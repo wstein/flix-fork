@@ -763,7 +763,7 @@ object Main {
 
       // Xdebug
       opt[Unit]("Xdebug").action((_, c) => c.copy(xdebug = true)).
-        text("[experimental] retains let-bindings so a debugger can observe them.")
+        text("[experimental] emits full debug information so a debugger can step and inspect variables.")
 
       // Xlib
       opt[LibLevel]("Xlib").action((arg, c) => c.copy(xlib = arg)).

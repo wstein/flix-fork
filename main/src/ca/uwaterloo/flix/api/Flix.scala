@@ -656,6 +656,7 @@ class Flix {
     val tracedAst = DatalogDebugging.run(typedAst)
 
     var treeShaker1Ast = TreeShaker1.run(tracedAst)
+    // Note: Do not null typedAst. It is used later.
 
     // Instrument only definitions that survive tree shaking. This matches the
     // conventional coverage scope of compiled code rather than all parsed code.
