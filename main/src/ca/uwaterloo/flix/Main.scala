@@ -81,7 +81,8 @@ object Main {
       XPerfFrontend = cmdOpts.XPerfFrontend,
       XPerfPar = cmdOpts.XPerfPar,
       XPerfN = cmdOpts.XPerfN,
-      xchaosMonkey = Options.Default.xchaosMonkey
+      xchaosMonkey = Options.Default.xchaosMonkey,
+      xdebug = cmdOpts.xdebug
     )
 
     // Don't use progress bar if benchmarking.
@@ -482,6 +483,7 @@ object Main {
     xbenchmarkFrontend: Boolean = false,
     xbenchmarkThroughput: Boolean = false,
     xnodeprecated: Boolean = false,
+    xdebug: Boolean = false,
     xlib: LibLevel = LibLevel.All,
     xprintphases: Boolean = false,
     xsummary: Boolean = false,
@@ -699,6 +701,10 @@ object Main {
       // Xbenchmark-throughput
       opt[Unit]("Xbenchmark-throughput").action((_, c) => c.copy(xbenchmarkThroughput = true)).
         text("[experimental] benchmarks the performance of the entire compiler.")
+
+      // Xdebug
+      opt[Unit]("Xdebug").action((_, c) => c.copy(xdebug = true)).
+        text("[experimental] retains let-bindings so a debugger can observe them.")
 
       // Xlib
       opt[LibLevel]("Xlib").action((arg, c) => c.copy(xlib = arg)).

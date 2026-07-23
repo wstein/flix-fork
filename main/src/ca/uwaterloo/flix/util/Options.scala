@@ -46,7 +46,8 @@ object Options {
     XPerfN = None,
     XPerfFrontend = false,
     XPerfPar = false,
-    xchaosMonkey = false
+    xchaosMonkey = false,
+    xdebug = false
   )
 
   /**
@@ -87,6 +88,7 @@ object Options {
   * @param threads        selects the number of threads to use.
   * @param loadClassFiles loads the generated class files into the JVM.
   * @param assumeYes      run non-interactively and assume answer to all prompts is yes.
+  * @param xdebug         retains let-bindings so a debugger can observe them.
   */
 case class Options(lib: LibLevel,
                    build: Build,
@@ -109,7 +111,8 @@ case class Options(lib: LibLevel,
                    XPerfFrontend: Boolean,
                    XPerfPar: Boolean,
                    XPerfN: Option[Int],
-                   xchaosMonkey: Boolean
+                   xchaosMonkey: Boolean,
+                   xdebug: Boolean
                   )
 
 /**

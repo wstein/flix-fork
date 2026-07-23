@@ -228,6 +228,17 @@ object Inliner {
       val es = exps.map(visitExp(_, ctx0))
       Expr.ApplyOp(sym, es, tpe, eff, loc)
 
+    // Under --Xdebug a binding the programmer wrote is kept, so that it occupies a local
+    // variable slot a debugger can name and inspect. Bindings the inliner introduces for a
+    // callee's arguments are left to the rules below: they carry no name from the source, and
+    // retaining them would bloat the code without telling anyone anything.
+    case Expr.Let(sym, exp1, exp2, tpe, eff, occur, loc) if flix.options.xdebug && !ctx0.currentlyInlining =>
+      val e1 = visitExp(exp1, ctx0)
+      val freshVarSym = Symbol.freshVarSym(sym)
+      val ctx = ctx0.addVarSubst(sym, freshVarSym).addInScopeVar(freshVarSym, BoundKind.LetBound(e1, occur, exp1.eff))
+      val e2 = visitExp(exp2, ctx)
+      Expr.Let(freshVarSym, e1, e2, tpe, eff, occur, loc)
+
     case Expr.Let(sym, exp1, exp2, tpe, eff, occur, loc) => (occur, exp1.eff) match {
       case (Occur.Dead, Type.Pure) =>
         // Eliminate dead binder
@@ -819,7 +830,7 @@ object Inliner {
     * Throws an error if `sym` is not in scope. This also implies that it is the responsibility of the caller
     * to replace any symbol occurrence with the corresponding fresh symbol in the variable substitution.
     */
-  private def useSiteInline(sym: Symbol.VarSym, ctx0: LocalContext): Option[Expr] = {
+  private def useSiteInline(sym: Symbol.VarSym, ctx0: LocalContext)(implicit flix: Flix): Option[Expr] = {
     ctx0.inScopeVars.get(sym) match {
       case Some(BoundKind.LetBound(exp, occur, eff)) if shouldInlineVar(sym, exp, occur, eff) =>
         Some(exp)
@@ -839,9 +850,11 @@ object Inliner {
     *
     * `eff` is the original effect of `exp`. See [[BoundKind.LetBound]] for more information.
     */
-  private def shouldInlineVar(sym: Symbol.VarSym, exp: Expr, occur: Occur, eff: Type): Boolean = (occur, eff) match {
-    case (Occur.Dead, _) => throw InternalCompilerException(s"unexpected call site inline of dead variable $sym", exp.loc)
-    case (Occur.Once, Type.Pure) => throw InternalCompilerException(s"unexpected call site inline of pre-inlined variable $sym", exp.loc)
+  private def shouldInlineVar(sym: Symbol.VarSym, exp: Expr, occur: Occur, eff: Type)(implicit flix: Flix): Boolean = (occur, eff) match {
+    // Under --Xdebug these two are reachable: the binding was retained instead of substituted,
+    // so the variable still occurs. Retaining it is the whole point, so decline to inline it.
+    case (Occur.Dead, _) => if (flix.options.xdebug) false else throw InternalCompilerException(s"unexpected call site inline of dead variable $sym", exp.loc)
+    case (Occur.Once, Type.Pure) => if (flix.options.xdebug) false else throw InternalCompilerException(s"unexpected call site inline of pre-inlined variable $sym", exp.loc)
     case (Occur.OnceInLambda, Type.Pure) => isLambda(exp)
     case (Occur.OnceInLocalDef, Type.Pure) => isLambda(exp)
     case (Occur.ManyBranch, Type.Pure) => false
