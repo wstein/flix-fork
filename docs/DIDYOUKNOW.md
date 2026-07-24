@@ -194,10 +194,12 @@ Did you know that:
 
 - the performance of the Flix compiler is tracked at https://arewefast.flix.dev/
 
-- the inliner substitutes away a let-binding that is pure and used once, so by
-  the time bytecode is generated it occupies no local variable slot. `--Xdebug`
-  retains the bindings a programmer wrote, at no measurable cost to compile
-  time or run time and about 0.02% more bytecode.
+- `--Xdebug` makes a compiled Flix program steppable in a Java debugger. The
+  inliner normally substitutes away a let-binding that is pure and used once, and
+  only one line is recorded per function, so there is nothing to name and nowhere
+  to step. The flag retains those bindings and records a line per statement and a
+  name per variable, which costs about 4.6% more bytecode and nothing at all when
+  the flag is absent.
 
 ## Other
 
