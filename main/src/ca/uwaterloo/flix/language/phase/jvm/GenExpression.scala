@@ -1156,7 +1156,7 @@ object GenExpression {
             BackendObjType.Result.unwindSuspensionFreeThunk("in pure closure call", loc)
           } else {
             ctx match {
-              case EffectContext(_, _, newFrame, setPc, narrowLocals, _, pcLabels, pcCounter, _) =>
+              case EffectContext(_, _, newFrame, setPc, narrowLocals, _, pcLabels, pcCounter, _, _) =>
                 val pcPoint = pcCounter(0) + 1
                 val pcPointLabel = pcLabels(pcPoint)
                 val afterUnboxing = new Label()
@@ -1171,7 +1171,7 @@ object GenExpression {
 
                 mv.visitLabel(afterUnboxing)
 
-              case DirectInstanceContext(_, _, _, _) | DirectStaticContext(_, _, _, _) =>
+              case DirectInstanceContext(_, _, _, _, _) | DirectStaticContext(_, _, _, _, _) =>
                 throw InternalCompilerException("Unexpected direct method context in control impure function", loc)
             }
           }
@@ -1235,7 +1235,7 @@ object GenExpression {
           }
           // Calling unwind and unboxing
           ctx match {
-            case EffectContext(_, _, newFrame, setPc, narrowLocals, _, pcLabels, pcCounter, _) =>
+            case EffectContext(_, _, newFrame, setPc, narrowLocals, _, pcLabels, pcCounter, _, _) =>
               val defn = root.defs(sym)
               if (Purity.isControlPure(defn.expr.purity)) {
                 BackendObjType.Result.unwindSuspensionFreeThunk("in pure function call", loc)
@@ -1253,17 +1253,17 @@ object GenExpression {
 
                 mv.visitLabel(afterUnboxing)
               }
-            case DirectInstanceContext(_, _, _, _) | DirectStaticContext(_, _, _, _) =>
+            case DirectInstanceContext(_, _, _, _, _) | DirectStaticContext(_, _, _, _, _) =>
               BackendObjType.Result.unwindSuspensionFreeThunk("in pure function call", loc)
           }
         }
     }
 
     case Expr.ApplyOp(sym, exps, tpe, _, loc) => ctx match {
-      case DirectInstanceContext(_, _, _, _) | DirectStaticContext(_, _, _, _) =>
+      case DirectInstanceContext(_, _, _, _, _) | DirectStaticContext(_, _, _, _, _) =>
         BackendObjType.Result.crashIfSuspension("Unexpected do-expression in direct method context", loc)
 
-      case EffectContext(_, _, newFrame, setPc, narrowLocals, _, pcLabels, pcCounter, _) =>
+      case EffectContext(_, _, newFrame, setPc, narrowLocals, _, pcLabels, pcCounter, _, _) =>
         import BackendObjType.Suspension
         import BytecodeInstructions.*
 
@@ -1320,7 +1320,7 @@ object GenExpression {
     }
 
     case Expr.ApplySelfTail(sym, exps, _, _, _) => ctx match {
-      case EffectContext(_, _, _, setPc, _, _, _, _, _) =>
+      case EffectContext(_, _, _, setPc, _, _, _, _, _, _) =>
         // The function abstract class name
         val functionInterface = JvmOps.getErasedFunctionInterfaceType(root.defs(sym).arrowType)
         // Evaluate each argument and put the result on the Fn class.
@@ -1336,7 +1336,7 @@ object GenExpression {
         // Jump to the entry point of the method.
         mv.visitJumpInsn(GOTO, ctx.entryPoint)
 
-      case DirectInstanceContext(_, _, _, _) =>
+      case DirectInstanceContext(_, _, _, _, _) =>
         // The function abstract class name
         val functionInterface = JvmOps.getErasedFunctionInterfaceType(root.defs(sym).arrowType)
         // Evaluate each argument and put the result on the Fn class.
@@ -1349,7 +1349,7 @@ object GenExpression {
         // Jump to the entry point of the method.
         mv.visitJumpInsn(GOTO, ctx.entryPoint)
 
-      case DirectStaticContext(_, _, _, _) =>
+      case DirectStaticContext(_, _, _, _, _) =>
         val defn = root.defs(sym)
         for (arg <- exps) {
           // Evaluate the argument and push the result on the stack.
@@ -1628,10 +1628,10 @@ object GenExpression {
       // handle value/suspend/thunk if in non-tail position
       if (ct == ExpPosition.NonTail) {
         ctx match {
-          case DirectInstanceContext(_, _, _, _) | DirectStaticContext(_, _, _, _) =>
+          case DirectInstanceContext(_, _, _, _, _) | DirectStaticContext(_, _, _, _, _) =>
             BackendObjType.Result.unwindSuspensionFreeThunk("in pure run-with call", loc)
 
-          case EffectContext(_, _, newFrame, setPc, narrowLocals, _, pcLabels, pcCounter, _) =>
+          case EffectContext(_, _, newFrame, setPc, narrowLocals, _, pcLabels, pcCounter, _, _) =>
             val pcPoint = pcCounter(0) + 1
             val pcPointLabel = pcLabels(pcPoint)
             val afterUnboxing = new Label()
