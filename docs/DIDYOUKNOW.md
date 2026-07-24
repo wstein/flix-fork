@@ -194,6 +194,11 @@ Did you know that:
 
 - the performance of the Flix compiler is tracked at https://arewefast.flix.dev/
 
+- the inliner substitutes away a let-binding that is pure and used once, so by
+  the time bytecode is generated it occupies no local variable slot. `--Xdebug`
+  retains the bindings a programmer wrote, at no measurable cost to compile
+  time or run time and about 0.02% more bytecode.
+
 ## Other
 
 Did you know that:
