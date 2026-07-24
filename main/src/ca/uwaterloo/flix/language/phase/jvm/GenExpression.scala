@@ -1429,7 +1429,7 @@ object GenExpression {
       // End label
       mv.visitLabel(endLabel)
 
-    case Expr.Let(_, offset, exp1, exp2, _) =>
+    case Expr.Let(sym, offset, exp1, exp2, _) =>
       import BytecodeInstructions.*
       val bType = BackendType.toBackendType(exp1.tpe)
       compileExpr(exp1)
@@ -1442,8 +1442,20 @@ object GenExpression {
         case _: Expr.NewObject => castIfNotPrim(bType)
         case _ => ()
       }
-      xStore(bType, JvmOps.getIndex(offset, ctx.localOffset))
-      compileExpr(exp2)
+      val index = JvmOps.getIndex(offset, ctx.localOffset)
+      xStore(bType, index)
+      // The binding is live for exactly the body it scopes over, which is where a debugger
+      // should be able to name it. Wildcards are skipped: they have no name worth reporting.
+      if (flix.options.xdebug && !sym.isWild) {
+        val start = new Label()
+        mv.visitLabel(start)
+        compileExpr(exp2)
+        val end = new Label()
+        mv.visitLabel(end)
+        mv.visitLocalVariable(sym.text, bType.toDescriptor, null, start, end, index)
+      } else {
+        compileExpr(exp2)
+      }
 
     case Expr.Stm(exps, exp, _) =>
       import BytecodeInstructions.*

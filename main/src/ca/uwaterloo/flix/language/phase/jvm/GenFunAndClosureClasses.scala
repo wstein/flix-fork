@@ -17,7 +17,7 @@
 package ca.uwaterloo.flix.language.phase.jvm
 
 import ca.uwaterloo.flix.api.{CompilerConstants, Flix, FlixEvent}
-import ca.uwaterloo.flix.language.ast.JvmAst.{Def, Root}
+import ca.uwaterloo.flix.language.ast.JvmAst.{Def, OffsetFormalParam, Root}
 import ca.uwaterloo.flix.language.ast.{Purity, SimpleType, Symbol}
 import ca.uwaterloo.flix.language.phase.jvm.ClassMaker.StaticMethod
 import ca.uwaterloo.flix.language.phase.jvm.JvmName.MethodDescriptor
@@ -301,9 +301,30 @@ object GenFunAndClosureClasses {
 
     BytecodeInstructions.xReturn(BackendObjType.Result.toTpe)
 
+    // The parameters are live for the whole method, starting before the entry label so that
+    // they remain nameable across a self-recursive tail call.
+    nameParams(m, defn.fparams, enterLabel, localOffset)
 
     m.visitMaxs(999, 999)
     m.visitEnd()
+  }
+
+  /**
+    * Records `params` in the method's `LocalVariableTable`, scoped from `start` to here.
+    *
+    * Does nothing unless `--Xdebug` is set, so that release builds carry no debug info they did
+    * not ask for. Wildcards are skipped: they have no name worth reporting.
+    */
+  private def nameParams(m: MethodVisitor, params: List[OffsetFormalParam], start: Label, localOffset: Int)(implicit root: Root, flix: Flix): Unit = {
+    if (!flix.options.xdebug) {
+      return
+    }
+    val end = new Label()
+    m.visitLabel(end)
+    for (p <- params if !p.sym.isWild) {
+      val tpe = BackendType.toBackendType(p.tpe)
+      m.visitLocalVariable(p.sym.text, tpe.toDescriptor, null, start, end, JvmOps.getIndex(p.offset, localOffset))
+    }
   }
 
   private def compileStaticInvokeMethod(visitor: ClassWriter, className: JvmName, defn: Def)(implicit root: Root): Unit = {
