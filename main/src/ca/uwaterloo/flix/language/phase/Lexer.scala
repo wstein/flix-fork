@@ -222,26 +222,22 @@ object Lexer {
 
   }
 
-  /** Run the lexer on multiple `Source`s in parallel. */
-  def run(root: ReadAst.Root, oldTokens: Map[Source, Array[Token]], changeSet: ChangeSet)(implicit flix: Flix): (Map[Source, Array[Token]], List[LexerError]) =
-    flix.phaseNew("Lexer") {
-      // Compute the stale and fresh sources.
-      val (stale, fresh) = changeSet.partition(root.sources, oldTokens)
+  /** Run the lexer on multiple `Source`s. */
+  def run(root: ReadAst.Root, oldTokens: Map[Source, Array[Token]], changeSet: ChangeSet): (Map[Source, Array[Token]], List[LexerError]) = {
+    // Compute the stale and fresh sources.
+    val (stale, fresh) = changeSet.partition(root.sources, oldTokens)
 
-      // Schedule the biggest sources first to increase throughput.
-      def sortBy(src: Source): Int = -src.data.length
+    // Lex each stale source file.
+    val (results, errors) = stale.keys.toList.map {
+      src =>
+        val (tokens, errors) = lex(src)
+        (src -> tokens, errors)
+    }.unzip
 
-      // Lex each stale source file in parallel.
-      val (results, errors) = ParOps.parMapWithPriority(stale.keys, sortBy) {
-        src =>
-          val (tokens, errors) = lex(src)
-          (src -> tokens, errors)
-      }.unzip
-
-      // Construct a map from each source to its tokens.
-      val all = fresh.concat(results)
-      (all, errors.flatten.toList)
-    }
+    // Construct a map from each source to its tokens.
+    val all = fresh.concat(results)
+    (all, errors.flatten.toList)
+  }
 
   /** Lexes a single source (file) into an array of tokens. */
   def lex(src: Source): (Array[Token], List[LexerError]) = {
@@ -956,7 +952,7 @@ object Lexer {
     * Must not modify the last token since it is end-of-file.
     */
   @unused
-  private def fuzz(tokens: Array[Token])(implicit flix: Flix): Array[Token] = {
+  private def fuzz(tokens: Array[Token]): Array[Token] = {
     // Return immediately if there are few tokens.
     if (tokens.length <= 10) {
       return tokens

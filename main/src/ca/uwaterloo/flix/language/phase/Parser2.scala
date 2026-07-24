@@ -122,23 +122,20 @@ object Parser2 {
     case class Closed(index: Int) extends Mark
   }
 
-  def run(tokens0: Map[Source, Array[Token]], oldRoot: SyntaxTree.Root, changeSet: ChangeSet)(implicit flix: Flix): (SyntaxTree.Root, List[CompilationMessage]) = flix.phaseNew("Parser2") {
+  def run(tokens0: Map[Source, Array[Token]], oldRoot: SyntaxTree.Root, changeSet: ChangeSet): (SyntaxTree.Root, List[CompilationMessage]) = {
     // Compute the stale and fresh sources.
     val (stale, fresh) = changeSet.partition(tokens0, oldRoot.units)
 
-    // Schedule the biggest sources first to increase throughput.
-    def sortBy(p: (Source, Array[Token])): Int = -p._2.length
-
-    // Parse each stale source in parallel and join them into a WeededAst.Root.
-    val (refreshed, errors) = ParOps.parMapWithPriority(stale, sortBy) {
+    // Parse each stale source and join them into a SyntaxTree.Root.
+    val (refreshed, errors) = stale.toList.map {
       case (src, tokens) =>
         val (tree, errors) = parse(src, tokens)
         (src -> tree, errors)
     }.unzip
 
     // Compute semantic tokens to retain in the AST.
-    val retainedTokens = ParOps.parMapValues(tokens0) {
-      case tokens => tokens.filter(_.kind.isSemantic)
+    val retainedTokens = tokens0.map {
+      case (src, tokens) => src -> tokens.filter(_.kind.isSemantic)
     }
 
     // Join refreshed syntax trees with the already fresh ones.
