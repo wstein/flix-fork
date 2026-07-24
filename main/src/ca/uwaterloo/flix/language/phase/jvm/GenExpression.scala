@@ -37,6 +37,14 @@ object GenExpression {
 
   type Ref[T] = Array[T]
 
+  /**
+    * Supplies the enclosing method's [[LineNumbers]] from the ambient [[MethodContext]].
+    *
+    * Every expression is compiled under a `MethodContext`, so this lets [[BytecodeInstructions.addLoc]]
+    * reach the table without threading it through each case of [[compileExpr]].
+    */
+  implicit def linesOf(implicit ctx: MethodContext): LineNumbers = ctx.lines
+
   sealed trait MethodContext {
 
     def entryPoint: Label
@@ -44,6 +52,9 @@ object GenExpression {
     def lenv: Map[Symbol.LabelSym, Label]
 
     def localOffset: Int
+
+    /** The line-number table of the method this expression belongs to. */
+    def lines: LineNumbers
 
     def addLabels(labels: Map[Symbol.LabelSym, Label]): MethodContext = {
       val updatedLabels = this.lenv ++ labels
@@ -72,7 +83,8 @@ object GenExpression {
     narrowLocals: MethodVisitor => Unit, // re-cast locals to their declared types after resume
     localOffset: Int,
     pcLabels: Vector[Label],
-    pcCounter: Ref[Int]
+    pcCounter: Ref[Int],
+    lines: LineNumbers
   ) extends MethodContext
 
   /**
@@ -85,6 +97,7 @@ object GenExpression {
     entryPoint: Label,
     lenv: Map[Symbol.LabelSym, Label],
     localOffset: Int,
+    lines: LineNumbers
   ) extends MethodContext
 
   /**
@@ -97,6 +110,7 @@ object GenExpression {
     entryPoint: Label,
     lenv: Map[Symbol.LabelSym, Label],
     localOffset: Int,
+    lines: LineNumbers
   ) extends MethodContext
 
   /**
@@ -1094,6 +1108,7 @@ object GenExpression {
     }
 
     case Expr.ApplyClo(exp1, exp2, ct, _, purity, loc) =>
+      if (flix.options.xdebug) BytecodeInstructions.addLoc(loc)
       // Type of the function abstract class
       val functionInterface = JvmOps.getErasedFunctionInterfaceType(exp1.tpe)
       val closureAbstractClass = JvmOps.getErasedClosureAbstractClassType(exp1.tpe)
@@ -1132,7 +1147,7 @@ object GenExpression {
             BackendObjType.Result.unwindSuspensionFreeThunk("in pure closure call", loc)
           } else {
             ctx match {
-              case EffectContext(_, _, newFrame, setPc, narrowLocals, _, pcLabels, pcCounter) =>
+              case EffectContext(_, _, newFrame, setPc, narrowLocals, _, pcLabels, pcCounter, _) =>
                 val pcPoint = pcCounter(0) + 1
                 val pcPointLabel = pcLabels(pcPoint)
                 val afterUnboxing = new Label()
@@ -1147,13 +1162,15 @@ object GenExpression {
 
                 mv.visitLabel(afterUnboxing)
 
-              case DirectInstanceContext(_, _, _) | DirectStaticContext(_, _, _) =>
+              case DirectInstanceContext(_, _, _, _) | DirectStaticContext(_, _, _, _) =>
                 throw InternalCompilerException("Unexpected direct method context in control impure function", loc)
             }
           }
       }
 
-    case Expr.ApplyDef(sym, exps, ct, _, _, loc) => ct match {
+    case Expr.ApplyDef(sym, exps, ct, _, _, loc) =>
+      if (flix.options.xdebug) BytecodeInstructions.addLoc(loc)
+      ct match {
       case ExpPosition.Tail =>
         val defJvmName = BackendObjType.Defn(sym).jvmName
         // Type of the function abstract class
@@ -1210,7 +1227,7 @@ object GenExpression {
           }
           // Calling unwind and unboxing
           ctx match {
-            case EffectContext(_, _, newFrame, setPc, narrowLocals, _, pcLabels, pcCounter) =>
+            case EffectContext(_, _, newFrame, setPc, narrowLocals, _, pcLabels, pcCounter, _) =>
               val defn = root.defs(sym)
               if (Purity.isControlPure(defn.expr.purity)) {
                 BackendObjType.Result.unwindSuspensionFreeThunk("in pure function call", loc)
@@ -1228,17 +1245,17 @@ object GenExpression {
 
                 mv.visitLabel(afterUnboxing)
               }
-            case DirectInstanceContext(_, _, _) | DirectStaticContext(_, _, _) =>
+            case DirectInstanceContext(_, _, _, _) | DirectStaticContext(_, _, _, _) =>
               BackendObjType.Result.unwindSuspensionFreeThunk("in pure function call", loc)
           }
         }
     }
 
     case Expr.ApplyOp(sym, exps, tpe, _, loc) => ctx match {
-      case DirectInstanceContext(_, _, _) | DirectStaticContext(_, _, _) =>
+      case DirectInstanceContext(_, _, _, _) | DirectStaticContext(_, _, _, _) =>
         BackendObjType.Result.crashIfSuspension("Unexpected do-expression in direct method context", loc)
 
-      case EffectContext(_, _, newFrame, setPc, narrowLocals, _, pcLabels, pcCounter) =>
+      case EffectContext(_, _, newFrame, setPc, narrowLocals, _, pcLabels, pcCounter, _) =>
         import BackendObjType.Suspension
         import BytecodeInstructions.*
 
@@ -1295,7 +1312,7 @@ object GenExpression {
     }
 
     case Expr.ApplySelfTail(sym, exps, _, _, _) => ctx match {
-      case EffectContext(_, _, _, setPc, _, _, _, _) =>
+      case EffectContext(_, _, _, setPc, _, _, _, _, _) =>
         // The function abstract class name
         val functionInterface = JvmOps.getErasedFunctionInterfaceType(root.defs(sym).arrowType)
         // Evaluate each argument and put the result on the Fn class.
@@ -1311,7 +1328,7 @@ object GenExpression {
         // Jump to the entry point of the method.
         mv.visitJumpInsn(GOTO, ctx.entryPoint)
 
-      case DirectInstanceContext(_, _, _) =>
+      case DirectInstanceContext(_, _, _, _) =>
         // The function abstract class name
         val functionInterface = JvmOps.getErasedFunctionInterfaceType(root.defs(sym).arrowType)
         // Evaluate each argument and put the result on the Fn class.
@@ -1324,7 +1341,7 @@ object GenExpression {
         // Jump to the entry point of the method.
         mv.visitJumpInsn(GOTO, ctx.entryPoint)
 
-      case DirectStaticContext(_, _, _) =>
+      case DirectStaticContext(_, _, _, _) =>
         val defn = root.defs(sym)
         for (arg <- exps) {
           // Evaluate the argument and push the result on the stack.
@@ -1340,8 +1357,9 @@ object GenExpression {
         mv.visitJumpInsn(GOTO, ctx.entryPoint)
     }
 
-    case Expr.IfThenElse(exp1, exp2, exp3, _, _, _) =>
+    case Expr.IfThenElse(exp1, exp2, exp3, _, _, loc) =>
       import BytecodeInstructions.*
+      if (flix.options.xdebug) addLoc(loc)
       compileExpr(exp1)
       branch(Condition.Bool) {
         case Branch.TrueBranch => compileExpr(exp2)
@@ -1429,9 +1447,10 @@ object GenExpression {
       // End label
       mv.visitLabel(endLabel)
 
-    case Expr.Let(sym, offset, exp1, exp2, _) =>
+    case Expr.Let(sym, offset, exp1, exp2, loc) =>
       import BytecodeInstructions.*
       val bType = BackendType.toBackendType(exp1.tpe)
+      if (flix.options.xdebug) addLoc(loc)
       compileExpr(exp1)
       // No cast needed in most cases: operations self-cast (Untag, Index, etc.),
       // function calls are wrapped in Cast by the Eraser, and effect resume
@@ -1444,6 +1463,10 @@ object GenExpression {
       }
       val index = JvmOps.getIndex(offset, ctx.localOffset)
       xStore(bType, index)
+      // The body starts a new statement. Emitting its line here is what gives the last
+      // expression of a function a line of its own; a body that is itself a binding or a
+      // sequence reports the same line again and the repeat is dropped.
+      if (flix.options.xdebug) addLoc(exp2.loc)
       // The binding is live for exactly the body it scopes over, which is where a debugger
       // should be able to name it. Wildcards are skipped: they have no name worth reporting.
       if (flix.options.xdebug && !sym.isWild) {
@@ -1460,9 +1483,11 @@ object GenExpression {
     case Expr.Stm(exps, exp, _) =>
       import BytecodeInstructions.*
       exps.foreach { e =>
+        if (flix.options.xdebug) addLoc(e.loc)
         compileExpr(e)
         xPop(BackendType.toBackendType(e.tpe))
       }
+      if (flix.options.xdebug) addLoc(exp.loc)
       compileExpr(exp)
 
     case Expr.Region(_, offset, exp, _, _, loc) =>
@@ -1595,10 +1620,10 @@ object GenExpression {
       // handle value/suspend/thunk if in non-tail position
       if (ct == ExpPosition.NonTail) {
         ctx match {
-          case DirectInstanceContext(_, _, _) | DirectStaticContext(_, _, _) =>
+          case DirectInstanceContext(_, _, _, _) | DirectStaticContext(_, _, _, _) =>
             BackendObjType.Result.unwindSuspensionFreeThunk("in pure run-with call", loc)
 
-          case EffectContext(_, _, newFrame, setPc, narrowLocals, _, pcLabels, pcCounter) =>
+          case EffectContext(_, _, newFrame, setPc, narrowLocals, _, pcLabels, pcCounter, _) =>
             val pcPoint = pcCounter(0) + 1
             val pcPointLabel = pcLabels(pcPoint)
             val afterUnboxing = new Label()

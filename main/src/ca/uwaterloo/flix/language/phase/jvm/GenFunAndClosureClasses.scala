@@ -287,6 +287,7 @@ object GenFunAndClosureClasses {
     val modifiers = ACC_PUBLIC + ACC_FINAL + ACC_STATIC
     implicit val m: MethodVisitor = visitor.visitMethod(modifiers, method.name, method.d.toDescriptor, null, null)
     m.visitCode()
+    implicit val lines: LineNumbers = new LineNumbers(defn.loc.source)
     BytecodeInstructions.addLoc(defn.loc)
 
     // used for self-recursive tail calls
@@ -296,7 +297,7 @@ object GenFunAndClosureClasses {
     // Generate the expression
     val localOffset = 0
     val labelEnv = Map.empty[Symbol.LabelSym, Label]
-    val ctx = GenExpression.DirectStaticContext(enterLabel, labelEnv, localOffset)
+    val ctx = GenExpression.DirectStaticContext(enterLabel, labelEnv, localOffset, lines)
     GenExpression.compileExpr(defn.expr)(m, ctx, root, flix)
 
     BytecodeInstructions.xReturn(BackendObjType.Result.toTpe)
@@ -387,6 +388,7 @@ object GenFunAndClosureClasses {
     }
 
     m.visitCode()
+    implicit val lines: LineNumbers = new LineNumbers(defn.loc.source)
     BytecodeInstructions.addLoc(defn.loc)
     loadParamsOf(lparams)
 
@@ -398,7 +400,7 @@ object GenFunAndClosureClasses {
     loadParamsOf(fparams)
 
     if (Purity.isControlPure(defn.expr.purity)) {
-      val ctx = GenExpression.DirectInstanceContext(enterLabel, Map.empty, localOffset)
+      val ctx = GenExpression.DirectInstanceContext(enterLabel, Map.empty, localOffset, lines)
       GenExpression.compileExpr(defn.expr)(m, ctx, root, flix)
     } else {
       val pcLabels: Vector[Label] = Vector.range(0, defn.pcPoints).map(_ => new Label())
@@ -454,7 +456,7 @@ object GenFunAndClosureClasses {
         }
       }
 
-      val ctx = GenExpression.EffectContext(enterLabel, Map.empty, newFrame, setPc, narrowLocals, localOffset, pcLabels.prepended(null), Array(0))
+      val ctx = GenExpression.EffectContext(enterLabel, Map.empty, newFrame, setPc, narrowLocals, localOffset, pcLabels.prepended(null), Array(0), lines)
       GenExpression.compileExpr(defn.expr)(m, ctx, root, flix)
       assert(ctx.pcCounter(0) == pcLabels.size, s"${(className, ctx.pcCounter(0), pcLabels.size)}")
     }

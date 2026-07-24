@@ -322,10 +322,12 @@ object BytecodeInstructions {
   // ~~~~~~~~~~~~~~~~~~~~~~~~~ Meta JVM Instructions ~~~~~~~~~~~~~~~~~~~~~~~~~~
   //
 
-  def addLoc(loc: SourceLocation)(implicit mv: MethodVisitor): Unit = {
-    val label = new Label()
-    mv.visitLabel(label)
-    mv.visitLineNumber(loc.startLine, label)
+  /**
+    * Records `loc` in the method's `LineNumberTable`, so that a debugger can map the code that
+    * follows back to the source line it came from.
+    */
+  def addLoc(loc: SourceLocation)(implicit mv: MethodVisitor, lines: LineNumbers): Unit = {
+    lines.emit(loc)
   }
 
   def branch(c: Condition)(cases: Branch => Unit)(implicit mv: MethodVisitor): Unit = {
