@@ -202,7 +202,7 @@ Did you know that:
   inliner normally substitutes away a let-binding that is pure and used once, and
   only one line is recorded per function, so there is nothing to name and nowhere
   to step. The flag retains those bindings and records a line per statement and a
-  name per variable, which costs about 4.6% more bytecode and nothing at all when
+  name per variable, which costs about 5% more bytecode and nothing at all when
   the flag is absent.
 
 - Datalog rules are not compiled to code -- they become values interpreted by
