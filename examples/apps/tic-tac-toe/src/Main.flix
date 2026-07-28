@@ -53,12 +53,7 @@ def main(): Unit \ IO = {
         println("");
         println("Instructions:");
         println("The cells are numbered as follows:\n");
-        println("   0   |   1   |   2   " );
-        println(" - - - | - - - | - - - ");
-        println("   3   |   4   |   5   " );
-        println(" - - - | - - - | - - - ");
-        println("   6   |   7   |   8   " );
-        println("       |       |       ");
+        println(Board.legend());
         println("Enter your move as one these numbers corresponding to a cell");
         println("You play against the computer. X always moves first.");
         println("");

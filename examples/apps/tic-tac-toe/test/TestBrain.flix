@@ -41,9 +41,13 @@ mod TestBrain {
 
     ///
     /// ```
-    ///  X | X | .        X to move completes the top row.
-    ///  . | O | .
-    ///  . | . | O
+    ///  ┌───┬───┬───┐
+    ///  │ X │ X │   │   X to move completes the top row.
+    ///  ├───┼───┼───┤
+    ///  │   │ O │   │
+    ///  ├───┼───┼───┤
+    ///  │   │   │ O │
+    ///  └───┴───┴───┘
     /// ```
     ///
     @Test
@@ -53,9 +57,13 @@ mod TestBrain {
 
     ///
     /// ```
-    ///  O | O | .        X to move must block at 2.
-    ///  . | X | .
-    ///  . | . | .
+    ///  ┌───┬───┬───┐
+    ///  │ O │ O │   │   X to move must block at 2.
+    ///  ├───┼───┼───┤
+    ///  │   │ X │   │
+    ///  ├───┼───┼───┤
+    ///  │   │   │   │
+    ///  └───┴───┴───┘
     /// ```
     ///
     @Test
@@ -65,9 +73,13 @@ mod TestBrain {
 
     ///
     /// ```
-    ///  O | O | .        Both sides threaten. X to move takes its own win at 5
-    ///  X | X | .        rather than blocking at 2.
-    ///  . | . | .
+    ///  ┌───┬───┬───┐
+    ///  │ O │ O │   │   Both sides threaten. X to move takes its own win at 5
+    ///  ├───┼───┼───┤   rather than blocking at 2.
+    ///  │ X │ X │   │
+    ///  ├───┼───┼───┤
+    ///  │   │   │   │
+    ///  └───┴───┴───┘
     /// ```
     ///
     @Test
@@ -77,9 +89,13 @@ mod TestBrain {
 
     ///
     /// ```
-    ///  X | . | .        X to move forks at 2 or 6: either creates two threats
-    ///  . | O | .        at once, and only one of them can be blocked.
-    ///  . | . | X
+    ///  ┌───┬───┬───┐
+    ///  │ X │   │   │   X to move forks at 2 or 6: either creates two threats
+    ///  ├───┼───┼───┤   at once, and only one of them can be blocked.
+    ///  │   │ O │   │
+    ///  ├───┼───┼───┤
+    ///  │   │   │ X │
+    ///  └───┴───┴───┘
     /// ```
     ///
     @Test
@@ -89,9 +105,13 @@ mod TestBrain {
 
     ///
     /// ```
-    ///  X | . | .        The corner trap. X threatens forks at both 2 and 6, so O
-    ///  . | O | .        cannot block them both and must instead force a reply by
-    ///  . | . | X        taking a side.
+    ///  ┌───┬───┬───┐
+    ///  │ X │   │   │   The corner trap. X threatens forks at both 2 and 6, so O
+    ///  ├───┼───┼───┤   cannot block them both and must instead force a reply by
+    ///  │   │ O │   │   taking a side.
+    ///  ├───┼───┼───┤
+    ///  │   │   │ X │
+    ///  └───┴───┴───┘
     /// ```
     ///
     @Test
@@ -108,9 +128,13 @@ mod TestBrain {
 
     ///
     /// ```
-    ///  O | . | .        The centre is gone and nothing is threatened, so X answers
-    ///  . | X | .        the opponent's corner with the corner facing it.
-    ///  . | . | .
+    ///  ┌───┬───┬───┐
+    ///  │ O │   │   │   The centre is gone and nothing is threatened, so X answers
+    ///  ├───┼───┼───┤   the opponent's corner with the corner facing it.
+    ///  │   │ X │   │
+    ///  ├───┼───┼───┤
+    ///  │   │   │   │
+    ///  └───┴───┴───┘
     /// ```
     ///
     @Test

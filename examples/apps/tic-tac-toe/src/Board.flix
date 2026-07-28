@@ -68,15 +68,41 @@ mod Board {
     }
 
     ///
+    /// Draws a 3x3 grid of already-rendered cell contents, using box-drawing characters.
+    ///
+    /// ```
+    /// ┌───┬───┬───┐
+    /// │ X │ O │ X │
+    /// ├───┼───┼───┤
+    /// │ O │ X │ O │
+    /// ├───┼───┼───┤
+    /// │ X │ O │ X │
+    /// └───┴───┴───┘
+    /// ```
+    ///
+    def grid(cells: Vector[String]): String =
+        let row = i -> "│ ${Vector.get(i, cells)} │ ${Vector.get(i + 1, cells)} │ ${Vector.get(i + 2, cells)} │";
+        String.unlines(
+                   "┌───┬───┬───┐"
+            :: row(0)
+            ::     "├───┼───┼───┤"
+            :: row(3)
+            ::     "├───┼───┼───┤"
+            :: row(6)
+            ::     "└───┴───┴───┘"
+            :: Nil
+        )
+
+    ///
     /// Returns a string representation of the board.
     ///
     pub def toString(board: Board): String = match board {
-        case Board(vec) =>  "       |       |       "
-                            ++ "\n   ${Symbol.toString(Vector.get(0, vec)) }   |   ${Symbol.toString(Vector.get(1, vec)) }   |   ${Symbol.toString(Vector.get(2, vec)) }   "
-                            ++ "\n - - - | - - - | - - - "
-                            ++ "\n   ${Symbol.toString(Vector.get(3, vec)) }   |   ${Symbol.toString(Vector.get(4, vec)) }   |   ${Symbol.toString(Vector.get(5, vec)) }   "
-                            ++ "\n - - - | - - - | - - - "
-                            ++ "\n   ${Symbol.toString(Vector.get(6, vec)) }   |   ${Symbol.toString(Vector.get(7, vec)) }   |   ${Symbol.toString(Vector.get(8, vec)) }   "
-                            ++ "\n       |       |       "
-        }
+        case Board(vec) => grid(Vector.map(Symbol.toString, vec))
+    }
+
+    ///
+    /// Returns a grid showing how the cells are numbered, for the instructions.
+    ///
+    pub def legend(): String =
+        grid(Vector.range(0, 9) |> Vector.map(Int32.toString))
 }
