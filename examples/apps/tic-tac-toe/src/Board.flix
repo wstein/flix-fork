@@ -56,6 +56,18 @@ mod Board {
     }
 
     ///
+    /// Returns the occupied cells of the board as `(index, symbol)` pairs.
+    ///
+    /// This is the board as seen by the machine player, which consumes it as Datalog facts.
+    ///
+    pub def occupiedCells(board: Board): Vector[(Int32, Symbol)] = match board {
+        case Board(vec) =>
+            vec
+                |> Vector.mapWithIndex((i, sym) -> (i, sym))
+                |> Vector.filter(match (_, sym) -> sym != Symbol.Empty)
+    }
+
+    ///
     /// Returns a string representation of the board.
     ///
     pub def toString(board: Board): String = match board {

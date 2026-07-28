@@ -1,7 +1,9 @@
 ///
 /// Represents the different symbols used in the game.
 ///
-pub enum Symbol with Eq {
+/// `Order` is required because symbols appear as terms in the Datalog program
+/// that drives the machine player.
+pub enum Symbol with Eq, Order {
     case X,
     case O,
     case Empty

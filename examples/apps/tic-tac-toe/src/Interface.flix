@@ -12,6 +12,12 @@ pub eff Interface {
     /// Gets a move from the user.
     ///
     def getMove(): Int32
+
+    ///
+    /// Asks the user which side they want to play. `X` always moves first, so this
+    /// is also the choice of who opens the game.
+    ///
+    def chooseSide(): Symbol
 }
 
 mod Interface {
@@ -32,6 +38,20 @@ mod Interface {
         }
     }
 
+    ///
+    /// Recursive helper function to read and return the side the user wants to play.
+    ///
+    def getSideFromConsole(): Symbol \ Console = {
+        Console.print("Do you want to move first? [y/n] ");
+        match Console.readln() |> Option.map(String.trim >> String.toLowerCase) {
+            case Some("y") => Symbol.X
+            case Some("n") => Symbol.O
+            case _         => {
+                Console.println("Please answer 'y' or 'n'.");
+                getSideFromConsole()
+            }
+        }
+    }
 
     ///
     /// Runs the Interface effect of the given function `f`.
@@ -53,6 +73,10 @@ mod Interface {
 
             def getMove(resume) = {
                 resume(getMoveFromConsole())
+            }
+
+            def chooseSide(resume) = {
+                resume(getSideFromConsole())
             }
         }
 }

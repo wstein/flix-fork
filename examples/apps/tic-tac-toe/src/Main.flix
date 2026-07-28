@@ -3,26 +3,35 @@ use Sys.Console
 ///
 /// The core gameplay loop called repeatedly until the game ends.
 ///
-def gameLoop(board: Board, symbol: Symbol): Unit \ Interface = {
-    Interface.display(board, "Enter a move (0 - 8): ");
-    let move = Interface.getMove();
-    match Board.makeMove(board, symbol, move) {
-        case Some(newBoard) => {
-            if (Board.checkWin(newBoard, symbol)) {
-                match symbol {
-                    case Symbol.X => Interface.display(newBoard, "Player One wins!!!")
-                    case Symbol.O => Interface.display(newBoard, "Player Two wins!!!")
-                    case _ => ()
+/// `symbol` is the side to move and `machine` is the side played by the computer.
+///
+def gameLoop(board: Board, symbol: Symbol, machine: Symbol): Unit \ Interface = {
+    let move =
+        if (symbol == machine)
+            Brain.chooseMove(board, symbol)
+        else {
+            Interface.display(board, "Enter a move (0 - 8): ");
+            Some(Interface.getMove())
+        };
+    match move {
+        case None => Interface.display(board, "Draw")
+        case Some(m) => match Board.makeMove(board, symbol, m) {
+            case Some(newBoard) => {
+                if (Board.checkWin(newBoard, symbol)) {
+                    if (symbol == machine)
+                        Interface.display(newBoard, "The computer wins!!!")
+                    else
+                        Interface.display(newBoard, "You win!!!")
+                } else if (Board.boardFilled(newBoard)) {
+                    Interface.display(newBoard, "Draw")
+                } else {
+                    gameLoop(newBoard, Symbol.complement(symbol), machine)
                 }
-            } else if (Board.boardFilled(newBoard)) {
-                Interface.display(board, "Draw")
-            } else {
-                gameLoop(newBoard, Symbol.complement(symbol))
             }
-        }
-        case None => {
-            Interface.display(board, "Cell already filled");
-            gameLoop(board, symbol)
+            case None => {
+                Interface.display(board, "Cell already filled");
+                gameLoop(board, symbol, machine)
+            }
         }
     }
 }
@@ -51,9 +60,11 @@ def main(): Unit \ IO = {
         println("   6   |   7   |   8   " );
         println("       |       |       ");
         println("Enter your move as one these numbers corresponding to a cell");
+        println("You play against the computer. X always moves first.");
         println("");
         let board = Board.newBoard();
-        gameLoop(board, Symbol.X)
+        let human = Interface.chooseSide();
+        gameLoop(board, Symbol.X, Symbol.complement(human))
     } with Interface.interfaceWithConsole
     with Console.runWithIO
 }
