@@ -51,6 +51,67 @@ class TestBootstrap extends AnyFunSuite {
     assert(jarPath.getFileName.toString.startsWith(ProjectPrefix))
   }
 
+  test("build-jar removes stale class files from an earlier build") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out)
+    val b = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
+    b.buildJar(PkgTestUtils.mkFlix)
+
+    // Plant a class file that no build would produce.
+    val classDir = p.resolve("build").resolve("class")
+    val stale = classDir.resolve("Stale.class")
+    Files.write(stale, Array[Byte](0xCA.toByte, 0xFE.toByte, 0xBA.toByte, 0xBE.toByte))
+    assert(Files.exists(stale))
+
+    b.buildJar(PkgTestUtils.mkFlix)
+
+    // It must be gone from the class directory and absent from the jar.
+    assert(!Files.exists(stale), "stale class file survived the rebuild")
+
+    val packageName = p.getFileName.toString
+    val jarPath = p.resolve("artifact").resolve(packageName + ".jar")
+    val entries = entryNamesOf(jarPath)
+    assert(!entries.contains("Stale.class"), s"stale class file was packaged into the jar: $entries")
+  }
+
+  test("build-jar produces a complete jar when run twice on the same project") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out)
+    val b = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
+
+    val packageName = p.getFileName.toString
+    val jarPath = p.resolve("artifact").resolve(packageName + ".jar")
+
+    b.buildJar(PkgTestUtils.mkFlix)
+    val first = entryNamesOf(jarPath)
+
+    // The second build must not rely on state left behind by the first: sources are
+    // tracked per Bootstrap, but the class files belong to the Flix instance.
+    b.buildJar(PkgTestUtils.mkFlix)
+    val second = entryNamesOf(jarPath)
+
+    assert(first.sizeIs > 1, s"first jar is suspiciously empty: $first")
+    assert(
+      first.size == second.size,
+      s"second build produced ${second.size} entries but the first produced ${first.size}")
+  }
+
+  test("build-jar refuses to delete a non-class file in the class directory") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out)
+    val b = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
+    b.buildJar(PkgTestUtils.mkFlix)
+
+    // A file that is not a class file must stop the build rather than be deleted.
+    val precious = p.resolve("build").resolve("class").resolve("precious.txt")
+    Files.write(precious, "do not delete me".getBytes)
+
+    val result = b.buildJar(PkgTestUtils.mkFlix)
+
+    assert(result.isInstanceOf[Result.Err[_, _]], "expected build-jar to fail on an unexpected file")
+    assert(Files.exists(precious), "build-jar deleted a file that was not a class file")
+  }
+
   test("build-jar generates ZIP entries with fixed time") {
     val p = Files.createTempDirectory(ProjectPrefix)
     Bootstrap.init(p)(System.out)
@@ -405,5 +466,9 @@ class TestBootstrap extends AnyFunSuite {
       sha.digest.map("%02x".format(_)).mkString
     }.get
   }
+
+  /** Returns the names of all entries in the zip archive at `p`. */
+  private def entryNamesOf(p: Path): Set[String] =
+    Using(new ZipFile(p.toFile))(_.entries().asScala.map(_.getName).toSet).get
 
 }

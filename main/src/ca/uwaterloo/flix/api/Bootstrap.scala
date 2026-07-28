@@ -456,12 +456,17 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
 
   /**
     * Builds a jar package for the project.
+    *
+    * Always performs a full, clean build so that the jar is a function of the current
+    * sources alone.
     */
   def buildJar(flix: Flix): Result[Unit, BootstrapError] = {
     val jarFile = Bootstrap.getJarFile(projectPath)
+    Steps.invalidateSourceTimestamps()
     Steps.updateStaleSources(flix)
     for {
       _ <- Steps.configureJarOutput(flix)
+      _ <- Steps.cleanClassDirectory()
       _ <- Steps.compile(flix)
       _ <- Steps.validateJarFile(jarFile)
       contents = (zip: ZipOutputStream) => {
@@ -476,13 +481,18 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
 
   /**
     * Builds a fatjar package for the project.
+    *
+    * Always performs a full, clean build so that the jar is a function of the current
+    * sources alone.
     */
   def buildFatJar(flix: Flix): Result[Unit, BootstrapError] = {
     val jarFile = Bootstrap.getJarFile(projectPath)
     val libDir = Bootstrap.getLibraryDirectory(projectPath)
+    Steps.invalidateSourceTimestamps()
     Steps.updateStaleSources(flix)
     for {
       _ <- Steps.configureJarOutput(flix)
+      _ <- Steps.cleanClassDirectory()
       _ <- Steps.compile(flix)
       _ <- Steps.validateJarFile(jarFile)
       _ <- Steps.validateDirectory(libDir)
@@ -1491,6 +1501,63 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
           return Err(BootstrapError.FileError(s"The path '${dir.toString}' is not readable."))
         }
       }
+      Ok(())
+    }
+
+    /**
+      * Forgets which sources have already been compiled, so that the next call to
+      * [[updateStaleSources]] hands every source to the compiler again.
+      *
+      * Required whenever the class directory is wiped: the timestamps are recorded per
+      * `Bootstrap`, but the class files belong to whichever `Flix` instance produced
+      * them. Without this, a second build on the same `Bootstrap` would consider every
+      * source unchanged, add nothing, and emit a jar missing almost all of its classes.
+      */
+    def invalidateSourceTimestamps(): Unit = {
+      timestamps = Map.empty
+    }
+
+    /**
+      * Removes every class file from the class directory of the project.
+      *
+      * A build only overwrites the class files it generates. Class files left behind by
+      * an earlier build - because the def they belonged to was deleted from the source,
+      * or renamed - would otherwise survive and be packaged into the jar. Wiping the
+      * directory first makes the jar a function of the current sources alone.
+      *
+      * Refuses to delete anything that is not a class file, so that a mis-configured
+      * output path cannot cause data loss.
+      */
+    def cleanClassDirectory(): Result[Unit, BootstrapError] = {
+      val classDir = Bootstrap.getClassDirectory(projectPath)
+      if (!Files.exists(classDir)) {
+        return Ok(())
+      }
+
+      checkForDangerousPath(classDir) match {
+        case Err(e) => return Err(e)
+        case Ok(()) => ()
+      }
+
+      val files = FileOps.getFilesIn(classDir, Int.MaxValue).map(_.normalize())
+
+      for (file <- files) {
+        if (!FileOps.checkExt(file, EXT_CLASS)) {
+          return Err(BootstrapError.FileError(s"Unexpected file extension in class directory (only '$EXT_CLASS' files are allowed): '${projectPath.relativize(file)}'"))
+        }
+        checkForDangerousPath(file) match {
+          case Err(e) => return Err(e)
+          case Ok(()) => ()
+        }
+      }
+
+      for (file <- files) {
+        FileOps.delete(file) match {
+          case Err(e) => return Err(BootstrapError.FileError(s"Failed to delete file '$file': $e"))
+          case Ok(_) => ()
+        }
+      }
+
       Ok(())
     }
 
