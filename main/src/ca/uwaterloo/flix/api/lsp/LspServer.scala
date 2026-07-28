@@ -128,12 +128,33 @@ object LspServer {
     private def loadFlixProject(roots: List[WorkspaceFolder]): Unit = {
       for {
         root <- roots
-        path = Paths.get(root.getName)
+        path <- workspacePath(root)
         if Files.exists(path) && Files.isDirectory(path)
       } {
         loadFlixSources(path)
         loadJarsAndFkgs(path)
       }
+    }
+
+    /**
+      * Returns the directory `root` refers to, or `None` if its URI cannot be read as a local path.
+      *
+      * Derived from `getUri`, not `getName`. The LSP spec defines `name` as the label shown to the
+      * user for the folder, so it is typically the last path segment -- `Paths.get(name)` then
+      * resolves against the server's working directory, does not exist, and the caller's guard
+      * silently skips the folder. The failure is invisible: source files still arrive through
+      * `textDocument/didOpen`, so analysis appears to work, while jars and packages -- which have no
+      * such fallback -- are never loaded and every Java import reports "Undefined Java class".
+      */
+    private def workspacePath(root: WorkspaceFolder): Option[Path] = {
+      val uri = root.getUri
+      if (uri == null) None
+      else
+        try Some(Paths.get(URI.create(uri)))
+        catch {
+          case _: IllegalArgumentException => None
+          case _: java.nio.file.FileSystemNotFoundException => None
+        }
     }
 
     /**
