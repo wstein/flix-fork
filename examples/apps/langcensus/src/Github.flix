@@ -32,9 +32,18 @@ pub eff Github {
     /// Gets the detailed statistic of a specific commit in the repository.
     ///
     def getCommit(repo: String, sha: String): Json
+
+    ///
+    /// Returns the request headers, so that pool workers can make their own calls.
+    ///
+    /// A worker cannot reach the `Config` handler on the collecting thread, so the
+    /// credentials have to be handed over as a plain value.
+    ///
+    def credentials(): Map[String, List[String]]
 }
 
 mod Github {
+    use Fs.{FileRead, FileWrite}
     use Time.Sleep
     use Util.Json
     use Util.Json.Json.{JString, JNull}
@@ -106,6 +115,37 @@ mod Github {
         }
 
     ///
+    /// Fetches one commit, consulting the cache first.
+    ///
+    /// Runs inside a pool worker, so every effect it needs is handled here and a
+    /// failure is returned rather than raised.
+    ///
+    pub def fetchCommitJson(headers: Map[String, List[String]], repo: String, sha: String): Result[String, Json] \ IO =
+        run {
+            match CensusUtil.cacheGet(repo, sha) {
+                case Some(json) => Ok(json)
+                case None =>
+                    let url = "https://api.github.com/repos/${repo}/commits/${sha}";
+                    let json = CensusUtil.getAndParse(url, headers);
+                    CensusUtil.cachePut(repo, sha, json);
+                    Ok(json)
+            }
+        } with Http.runWithIO
+        with Sleep.runWithIO
+        with ReadFile.runWithFileRead
+        with WriteFile.runWithFileWrite
+        with MkDirs.runWithFileWrite
+        with FileRead.runWithIO
+        with FileWrite.runWithIO
+        with handler AnalysisFailure {
+            def raiseRequestFailure(err, _k) = Err("${err}")
+            def raiseHttpError(msg, _k)      = Err(msg)
+            def raiseConfigError(msg, _k)    = Err(msg)
+            def raiseParseError(msg, _k)     = Err(msg)
+            def raiseJsonError(err, _k)      = Err("${err}")
+        }
+
+    ///
     /// Pages through `repo`'s history, collecting SHAs.
     ///
     /// A repository with no commits has no default branch, so GraphQL returns null
@@ -152,6 +192,8 @@ mod Github {
         run {
             f()
         } with handler Github {
+            def credentials(resume) = resume(buildHeader())
+
             def getRepos(resume) = {
                 CensusUtil.log("Fetching repositories...");
                 let repos =
