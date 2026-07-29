@@ -35,6 +35,7 @@ pub eff Github {
 }
 
 mod Github {
+    use Time.Sleep
     use Fs.MkDirs
     use Fs.ReadFile
     use Fs.WriteFile
@@ -66,6 +67,7 @@ mod Github {
             let shas = CensusUtil.getAllPages(url, headers) |> List.map(CensusUtil.accessJson("sha"));
             Ok((repo, shas))
         } with Http.runWithIO
+        with Sleep.runWithIO
         with handler AnalysisFailure {
             def raiseRequestFailure(err, _k) = Err("${err}")
             def raiseHttpError(msg, _k)      = Err(msg)
@@ -77,7 +79,7 @@ mod Github {
     ///
     /// The handler that gets data from github through REST API.
     ///
-    pub def runWithConfigHttp(f: Unit -> a \ ef): a \ ef - Github + Config + Http + AnalysisFailure + ReadFile + WriteFile + MkDirs + Chan + NonDet + IO = {
+    pub def runWithConfigHttp(f: Unit -> a \ ef): a \ ef - Github + Config + Http + AnalysisFailure + ReadFile + WriteFile + MkDirs + Chan + NonDet + Sleep + IO = {
         run {
             f()
         } with handler Github {
@@ -108,10 +110,15 @@ mod Github {
                 );
 
                 // Failures are reported back on this thread, where exiting is safe.
-                results |> List.map(res -> match res {
+                let commits = results |> List.map(res -> match res {
                     case Result.Ok(pair) => pair
                     case Result.Err(msg) => AnalysisFailure.raiseHttpError(msg)
-                }) |> List.toMap |> resume
+                });
+
+                let needed = commits |> List.map(match (_, shas) -> List.length(shas)) |> List.sum;
+                CensusUtil.reportQuota(needed, headers);
+
+                commits |> List.toMap |> resume
             }
 
             def getLanguages(repo, resume) = {

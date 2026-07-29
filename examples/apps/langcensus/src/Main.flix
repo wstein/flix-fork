@@ -1,5 +1,6 @@
 use Fs.{FileRead, FileWrite, MkDirs, ReadFile, WriteFile}
 use Net.Http
+use Time.Sleep
 use Sys.{Env, Exit}
 
 ///
@@ -27,6 +28,7 @@ def main(): Unit \ IO + Chan + NonDet =
     with Github.runWithConfigHttp
     with Config.runWithEnv
     with Http.runWithIO
+    with Sleep.runWithIO
     with ReadFile.runWithFileRead
     with WriteFile.runWithFileWrite
     with MkDirs.runWithFileWrite

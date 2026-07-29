@@ -12,6 +12,8 @@ mod CensusUtil {
     use Fs.ReadFile
     use Fs.WriteFile
     use Net.Http
+    use Time.Duration
+    use Time.Sleep
     use Net.HttpRequest
     use Net.HttpResponse
     use Util.Json
@@ -80,6 +82,49 @@ mod CensusUtil {
     /// finishing sooner.
     ///
     pub def workerCount(): Int32 = 8
+
+    ///
+    /// Returns the remaining REST quota and the seconds until it resets.
+    ///
+    /// Querying `/rate_limit` does not itself count against the quota.
+    ///
+    pub def quota(headers: Map[String, List[String]]): Option[(Int32, Int32)] \ Http + IO =
+        match Http.send(HttpRequest.get("https://api.github.com/rate_limit") |> HttpRequest.withHeaders(headers)) {
+            case Result.Err(_) => None
+            case Result.Ok(response) =>
+                // The quota is reported in the headers, so the body is not needed.
+                if (HttpResponse.status(response) != 200)
+                    None
+                else
+                    Some((remainingOf(response), secondsUntilReset(response)))
+        }
+
+    ///
+    /// Returns the quota left according to `response`, or -1 if it did not say.
+    ///
+    def remainingOf(response: HttpResponse): Int32 =
+        header("x-ratelimit-remaining", response)
+        |> Option.flatMap(Int32.fromString)
+        |> Option.getWithDefault(-1)
+
+    ///
+    /// Warns if `needed` requests will not fit in the remaining quota.
+    ///
+    /// The census issues roughly one request per uncached commit, so a large account
+    /// can exceed an hour's quota outright. Saying so up front beats discovering it
+    /// most of the way through a long run.
+    ///
+    pub def reportQuota(needed: Int32, headers: Map[String, List[String]]): Unit \ Http + IO =
+        match quota(headers) {
+            case None => ()
+            case Some((remaining, resetSecs)) =>
+                let mins = resetSecs / 60;
+                log("Quota: ${remaining} requests left, resets in ${mins} minutes. This run needs up to ${needed}.");
+                if (needed > remaining)
+                    log("  That is more than remains. Cached commits cost nothing, and the run waits for the reset rather than giving up.")
+                else
+                    ()
+        }
 
     ///
     /// Applies `f` to every element of `items` across `workers` threads, calling
@@ -214,15 +259,53 @@ mod CensusUtil {
                 AnalysisFailure.raiseHttpError("GitHub rejected a request: HTTP ${status} for ${url}.")
 
     ///
+    /// Returns how many seconds remain until the quota in `response` resets.
+    ///
+    def secondsUntilReset(response: HttpResponse): Int32 \ IO =
+        match header("x-ratelimit-reset", response) |> Option.flatMap(Int64.fromString) {
+            case None       => 60
+            case Some(secs) =>
+                let nowSecs = System.currentTimeMillis() / 1000i64;
+                Int32.max(1, Int64.tryToInt32(secs - nowSecs) |> Option.getWithDefault(60))
+        }
+
+    ///
+    /// Returns `true` if `response` was refused because the quota is exhausted.
+    ///
+    def isRateLimited(response: HttpResponse): Bool =
+        let status = HttpResponse.status(response);
+        (status == 403 or status == 429)
+            and header("x-ratelimit-remaining", response) == Some("0")
+
+    ///
     /// Sends a GET request to `url` carrying the given `headers`.
     ///
-    def get(url: String, headers: Map[String, List[String]]): Result[IoError, HttpResponse] \ Http =
-        Http.send(HttpRequest.get(url) |> HttpRequest.withHeaders(headers))
+    /// If the quota is exhausted, waits for it to reset and tries again rather than
+    /// abandoning the census: with commit responses cached, a run that resumes after
+    /// the reset picks up where it left off. Gives up after `attempts` waits so a
+    /// misreported quota cannot loop forever.
+    ///
+    def getWithin(attempts: Int32, url: String, headers: Map[String, List[String]]): Result[IoError, HttpResponse] \ Http + Sleep + IO =
+        let response = Http.send(HttpRequest.get(url) |> HttpRequest.withHeaders(headers));
+        match response {
+            case Result.Ok(r) =>
+                if (isRateLimited(r) and attempts > 0) {
+                    let waitSecs = secondsUntilReset(r);
+                    log("Quota exhausted. Waiting ${waitSecs}s for it to reset, then retrying.");
+                    Sleep.sleep(Duration.seconds(waitSecs + 1));
+                    getWithin(attempts - 1, url, headers)
+                } else
+                    response
+            case Result.Err(_) => response
+        }
+
+    def get(url: String, headers: Map[String, List[String]]): Result[IoError, HttpResponse] \ Http + Sleep + IO =
+        getWithin(3, url, headers)
 
     ///
     /// First gets the url, then parses the whole response body into a json element.
     ///
-    pub def getAndParse(url: String, header: Map[String, List[String]]): Json \ Http + AnalysisFailure + IO =
+    pub def getAndParse(url: String, header: Map[String, List[String]]): Json \ Http + AnalysisFailure + Sleep + IO =
         match get(url, header) {
             case Result.Ok(response)  =>
                 checkStatus(url, response);
@@ -240,7 +323,7 @@ mod CensusUtil {
     ///   <https://api.github.com/repositories/1300192/issues?page=515>; rel="last",
     ///   <https://api.github.com/repositories/1300192/issues?page=1>; rel="first"
     ///
-    pub def getAllPages(url: String, headers: Map[String, List[String]]): List[Json] \ Http + AnalysisFailure + IO = {
+    pub def getAllPages(url: String, headers: Map[String, List[String]]): List[Json] \ Http + AnalysisFailure + Sleep + IO = {
         match get(url, headers) {
             case Result.Ok(response)  =>
                 let status = HttpResponse.status(response);
