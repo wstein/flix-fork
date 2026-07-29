@@ -49,7 +49,7 @@ class TestLocalVariableTable extends AnyFunSuite {
   /** One `LocalVariableTable` entry. */
   private case class Entry(name: String, descriptor: String, slot: Int)
 
-  /** Returns the entries recorded for `Def$compute.staticApply`, compiled with `xdebug` as given. */
+  /** Returns the entries recorded for the generated `compute.staticApply`, compiled with `xdebug` as given. */
   private def entriesOf(xdebug: Boolean): List[Entry] = {
     val out = Files.createTempDirectory("flix-lvt-test")
     try {
@@ -60,7 +60,7 @@ class TestLocalVariableTable extends AnyFunSuite {
         case Result.Ok(_) => ()
         case Result.Err(errors) => fail(s"the test program must compile, but got: $errors")
       }
-      readEntries(out.resolve("class").resolve("Def$compute.class"))
+      readEntries(out.resolve("class").resolve(s"${JvmName.mkClassName("Def", "compute")}.class"))
     } finally {
       deleteRecursively(out)
     }
