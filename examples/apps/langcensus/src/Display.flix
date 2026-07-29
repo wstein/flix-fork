@@ -78,9 +78,14 @@ mod Display{
     }
 
     ///
-    /// Filters out the languages whose adds is zero.
+    /// Drops entries that record no change at all.
     ///
-    def statFilter(stat: Stat): Stat = Map.filter(match (adds, _) -> adds > 0ii, stat)
+    /// Deletions count as work. Requiring additions discarded every language a person
+    /// only removed code in, which is exactly the activity a cleanup or a migration
+    /// consists of.
+    ///
+    pub def statFilter(stat: Stat): Stat =
+        Map.filter(match (adds, dels) -> adds > 0ii or dels > 0ii, stat)
 
     ///
     /// Prints the stat for each language.
@@ -91,10 +96,22 @@ mod Display{
     ///
     /// Renames the extention to langauges and merge entries of the same language.
     ///
-    def renameAndMerge(languages: Map[String, String], stat: Stat): Stat =
+    ///
+    /// The bucket for files whose extension no language claims.
+    ///
+    /// Naming the leftovers keeps the totals honest: silently dropping them made the
+    /// report look complete while quietly losing work.
+    ///
+    pub def unclassified(): String = "Unclassified"
+
+    pub def renameAndMerge(languages: Map[String, String], stat: Stat): Stat =
         Map.foldLeftWithKey((acc, ext, data) -> {
             match Map.get(String.toLowerCase(ext), languages) {
-                case Option.None        => acc
+                case Option.None        =>
+                    Map.insertWith(
+                        match (oldAdds, oldDels) -> match (newAdds, newDels) -> (oldAdds + newAdds, oldDels + newDels),
+                        unclassified(), data, acc
+                    )
                 case Option.Some(language) =>
                     Map.insertWith(
                         match (oldAdds, oldDels) -> match (newAdds, newDels) -> (oldAdds + newAdds, oldDels + newDels),
@@ -213,9 +230,15 @@ mod Display{
         "" ::
         "| | |" ::
         "| :-- | --: |" ::
+        let unclassifiedLines =
+            langRows
+            |> List.filter(match (lang, _) -> lang == unclassified())
+            |> List.foldLeft((acc, row) -> match row { case (_, (a, d)) => acc + a + d }, 0ii);
+        let changed = adds + dels;
         "| Repositories with counted commits | ${group(repos)} |" ::
         "| Languages you changed | ${group(List.length(langRows))} |" ::
         "| Languages present in those repositories | ${group(List.length(byteRows))} |" ::
+        "| Lines in files no language claims | ${groupBig(unclassifiedLines)} (${percent(unclassifiedLines, changed)}) |" ::
         "| Lines added | ${groupBig(adds)} |" ::
         "| Lines deleted | ${groupBig(dels)} |" ::
         "| Bytes of code | ${groupBig(bytes)} |" ::
