@@ -24,7 +24,7 @@ eff AnalysisFailure {
     ///
     /// This failure means we have trouble parsing a string to a json element.
     ///
-    def raiseParseError(): Void
+    def raiseParseError(msg: String): Void
 
     ///
     /// This failure means we have trouble accessing a json element.
@@ -55,8 +55,8 @@ mod AnalysisFailure{
                 println(msg);
                 Exit.exit(2)
             }
-            def raiseParseError(_k) = {
-                println("Parse Error");
+            def raiseParseError(msg, _k) = {
+                println(msg);
                 Exit.exit(3)
             }
             def raiseJsonError(err, _k) = {

@@ -10,7 +10,7 @@ use Sys.{Env, Exit}
 ///   - The total adds and dels of the user for each language.
 ///   - The total bytes of code for each language for all the reporitorites the user has participated in.
 ///
-def main(): Unit \ IO =
+def main(): Unit \ IO + Chan + NonDet =
     run {
         let repos = Github.getRepos();
         let repoShaMap = Github.getCommits(repos);

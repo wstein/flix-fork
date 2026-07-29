@@ -54,9 +54,30 @@ mod Github {
     }
 
     ///
+    /// Fetches the SHAs of `name`'s commits in `repo`.
+    ///
+    /// Runs inside a pool worker, so it installs its own `Http` handler and turns a
+    /// failure into a value instead of raising it: a worker must not exit the
+    /// process out from under the other workers.
+    ///
+    def fetchCommits(name: String, headers: Map[String, List[String]], repo: String): Result[String, (String, List[String])] \ IO =
+        run {
+            let url = "https://api.github.com/repos/${repo}/commits?author=${name}&per_page=100";
+            let shas = CensusUtil.getAllPages(url, headers) |> List.map(CensusUtil.accessJson("sha"));
+            Ok((repo, shas))
+        } with Http.runWithIO
+        with handler AnalysisFailure {
+            def raiseRequestFailure(err, _k) = Err("${err}")
+            def raiseHttpError(msg, _k)      = Err(msg)
+            def raiseConfigError(msg, _k)    = Err(msg)
+            def raiseParseError(msg, _k)     = Err(msg)
+            def raiseJsonError(err, _k)      = Err("${err}")
+        }
+
+    ///
     /// The handler that gets data from github through REST API.
     ///
-    pub def runWithConfigHttp(f: Unit -> a \ ef): a \ ef - Github + Config + Http + AnalysisFailure + ReadFile + WriteFile + MkDirs + IO = {
+    pub def runWithConfigHttp(f: Unit -> a \ ef): a \ ef - Github + Config + Http + AnalysisFailure + ReadFile + WriteFile + MkDirs + Chan + NonDet + IO = {
         run {
             f()
         } with handler Github {
@@ -70,12 +91,26 @@ mod Github {
             }
 
             def getCommits(repos, resume) = {
-                let repoCount = List.length(repos);
-                repos |> List.mapWithIndex((i, repo) -> {
-                    let url = "https://api.github.com/repos/${repo}/commits?author=${Config.getName()}&per_page=100";
-                    let shas = CensusUtil.getAllPages(url, buildHeader()) |> List.map(CensusUtil.accessJson("sha"));
-                    CensusUtil.log("[${CensusUtil.counter(i + 1, repoCount)}] ${repo}: ${List.length(shas)} commits");
-                    (repo, shas)
+                // Resolve the credentials once, here: a worker cannot reach the
+                // `Config` handler, which lives on this thread's stack.
+                let headers = buildHeader();
+                let name = Config.getName();
+
+                let results = CensusUtil.parMap(
+                    CensusUtil.workerCount(),
+                    repos,
+                    repo -> fetchCommits(name, headers, repo),
+                    (i, total, res) -> match res {
+                        case Result.Ok((repo, shas)) =>
+                            CensusUtil.log("[${CensusUtil.counter(i, total)}] ${repo}: ${List.length(shas)} commits")
+                        case Result.Err(_) => ()
+                    }
+                );
+
+                // Failures are reported back on this thread, where exiting is safe.
+                results |> List.map(res -> match res {
+                    case Result.Ok(pair) => pair
+                    case Result.Err(msg) => AnalysisFailure.raiseHttpError(msg)
                 }) |> List.toMap |> resume
             }
 

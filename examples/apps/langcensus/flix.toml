@@ -3,6 +3,6 @@ name        = "langcensus"
 description = "count the lines of adds and dels for every commit from you"
 version     = "0.1.0"
 flix        = "0.58.1"
-authors     = ["chenhaogao123@gmail.com"]
+authors     = ["chenhaogao123@gmail.com", "werner.stein@gmail.com"]
 
 [dependencies]

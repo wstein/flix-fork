@@ -55,10 +55,12 @@ mod CensusUtil {
     ///
     /// Returns the cached response for `sha`, or `None` if it has not been fetched yet.
     ///
-    pub def cacheGet(repo: String, sha: String): Option[Json] \ ReadFile + AnalysisFailure =
+    pub def cacheGet(repo: String, sha: String): Option[Json] \ ReadFile =
         match ReadFile.read(cachePath(repo, sha)) {
             case Result.Err(_)   => None
-            case Result.Ok(body) => Some(parse(body))
+            // A cache entry that will not parse is treated as a miss, so a partially
+            // written file heals itself on the next run instead of poisoning it.
+            case Result.Ok(body) => Json.parse(body) |> Result.toOption
         }
 
     ///
@@ -69,6 +71,53 @@ mod CensusUtil {
         MkDirs.mkDirs(cacheDir()) |> Result.map(_ ->
             WriteFile.write(str = Json.toCompactString(json), cachePath(repo, sha))
         ) |> _ -> ()
+
+    ///
+    /// How many repositories are fetched concurrently.
+    ///
+    /// Kept deliberately small: GitHub throttles bursts of concurrent requests, and
+    /// the quota is shared, so more workers reach the rate limit sooner rather than
+    /// finishing sooner.
+    ///
+    pub def workerCount(): Int32 = 8
+
+    ///
+    /// Applies `f` to every element of `items` across `workers` threads, calling
+    /// `onDone` on the collecting thread as each result arrives.
+    ///
+    /// `f` must be `IO`-only. A worker cannot perform an algebraic effect handled by
+    /// its parent, because the handler lives on the parent's stack, so anything
+    /// effectful has to install its own handlers inside `f`.
+    ///
+    /// Results come back in completion order, not input order.
+    ///
+    pub def parMap(workers: Int32, items: List[a], f: a -> b \ IO, onDone: (Int32, Int32, b) -> Unit \ IO): List[b] \ Chan + NonDet + IO =
+        region rc {
+            let total = List.length(items);
+            let (workTx, workRx) = Channel.buffered(total + workers);
+            let (resTx, resRx) = Channel.buffered(total);
+
+            // Queue the work, then one `None` per worker to tell it to stop.
+            foreach (x <- items) Channel.send(Some(x), workTx);
+            foreach (_ <- List.range(0, workers)) Channel.send(None, workTx);
+
+            foreach (_ <- List.range(0, workers)) spawn drain(workRx, resTx, f) @ rc;
+
+            List.range(0, total) |> List.map(i -> {
+                let r = Channel.recv(resRx);
+                onDone(i + 1, total, r);
+                r
+            })
+        }
+
+    ///
+    /// Pulls work until the queue is exhausted.
+    ///
+    def drain(rx: Receiver[Option[a]], tx: Sender[b], f: a -> b \ IO): Unit \ Chan + NonDet + IO =
+        match Channel.recv(rx) {
+            case None    => ()
+            case Some(x) => Channel.send(f(x), tx); drain(rx, tx, f)
+        }
 
     pub type alias Stat = Map[String, (BigInt, BigInt)]
 
@@ -95,10 +144,20 @@ mod CensusUtil {
     ///
     /// A wrapper for Json.parse, with the error handled by effect.
     ///
-    def parse(jsonString: String): Json \ AnalysisFailure =
+    def parse(context: String, jsonString: String): Json \ AnalysisFailure =
         match Json.parse(jsonString) {
-            case Result.Err(_)   => AnalysisFailure.raiseParseError()
             case Result.Ok(json) => json
+            case Result.Err(err) =>
+                // Include the source and a slice of the payload: without them a parse
+                // failure part-way through thousands of commits is undiagnosable.
+                let excerpt = String.takeLeft(300, jsonString);
+                AnalysisFailure.raiseParseError(
+                    String.unlines(
+                        "Could not parse a JSON response from GitHub." ::
+                        "  source: ${context}" ::
+                        "  error:  ${err}" ::
+                        "  bytes:  ${String.length(jsonString)}" ::
+                        "  begins: ${excerpt}" :: Nil))
         }
 
     ///
@@ -167,7 +226,7 @@ mod CensusUtil {
         match get(url, header) {
             case Result.Ok(response)  =>
                 checkStatus(url, response);
-                response |> HttpResponse.body |> parse
+                parse(url, HttpResponse.body(response))
             case Result.Err(err) => AnalysisFailure.raiseRequestFailure(err)
         }
 
@@ -184,8 +243,18 @@ mod CensusUtil {
     pub def getAllPages(url: String, headers: Map[String, List[String]]): List[Json] \ Http + AnalysisFailure + IO = {
         match get(url, headers) {
             case Result.Ok(response)  =>
+                let status = HttpResponse.status(response);
+                // GitHub answers 409 for a repository that has no commits at all, and
+                // 404 for one that is gone or invisible to this token. Both are ordinary
+                // facts about a repository, not reasons to abandon the census.
+                if (status == 409)
+                    Nil
+                else if (status == 404) {
+                    log("  skipping ${url}: not found (renamed, deleted, or not visible to this token)");
+                    Nil
+                } else {
                 checkStatus(url, response);
-                let thisPage: List[Json] = response |> HttpResponse.body |> parse |> fromJson;
+                let thisPage: List[Json] = parse(url, HttpResponse.body(response)) |> fromJson;
                 let nextPagesOpt = forM (
                     linkValueList <- HttpResponse.headers(response) |> Map.get("link");
                     linkString <- List.head(linkValueList);
@@ -196,6 +265,7 @@ mod CensusUtil {
                 ) yield getAllPages(nextLink, headers);
                 let nextPages = Option.getWithDefault(Nil, nextPagesOpt);
                 thisPage ::: nextPages
+                }
             case Result.Err(err) => AnalysisFailure.raiseRequestFailure(err)
         }
     }
