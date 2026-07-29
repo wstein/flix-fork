@@ -21,7 +21,7 @@ import ca.uwaterloo.flix.api.{Bootstrap, BootstrapError, Flix, Version}
 import ca.uwaterloo.flix.language.CompilationMessage
 import ca.uwaterloo.flix.language.ast.shared.SecurityContext
 import ca.uwaterloo.flix.language.ast.{Symbol, TypedAst}
-import ca.uwaterloo.flix.language.phase.HtmlDocumentor
+import ca.uwaterloo.flix.language.phase.Documentor
 import ca.uwaterloo.flix.language.phase.unification.zhegalkin.ZhegalkinPerf
 import ca.uwaterloo.flix.runtime.shell.Shell
 import ca.uwaterloo.flix.tools.*
@@ -72,6 +72,7 @@ object Main {
       outputPath = Options.Default.outputPath,
       threads = cmdOpts.threads.getOrElse(Options.Default.threads),
       compilerTop = cmdOpts.top,
+      docFormat = cmdOpts.docFormat,
       loadClassFiles = Options.Default.loadClassFiles,
       assumeYes = cmdOpts.assumeYes,
       xprintphases = cmdOpts.xprintphases,
@@ -288,7 +289,7 @@ object Main {
             val flix = mkFlixWithFiles(cmdOpts.files, options)
             val (optRoot, errors) = flix.check()
             if (errors.isEmpty) {
-              HtmlDocumentor.run(optRoot.get, PackageModules.All)(flix)
+              Documentor.run(optRoot.get, PackageModules.All, options.docFormat)(flix)
               System.exit(0)
             } else exitWithErrors(flix, errors, optRoot)
           }
@@ -470,6 +471,7 @@ object Main {
   case class CmdOpts(
     command: Command = Command.None,
     args: List[String] = Nil,
+    docFormat: DocFormat = Options.Default.docFormat,
     entryPoint: Option[String] = None,
     installDeps: Boolean = true,
     githubToken: Option[String] = None,
@@ -577,6 +579,13 @@ object Main {
       case arg => throw new IllegalArgumentException(s"'$arg' is not a valid Datalog debug option. Valid options are comma-separated combinations of 'rules', 'facts', and 'ram'.")
     }
 
+    implicit val readDocFormat: scopt.Read[DocFormat] = scopt.Read.reads {
+      case "html" => DocFormat.Html
+      case "md" => DocFormat.Markdown
+      case "all" => DocFormat.All
+      case arg => throw new IllegalArgumentException(s"'$arg' is not a valid documentation format. Valid options are 'html', 'md', and 'all'.")
+    }
+
     implicit val readSubEffectLevel: scopt.Read[Subeffecting] = scopt.Read.reads {
       case "mod-defs" => Subeffecting.ModDefs
       case "ins-defs" => Subeffecting.InsDefs
@@ -657,6 +666,9 @@ object Main {
       ).hidden()
 
       note("")
+
+      opt[DocFormat]("doc-format").action((arg, c) => c.copy(docFormat = arg)).
+        text("selects the format that 'doc' emits (html, md, all). Defaults to html.")
 
       opt[String]("entrypoint").action((s, c) => c.copy(entryPoint = Some(s))).
         text("specifies the main entry point.")

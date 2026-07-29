@@ -16,9 +16,11 @@
 
 package ca.uwaterloo.flix.language.phase
 
+import ca.uwaterloo.flix.api.Flix
 import ca.uwaterloo.flix.language.ast.shared.Doc
 import ca.uwaterloo.flix.language.ast.{Symbol, Type, TypeConstructor, TypedAst}
 import ca.uwaterloo.flix.tools.pkg.PackageModules
+import ca.uwaterloo.flix.util.DocFormat
 
 import scala.annotation.tailrec
 
@@ -43,6 +45,17 @@ object Documentor {
     * The "pseudo-name" of the root namespace used for its file name.
     */
   val RootFileName: String = "index"
+
+  /**
+    * Writes documentation for `root`, restricted to `packageModules`, in the requested `format`.
+    */
+  def run(root: TypedAst.Root, packageModules: PackageModules, format: DocFormat)(implicit flix: Flix): Unit = format match {
+    case DocFormat.Html => HtmlDocumentor.run(root, packageModules)
+    case DocFormat.Markdown => MarkdownDocumentor.run(root, packageModules)
+    case DocFormat.All =>
+      HtmlDocumentor.run(root, packageModules)
+      MarkdownDocumentor.run(root, packageModules)
+  }
 
   /**
     * Returns the tree of documentable items in `root`, restricted to `packageModules`.

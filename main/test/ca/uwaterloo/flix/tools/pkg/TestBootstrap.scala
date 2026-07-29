@@ -247,6 +247,23 @@ class TestBootstrap extends AnyFunSuite {
     }
   }
 
+  test("clean-should-remove-generated-documentation") {
+    // 'clean' refuses to delete anything it does not recognise, so every format that 'doc'
+    // can emit has to be recognised, or generating docs makes the project uncleanable.
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out).unsafeGet
+    val b = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
+    b.build(PkgTestUtils.mkFlix)
+    val docDir = p.resolve("./build/doc/").normalize()
+    Files.createDirectories(docDir)
+    FileOps.writeString(docDir.resolve("List.md").normalize(), "# List")
+    FileOps.writeString(docDir.resolve("List.html").normalize(), "<h1>List</h1>")
+    b.clean() match {
+      case Result.Ok(_) => succeed
+      case Result.Err(e) => fail(s"expected clean to accept generated documentation, but got: $e")
+    }
+  }
+
   test("clean-should-error-on-unexpected-file") {
     val p = Files.createTempDirectory(ProjectPrefix)
     Bootstrap.init(p)(System.out).unsafeGet

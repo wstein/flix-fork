@@ -21,7 +21,7 @@ import ca.uwaterloo.flix.api.lsp.FormatterLsp as LspFormatter
 import ca.uwaterloo.flix.language.CompilationMessage
 import ca.uwaterloo.flix.language.ast.shared.SecurityContext
 import ca.uwaterloo.flix.language.ast.{Scheme, SourceLocation, Symbol, TypedAst}
-import ca.uwaterloo.flix.language.phase.HtmlDocumentor
+import ca.uwaterloo.flix.language.phase.Documentor
 import ca.uwaterloo.flix.runtime.CompilationResult
 import ca.uwaterloo.flix.runtime.shell.FileWatcher
 import ca.uwaterloo.flix.tools.Tester
@@ -804,13 +804,13 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
     Ok(())
   }
 
-  /** Returns `Err` if `path` is not a file that could be produced by [[HtmlDocumentor]]. */
+  /** Returns `Err` if `path` is not a file that could be produced by a documentation backend. */
   private def isValidDocumentFile(path: Path): Result[Unit, BootstrapError] = {
     val knownFiles = List("favicon.png", "index.js", "styles.css")
     if (knownFiles.contains(path.getFileName.toString)) {
       return Ok(())
     }
-    if (FileOps.checkExt(path, "html")) {
+    if (FileOps.checkExt(path, "html") || FileOps.checkExt(path, "md")) {
       return Ok(())
     }
     val iconsDir = Bootstrap.getDocumentationDirectory(projectPath).resolve("./icons/").normalize()
@@ -834,7 +834,7 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
     */
   def doc(flix: Flix): Result[Unit, BootstrapError] = {
     Steps.updateStaleSources(flix)
-    Steps.check(flix).map(HtmlDocumentor.run(_, getPackageModules)(flix))
+    Steps.check(flix).map(Documentor.run(_, getPackageModules, flix.options.docFormat)(flix))
   }
 
   /**

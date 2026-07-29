@@ -16,7 +16,7 @@
 
 package ca.uwaterloo.flix
 
-import ca.uwaterloo.flix.util.LibLevel
+import ca.uwaterloo.flix.util.{DocFormat, LibLevel}
 import org.scalatest.funsuite.AnyFunSuite
 
 class TestMain extends AnyFunSuite {
@@ -61,6 +61,38 @@ class TestMain extends AnyFunSuite {
     val args = Array("doc")
     val opts = Main.parseCmdOpts(args).get
     assert(opts.command == Main.Command.Doc)
+  }
+
+  test("doc --doc-format html") {
+    val args = Array("doc", "--doc-format", "html")
+    val opts = Main.parseCmdOpts(args).get
+    assert(opts.command == Main.Command.Doc)
+    assert(opts.docFormat == DocFormat.Html)
+  }
+
+  test("doc --doc-format md") {
+    val args = Array("doc", "--doc-format", "md")
+    val opts = Main.parseCmdOpts(args).get
+    assert(opts.command == Main.Command.Doc)
+    assert(opts.docFormat == DocFormat.Markdown)
+  }
+
+  test("doc --doc-format all") {
+    val args = Array("doc", "--doc-format", "all")
+    val opts = Main.parseCmdOpts(args).get
+    assert(opts.docFormat == DocFormat.All)
+  }
+
+  test("doc without --doc-format") {
+    // HTML has always been what 'doc' emits, and stays so unless asked otherwise.
+    val args = Array("doc")
+    val opts = Main.parseCmdOpts(args).get
+    assert(opts.docFormat == DocFormat.Html)
+  }
+
+  test("doc --doc-format with an unknown format") {
+    val args = Array("doc", "--doc-format", "xml")
+    assert(Main.parseCmdOpts(args).isEmpty)
   }
 
   test("format") {

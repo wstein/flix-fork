@@ -28,6 +28,7 @@ object Options {
     lib = LibLevel.All,
     build = Build.Development,
     compilerTop = false,
+    docFormat = DocFormat.Html,
     entryPoint = None,
     githubToken = None,
     installDeps = false,
@@ -78,6 +79,7 @@ object Options {
   * @param lib            selects the level of libraries to include.
   * @param build          selects development or production mode.
   * @param compilerTop    shows a live TUI of where the compiler spends its time.
+  * @param docFormat      selects the format that 'flix doc' emits.
   * @param entryPoint     specifies the main entry point.
   * @param githubToken    the API key to use for GitHub dependency resolution.
   * @param incremental    enables incremental compilation.
@@ -95,6 +97,7 @@ object Options {
 case class Options(lib: LibLevel,
                    build: Build,
                    compilerTop: Boolean,
+                   docFormat: DocFormat,
                    entryPoint: Option[Symbol.DefnSym],
                    githubToken: Option[String],
                    incremental: Boolean,
@@ -180,6 +183,24 @@ object DatalogDebug {
 
   /** All of the above. */
   val All: Set[DatalogDebug] = Set(Rules, Facts, Ram)
+
+}
+
+/**
+  * An option that selects the format that `flix doc` emits.
+  */
+sealed trait DocFormat
+
+object DocFormat {
+
+  /** Emit HTML pages, for reading in a browser. */
+  case object Html extends DocFormat
+
+  /** Emit Markdown pages, for reading in a checkout or by a language model. */
+  case object Markdown extends DocFormat
+
+  /** Emit both. */
+  case object All extends DocFormat
 
 }
 
