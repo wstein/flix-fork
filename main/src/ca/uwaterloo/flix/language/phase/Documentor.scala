@@ -1,0 +1,498 @@
+/*
+ * Copyright 2023 Holger Dal Mogensen
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package ca.uwaterloo.flix.language.phase
+
+import ca.uwaterloo.flix.language.ast.shared.Doc
+import ca.uwaterloo.flix.language.ast.{Symbol, Type, TypeConstructor, TypedAst}
+import ca.uwaterloo.flix.tools.pkg.PackageModules
+
+import scala.annotation.tailrec
+
+/**
+  * The format-agnostic half of API documentation generation.
+  *
+  * A [[TypedAst.Root]] is a flat collection of symbols, which is inconvenient to document: a
+  * documentation page for `List` must gather the `List` enum, its instances, and the definitions of
+  * the companion module `List`. This object turns a root into a tree of [[Item]]s in which those
+  * relationships are already resolved, so that a documentation backend only has to render.
+  *
+  * The tree is shared by every backend; see [[HtmlDocumentor]] and [[MarkdownDocumentor]].
+  */
+object Documentor {
+
+  /**
+    * The "pseudo-name" of the root namespace displayed on the pages.
+    */
+  val RootNS: String = "Prelude"
+
+  /**
+    * The "pseudo-name" of the root namespace used for its file name.
+    */
+  val RootFileName: String = "index"
+
+  /**
+    * Returns the tree of documentable items in `root`, restricted to `packageModules`.
+    *
+    * Non-public items, and modules left empty by that filtering, are removed. Companion modules are
+    * attached to the trait, effect, or enum that they belong to, rather than appearing as
+    * submodules of their parent.
+    */
+  def build(root: TypedAst.Root, packageModules: PackageModules): Module = {
+    pairModules(filterModules(splitModules(root), packageModules))
+  }
+
+  /**
+    * Returns the shortest name of the module symbol, e.g. 'StdOut'.
+    */
+  def moduleName(sym: Symbol.ModuleSym): String = sym.ns.lastOption.getOrElse(RootNS)
+
+  /**
+    * Returns the fully qualified name of the module symbol, e.g. 'System.StdOut'.
+    */
+  def moduleQualifiedName(sym: Symbol.ModuleSym): String = if (sym.isRoot) RootNS else sym.toString
+
+  /**
+    * Returns the file name of the module symbol with the given `extension`, e.g. 'System.StdOut.html'.
+    */
+  def moduleFileName(sym: Symbol.ModuleSym, extension: String): String =
+    s"${if (sym.isRoot) RootFileName else sym.toString}.$extension"
+
+  /**
+    * Returns the shortest name of the trait symbol, e.g. 'Foldable'.
+    */
+  def traitName(sym: Symbol.TraitSym): String = sym.name
+
+  /**
+    * Returns the fully qualified name of the trait symbol, e.g. 'Fixpoint.PredSymsOf'.
+    */
+  def traitQualifiedName(sym: Symbol.TraitSym): String = sym.toString
+
+  /**
+    * Returns the file name of the trait symbol with the given `extension`, e.g. 'Fixpoint.PredSymsOf.html'.
+    */
+  def traitFileName(sym: Symbol.TraitSym, extension: String): String = s"$sym.$extension"
+
+  /**
+    * Returns the shortest name of the effect symbol, e.g. 'StdOut'.
+    */
+  def effectName(sym: Symbol.EffSym): String = sym.name
+
+  /**
+    * Returns the fully qualified name of the effect symbol, e.g. 'System.StdOut'.
+    */
+  def effectQualifiedName(sym: Symbol.EffSym): String = sym.toString
+
+  /**
+    * Returns the file name of the effect symbol with the given `extension`, e.g. 'System.StdOut.html'.
+    */
+  def effectFileName(sym: Symbol.EffSym, extension: String): String = s"$sym.$extension"
+
+  /**
+    * Returns the shortest name of the enum symbol, e.g. 'StdOut'.
+    */
+  def enumName(sym: Symbol.EnumSym): String = sym.name
+
+  /**
+    * Returns the fully qualified name of the enum symbol, e.g. 'System.StdOut'.
+    */
+  def enumQualifiedName(sym: Symbol.EnumSym): String = sym.toString
+
+  /**
+    * Returns the file name of the enum symbol with the given `extension`, e.g. 'System.StdOut.html'.
+    */
+  def enumFileName(sym: Symbol.EnumSym, extension: String): String = s"$sym.$extension"
+
+  /**
+    * Returns the file name of `item` with the given `extension`, e.g. 'System.StdOut.html'.
+    */
+  def fileName(item: Item, extension: String): String = item match {
+    case m: Module => moduleFileName(m.sym, extension)
+    case t: Trait => traitFileName(t.decl.sym, extension)
+    case e: Effect => effectFileName(e.decl.sym, extension)
+    case e: Enum => enumFileName(e.decl.sym, extension)
+  }
+
+  /**
+    * Splits the modules present in the root into a tree of [[Module]]s, making them easier to work with.
+    *
+    * Note: This function leaves all companion module fields empty.
+    * Use `pairModules` to fill them in.
+    */
+  private def splitModules(root: TypedAst.Root): Module = {
+
+    /**
+      * Visits a module and all of its submodules
+      */
+    def visitMod(moduleSym: Symbol.ModuleSym, parent: Option[Symbol.ModuleSym]): Module = {
+      val mod = root.modules(moduleSym)
+
+      var submodules: List[Symbol.ModuleSym] = Nil
+      var traits: List[Trait] = Nil
+      var effects: List[Effect] = Nil
+      var enums: List[Enum] = Nil
+      var typeAliases: List[TypedAst.TypeAlias] = Nil
+      var defs: List[TypedAst.Def] = Nil
+      mod.children.foreach {
+        case sym: Symbol.ModuleSym => submodules = sym :: submodules
+        case sym: Symbol.TraitSym =>
+          traits = mkTrait(sym, moduleSym, root) :: traits
+        case sym: Symbol.EffSym =>
+          effects = mkEffect(sym, moduleSym, root) :: effects
+        case sym: Symbol.EnumSym =>
+          enums = mkEnum(sym, moduleSym, root) :: enums
+        case sym: Symbol.TypeAliasSym => typeAliases = root.typeAliases(sym) :: typeAliases
+        case sym: Symbol.DefnSym => defs = root.defs(sym) :: defs
+        case _ => // No op
+      }
+
+      Module(
+        moduleSym,
+        mod.doc,
+        parent,
+        submodules.map(visitMod(_, Some(moduleSym))),
+        traits,
+        effects,
+        enums,
+        typeAliases,
+        defs,
+      )
+    }
+
+    visitMod(Symbol.mkModuleSym(Nil), None)
+  }
+
+  /**
+    * Extracts all relevant information about the given `TraitSym` from the root, into a [[Trait]],
+    * leaving the companion module unpopulated.
+    */
+  private def mkTrait(sym: Symbol.TraitSym, parent: Symbol.ModuleSym, root: TypedAst.Root): Trait = {
+    val decl = root.traits(sym)
+
+    val (sigs, defs) = decl.sigs.partition(_.exp.isEmpty)
+    val instances = root.instances.get(sym)
+
+    Trait(decl, sigs, defs, instances, parent, None)
+  }
+
+  /**
+    * Extracts all relevant information about the given `EffSym` from the root, into an [[Effect]],
+    * leaving the companion module unpopulated.
+    */
+  private def mkEffect(sym: Symbol.EffSym, parent: Symbol.ModuleSym, root: TypedAst.Root): Effect = {
+    Effect(root.effects(sym), parent, None)
+  }
+
+  /**
+    * Extracts all relevant information about the given `EnumSym` from the root, into an [[Enum]],
+    * leaving the companion module unpopulated.
+    */
+  private def mkEnum(sym: Symbol.EnumSym, parent: Symbol.ModuleSym, root: TypedAst.Root): Enum = {
+
+    /**
+      * Checks if a [[TypedAst.Instance]] with the given type `tpe` should be included on the page of the given enum.
+      */
+    @tailrec
+    def enumMatchesInstance(enm: Symbol.EnumSym, tpe: Type): Boolean = tpe match {
+      // An instance should be included if:
+      // 1. An instance exists directly, e.g. `Eq[Boxed]`
+      case Type.Cst(TypeConstructor.Enum(s, _), _) => enm == s
+      // 2. An instance exists, consisting of the enum having been applied with some number of parameters, e.g. `Eq[Chain[a]] with Eq[a]`
+      case Type.Apply(t, _, _) => enumMatchesInstance(enm, t)
+      // Othwerwise not
+      case _ => false
+    }
+
+    val allInstances = root.instances.values
+    val instances = allInstances.filter(i => enumMatchesInstance(sym, i.tpe)).toList
+
+    Enum(root.enums(sym), instances, parent, None)
+  }
+
+  /**
+    * Filter the module, `mod`, and its children, removing all items and empty modules, which shouldn't appear in the documentation.
+    */
+  private def filterModules(mod: Module, packageModules: PackageModules): Module = {
+    filterEmpty(filterContents(mod, packageModules))
+  }
+
+  /**
+    * Returns a tree of modules corresponding to the given input,
+    * but with all contained items that shouldn't appear in the documentation removed.
+    *
+    * Note: This function assumes that companion modules are unpopulated,
+    * i.e. this should be called before `pairModules`.
+    */
+  private def filterContents(mod: Module, packageModules: PackageModules): Module = mod match {
+    case Module(sym, doc, parent, submodules, traits, effects, enums, typeAliases, defs) =>
+      val included = packageModules.contains(sym)
+      if (included) {
+        Module(
+          sym,
+          doc,
+          parent,
+          submodules.map(m => filterContents(m, PackageModules.All)),
+          traits.filter(c => c.decl.mod.isPublic).map(c => filterTrait(c)),
+          effects.filter(e => e.decl.mod.isPublic).map(e => filterEffect(e)),
+          enums.filter(e => e.decl.mod.isPublic).map(e => filterEnum(e)),
+          typeAliases.filter(t => t.mod.isPublic),
+          defs.filter(d => d.spec.mod.isPublic),
+        )
+      } else {
+        // Keep the 'spine' of the tree if a module further down is included
+        val sm = submodules ++
+          traits.flatMap(c => c.companionMod) ++
+          effects.flatMap(e => e.companionMod) ++
+          enums.flatMap(e => e.companionMod)
+
+        Module(
+          sym,
+          doc,
+          parent,
+          sm.map(m => filterContents(m, packageModules)),
+          Nil,
+          Nil,
+          Nil,
+          Nil,
+          Nil,
+        )
+      }
+  }
+
+  /**
+    * Returns a [[Trait]] corresponding to the given `trt`,
+    * but with all items that shouldn't appear in the documentation removed.
+    *
+    * Note: This function assumes that companion modules are unpopulated,
+    * i.e. this should be called before `pairModules`.
+    */
+  private def filterTrait(trt: Trait): Trait = trt match {
+    case Trait(TypedAst.Trait(doc, ann, mod, sym, tparam, superTraits, assocs, _, laws, loc), signatures, defs, instances, parent, _) =>
+      Trait(
+        TypedAst.Trait(
+          doc,
+          ann,
+          mod,
+          sym,
+          tparam,
+          superTraits,
+          assocs,
+          Nil,
+          laws.filter(l => l.spec.mod.isPublic),
+          loc
+        ),
+        signatures.filter(s => s.spec.mod.isPublic),
+        defs.filter(d => d.spec.mod.isPublic),
+        instances,
+        parent,
+        None
+      )
+  }
+
+  /**
+    * Returns an [[Effect]] corresponding to the given `eff`,
+    * but with all items that shouldn't appear in the documentation removed.
+    *
+    * Note: This function assumes that companion modules are unpopulated,
+    * i.e. this should be called before `pairModules`.
+    */
+  private def filterEffect(eff: Effect): Effect = eff match {
+    case Effect(e, parent, _) =>
+      Effect(
+        e,
+        parent,
+        None,
+      )
+  }
+
+  /**
+    * Returns an [[Enum]] corresponding to the given `enm`,
+    * but with all items that shouldn't appear in the documentation removed.
+    *
+    * Note: This function assumes that companion modules are unpopulated,
+    * i.e. this should be called before `pairModules`.
+    */
+  private def filterEnum(enm: Enum): Enum = enm match {
+    case Enum(e, instances, parent, _) =>
+      Enum(
+        e,
+        instances,
+        parent,
+        None,
+      )
+  }
+
+  /**
+    * Remove any modules and references to them if they:
+    *   1. Contain no items
+    *   1. Contain no submodules with any items
+    *
+    * Note: This function assumes that companion modules are unpopulated,
+    * i.e. this should be called before `pairModules`.
+    */
+  private def filterEmpty(mod: Module): Module = {
+    /**
+      * Recursively walks the module tree removing empty modules.
+      */
+    def visitMod(mod: Module): Option[Module] = mod match {
+      case Module(sym, doc, parent, submodules, traits, effects, enums, typeAliases, defs) =>
+        val filteredSubMods = submodules.flatMap(visitMod)
+
+        val isEmpty =
+          filteredSubMods.isEmpty &&
+            traits.isEmpty &&
+            effects.isEmpty &&
+            enums.isEmpty &&
+            typeAliases.isEmpty &&
+            defs.isEmpty
+
+        if (isEmpty) None
+        else Some(
+          Module(
+            sym,
+            doc,
+            parent,
+            filteredSubMods,
+            traits,
+            effects,
+            enums,
+            typeAliases,
+            defs
+          )
+        )
+    }
+
+    visitMod(mod)
+      .getOrElse(Module(
+        mod.sym,
+        mod.doc,
+        None,
+        Nil,
+        Nil,
+        Nil,
+        Nil,
+        Nil,
+        Nil,
+      ))
+  }
+
+  /**
+    * Get the given module tree, but with all companion modules paired to their respective items.
+    */
+  private def pairModules(mod: Module): Module = mod match {
+    case Module(sym, doc, parent, submodules, traits, effects, enums, typeAliases, defs) =>
+
+      val visitedSubmodules = submodules.map(pairModules)
+
+      /** Modules that should not be included as a submodule */
+      var companionMods: List[Module] = Nil
+
+      val pairedTraits = traits.map { t =>
+        val comp = visitedSubmodules.find(m => m.sym.ns.last == t.decl.sym.name)
+        comp.foreach(c => companionMods = c :: companionMods)
+        t.copy(companionMod = comp)
+      }
+      val pairedEffects = effects.map { e =>
+        val comp = visitedSubmodules.find(m => m.sym.ns.last == e.decl.sym.name)
+        comp.foreach(c => companionMods = c :: companionMods)
+        e.copy(companionMod = comp)
+      }
+      val pairedEnums = enums.map { e =>
+        val comp = visitedSubmodules.find(m => m.sym.ns.last == e.decl.sym.name)
+        comp.foreach(c => companionMods = c :: companionMods)
+        e.copy(companionMod = comp)
+      }
+
+      val filteredSubmodules = visitedSubmodules.filterNot(companionMods.contains)
+
+      Module(
+        sym,
+        doc,
+        parent,
+        filteredSubmodules,
+        pairedTraits,
+        pairedEffects,
+        pairedEnums,
+        typeAliases,
+        defs,
+      )
+  }
+
+  /**
+    * An item is a unit that is typically output to its own documentation file.
+    */
+  sealed trait Item {
+    /** The shortest name of the item, e.g. 'StdOut' */
+    def name: String
+
+    /** The fully qualified name of the item, e.g. 'System.StdOut' */
+    def qualifiedName: String
+  }
+
+  /**
+    * A representation of a module that's easier to work with while generating documentation.
+    */
+  case class Module(sym: Symbol.ModuleSym,
+                    doc: Doc,
+                    parent: Option[Symbol.ModuleSym],
+                    submodules: List[Module],
+                    traits: List[Trait],
+                    effects: List[Effect],
+                    enums: List[Enum],
+                    typeAliases: List[TypedAst.TypeAlias],
+                    defs: List[TypedAst.Def]) extends Item {
+    override def name: String = moduleName(this.sym)
+
+    override def qualifiedName: String = moduleQualifiedName(this.sym)
+  }
+
+  /**
+    * A representation of a trait that's easier to work with while generating documentation.
+    */
+  case class Trait(decl: TypedAst.Trait,
+                   signatures: List[TypedAst.Sig],
+                   defs: List[TypedAst.Sig],
+                   instances: List[TypedAst.Instance],
+                   parent: Symbol.ModuleSym,
+                   companionMod: Option[Module]) extends Item {
+    override def name: String = traitName(this.decl.sym)
+
+    override def qualifiedName: String = traitQualifiedName(this.decl.sym)
+  }
+
+  /**
+    * A representation of an effect that's easier to work with while generating documentation.
+    */
+  case class Effect(decl: TypedAst.Effect,
+                    parent: Symbol.ModuleSym,
+                    companionMod: Option[Module]) extends Item {
+    override def name: String = effectName(this.decl.sym)
+
+    override def qualifiedName: String = effectQualifiedName(this.decl.sym)
+  }
+
+  /**
+    * A representation of an enum that's easier to work with while generating documentation.
+    */
+  case class Enum(decl: TypedAst.Enum,
+                  instances: List[TypedAst.Instance],
+                  parent: Symbol.ModuleSym,
+                  companionMod: Option[Module]) extends Item {
+    override def name: String = enumName(this.decl.sym)
+
+    override def qualifiedName: String = enumQualifiedName(this.decl.sym)
+  }
+}

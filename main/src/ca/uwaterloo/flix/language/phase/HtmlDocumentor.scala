@@ -29,21 +29,18 @@ import org.commonmark.renderer.html.HtmlRenderer
 import java.io.IOException
 import java.net.URLEncoder
 import java.nio.file.{Files, Path, Paths}
-import scala.annotation.tailrec
 
 /**
-  * A phase that emits a JSON file for library documentation.
+  * A phase that emits HTML files for library documentation.
   */
 object HtmlDocumentor {
 
+  import Documentor.{Effect, Enum, Item, Module, Trait}
+
   /**
-    * The "Pseudo-name" of the root namespace displayed on the pages.
+    * The file extension of every page emitted by this backend.
     */
-  private val RootNS: String = "Prelude"
-  /**
-    * The "Pseudo-name" of the root namespace used for its file name.
-    */
-  private val RootFileName: String = "index"
+  private val Extension: String = "html"
 
   /**
     * The directory where to write the ouput.
@@ -76,11 +73,7 @@ object HtmlDocumentor {
   private val LibraryGitHub: String = "https://github.com/flix/flix/blob/master/main/src/library/"
 
   def run(root: TypedAst.Root, packageModules: PackageModules)(implicit flix: Flix): Unit = {
-    val modulesRoot = splitModules(root)
-    val filteredModulesRoot = filterModules(modulesRoot, packageModules)
-    val pairedModulesRoot = pairModules(filteredModulesRoot)
-
-    visitMod(pairedModulesRoot)
+    visitMod(Documentor.build(root, packageModules))
 
     writeAssets()
   }
@@ -92,9 +85,9 @@ object HtmlDocumentor {
     */
   private def visitMod(mod: Module)(implicit flix: Flix): List[String] = {
     val out = documentModule(mod)
-    writeDocFile(mod.fileName, out)
+    writeDocFile(fileName(mod), out)
 
-    val generatedPages = List(mod.fileName) :::
+    val generatedPages = List(fileName(mod)) :::
       mod.submodules.flatMap(visitMod) :::
       mod.traits.flatMap(visitTrait) :::
       mod.effects.flatMap(visitEffect) :::
@@ -110,9 +103,9 @@ object HtmlDocumentor {
     */
   private def visitTrait(trt: Trait)(implicit flix: Flix): List[String] = {
     val out = documentTrait(trt)
-    writeDocFile(trt.fileName, out)
+    writeDocFile(fileName(trt), out)
 
-    val generatedPages = List(trt.fileName) :::
+    val generatedPages = List(fileName(trt)) :::
       trt.companionMod.map { mod =>
         mod.submodules.flatMap(visitMod) :::
           mod.traits.flatMap(visitTrait) :::
@@ -130,9 +123,9 @@ object HtmlDocumentor {
     */
   private def visitEffect(eff: Effect)(implicit flix: Flix): List[String] = {
     val out = documentEffect(eff)
-    writeDocFile(eff.fileName, out)
+    writeDocFile(fileName(eff), out)
 
-    val generatedPages = List(eff.fileName) :::
+    val generatedPages = List(fileName(eff)) :::
       eff.companionMod.map { mod =>
         mod.submodules.flatMap(visitMod) :::
           mod.traits.flatMap(visitTrait) :::
@@ -150,9 +143,9 @@ object HtmlDocumentor {
     */
   private def visitEnum(enm: Enum)(implicit flix: Flix): List[String] = {
     val out = documentEnum(enm)
-    writeDocFile(enm.fileName, out)
+    writeDocFile(fileName(enm), out)
 
-    val generatedPages = List(enm.fileName) :::
+    val generatedPages = List(fileName(enm)) :::
       enm.companionMod.map { mod =>
         mod.submodules.flatMap(visitMod)
         mod.traits.flatMap(visitTrait)
@@ -164,377 +157,29 @@ object HtmlDocumentor {
   }
 
   /**
-    * Get the shortest name of the module symbol, e.g. 'StdOut'.
+    * Returns the shortest name of the module symbol, e.g. 'StdOut'.
     */
-  private def moduleName(sym: Symbol.ModuleSym): String = sym.ns.lastOption.getOrElse(RootNS)
+  private def moduleName(sym: Symbol.ModuleSym): String = Documentor.moduleName(sym)
 
   /**
-    * Get the fully qualified name of the module symbol, e.g. 'System.StdOut'.
+    * Returns the file name of the module symbol, e.g. 'System.StdOut.html'.
     */
-  private def moduleQualifiedName(sym: Symbol.ModuleSym): String = if (sym.isRoot) RootNS else sym.toString
+  private def moduleFileName(sym: Symbol.ModuleSym): String = Documentor.moduleFileName(sym, Extension)
 
   /**
-    * Get the file name of the module symbol, e.g. 'System.StdOut.html'.
+    * Returns the shortest name of the trait symbol, e.g. 'Foldable'.
     */
-  private def moduleFileName(sym: Symbol.ModuleSym): String = s"${if (sym.isRoot) RootFileName else sym.toString}.html"
+  private def traitName(sym: Symbol.TraitSym): String = Documentor.traitName(sym)
 
   /**
-    * Get the shortest name of the trait symbol, e.g. 'Foldable'.
+    * Returns the file name of the trait symbol, e.g. 'Fixpoint.PredSymsOf.html'.
     */
-  private def traitName(sym: Symbol.TraitSym): String = sym.name
+  private def traitFileName(sym: Symbol.TraitSym): String = Documentor.traitFileName(sym, Extension)
 
   /**
-    * Get the fully qualified name of the trait symbol, e.g. 'Fixpoint.PredSymsOf'.
+    * Returns the file name that this backend writes the given documentation [[Item]] to.
     */
-  private def traitQualifiedName(sym: Symbol.TraitSym): String = sym.toString
-
-  /**
-    * Get the file name of the trait symbol, e.g. 'Fixpoint.PredSymsOf.html'.
-    */
-  private def traitFileName(sym: Symbol.TraitSym): String = s"${sym.toString}.html"
-
-  /**
-    * Get the shortest name of the effect symbol, e.g. 'StdOut'.
-    */
-  private def effectName(sym: Symbol.EffSym): String = sym.name
-
-  /**
-    * Get the fully qualified name of the effect symbol, e.g. 'System.StdOut'.
-    */
-  private def effectQualifiedName(sym: Symbol.EffSym): String = sym.toString
-
-  /**
-    * Get the file name of the effect symbol, e.g. 'System.StdOut.html'.
-    */
-  private def effectFileName(sym: Symbol.EffSym): String = s"${sym.toString}.html"
-
-  /**
-    * Get the shortest name of the enum symbol, e.g. 'StdOut'.
-    */
-  private def enumName(sym: Symbol.EnumSym): String = sym.name
-
-  /**
-    * Get the fully qualified name of the enum symbol, e.g. 'System.StdOut'.
-    */
-  private def enumQualifiedName(sym: Symbol.EnumSym): String = sym.toString
-
-  /**
-    * Get the file name of the enum symbol, e.g. 'System.StdOut.html'.
-    */
-  private def enumFileName(sym: Symbol.EnumSym): String = s"${sym.toString}.html"
-
-  /**
-    * Splits the modules present in the root into a tree of `HtmlDocumentor.Module`s, making them easier to work with.
-    *
-    * Note: This function leaves all companion module fields empty.
-    * Use `pairModules` to fill them in.
-    */
-  private def splitModules(root: TypedAst.Root): Module = {
-
-    /**
-      * Visits a module and all of its submodules
-      */
-    def visitMod(moduleSym: Symbol.ModuleSym, parent: Option[Symbol.ModuleSym]): Module = {
-      val mod = root.modules(moduleSym)
-      val uses = root.uses.get(moduleSym)
-
-      var submodules: List[Symbol.ModuleSym] = Nil
-      var traits: List[Trait] = Nil
-      var effects: List[Effect] = Nil
-      var enums: List[Enum] = Nil
-      var typeAliases: List[TypedAst.TypeAlias] = Nil
-      var defs: List[TypedAst.Def] = Nil
-      mod.children.foreach {
-        case sym: Symbol.ModuleSym => submodules = sym :: submodules
-        case sym: Symbol.TraitSym =>
-          traits = mkTrait(sym, moduleSym, root) :: traits
-        case sym: Symbol.EffSym =>
-          effects = mkEffect(sym, moduleSym, root) :: effects
-        case sym: Symbol.EnumSym =>
-          enums = mkEnum(sym, moduleSym, root) :: enums
-        case sym: Symbol.TypeAliasSym => typeAliases = root.typeAliases(sym) :: typeAliases
-        case sym: Symbol.DefnSym => defs = root.defs(sym) :: defs
-        case _ => // No op
-      }
-
-      Module(
-        moduleSym,
-        mod.doc,
-        parent,
-        uses,
-        submodules.map(visitMod(_, Some(moduleSym))),
-        traits,
-        effects,
-        enums,
-        typeAliases,
-        defs,
-      )
-    }
-
-    visitMod(Symbol.mkModuleSym(Nil), None)
-  }
-
-  /**
-    * Extracts all relevant information about the given `TraitSym` from the root, into a `HtmlDocumentor.Trait`,
-    * leaving the companion module unpopulated.
-    */
-  private def mkTrait(sym: Symbol.TraitSym, parent: Symbol.ModuleSym, root: TypedAst.Root): Trait = {
-    val decl = root.traits(sym)
-
-    val (sigs, defs) = decl.sigs.partition(_.exp.isEmpty)
-    val instances = root.instances.get(sym)
-
-    Trait(decl, sigs, defs, instances, parent, None)
-  }
-
-  /**
-    * Extracts all relevant information about the given `EffSym` from the root, into a `HtmlDocumentor.Effect`,
-    * * leaving the companion module unpopulated.
-    */
-  private def mkEffect(sym: Symbol.EffSym, parent: Symbol.ModuleSym, root: TypedAst.Root): Effect = {
-    Effect(root.effects(sym), parent, None)
-  }
-
-  /**
-    * Extracts all relevant information about the given `EnumSym` from the root, into a `HtmlDocumentor.Enum`,
-    * * leaving the companion module unpopulated.
-    */
-  private def mkEnum(sym: Symbol.EnumSym, parent: Symbol.ModuleSym, root: TypedAst.Root): Enum = {
-
-    /**
-      * Checks if a [[TypedAst.Instance]] with the given type `tpe` should be included on the page of the given enum.
-      */
-    @tailrec
-    def enumMatchesInstance(enm: Symbol.EnumSym, tpe: Type): Boolean = tpe match {
-      // An instance should be included if:
-      // 1. An instance exists directly, e.g. `Eq[Boxed]`
-      case Type.Cst(TypeConstructor.Enum(s, _), _) => enm == s
-      // 2. An instance exists, consisting of the enum having been applied with some number of parameters, e.g. `Eq[Chain[a]] with Eq[a]`
-      case Type.Apply(t, _, _) => enumMatchesInstance(enm, t)
-      // Othwerwise not
-      case _ => false
-    }
-
-    val allInstances = root.instances.values
-    val instances = allInstances.filter(i => enumMatchesInstance(sym, i.tpe)).toList
-
-    Enum(root.enums(sym), instances, parent, None)
-  }
-
-  /**
-    * Filter the module, `mod`, and its children, removing all items and empty modules, which shouldn't appear in the documentation.
-    */
-  private def filterModules(mod: Module, packageModules: PackageModules): Module = {
-    filterEmpty(filterContents(mod, packageModules))
-  }
-
-  /**
-    * Returns a tree of modules corresponding to the given input,
-    * but with all contained items that shouldn't appear in the documentation removed.
-    *
-    * Note: This function assumes that companion modules are unpopulated,
-    * i.e. this should be called before `pairModules`.
-    */
-  private def filterContents(mod: Module, packageModules: PackageModules): Module = mod match {
-    case Module(sym, doc, parent, uses, submodules, traits, effects, enums, typeAliases, defs) =>
-      val included = packageModules.contains(sym)
-      if (included) {
-        Module(
-          sym,
-          doc,
-          parent,
-          uses,
-          submodules.map(m => filterContents(m, PackageModules.All)),
-          traits.filter(c => c.decl.mod.isPublic).map(c => filterTrait(c)),
-          effects.filter(e => e.decl.mod.isPublic).map(e => filterEffect(e)),
-          enums.filter(e => e.decl.mod.isPublic).map(e => filterEnum(e)),
-          typeAliases.filter(t => t.mod.isPublic),
-          defs.filter(d => d.spec.mod.isPublic),
-        )
-      } else {
-        // Keep the 'spine' of the tree if a module further down is included
-        val sm = submodules ++
-          traits.flatMap(c => c.companionMod) ++
-          effects.flatMap(e => e.companionMod) ++
-          enums.flatMap(e => e.companionMod)
-
-        Module(
-          sym,
-          doc,
-          parent,
-          Nil,
-          sm.map(m => filterContents(m, packageModules)),
-          Nil,
-          Nil,
-          Nil,
-          Nil,
-          Nil,
-        )
-      }
-  }
-
-  /**
-    * Returns a `Trait` corresponding to the given `trt`,
-    * but with all items that shouldn't appear in the documentation removed.
-    *
-    * Note: This function assumes that companion modules are unpopulated,
-    * i.e. this should be called before `pairModules`.
-    */
-  private def filterTrait(trt: Trait): Trait = trt match {
-    case Trait(TypedAst.Trait(doc, ann, mod, sym, tparam, superTraits, assocs, _, laws, loc), signatures, defs, instances, parent, _) =>
-      Trait(
-        TypedAst.Trait(
-          doc,
-          ann,
-          mod,
-          sym,
-          tparam,
-          superTraits,
-          assocs,
-          Nil,
-          laws.filter(l => l.spec.mod.isPublic),
-          loc
-        ),
-        signatures.filter(s => s.spec.mod.isPublic),
-        defs.filter(d => d.spec.mod.isPublic),
-        instances,
-        parent,
-        None
-      )
-  }
-
-
-  /**
-    * Returns an `Effect` corresponding to the given `eff`,
-    * but with all items that shouldn't appear in the documentation removed.
-    *
-    * Note: This function assumes that companion modules are unpopulated,
-    * i.e. this should be called before `pairModules`.
-    */
-  private def filterEffect(eff: Effect): Effect = eff match {
-    case Effect(e, parent, _) =>
-      Effect(
-        e,
-        parent,
-        None,
-      )
-  }
-
-  /**
-    * Returns an `Enum` corresponding to the given `enm`,
-    * but with all items that shouldn't appear in the documentation removed.
-    *
-    * Note: This function assumes that companion modules are unpopulated,
-    * i.e. this should be called before `pairModules`.
-    */
-  private def filterEnum(enm: Enum): Enum = enm match {
-    case Enum(e, instances, parent, _) =>
-      Enum(
-        e,
-        instances,
-        parent,
-        None,
-      )
-  }
-
-  /**
-    * Remove any modules and references to them if they:
-    *   1. Contain no items
-    *   1. Contain no submodules with any items
-    *
-    * Note: This function assumes that companion modules are unpopulated,
-    * i.e. this should be called before `pairModules`.
-    */
-  private def filterEmpty(mod: Module): Module = {
-    /**
-      * Recursively walks the module tree removing empty modules.
-      */
-    def visitMod(mod: Module): Option[Module] = mod match {
-      case Module(sym, doc, parent, uses, submodules, traits, effects, enums, typeAliases, defs) =>
-        val filteredSubMods = submodules.flatMap(visitMod)
-
-        val isEmpty =
-          filteredSubMods.isEmpty &&
-            traits.isEmpty &&
-            effects.isEmpty &&
-            enums.isEmpty &&
-            typeAliases.isEmpty &&
-            defs.isEmpty
-
-        if (isEmpty) None
-        else Some(
-          Module(
-            sym,
-            doc,
-            parent,
-            uses,
-            filteredSubMods,
-            traits,
-            effects,
-            enums,
-            typeAliases,
-            defs
-          )
-        )
-    }
-
-    visitMod(mod)
-      .getOrElse(Module(
-        mod.sym,
-        mod.doc,
-        None,
-        Nil,
-        Nil,
-        Nil,
-        Nil,
-        Nil,
-        Nil,
-        Nil,
-      ))
-  }
-
-  /**
-    * Get the given module tree, but with all companion modules paired to their respective items.
-    */
-  private def pairModules(mod: Module): Module = mod match {
-    case Module(sym, doc, parent, uses, submodules, traits, effects, enums, typeAliases, defs) =>
-
-      val visitedSubmodules = submodules.map(pairModules)
-
-      /** Modules that should not be included as a submodule */
-      var companionMods: List[Module] = Nil
-
-      val pairedTraits = traits.map { t =>
-        val comp = visitedSubmodules.find(m => m.sym.ns.last == t.decl.sym.name)
-        comp.foreach(c => companionMods = c :: companionMods)
-        t.copy(companionMod = comp)
-      }
-      val pairedEffects = effects.map { e =>
-        val comp = visitedSubmodules.find(m => m.sym.ns.last == e.decl.sym.name)
-        comp.foreach(c => companionMods = c :: companionMods)
-        e.copy(companionMod = comp)
-      }
-      val pairedEnums = enums.map { e =>
-        val comp = visitedSubmodules.find(m => m.sym.ns.last == e.decl.sym.name)
-        comp.foreach(c => companionMods = c :: companionMods)
-        e.copy(companionMod = comp)
-      }
-
-      val filteredSubmodules = visitedSubmodules.filterNot(companionMods.contains)
-
-      Module(
-        sym,
-        doc,
-        parent,
-        uses,
-        filteredSubmodules,
-        pairedTraits,
-        pairedEffects,
-        pairedEnums,
-        typeAliases,
-        defs,
-      )
-  }
+  private def fileName(item: Item): String = Documentor.fileName(item, Extension)
 
   /**
     * Documents the given `Module`, `mod`, returning a string of HTML.
@@ -548,7 +193,7 @@ object HtmlDocumentor {
     val sortedTypeAliases = mod.typeAliases.sortBy(_.sym.name)
     val sortedDefs = mod.defs.sortBy(_.sym.name)
 
-    sb.append(mkHead(mod.qualifiedName, mod.fileName))
+    sb.append(mkHead(mod.qualifiedName, fileName(mod)))
     sb.append("<body class='no-script'>")
 
     docHeader()
@@ -558,17 +203,17 @@ object HtmlDocumentor {
       docSideBarSection(
         "Traits",
         sortedTraits,
-        (t: Trait) => sb.append(s"<a href='${escUrl(t.fileName)}'>${esc(t.name)}</a>"),
+        (t: Trait) => sb.append(s"<a href='${escUrl(fileName(t))}'>${esc(t.name)}</a>"),
       )
       docSideBarSection(
         "Effects",
         sortedEffs,
-        (e: Effect) => sb.append(s"<a href='${escUrl(e.fileName)}'>${esc(e.name)}</a>"),
+        (e: Effect) => sb.append(s"<a href='${escUrl(fileName(e))}'>${esc(e.name)}</a>"),
       )
       docSideBarSection(
         "Enums",
         sortedEnums,
-        (e: Enum) => sb.append(s"<a href='${escUrl(e.fileName)}'>${esc(e.name)}</a>"),
+        (e: Enum) => sb.append(s"<a href='${escUrl(fileName(e))}'>${esc(e.name)}</a>"),
       )
       docSideBarSection(
         "Type Aliases",
@@ -612,7 +257,7 @@ object HtmlDocumentor {
     val sortedTypeAliases = mod.map(_.typeAliases).getOrElse(Nil).sortBy(_.sym.name)
     val sortedModuleDefs = mod.map(_.defs).getOrElse(Nil).sortBy(_.sym.name)
 
-    sb.append(mkHead(trt.qualifiedName, trt.fileName))
+    sb.append(mkHead(trt.qualifiedName, fileName(trt)))
     sb.append("<body class='no-script'>")
 
     docHeader()
@@ -632,17 +277,17 @@ object HtmlDocumentor {
       docSideBarSection(
         "Traits",
         sortedTraits,
-        (t: Trait) => sb.append(s"<a href='${escUrl(t.fileName)}'>${esc(t.name)}</a>"),
+        (t: Trait) => sb.append(s"<a href='${escUrl(fileName(t))}'>${esc(t.name)}</a>"),
       )
       docSideBarSection(
         "Effects",
         sortedEffs,
-        (e: Effect) => sb.append(s"<a href='${escUrl(e.fileName)}'>${esc(e.name)}</a>"),
+        (e: Effect) => sb.append(s"<a href='${escUrl(fileName(e))}'>${esc(e.name)}</a>"),
       )
       docSideBarSection(
         "Enums",
         sortedEnums,
-        (e: Enum) => sb.append(s"<a href='${escUrl(e.fileName)}'>${esc(e.name)}</a>"),
+        (e: Enum) => sb.append(s"<a href='${escUrl(fileName(e))}'>${esc(e.name)}</a>"),
       )
       docSideBarSection(
         "Type Aliases",
@@ -703,7 +348,7 @@ object HtmlDocumentor {
     val sortedTypeAliases = mod.map(_.typeAliases).getOrElse(Nil).sortBy(_.sym.name)
     val sortedModuleDefs = mod.map(_.defs).getOrElse(Nil).sortBy(_.sym.name)
 
-    sb.append(mkHead(eff.qualifiedName, eff.fileName))
+    sb.append(mkHead(eff.qualifiedName, fileName(eff)))
     sb.append("<body class='no-script'>")
 
     docHeader()
@@ -717,17 +362,17 @@ object HtmlDocumentor {
       docSideBarSection(
         "Traits",
         sortedTraits,
-        (t: Trait) => sb.append(s"<a href='${escUrl(t.fileName)}'>${esc(t.name)}</a>"),
+        (t: Trait) => sb.append(s"<a href='${escUrl(fileName(t))}'>${esc(t.name)}</a>"),
       )
       docSideBarSection(
         "Effects",
         sortedEffs,
-        (e: Effect) => sb.append(s"<a href='${escUrl(e.fileName)}'>${esc(e.name)}</a>"),
+        (e: Effect) => sb.append(s"<a href='${escUrl(fileName(e))}'>${esc(e.name)}</a>"),
       )
       docSideBarSection(
         "Enums",
         sortedEnums,
-        (e: Enum) => sb.append(s"<a href='${escUrl(e.fileName)}'>${esc(e.name)}</a>"),
+        (e: Enum) => sb.append(s"<a href='${escUrl(fileName(e))}'>${esc(e.name)}</a>"),
       )
       docSideBarSection(
         "Type Aliases",
@@ -783,7 +428,7 @@ object HtmlDocumentor {
     val sortedTypeAliases = mod.map(_.typeAliases).getOrElse(Nil).sortBy(_.sym.name)
     val sortedModuleDefs = mod.map(_.defs).getOrElse(Nil).sortBy(_.sym.name)
 
-    sb.append(mkHead(enm.qualifiedName, enm.fileName))
+    sb.append(mkHead(enm.qualifiedName, fileName(enm)))
     sb.append("<body class='no-script'>")
 
     docHeader()
@@ -793,17 +438,17 @@ object HtmlDocumentor {
       docSideBarSection(
         "Traits",
         sortedTraits,
-        (t: Trait) => sb.append(s"<a href='${escUrl(t.fileName)}'>${esc(t.name)}</a>"),
+        (t: Trait) => sb.append(s"<a href='${escUrl(fileName(t))}'>${esc(t.name)}</a>"),
       )
       docSideBarSection(
         "Effects",
         sortedEffs,
-        (e: Effect) => sb.append(s"<a href='${escUrl(e.fileName)}'>${esc(e.name)}</a>"),
+        (e: Effect) => sb.append(s"<a href='${escUrl(fileName(e))}'>${esc(e.name)}</a>"),
       )
       docSideBarSection(
         "Enums",
         sortedEnums,
-        (e: Enum) => sb.append(s"<a href='${escUrl(e.fileName)}'>${esc(e.name)}</a>"),
+        (e: Enum) => sb.append(s"<a href='${escUrl(fileName(e))}'>${esc(e.name)}</a>"),
       )
       docSideBarSection(
         "Type Aliases",
@@ -968,7 +613,7 @@ object HtmlDocumentor {
     sb.append("<ul class='Modules'>")
     for (m <- sortedItems) {
       sb.append("<li>")
-      sb.append(s"<a href='${escUrl(m.fileName)}'>${esc(m.name)}</a>")
+      sb.append(s"<a href='${escUrl(fileName(m))}'>${esc(m.name)}</a>")
       sb.append("</li>")
     }
     sb.append("</ul>")
@@ -1546,80 +1191,4 @@ object HtmlDocumentor {
     */
   private def escUrl(s: String): String = URLEncoder.encode(s, "UTF-8")
 
-  /**
-    * An item is a unit that is typically output to its own HTML file.
-    */
-  private sealed trait Item {
-    /** The shortest name of the item, e.g. 'StdOut' */
-    def name: String
-
-    /** The fully qualified name of the item, e.g. 'System.StdOut' */
-    def qualifiedName: String
-
-    /** The file name of the item, e.g. 'System.StdOut.html' */
-    def fileName: String
-  }
-
-  /**
-    * A representation of a module that's easier to work with while generating documentation.
-    */
-  private case class Module(sym: Symbol.ModuleSym,
-                            doc: Doc,
-                            parent: Option[Symbol.ModuleSym],
-                            uses: List[UseOrImport],
-                            submodules: List[Module],
-                            traits: List[Trait],
-                            effects: List[Effect],
-                            enums: List[Enum],
-                            typeAliases: List[TypedAst.TypeAlias],
-                            defs: List[TypedAst.Def]) extends Item {
-    override def name: String = moduleName(this.sym)
-
-    override def qualifiedName: String = moduleQualifiedName(this.sym)
-
-    override def fileName: String = moduleFileName(this.sym)
-  }
-
-  /**
-    * A representation of a trait that's easier to work with while generating documentation.
-    */
-  private case class Trait(decl: TypedAst.Trait,
-                           signatures: List[TypedAst.Sig],
-                           defs: List[TypedAst.Sig],
-                           instances: List[TypedAst.Instance],
-                           parent: Symbol.ModuleSym,
-                           companionMod: Option[Module]) extends Item {
-    override def name: String = traitName(this.decl.sym)
-
-    override def qualifiedName: String = traitQualifiedName(this.decl.sym)
-
-    override def fileName: String = traitFileName(this.decl.sym)
-  }
-
-  /**
-    * A representation of an effect that's easier to work with while generating documentation.
-    */
-  private case class Effect(decl: TypedAst.Effect,
-                            parent: Symbol.ModuleSym,
-                            companionMod: Option[Module]) extends Item {
-    override def name: String = effectName(this.decl.sym)
-
-    override def qualifiedName: String = effectQualifiedName(this.decl.sym)
-
-    override def fileName: String = effectFileName(this.decl.sym)
-  }
-
-  /**
-    * A representation of an enum that's easier to work with while generating documentation.
-    */
-  private case class Enum(decl: TypedAst.Enum,
-                          instances: List[TypedAst.Instance],
-                          parent: Symbol.ModuleSym,
-                          companionMod: Option[Module]) extends Item {
-    override def name: String = enumName(this.decl.sym)
-
-    override def qualifiedName: String = enumQualifiedName(this.decl.sym)
-
-    override def fileName: String = enumFileName(this.decl.sym)
-  }
 }
