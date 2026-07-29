@@ -1,0 +1,422 @@
+/*
+ * Copyright 2026 Werner Stein
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package ca.uwaterloo.flix.language.phase
+
+import ca.uwaterloo.flix.api.{CompilerConstants, Flix}
+import ca.uwaterloo.flix.language.CompilationMessage
+import ca.uwaterloo.flix.language.ast.shared.SecurityContext
+import ca.uwaterloo.flix.tools.pkg.PackageModules
+import ca.uwaterloo.flix.util.{Formatter, Options}
+import org.scalatest.funsuite.AnyFunSuite
+
+/**
+  * Tests the Markdown documentation backend.
+  *
+  * The assertions are structural rather than a comparison against a checked-in page: the standard
+  * library's documentation comments change constantly, and a test that has to be regenerated after
+  * every such change stops being read. What must hold is that a page names what it documents,
+  * states its conventions truthfully, and drops nothing.
+  */
+class TestMarkdownDocumentor extends AnyFunSuite {
+
+  private implicit val sctx: SecurityContext = SecurityContext.Unrestricted
+
+  /** Returns the Markdown pages of `input`, which must compile without errors. */
+  private def document(input: String,
+                       packageModules: PackageModules = PackageModules.All,
+                       options: Options = Options.TestWithLibNix): Map[String, String] = {
+    implicit val flix: Flix = new Flix().setOptions(options)
+    flix.addVirtualPath(CompilerConstants.VirtualTestFile, input)
+    flix.check() match {
+      case (Some(root), Nil) => MarkdownDocumentor.documentAll(root, packageModules)
+      case (_, errors) => fail(CompilationMessage.formatAll(errors)(Formatter.NoFormatter, None))
+    }
+  }
+
+  /** Returns the page named `name`, failing if it was not generated. */
+  private def page(pages: Map[String, String], name: String): String =
+    pages.getOrElse(name, fail(s"expected a page '$name', but got: ${pages.keys.toList.sorted.mkString(", ")}"))
+
+  test("page.enum.01") {
+    val pages = document(
+      """
+        |///
+        |/// A colour.
+        |///
+        |pub enum Color[t] {
+        |    case Red
+        |    case Custom(t)
+        |}
+        |""".stripMargin)
+
+    val md = page(pages, "Color.md")
+    assert(md.startsWith("# Color\n"))
+    assert(md.contains("A colour."))
+  }
+
+  test("page.enum.02") {
+    // The declaration must be valid Flix, braces and all, since the page is read to write code.
+    val pages = document(
+      """
+        |pub enum Color[t] {
+        |    case Red
+        |    case Custom(t)
+        |}
+        |""".stripMargin)
+
+    val md = page(pages, "Color.md")
+    assert(md.contains("```flix\nenum Color[t: Type] {\n    case Red\n    case Custom(t)\n}\n```"), md)
+  }
+
+  test("page.enum.03") {
+    // Derived traits belong on the declaration line, where they are in the source.
+    val pages = document(
+      """
+        |pub enum Color with Eq {
+        |    case Red
+        |}
+        |""".stripMargin, options = Options.TestWithLibMin)
+
+    assert(page(pages, "Color.md").contains("enum Color with Eq {"))
+  }
+
+  test("page.instances.01") {
+    // Every instance is listed and the count matches. Nothing is truncated.
+    val pages = document(
+      """
+        |pub enum Box[a] {
+        |    case Box(a)
+        |}
+        |
+        |pub trait Describe[a] {
+        |    pub def describe(x: a): String
+        |}
+        |
+        |pub trait Render[a] {
+        |    pub def render(x: a): String
+        |}
+        |
+        |instance Describe[Box[a]] with Describe[a] {
+        |    pub def describe(_x: Box[a]): String = "box"
+        |}
+        |
+        |instance Render[Box[a]] {
+        |    pub def render(_x: Box[a]): String = "box"
+        |}
+        |""".stripMargin)
+
+    val md = page(pages, "Box.md")
+    assert(md.contains("## Instances"))
+    assert(md.contains("`Describe[Box[a]] with Describe[a]` ([Describe](Describe.md))"), md)
+    assert(md.contains("`Render[Box[a]]` ([Render](Render.md))"), md)
+    assert(md.contains("*(2 total)*"), md)
+  }
+
+  test("page.instances.02") {
+    // On a trait's own page a link back to that same page would say nothing, so it is left out.
+    val pages = document(
+      """
+        |pub trait Describe[a] {
+        |    pub def describe(x: a): String
+        |}
+        |
+        |instance Describe[Int32] {
+        |    pub def describe(_x: Int32): String = "int"
+        |}
+        |""".stripMargin)
+
+    val md = page(pages, "Describe.md")
+    assert(md.contains("`Describe[Int32]` *(1 total)*"), md)
+    assert(!md.contains("(Describe.md)"), "a trait page must not link to itself")
+  }
+
+  test("page.def.01") {
+    // A signature carries parameters, return type, effect, and constraints.
+    val pages = document(
+      """
+        |mod Api {
+        |    ///
+        |    /// Prints `x`.
+        |    ///
+        |    pub def show(x: a): Unit \ IO with ToString[a] = println(x)
+        |}
+        |""".stripMargin, options = Options.TestWithLibMin)
+
+    val md = page(pages, "Api.md")
+    assert(md.contains("`def show(x: a): Unit \\ IO with ToString[a]` — Prints `x`."), md)
+  }
+
+  test("page.def.02") {
+    // A definition without parameters must not show the unit parameter the compiler introduces.
+    val pages = document(
+      """
+        |mod Api {
+        |    pub def zero(): Int32 = 0
+        |}
+        |""".stripMargin)
+
+    assert(page(pages, "Api.md").contains("`def zero(): Int32`"))
+  }
+
+  test("page.def.03") {
+    // Annotations change how a definition may be called, so they must survive onto the page.
+    val pages = document(
+      """
+        |mod Api {
+        |    @Lazy
+        |    pub def delay(x: a): a = x
+        |}
+        |""".stripMargin)
+
+    assert(page(pages, "Api.md").contains("`@Lazy def delay(x: a): a`"))
+  }
+
+  test("doc.summary.01") {
+    // The first paragraph is collapsed onto the signature line; the rest follows verbatim.
+    val pages = document(
+      """
+        |mod Api {
+        |    ///
+        |    /// Returns one.
+        |    /// Always.
+        |    ///
+        |    /// Some more detail.
+        |    ///
+        |    pub def one(): Int32 = 1
+        |}
+        |""".stripMargin)
+
+    val md = page(pages, "Api.md")
+    assert(md.contains("`def one(): Int32` — Returns one. Always."), md)
+    assert(md.contains("Some more detail."), md)
+  }
+
+  test("doc.summary.02") {
+    // A fenced example cannot be collapsed onto one line without destroying it.
+    val pages = document(
+      """
+        |mod Api {
+        |    ///
+        |    /// Returns one.
+        |    ///
+        |    /// ```
+        |    /// Api.one()
+        |    /// ```
+        |    ///
+        |    pub def one(): Int32 = 1
+        |}
+        |""".stripMargin)
+
+    val md = page(pages, "Api.md")
+    assert(md.contains("`def one(): Int32` — Returns one."), md)
+    assert(md.contains("```\nApi.one()\n```"), md)
+  }
+
+  test("doc.summary.03") {
+    // A list directly under the first line is not prose and must not be joined onto it.
+    val pages = document(
+      """
+        |mod Api {
+        |    ///
+        |    /// Returns one, because:
+        |    /// - it is one
+        |    /// - it is not two
+        |    ///
+        |    pub def one(): Int32 = 1
+        |}
+        |""".stripMargin)
+
+    val md = page(pages, "Api.md")
+    assert(md.contains("`def one(): Int32` — Returns one, because:"), md)
+    assert(md.contains("- it is one\n- it is not two"), md)
+  }
+
+  test("doc.summary.04") {
+    // A definition without documentation still gets a line of its own.
+    val pages = document(
+      """
+        |mod Api {
+        |    pub def one(): Int32 = 1
+        |}
+        |""".stripMargin)
+
+    assert(page(pages, "Api.md").contains("`def one(): Int32`\n"))
+  }
+
+  test("header.source.01") {
+    // Everything on this page comes from one file, so the page may name it.
+    val pages = document(
+      """
+        |mod Api {
+        |    pub def one(): Int32 = 1
+        |}
+        |""".stripMargin)
+
+    assert(page(pages, "Api.md").contains(s"> Source: every definition lives in `${CompilerConstants.VirtualTestFile}`"))
+  }
+
+  test("header.source.02") {
+    // A module with nothing but submodules has no definitions, so it must claim no source.
+    val pages = document(
+      """
+        |mod Outer.Inner {
+        |    pub def one(): Int32 = 1
+        |}
+        |""".stripMargin)
+
+    assert(!page(pages, "Outer.md").contains("> Source:"), "a page with no definitions must not name a source file")
+  }
+
+  test("header.crossref.01") {
+    val pages = document("pub def one(): Int32 = 1")
+    assert(page(pages, "index.md").contains("> Cross-references: a type `X` in any signature links to `X.md`"))
+  }
+
+  test("index.01") {
+    // The index backs the cross-reference promise by listing every page that exists.
+    val pages = document(
+      """
+        |pub enum Color {
+        |    case Red
+        |}
+        |
+        |mod Api {
+        |    pub def one(): Int32 = 1
+        |}
+        |""".stripMargin)
+
+    val index = page(pages, "index.md")
+    assert(index.contains("## All Pages"))
+    assert(index.contains("[Color](Color.md)"), index)
+    assert(index.contains("[Api](Api.md)"), index)
+    assert(index.contains("[index](index.md)"), index)
+  }
+
+  test("page.companion.01") {
+    // A companion module has no page of its own; its definitions appear on the enum's page.
+    val pages = document(
+      """
+        |pub enum Color {
+        |    case Red
+        |}
+        |
+        |mod Color {
+        |    pub def isRed(c: Color): Bool = match c {
+        |        case Color.Red => true
+        |    }
+        |}
+        |""".stripMargin)
+
+    val md = page(pages, "Color.md")
+    assert(md.contains("## Definitions"))
+    assert(md.contains("`def isRed(c: Color): Bool`"), md)
+  }
+
+  test("page.trait.01") {
+    // Signatures and defaulted trait definitions are kept apart, as they are in the source.
+    val pages = document(
+      """
+        |pub trait Greet[a] {
+        |    pub def name(x: a): String
+        |    pub def greet(_x: a): String = "hello"
+        |}
+        |""".stripMargin)
+
+    val md = page(pages, "Greet.md")
+    assert(md.contains("```flix\ntrait Greet[a: Type]\n```"), md)
+    assert(md.contains("## Signatures\n\n`def name(x: a): String with Greet[a]`"), md)
+    assert(md.contains("## Trait Definitions\n\n`def greet(_x: a): String with Greet[a]`"), md)
+  }
+
+  test("page.effect.01") {
+    val pages = document(
+      """
+        |pub eff Ask {
+        |    def ask(): String
+        |}
+        |""".stripMargin)
+
+    val md = page(pages, "Ask.md")
+    assert(md.contains("```flix\neff Ask\n```"), md)
+    assert(md.contains("## Operations\n\n`def ask(): String \\ Ask`"), md)
+  }
+
+  test("page.typeAlias.01") {
+    val pages = document(
+      """
+        |mod Api {
+        |    ///
+        |    /// A name.
+        |    ///
+        |    pub type alias Name = String
+        |}
+        |""".stripMargin)
+
+    assert(page(pages, "Api.md").contains("`type alias Name = String` — A name."))
+  }
+
+  test("page.modules.01") {
+    // A module page links to everything nested inside it, so the tree can be walked from the index.
+    val pages = document(
+      """
+        |mod Outer {
+        |    pub def one(): Int32 = 1
+        |
+        |    mod Inner {
+        |        pub def two(): Int32 = 2
+        |    }
+        |}
+        |""".stripMargin)
+
+    assert(page(pages, "Outer.md").contains("## Modules\n\n[Inner](Outer.Inner.md)"), page(pages, "Outer.md"))
+    assert(pages.contains("Outer.Inner.md"))
+  }
+
+  test("page.private.01") {
+    // Non-public items are not part of the API and must not appear on any page.
+    val pages = document(
+      """
+        |mod Api {
+        |    pub def visible(): Int32 = hidden()
+        |    def hidden(): Int32 = 2
+        |}
+        |""".stripMargin)
+
+    val md = page(pages, "Api.md")
+    assert(md.contains("`def visible(): Int32`"))
+    assert(!md.contains("hidden"), "a non-public definition must not be documented")
+  }
+
+  test("page.selected.01") {
+    // Restricting to a package must restrict the pages, not just their contents.
+    val input =
+      """
+        |mod Included {
+        |    pub def f(): Int32 = 1
+        |}
+        |
+        |mod Excluded {
+        |    pub def g(): Int32 = 2
+        |}
+        |""".stripMargin
+
+    val selected = PackageModules.Selected(Set(ca.uwaterloo.flix.language.ast.Symbol.mkModuleSym(List("Included"))))
+    val pages = document(input, selected)
+
+    assert(pages.contains("Included.md"))
+    assert(!pages.contains("Excluded.md"), s"got: ${pages.keys.toList.sorted.mkString(", ")}")
+  }
+}
