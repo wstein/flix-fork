@@ -125,8 +125,11 @@ mod Github {
             match CensusUtil.cacheGet(repo, sha) {
                 case Some(json) => Ok(json)
                 case None =>
-                    let url = "https://api.github.com/repos/${repo}/commits/${sha}";
-                    let json = CensusUtil.getAndParse(url, headers);
+                    let url = "https://api.github.com/repos/${repo}/commits/${sha}?per_page=100";
+                    // Only the file list is used downstream, so the pages are merged
+                    // into one object rather than kept as separate responses.
+                    let files = CensusUtil.getAllFiles(url, headers);
+                    let json = Json.JObject(Map#{"files" => Json.JArray(List.toVector(files))});
                     CensusUtil.cachePut(repo, sha, json);
                     Ok(json)
             }
@@ -196,10 +199,22 @@ mod Github {
 
             def getRepos(resume) = {
                 CensusUtil.log("Fetching repositories...");
-                let repos =
-                    CensusUtil.getAllPages("https://api.github.com/user/repos?affiliation=owner,collaborator&per_page=100", buildHeader())
-                    |> List.map(repoJson -> CensusUtil.accessJson("full_name", repoJson));
+                let includePrivate = Config.includePrivate();
+                // `organization_member` is a distinct affiliation; without it a census
+                // silently omits everything owned by an organisation.
+                let url = "https://api.github.com/user/repos?affiliation=owner,collaborator,organization_member&per_page=100";
+                let all = CensusUtil.getAllPages(url, buildHeader());
+                let visible = all |> List.filter(repoJson -> {
+                    let isPrivate: Bool = CensusUtil.accessJson("private", repoJson);
+                    includePrivate or not isPrivate
+                });
+                let repos = visible |> List.map(repoJson -> CensusUtil.accessJson("full_name", repoJson));
+                let omitted = List.length(all) - List.length(repos);
                 CensusUtil.log("Found ${List.length(repos)} repositories.");
+                if (omitted > 0)
+                    CensusUtil.log("  Omitted ${omitted} non-public repositories. Set LANGCENSUS_INCLUDE_PRIVATE=true to include them.")
+                else
+                    ();
                 resume(repos)
             }
 

@@ -85,6 +85,9 @@ mod Analyse {
     def statOf(commit: Json): Stat \ AnalysisFailure = {
         CensusUtil.accessJson("files", commit) |> List.foldLeft((acc, file) -> {
             let filename =  CensusUtil.accessJson("filename", file);
+            // Vendored and generated files are somebody else's work, and a lock file
+            // alone can outweigh everything a person actually wrote.
+            if (CensusUtil.isGeneratedFilePath(filename)) acc else
             let extOpt =  filename |> CensusUtil.extractExt;
             match extOpt {
                 case Option.None  => acc

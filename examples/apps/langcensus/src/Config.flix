@@ -11,6 +11,14 @@ eff Config {
     /// Gets the github user token.
     ///
     def getToken(): String
+
+    ///
+    /// Whether repositories that are not public may be included.
+    ///
+    /// Off unless `LANGCENSUS_INCLUDE_PRIVATE` is set to `true`, because the report
+    /// names every repository it counts and is meant to be shareable.
+    ///
+    def includePrivate(): Bool
 }
 
 mod Config {
@@ -29,6 +37,12 @@ mod Config {
     }
 
     ///
+    /// Gets an optional environment variable.
+    ///
+    def getEnvOpt(envName: String): Option[String] \ Env =
+        Env.getEnv() |> Map.get(envName)
+
+    ///
     /// Handles Config effect through accessing environment variables.
     ///
     pub def runWithEnv(f: Unit -> a \ ef): a \ ef - Config + AnalysisFailure + Env = {
@@ -37,6 +51,12 @@ mod Config {
         } with handler Config {
             def getName(resume) = getEnv("GITHUB_NAME") |> resume
             def getToken(resume) = getEnv("GITHUB_TOKEN") |> resume
+            def includePrivate(resume) =
+                getEnvOpt("LANGCENSUS_INCLUDE_PRIVATE")
+                |> Option.map(String.toLowerCase)
+                |> Option.map(v -> v == "true" or v == "1" or v == "yes")
+                |> Option.getWithDefault(false)
+                |> resume
         }
     }
 }
