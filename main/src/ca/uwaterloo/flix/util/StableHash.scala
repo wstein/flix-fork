@@ -12,7 +12,6 @@ import java.nio.charset.StandardCharsets.UTF_8
 
 /** Stable, identifier-safe hashes for compiler-generated names. */
 object StableHash {
-  private val SchemaVersion = "1"
   private val Base58Alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
   private val HashLength = 13
 
@@ -24,7 +23,7 @@ object StableHash {
 
   /** Length prefixes make the canonical serialization unambiguous. */
   private def canonicalKey(fields: List[String]): String =
-    (s"schema-version=$SchemaVersion" :: fields.map(field => s"${field.length}:$field")).mkString("|")
+    fields.map(field => s"${field.length}:$field").mkString("|")
 
   private def base58(hash: Long): String = {
     val encoded = new Array[Char](HashLength)

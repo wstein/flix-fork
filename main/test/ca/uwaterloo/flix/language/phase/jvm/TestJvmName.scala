@@ -19,7 +19,7 @@ class TestJvmName extends AnyFunSuite {
     val option = Symbol.mkEnumSym("Option")
     val specialized = Symbol.specializedEnumSym(option, List(SimpleType.Int32))
     val name = JvmName.mkClassName(specialized.name, "None")
-    assert(name.matches("Option\\$h[1-9A-HJ-NP-Za-km-z]{13}\\$None"))
+    assert(name.matches("Option\\$[1-9A-HJ-NP-Za-km-z]{13}\\$None"))
     assertResult(specialized.name)(Symbol.specializedEnumSym(option, List(SimpleType.Int32)).name)
   }
 }

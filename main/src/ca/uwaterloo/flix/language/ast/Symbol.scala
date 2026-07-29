@@ -99,7 +99,7 @@ object Symbol {
     */
   def specializedEnumSym(sym: EnumSym, targs: List[SimpleType]): EnumSym = {
     val key = sym.toString :: targs.map(_.toString)
-    new EnumSym(None, sym.namespace, s"${sym.text}${Flix.Delimiter}h${StableHash.xxh3_64Base58(key)}", sym.loc)
+    new EnumSym(None, sym.namespace, s"${sym.text}${Flix.Delimiter}${StableHash.xxh3_64Base58(key)}", sym.loc)
   }
 
   /**
