@@ -1,5 +1,5 @@
-use Util.Stat
-use Util.Stats
+use CensusUtil.Stat
+use CensusUtil.Stats
 
 ///
 /// The effect to analyse a user's github data.
@@ -17,8 +17,8 @@ eff Analyse {
 }
 
 mod Analyse {
-    use Util.Stat
-    use Json.JsonElement
+    use CensusUtil.Stat
+    use Util.Json
 
     ///
     /// Handles analysis effect through Github Effect.
@@ -28,19 +28,19 @@ mod Analyse {
             f()
         } with handler Analyse {
             def analyseByRepo(commits, resume) =
-                let allStats : List[(String, Stat)] = foreach (
-                    (repo, shas) <- commits;
-                    sha <- shas
-                ) yield commitToAddsDels(repo, sha);
+                let allStats : List[(String, Stat)] =
+                    Map.toList(commits) |> List.flatMap(match (repo, shas) ->
+                        shas |> List.map(sha -> commitToAddsDels(repo, sha))
+                    );
                 mergeStats(allStats) |> resume
 
             def analyseByByte(repos, resume) = {
-                let allStats: List[(String, BigInt)] = foreach (
-                    repo <- repos;
-                    languageStat = Github.getLanguages(repo);
-                    languageStatMap = Util.fromJson(languageStat);
-                    (lang, size) <- (languageStatMap: Map[String, BigInt])
-                ) yield (lang, size);
+                let allStats: List[(String, BigInt)] =
+                    repos |> List.flatMap(repo -> {
+                        let languageStat = Github.getLanguages(repo);
+                        let languageStatMap: Map[String, BigInt] = CensusUtil.fromJson(languageStat);
+                        Map.toList(languageStatMap)
+                    });
                 mergeStatsByByte(allStats) |> resume
             }
         }
@@ -50,14 +50,14 @@ mod Analyse {
     /// Collect adds and dels from all changed valid files in a commit.
     ///
     def commitToAddsDels(repo: String, sha: String): (String, Stat) \ AnalysisFailure + Github = {
-        let stat = Github.getCommit(repo, sha) |> Util.accessJson("files") |> List.foldLeft((acc, file) -> {
-            let filename =  Util.accessJson("filename", file);
-            let extOpt =  filename |> Util.extractExt;
+        let stat = Github.getCommit(repo, sha) |> CensusUtil.accessJson("files") |> List.foldLeft((acc, file) -> {
+            let filename =  CensusUtil.accessJson("filename", file);
+            let extOpt =  filename |> CensusUtil.extractExt;
             match extOpt {
                 case Option.None  => acc
                 case Option.Some(ext) =>
-                    let additions = Util.accessJson("additions", file);
-                    let deletions = Util.accessJson("deletions", file);
+                    let additions = CensusUtil.accessJson("additions", file);
+                    let deletions = CensusUtil.accessJson("deletions", file);
                     Map.insertWith(
                         match (old_adds, old_dels) -> match (new_adds, new_dels) -> (old_adds + new_adds, old_dels + new_dels),
                         ext, (additions, deletions), acc

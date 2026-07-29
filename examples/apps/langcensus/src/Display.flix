@@ -1,4 +1,4 @@
-use Util.Stats
+use CensusUtil.Stats
 
 ///
 /// The effect to display different analysis results.
@@ -10,7 +10,7 @@ eff Display {
 }
 
 mod Display{
-    use Util.Stat
+    use CensusUtil.Stat
 
     ///
     /// Handles the display effect through IO.

@@ -1,9 +1,16 @@
-mod Util {
+///
+/// Helpers shared across the analysis.
+///
+/// Named `CensusUtil` rather than `Util` because the standard library owns the
+/// top-level `Util` module.
+///
+mod CensusUtil {
     import java.util.regex.Pattern
-    use Json.FromJson
-    use Json.JsonElement
-    use Json.Parse
-    use Json.Path.Path
+    use Net.Http
+    use Net.HttpRequest
+    use Net.HttpResponse
+    use Util.Json
+    use Util.Json.FromJson
 
     pub type alias Stat = Map[String, (BigInt, BigInt)]
 
@@ -12,42 +19,42 @@ mod Util {
     ///
     /// A wrapper for FromJson.fromJson, with the error handled by effect.
     ///
-    pub def fromJson(json: JsonElement): a \ AnalysisFailure with Json.FromJson[a] =
+    pub def fromJson(json: Json): a \ AnalysisFailure with FromJson[a] =
         match FromJson.fromJson(json) {
             case Result.Ok(res)  => res
             case Result.Err(err) => AnalysisFailure.raiseJsonError(err)
         }
 
     ///
-    /// A wrapper for Json.getAtKey, with the error handled by effect.
-    ///
-    def getKey(key: String, map: Map[String, JsonElement]): a \ AnalysisFailure with Json.FromJson[a] =
-        match Json.getAtKey(Path.Root, key, map) {
-            case Ok(res) => res
-            case Err(err) => AnalysisFailure.raiseJsonError(err)
-        }
-
-    ///
     /// Gets the value of the corresponding key from the json element, which is supposed to be a map.
     ///
-    pub def accessJson(key: String, json: JsonElement): a \ AnalysisFailure with Json.FromJson[a] = fromJson(json) |> getKey(key)
-
-
-    ///
-    /// A wrapper for Parse.parse, with the error handled by effect.
-    ///
-    def parse(jsonString: String): JsonElement \ AnalysisFailure =
-        match Parse.parse(jsonString) {
-            case None => AnalysisFailure.raiseParseError()
-            case Some(json) => json
+    pub def accessJson(key: String, json: Json): a \ AnalysisFailure with FromJson[a] =
+        match FromJson.decodeAtKey(key, json) {
+            case Result.Ok(res)  => res
+            case Result.Err(err) => AnalysisFailure.raiseJsonError(err)
         }
+
+    ///
+    /// A wrapper for Json.parse, with the error handled by effect.
+    ///
+    def parse(jsonString: String): Json \ AnalysisFailure =
+        match Json.parse(jsonString) {
+            case Result.Err(_)   => AnalysisFailure.raiseParseError()
+            case Result.Ok(json) => json
+        }
+
+    ///
+    /// Sends a GET request to `url` carrying the given `headers`.
+    ///
+    def get(url: String, headers: Map[String, List[String]]): Result[IoError, HttpResponse] \ Http =
+        Http.send(HttpRequest.get(url) |> HttpRequest.withHeaders(headers))
 
     ///
     /// First gets the url, then parses the whole response body into a json element.
     ///
-    pub def getAndParse(url: String, header: Map[String, List[String]]): JsonElement \ HttpWithResult + AnalysisFailure =
-        match HttpWithResult.get(url, header) {
-            case Result.Ok(response)  => response |> Http.Response.body |> parse
+    pub def getAndParse(url: String, header: Map[String, List[String]]): Json \ Http + AnalysisFailure =
+        match get(url, header) {
+            case Result.Ok(response)  => response |> HttpResponse.body |> parse
             case Result.Err(err) => AnalysisFailure.raiseRequestFailure(err)
         }
 
@@ -61,15 +68,15 @@ mod Util {
     ///   <https://api.github.com/repositories/1300192/issues?page=515>; rel="last",
     ///   <https://api.github.com/repositories/1300192/issues?page=1>; rel="first"
     ///
-    pub def getAllPages(url: String, headers: Map[String, List[String]]): List[JsonElement] \ HttpWithResult  + AnalysisFailure + IO = {
-        match HttpWithResult.get(url, headers) {
+    pub def getAllPages(url: String, headers: Map[String, List[String]]): List[Json] \ Http + AnalysisFailure + IO = {
+        match get(url, headers) {
             case Result.Ok(response)  =>
-                if (Http.Response.status(response) != 200)
+                if (HttpResponse.status(response) != 200)
                     Nil
                 else
-                    let thisPage: List[JsonElement] = response |> Http.Response.body |> parse |> fromJson;
+                    let thisPage: List[Json] = response |> HttpResponse.body |> parse |> fromJson;
                     let nextPagesOpt = forM (
-                        linkValueList <- Http.Response.headers(response) |> Map.get("link");
+                        linkValueList <- HttpResponse.headers(response) |> Map.get("link");
                         linkString <- List.head(linkValueList);
                         pattern = Pattern.compile("<([^>]*)>; rel=\"next\"");
                         matcher = pattern.matcher(linkString);
