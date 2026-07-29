@@ -21,7 +21,18 @@ mod CensusUtil {
     ///
     pub def log(msg: String): Unit \ IO =
         let uptimeMs = ManagementFactory.getRuntimeMXBean().getUptime();
-        println("[${uptimeMs / 1000i64}s] ${msg}")
+        let secs = String.padLeft(4, ' ', "${uptimeMs / 1000i64}s");
+        println("[${secs}] ${msg}")
+
+    ///
+    /// Formats `i` of `total` as a right-aligned counter, e.g. `" 20/106"`.
+    ///
+    /// Right-aligning keeps the repository names in a single column, so a long run
+    /// stays scannable.
+    ///
+    pub def counter(i: Int32, total: Int32): String =
+        let width = String.length("${total}");
+        "${String.padLeft(width, ' ', "${i}")}/${total}"
 
     pub type alias Stat = Map[String, (BigInt, BigInt)]
 

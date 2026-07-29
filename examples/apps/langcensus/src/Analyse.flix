@@ -35,7 +35,7 @@ mod Analyse {
                         let (repo, shas) = entry;
                         let shaCount = List.length(shas);
                         shas |> List.mapWithIndex((j, sha) -> {
-                            CensusUtil.log("[${i + 1}/${repoCount}] ${repo}: commit ${j + 1}/${shaCount}");
+                            CensusUtil.log("[${CensusUtil.counter(i + 1, repoCount)}] ${repo}: commit ${CensusUtil.counter(j + 1, shaCount)}");
                             commitToAddsDels(repo, sha)
                         })
                     }) |> List.flatten;
@@ -45,7 +45,7 @@ mod Analyse {
                 let repoCount = List.length(repos);
                 let allStats: List[(String, BigInt)] =
                     repos |> List.mapWithIndex((i, repo) -> {
-                        CensusUtil.log("[${i + 1}/${repoCount}] ${repo}: languages");
+                        CensusUtil.log("[${CensusUtil.counter(i + 1, repoCount)}] ${repo}: languages");
                         let languageStat = Github.getLanguages(repo);
                         let languageStatMap: Map[String, BigInt] = CensusUtil.fromJson(languageStat);
                         Map.toList(languageStatMap)

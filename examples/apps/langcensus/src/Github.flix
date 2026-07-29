@@ -69,10 +69,9 @@ mod Github {
             def getCommits(repos, resume) = {
                 let repoCount = List.length(repos);
                 repos |> List.mapWithIndex((i, repo) -> {
-                    CensusUtil.log("[${i + 1}/${repoCount}] ${repo}: fetching commits...");
                     let url = "https://api.github.com/repos/${repo}/commits?author=${Config.getName()}&per_page=100";
                     let shas = CensusUtil.getAllPages(url, buildHeader()) |> List.map(CensusUtil.accessJson("sha"));
-                    CensusUtil.log("[${i + 1}/${repoCount}] ${repo}: ${List.length(shas)} commits");
+                    CensusUtil.log("[${CensusUtil.counter(i + 1, repoCount)}] ${repo}: ${List.length(shas)} commits");
                     (repo, shas)
                 }) |> List.toMap |> resume
             }
