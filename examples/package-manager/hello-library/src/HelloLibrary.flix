@@ -1,3 +1,3 @@
 mod HelloLibrary {
-    def foo(): Unit = ???
+    pub def foo(): Int32 = 42
 }
