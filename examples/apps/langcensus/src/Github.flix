@@ -36,6 +36,8 @@ pub eff Github {
 
 mod Github {
     use Time.Sleep
+    use Util.Json
+    use Util.Json.Json.{JString, JNull}
     use Fs.MkDirs
     use Fs.ReadFile
     use Fs.WriteFile
@@ -55,17 +57,44 @@ mod Github {
     }
 
     ///
+    /// The GraphQL document listing a user's commits on a repository's default branch.
+    ///
+    /// One request returns up to 100 SHAs and costs a single point, against a budget
+    /// separate from the REST quota, so listing the whole account costs a rounding
+    /// error rather than one REST request per page.
+    ///
+    def commitsDocument(): String =
+        String.unlines(
+            "query($owner: String!, $name: String!, $author: ID!, $cursor: String) {" ::
+            "  repository(owner: $owner, name: $name) {" ::
+            "    defaultBranchRef { target { ... on Commit {" ::
+            "      history(first: 100, author: {id: $author}, after: $cursor) {" ::
+            "        pageInfo { hasNextPage endCursor }" ::
+            "        nodes { oid }" ::
+            "      } } }" ::
+            "  } } }" :: Nil)
+
+    ///
+    /// Resolves the node id of `login`, which is how GraphQL identifies a commit author.
+    ///
+    /// REST filters commits by username; GraphQL wants an id, so it is looked up once
+    /// and reused for every repository.
+    ///
+    def authorId(login: String, headers: Map[String, List[String]]): String \ Http + AnalysisFailure + IO =
+        let doc = "query($login: String!) { user(login: $login) { id } }";
+        let data = CensusUtil.graphQl(doc, Map#{"login" => JString(login)}, headers);
+        CensusUtil.accessJson("id", CensusUtil.accessJson("user", data))
+
+    ///
     /// Fetches the SHAs of `name`'s commits in `repo`.
     ///
     /// Runs inside a pool worker, so it installs its own `Http` handler and turns a
     /// failure into a value instead of raising it: a worker must not exit the
     /// process out from under the other workers.
     ///
-    def fetchCommits(name: String, headers: Map[String, List[String]], repo: String): Result[String, (String, List[String])] \ IO =
+    def fetchCommits(author: String, headers: Map[String, List[String]], repo: String): Result[String, (String, List[String])] \ IO =
         run {
-            let url = "https://api.github.com/repos/${repo}/commits?author=${name}&per_page=100";
-            let shas = CensusUtil.getAllPages(url, headers) |> List.map(CensusUtil.accessJson("sha"));
-            Ok((repo, shas))
+            Ok((repo, shasOf(author, headers, repo, None)))
         } with Http.runWithIO
         with Sleep.runWithIO
         with handler AnalysisFailure {
@@ -74,6 +103,46 @@ mod Github {
             def raiseConfigError(msg, _k)    = Err(msg)
             def raiseParseError(msg, _k)     = Err(msg)
             def raiseJsonError(err, _k)      = Err("${err}")
+        }
+
+    ///
+    /// Pages through `repo`'s history, collecting SHAs.
+    ///
+    /// A repository with no commits has no default branch, so GraphQL returns null
+    /// where REST answers 409. Both mean the same thing: nothing to count.
+    ///
+    def shasOf(author: String, headers: Map[String, List[String]], repo: String, cursor: Option[String]): List[String] \ Http + AnalysisFailure + IO =
+        let (owner, name) = splitRepo(repo);
+        let vars = Map#{
+            "owner"  => JString(owner),
+            "name"   => JString(name),
+            "author" => JString(author),
+            "cursor" => match cursor { case Some(c) => JString(c) case None => JNull }
+        };
+        let data = CensusUtil.graphQl(commitsDocument(), vars, headers);
+        let branch: Json = CensusUtil.accessJson("defaultBranchRef", CensusUtil.accessJson("repository", data));
+        match branch {
+            case Json.JNull => Nil
+            case _ =>
+                let history = CensusUtil.accessJson("history", CensusUtil.accessJson("target", branch));
+                let nodes: List[Json] = CensusUtil.accessJson("nodes", history);
+                let shas = nodes |> List.map(CensusUtil.accessJson("oid"));
+                let pageInfo = CensusUtil.accessJson("pageInfo", history);
+                let hasNext: Bool = CensusUtil.accessJson("hasNextPage", pageInfo);
+                if (hasNext) {
+                    let endCursor: String = CensusUtil.accessJson("endCursor", pageInfo);
+                    shas ::: shasOf(author, headers, repo, Some(endCursor))
+                } else
+                    shas
+        }
+
+    ///
+    /// Splits "owner/name" into its two halves.
+    ///
+    def splitRepo(repo: String): (String, String) =
+        match String.indexOf(substr = "/", repo) {
+            case Some(i) => (String.takeLeft(i, repo), String.drop(i + 1, repo))
+            case None    => (repo, repo)
         }
 
     ///
@@ -96,12 +165,12 @@ mod Github {
                 // Resolve the credentials once, here: a worker cannot reach the
                 // `Config` handler, which lives on this thread's stack.
                 let headers = buildHeader();
-                let name = Config.getName();
+                let author = authorId(Config.getName(), headers);
 
                 let results = CensusUtil.parMap(
                     CensusUtil.workerCount(),
                     repos,
-                    repo -> fetchCommits(name, headers, repo),
+                    repo -> fetchCommits(author, headers, repo),
                     (i, total, res) -> match res {
                         case Result.Ok((repo, shas)) =>
                             CensusUtil.log("[${CensusUtil.counter(i, total)}] ${repo}: ${List.length(shas)} commits")

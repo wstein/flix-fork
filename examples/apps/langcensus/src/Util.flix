@@ -18,6 +18,8 @@ mod CensusUtil {
     use Net.HttpResponse
     use Util.Json
     use Util.Json.FromJson
+    use Util.Json.JsonError
+    use Util.Json.Json.{JObject, JString, JNull}
 
     ///
     /// Prints `msg` prefixed with the whole seconds elapsed since the program started.
@@ -162,6 +164,31 @@ mod CensusUtil {
         match Channel.recv(rx) {
             case None    => ()
             case Some(x) => Channel.send(f(x), tx); drain(rx, tx, f)
+        }
+
+    ///
+    /// Sends a GraphQL query with `variables` and returns the `data` object.
+    ///
+    /// The body is assembled as a `Json` value and serialised, rather than spliced
+    /// together as text, so the query and its arguments cannot be mis-escaped.
+    ///
+    /// GraphQL reports failures inside a 200 response, so `errors` is checked
+    /// explicitly; a transport-level failure still goes through `checkStatus`.
+    ///
+    pub def graphQl(document: String, variables: Map[String, Json], headers: Map[String, List[String]]): Json \ Http + AnalysisFailure + IO =
+        let url = "https://api.github.com/graphql";
+        let body = Json.toCompactString(JObject(Map#{"query" => JString(document), "variables" => JObject(variables)}));
+        match Http.send(HttpRequest.post(url, body) |> HttpRequest.withHeaders(headers)) {
+            case Result.Err(err) => AnalysisFailure.raiseRequestFailure(err)
+            case Result.Ok(response) =>
+                checkStatus(url, response);
+                let json = parse(url, HttpResponse.body(response));
+                let errors: Result[JsonError, Json] = FromJson.decodeAtKey("errors", json);
+                match errors {
+                    case Result.Ok(errs) =>
+                        AnalysisFailure.raiseHttpError("GitHub GraphQL reported an error: ${errs}")
+                    case Result.Err(_) => accessJson("data", json)
+                }
         }
 
     pub type alias Stat = Map[String, (BigInt, BigInt)]
