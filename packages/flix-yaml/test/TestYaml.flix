@@ -32,15 +32,67 @@ mod TestYaml {
         }
 
     ///
-    /// A YAML file is written by a person, so the order they chose is kept.
+    /// Mappings are a `Map` keyed by node, as in HsYAML, so lookup is by content and
+    /// the author's key order is not recoverable. This pins that trade-off.
     ///
     @Test
-    def mappingKeepsAuthorOrder(): Unit \ Assert + IO =
+    def mappingIsKeyedByNode(): Unit \ Assert + IO =
         match Yaml.Parse.parse("zebra: 1\nalpha: 2\nmiddle: 3\n") {
-            case Ok(Yaml.YMapping(kvs)) =>
-                let keys = kvs |> List.map(match (k, _) -> "${k}");
-                assertEq(expected = "zebra" :: "alpha" :: "middle" :: Nil, keys)
+            case Ok(Yaml.YMapping(_, _, m)) =>
+                let keys = Map.keysOf(m) |> Set.toList |> List.map(k -> "${k}");
+                assertEq(expected = "alpha" :: "middle" :: "zebra" :: Nil, keys)
             case other => assertTrueWithMsg(false, "unexpected: ${other}")
+        }
+
+    ///
+    /// Every node knows where it came from, which is what makes a useful error
+    /// message possible.
+    ///
+    @Test
+    def nodesCarryTheirPosition(): Unit \ Assert + IO =
+        match Yaml.Parse.parse("first: 1\nsecond: 2\n") {
+            case Ok(y) =>
+                let found: Result[YamlError, Yaml] = Yaml.FromYaml.decodeAtKey("second", y);
+                match found {
+                case Ok(node) =>
+                    let Yaml.Pos.Pos(line, _) = Yaml.posOf(node);
+                    assertEq(expected = 1, line)
+                case Err(e) => assertTrueWithMsg(false, "lookup failed: ${e}")
+                }
+            case Err(e) => assertTrueWithMsg(false, "parse failed: ${e}")
+        }
+
+    ///
+    /// Resolved tags are kept rather than discarded once a scalar is typed.
+    ///
+    @Test
+    def nodesCarryTheirTag(): Unit \ Assert + IO =
+        match Yaml.Parse.parse("n: 7\n") {
+            case Ok(y) =>
+                assertEq(expected = "tag:yaml.org,2002:map", Yaml.tagOf(y));
+                let found: Result[YamlError, Yaml] = Yaml.FromYaml.decodeAtKey("n", y);
+                match found {
+                    case Ok(node) => assertEq(expected = "tag:yaml.org,2002:int", Yaml.tagOf(node))
+                    case Err(e)   => assertTrueWithMsg(false, "lookup failed: ${e}")
+                }
+            case Err(e) => assertTrueWithMsg(false, "parse failed: ${e}")
+        }
+
+    ///
+    /// A tag outside the core schema is kept as text, never used to build a value.
+    ///
+    @Test
+    def unknownTagIsNotConstructed(): Unit \ Assert + IO =
+        match Yaml.Parse.parse("x: !Custom hello\n") {
+            case Ok(y) =>
+                let found: Result[YamlError, Yaml] = Yaml.FromYaml.decodeAtKey("x", y);
+                match found {
+                case Ok(Yaml.YScalar(_, tag, Yaml.Scalar.SUnknown(_, text))) =>
+                    assertEq(expected = "!Custom", tag);
+                    assertEq(expected = "hello", text)
+                case other => assertTrueWithMsg(false, "expected an unconstructed scalar, got ${other}")
+                }
+            case Err(e) => assertTrueWithMsg(false, "parse failed: ${e}")
         }
 
     @Test

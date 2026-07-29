@@ -47,12 +47,35 @@ there is no unsafe variant to reach for:
 | Document size | 8 MiB of code points | Bounds the input. |
 | Duplicate keys | rejected | Returned as an error rather than silently resolved. |
 
-## Mappings keep their order
+## The node type
 
-`Yaml.YMapping` is a list of pairs, not a `Map`. A YAML file is written by a
-person and read back by one, so the order they chose is preserved. `Util.Json`
-sorts keys, which is right for canonical output and wrong for round-tripping
-config.
+Modelled on [HsYAML][hsyaml]'s `Node`:
+
+```flix
+pub enum Yaml {
+    case YScalar(Pos, Tag, Scalar)
+    case YMapping(Pos, Tag, Map[Yaml, Yaml])
+    case YSequence(Pos, Tag, List[Yaml])
+}
+```
+
+Every node carries its **source position** and its **resolved tag**, and scalars
+are a separate typed sum (`SNull`, `SBool`, `SInt`, `SFloat`, `SStr`, `SUnknown`).
+
+Mappings are a `Map` **keyed by node**, because YAML permits any node as a key,
+not only a string. Equality and ordering deliberately ignore position — otherwise
+a key could never be looked up, since the caller has no position to build one
+with. HsYAML hand-writes its `Eq`/`Ord` for exactly this reason; so does this.
+
+Two consequences follow from the `Map`, both inherited from HsYAML's design:
+
+- **Key order is not preserved.** A `Map` sorts. If you need to round-trip a
+  config file with its original ordering, this is the wrong shape.
+- **Lookup is logarithmic** rather than linear, and keys may be sequences or
+  mappings.
+
+Duplicate keys are rejected rather than collapsed. The composer does not check
+this itself, so the package does.
 
 ## Converting to JSON
 
@@ -68,8 +91,10 @@ Parsing never produces `Json` implicitly.
 
 - **Writing.** Reading only, for now.
 - **Multiple documents.** `---`-separated streams parse only the first document.
-- **Anchors are expanded, not preserved.** The `Yaml` type has no anchor or tag
-  case, so a round trip loses them.
+- **Anchors are expanded, not preserved.** HsYAML has an `Anchor` constructor and
+  keeps them; snakeyaml-engine's composer resolves aliases into shared nodes
+  before the tree is seen, so there is nothing left to record. Round-tripping
+  anchors would need a different backend.
 
 ## Tests
 
@@ -78,3 +103,4 @@ flix test
 ```
 
 [engine]: https://bitbucket.org/snakeyaml/snakeyaml-engine
+[hsyaml]: https://github.com/haskell-hvr/HsYAML

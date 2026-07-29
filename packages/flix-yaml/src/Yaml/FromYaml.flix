@@ -1,11 +1,12 @@
 ///
 /// Decoding YAML into a caller's own types.
 ///
-/// Mirrors `Util.Json.FromJson` so that anyone who has decoded JSON in Flix already
+/// Mirrors `Util.Json.FromJson`, so anyone who has decoded JSON in Flix already
 /// knows this API.
 ///
 pub mod Yaml.FromYaml {
 
+    use Yaml.Scalar
     use Yaml.Yaml
     use Yaml.YamlError.YamlError
 
@@ -25,28 +26,30 @@ pub mod Yaml.FromYaml {
         yield value
 
     ///
-    /// Decodes the value at `key`, or `None` if the key is absent.
+    /// Decodes the value at `key`, or `None` if the key is absent or null.
     ///
     /// A missing key and a key explicitly set to null are both `None`, which is what
-    /// configuration files usually mean by an omitted setting.
+    /// a configuration file usually means by an omitted setting.
     ///
     pub def decodeAtKeyOpt(key: String, y: Yaml): Result[YamlError, Option[a]] with FromYaml[a] =
         match lookup(key, y) {
-            case Err(YamlError.MissingKey(_)) => Ok(None)
-            case Err(e)                       => Err(e)
-            case Ok(Yaml.YNull)               => Ok(None)
-            case Ok(node)                     => FromYaml.fromYaml(node) |> Result.map(Some)
+            case Err(YamlError.MissingKey(_))         => Ok(None)
+            case Err(e)                               => Err(e)
+            case Ok(Yaml.YScalar(_, _, Scalar.SNull)) => Ok(None)
+            case Ok(node)                             => FromYaml.fromYaml(node) |> Result.map(Some)
         }
 
     ///
     /// Returns the node at `key` of a mapping.
     ///
+    /// The lookup is logarithmic, because mappings are a `Map` keyed by node. The key
+    /// is built by `Yaml.key`, whose position the ordering discards.
+    ///
     def lookup(key: String, y: Yaml): Result[YamlError, Yaml] = match y {
-        case Yaml.YMapping(kvs) =>
-            match List.find(match (k, _) -> k == Yaml.YString(key), kvs) {
-                case Some((_, v)) => Ok(v)
-                case None         => Err(YamlError.MissingKey(key))
-            }
+        case Yaml.YMapping(_, _, m) => match Map.get(Yaml.key(key), m) {
+            case Some(v) => Ok(v)
+            case None    => Err(YamlError.MissingKey(key))
+        }
         case other => Err(YamlError.Mismatch("mapping", describe(other)))
     }
 
@@ -54,13 +57,16 @@ pub mod Yaml.FromYaml {
     /// Names the shape of a node, for error messages.
     ///
     pub def describe(y: Yaml): String = match y {
-        case Yaml.YMapping(_)  => "mapping"
-        case Yaml.YSequence(_) => "sequence"
-        case Yaml.YString(_)   => "string"
-        case Yaml.YInt(_)      => "integer"
-        case Yaml.YFloat(_)    => "float"
-        case Yaml.YBool(_)     => "boolean"
-        case Yaml.YNull        => "null"
+        case Yaml.YMapping(_, _, _)  => "mapping"
+        case Yaml.YSequence(_, _, _) => "sequence"
+        case Yaml.YScalar(_, _, s)   => match s {
+            case Scalar.SNull          => "null"
+            case Scalar.SBool(_)       => "boolean"
+            case Scalar.SInt(_)        => "integer"
+            case Scalar.SFloat(_)      => "float"
+            case Scalar.SStr(_)        => "string"
+            case Scalar.SUnknown(t, _) => "scalar tagged ${t}"
+        }
     }
 
     ///
@@ -75,28 +81,28 @@ pub mod Yaml.FromYaml {
 
     instance FromYaml[String] {
         pub def fromYaml(y: Yaml): Result[YamlError, String] = match y {
-            case Yaml.YString(s) => Ok(s)
-            case other           => mismatch("string", other)
+            case Yaml.YScalar(_, _, Scalar.SStr(s)) => Ok(s)
+            case other => mismatch("string", other)
         }
     }
 
     instance FromYaml[Bool] {
         pub def fromYaml(y: Yaml): Result[YamlError, Bool] = match y {
-            case Yaml.YBool(b) => Ok(b)
-            case other         => mismatch("boolean", other)
+            case Yaml.YScalar(_, _, Scalar.SBool(b)) => Ok(b)
+            case other => mismatch("boolean", other)
         }
     }
 
     instance FromYaml[BigInt] {
         pub def fromYaml(y: Yaml): Result[YamlError, BigInt] = match y {
-            case Yaml.YInt(i) => Ok(i)
-            case other        => mismatch("integer", other)
+            case Yaml.YScalar(_, _, Scalar.SInt(i)) => Ok(i)
+            case other => mismatch("integer", other)
         }
     }
 
     instance FromYaml[Int32] {
         pub def fromYaml(y: Yaml): Result[YamlError, Int32] = match y {
-            case Yaml.YInt(i) => match BigInt.tryToInt32(i) {
+            case Yaml.YScalar(_, _, Scalar.SInt(i)) => match BigInt.tryToInt32(i) {
                 case Some(n) => Ok(n)
                 case None    => Err(YamlError.Mismatch("integer within Int32", "${i}"))
             }
@@ -106,7 +112,7 @@ pub mod Yaml.FromYaml {
 
     instance FromYaml[Int64] {
         pub def fromYaml(y: Yaml): Result[YamlError, Int64] = match y {
-            case Yaml.YInt(i) => match BigInt.tryToInt64(i) {
+            case Yaml.YScalar(_, _, Scalar.SInt(i)) => match BigInt.tryToInt64(i) {
                 case Some(n) => Ok(n)
                 case None    => Err(YamlError.Mismatch("integer within Int64", "${i}"))
             }
@@ -115,23 +121,23 @@ pub mod Yaml.FromYaml {
     }
 
     ///
-    /// An integer is accepted where a float is wanted, as YAML's core schema does.
+    /// An integer is accepted where a float is wanted, as the core schema allows.
     ///
     instance FromYaml[Float64] {
         pub def fromYaml(y: Yaml): Result[YamlError, Float64] = match y {
-            case Yaml.YFloat(f) => Ok(f)
-            case Yaml.YInt(i)   => match BigInt.tryToFloat64(i) {
+            case Yaml.YScalar(_, _, Scalar.SFloat(f)) => Ok(f)
+            case Yaml.YScalar(_, _, Scalar.SInt(i))   => match BigInt.tryToFloat64(i) {
                 case Some(f) => Ok(f)
                 case None    => Err(YamlError.Mismatch("float within Float64", "${i}"))
             }
-            case other          => mismatch("float", other)
+            case other => mismatch("float", other)
         }
     }
 
     instance FromYaml[List[a]] with FromYaml[a] {
         pub def fromYaml(y: Yaml): Result[YamlError, List[a]] = match y {
-            case Yaml.YSequence(xs) => Result.traverse(FromYaml.fromYaml, xs)
-            case other              => mismatch("sequence", other)
+            case Yaml.YSequence(_, _, xs) => Result.traverse(FromYaml.fromYaml, xs)
+            case other => mismatch("sequence", other)
         }
     }
 
@@ -140,22 +146,18 @@ pub mod Yaml.FromYaml {
     ///
     instance FromYaml[Option[a]] with FromYaml[a] {
         pub def fromYaml(y: Yaml): Result[YamlError, Option[a]] = match y {
-            case Yaml.YNull => Ok(None)
-            case other      => FromYaml.fromYaml(other) |> Result.map(Some)
+            case Yaml.YScalar(_, _, Scalar.SNull) => Ok(None)
+            case other => FromYaml.fromYaml(other) |> Result.map(Some)
         }
     }
 
-    ///
-    /// A mapping with string keys decodes to a `Map`. Key order is lost here, as it
-    /// must be, since `Map` is sorted.
-    ///
     instance FromYaml[Map[k, v]] with Order[k], FromYaml[k], FromYaml[v] {
         pub def fromYaml(y: Yaml): Result[YamlError, Map[k, v]] = match y {
-            case Yaml.YMapping(kvs) =>
+            case Yaml.YMapping(_, _, m) =>
                 Result.traverse(match (k, v) ->
                     forM (key <- FromYaml.fromYaml(k);
                           value <- FromYaml.fromYaml(v))
-                    yield (key, value), kvs)
+                    yield (key, value), Map.toList(m))
                 |> Result.map(List.toMap)
             case other => mismatch("mapping", other)
         }
