@@ -368,7 +368,7 @@ object Eraser {
   private final class SharedContext {
 
     /**
-      * `(Option, List(Int32)) -> Option$42` means that `Option` is specialized wrt. `Int32` under the name `Option$42`.
+      * `(Option, List(Int32)) -> Option$h...` means that `Option` is specialized wrt. `Int32` under a stable generated name.
       */
     private val enumSpecializations: ConcurrentHashMap[(Symbol.EnumSym, List[SimpleType]), Symbol.EnumSym] =
       new ConcurrentHashMap()
@@ -387,7 +387,7 @@ object Eraser {
           enumSpecializations.computeIfAbsent((sym, targs), _ => sym)
         case _ =>
           // Do specialization.
-          enumSpecializations.computeIfAbsent((sym, targs), _ => Symbol.freshEnumSym(sym))
+          enumSpecializations.computeIfAbsent((sym, targs), _ => Symbol.specializedEnumSym(sym, targs))
       }
     }
 

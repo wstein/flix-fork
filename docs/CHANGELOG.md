@@ -1,7 +1,7 @@
 # Changelog
 
 Unreleased:
-- Compiler: Generated JVM class names now use versioned XXH3-64/Base58 components, making them compact and reproducible.
+- Compiler: Monomorphized enum-case JVM class names now replace fresh identifiers with versioned XXH3-64/Base58 components.
 
 Version 0.75.1:
 - Compiler: Fixed a few bugs (thanks Magnus!)

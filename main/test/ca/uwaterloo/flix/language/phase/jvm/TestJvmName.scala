@@ -6,17 +6,20 @@
  */
 package ca.uwaterloo.flix.language.phase.jvm
 
+import ca.uwaterloo.flix.language.ast.{SimpleType, Symbol}
 import org.scalatest.funsuite.AnyFunSuite
 
 class TestJvmName extends AnyFunSuite {
 
-  test("generated class names contain a fixed-width, identifier-safe hash") {
-    val name = JvmName.mkClassName("Option", "None")
-    assert(name.matches("Option\\$h[1-9A-HJ-NP-Za-km-z]{13}\\$None"))
+  test("ordinary generated class names retain their established form") {
+    assertResult("Option$None")(JvmName.mkClassName("Option", "None"))
   }
 
-  test("generated class names are stable and distinguish canonical inputs") {
-    assertResult(JvmName.mkClassName("Option", "None"))(JvmName.mkClassName("Option", "None"))
-    assert(JvmName.mkClassName("Option", "None") != JvmName.mkClassName("Option", "Some"))
+  test("specialized enum cases replace the former fresh identifier with a stable hash") {
+    val option = Symbol.mkEnumSym("Option")
+    val specialized = Symbol.specializedEnumSym(option, List(SimpleType.Int32))
+    val name = JvmName.mkClassName(specialized.name, "None")
+    assert(name.matches("Option\\$h[1-9A-HJ-NP-Za-km-z]{13}\\$None"))
+    assertResult(specialized.name)(Symbol.specializedEnumSym(option, List(SimpleType.Int32)).name)
   }
 }

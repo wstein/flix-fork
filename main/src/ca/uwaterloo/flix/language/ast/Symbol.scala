@@ -19,7 +19,7 @@ package ca.uwaterloo.flix.language.ast
 import ca.uwaterloo.flix.api.Flix
 import ca.uwaterloo.flix.language.ast.Name.{Ident, NName}
 import ca.uwaterloo.flix.language.ast.shared.*
-import ca.uwaterloo.flix.util.InternalCompilerException
+import ca.uwaterloo.flix.util.{InternalCompilerException, StableHash}
 
 import java.util.Objects
 import scala.collection.immutable.SortedSet
@@ -88,6 +88,18 @@ object Symbol {
   def freshEnumSym(sym: EnumSym)(implicit flix: Flix): EnumSym = {
     val id = Some(flix.genSym.freshId())
     new EnumSym(id, sym.namespace, sym.text, sym.loc)
+  }
+
+  /**
+    * Returns the stable symbol used for a monomorphized enum specialization.
+    *
+    * Unlike [[freshEnumSym]], this symbol's name is independent of compiler
+    * process state. The key contains only the source enum's fully-qualified
+    * name and its canonical monomorphized type arguments.
+    */
+  def specializedEnumSym(sym: EnumSym, targs: List[SimpleType]): EnumSym = {
+    val key = sym.toString :: targs.map(_.toString)
+    new EnumSym(None, sym.namespace, s"${sym.text}${Flix.Delimiter}h${StableHash.xxh3_64Base58(key)}", sym.loc)
   }
 
   /**
