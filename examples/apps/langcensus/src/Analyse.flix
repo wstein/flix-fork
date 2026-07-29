@@ -35,9 +35,9 @@ mod Analyse {
                 // Each item carries its position within its own repository, so the
                 // progress line can say how far through that repository it is even
                 // though the queue is global.
+                let deduped = dedupeBySha(commits);
                 let pairs =
-                    Map.toList(commits)
-                    |> List.filter(match (_, shas) -> not List.isEmpty(shas))
+                    deduped
                     |> List.flatMap(match (repo, shas) -> {
                         let inRepo = List.length(shas);
                         shas |> List.mapWithIndex((j, sha) -> (repo, sha, j + 1, inRepo))
@@ -78,6 +78,26 @@ mod Analyse {
             }
         }
     }
+
+    ///
+    /// Assigns every commit to exactly one repository.
+    ///
+    /// A fork shares its parent's history, so the same SHA can appear in several
+    /// repositories. Counting it once per repository would inflate every total, and
+    /// the inflation would look like ordinary activity. Repositories are visited in
+    /// name order so the winner does not depend on which fetch finished first, and
+    /// repositories left with nothing are dropped.
+    ///
+    pub def dedupeBySha(commits: Map[String, List[String]]): List[(String, List[String])] =
+        Map.toList(commits)
+        |> List.filter(match (_, shas) -> not List.isEmpty(shas))
+        |> List.foldLeft(match (acc, seen) -> match (repo, shas) -> {
+            let fresh = shas |> List.filter(sha -> not Set.memberOf(sha, seen));
+            ((repo, fresh) :: acc, List.foldLeft((s, sha) -> Set.insert(sha, s), seen, fresh))
+        }, (Nil, Set.empty()))
+        |> fst
+        |> List.reverse
+        |> List.filter(match (_, shas) -> not List.isEmpty(shas))
 
     ///
     /// Collect adds and dels from all changed valid files in a commit.

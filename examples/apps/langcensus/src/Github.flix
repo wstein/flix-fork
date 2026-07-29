@@ -90,8 +90,18 @@ mod Github {
     /// and reused for every repository.
     ///
     def authorId(login: String, headers: Map[String, List[String]]): String \ Http + AnalysisFailure + IO =
-        let doc = "query($login: String!) { user(login: $login) { id } }";
+        let doc = "query($login: String!) { viewer { login } user(login: $login) { id } }";
         let data = CensusUtil.graphQl(doc, Map#{"login" => JString(login)}, headers);
+
+        // GITHUB_NAME and GITHUB_TOKEN are set independently, so they can disagree.
+        // When they do, the census silently reports one person's commits over
+        // another person's repositories, which looks entirely plausible.
+        let viewer: String = CensusUtil.accessJson("login", CensusUtil.accessJson("viewer", data));
+        if (String.toLowerCase(viewer) != String.toLowerCase(login))
+            CensusUtil.log("Note: counting commits by '${login}', but the token belongs to '${viewer}'. Repositories are those '${viewer}' can see.")
+        else
+            ();
+
         CensusUtil.accessJson("id", CensusUtil.accessJson("user", data))
 
     ///
