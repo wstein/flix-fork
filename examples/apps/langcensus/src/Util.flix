@@ -50,7 +50,11 @@ mod CensusUtil {
     ///
     /// How wide the progress line is drawn.
     ///
-    def progressWidth(): Int32 = 110
+    /// Kept under 80 columns on purpose. A line wider than the terminal wraps, and a
+    /// carriage return then only returns to the start of the last visual row, so the
+    /// bar scrolls instead of redrawing in place.
+    ///
+    def progressWidth(): Int32 = 78
 
     ///
     /// Redraws a one-line progress bar in place.
@@ -60,12 +64,17 @@ mod CensusUtil {
     /// bar is redrawn unconditionally, so redirecting output to a file collects one
     /// long line rather than a readable log.
     ///
-    pub def progress(done: Int32, total: Int32, label: String): Unit \ IO =
-        let barWidth = 24;
+    pub def progress(done: Int32, total: Int32, name: String, detail: String): Unit \ IO =
+        let barWidth = 14;
         let filled = if (total <= 0) 0 else (done * barWidth) / total;
         let bar = String.repeat(filled, "=") ++ String.repeat(barWidth - filled, " ");
         let pct = if (total <= 0) 0 else (done * 100) / total;
-        let line = "[${elapsed()}] [${bar}] ${counter(done, total)} ${String.padLeft(3, ' ', "${pct}")}%  ${label}";
+        let prefix = "[${elapsed()}] [${bar}] ${counter(done, total)} ${String.padLeft(3, ' ', "${pct}")}%  ";
+        let suffix = if (String.isEmpty(detail)) "" else " - ${detail}";
+        // Give the name a fixed column and trim only it. Trimming the whole label
+        // would cut the counter off the end, which is the part worth reading.
+        let room = Int32.max(0, progressWidth() - String.length(prefix) - String.length(suffix));
+        let line = prefix ++ String.padRight(room, ' ', String.takeLeft(room, name)) ++ suffix;
         // Pad to a fixed width so a shorter line cannot leave the tail of a longer
         // one behind on screen.
         printInline("\r" ++ String.padRight(progressWidth(), ' ', String.takeLeft(progressWidth(), line)))

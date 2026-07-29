@@ -215,7 +215,7 @@ mod Github {
                     repo -> fetchCommits(author, headers, repo),
                     (done, total, res) -> match res {
                         case Result.Ok((repo, shas)) =>
-                            CensusUtil.progress(done, total, "${repo}: ${List.length(shas)} commits")
+                            CensusUtil.progress(done, total, repo, "${List.length(shas)} commits")
                         case Result.Err(_) => ()
                     }
                 );

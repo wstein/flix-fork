@@ -52,7 +52,7 @@ mod Analyse {
                         Github.fetchCommitJson(headers, repo, sha) |> Result.map(json -> (repo, j, inRepo, json)),
                     (done, total, res) -> match res {
                         case Result.Ok((repo, j, inRepo, _)) =>
-                            CensusUtil.progress(done, total, "${repo} ${CensusUtil.counter(j, inRepo)}")
+                            CensusUtil.progress(done, total, repo, "commit ${CensusUtil.counter(j, inRepo)}")
                         case Result.Err(_) => ()
                     }
                 );
@@ -68,7 +68,7 @@ mod Analyse {
                 let repoCount = List.length(repos);
                 let allStats: List[(String, BigInt)] =
                     repos |> List.mapWithIndex((i, repo) -> {
-                        CensusUtil.progress(i + 1, repoCount, "${repo}: languages");
+                        CensusUtil.progress(i + 1, repoCount, repo, "languages");
                         let languageStat = Github.getLanguages(repo);
                         let languageStatMap: Map[String, BigInt] = CensusUtil.fromJson(languageStat);
                         Map.toList(languageStatMap)
