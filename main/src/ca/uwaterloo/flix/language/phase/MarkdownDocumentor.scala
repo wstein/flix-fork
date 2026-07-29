@@ -76,6 +76,14 @@ object MarkdownDocumentor {
   private val GeneratedMarker: String = s"<!-- ${Documentor.GeneratedMarker} -->"
 
   /**
+    * The directory of the standard library within the `flix/flix` repository.
+    *
+    * Standard library sources reach the compiler as virtual files named after the file alone, so a
+    * page that points a reader at `List.flix` has to say where that file lives.
+    */
+  private val LibraryDirectory: String = "main/src/library/"
+
+  /**
     * The directory where to write the output.
     */
   private def OutputDirectory(implicit flix: Flix): Path = flix.options.outputPath.resolve("doc/")
@@ -356,7 +364,7 @@ object MarkdownDocumentor {
   private def docSourcePath(source: Source): String = {
     val normalized = source.name.replace('\\', '/')
     source.input match {
-      case Input.RealFile(_, _) => s"`$normalized`"
+      case Input.BundledLibraryFile(_, _, _) => s"`$LibraryDirectory$normalized` (flix/flix repo)"
       case _ => s"`$normalized`"
     }
   }
