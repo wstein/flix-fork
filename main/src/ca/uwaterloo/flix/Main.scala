@@ -62,6 +62,10 @@ object Main {
     var options = Options(
       lib = cmdOpts.xlib,
       build = Build.Development,
+      compilerTop = cmdOpts.top,
+      coverage = cmdOpts.coverage,
+      coverageOutput = cmdOpts.coverageOutput.map(Paths.get(_)).getOrElse(Options.Default.coverageOutput),
+      docFormat = cmdOpts.docFormat,
       entryPoint = entryPoint,
       githubToken = githubToken,
       incremental = Options.Default.incremental,
@@ -71,8 +75,6 @@ object Main {
       outputJvm = false,
       outputPath = Options.Default.outputPath,
       threads = cmdOpts.threads.getOrElse(Options.Default.threads),
-      compilerTop = cmdOpts.top,
-      docFormat = cmdOpts.docFormat,
       loadClassFiles = Options.Default.loadClassFiles,
       assumeYes = cmdOpts.assumeYes,
       xprintphases = cmdOpts.xprintphases,
@@ -471,6 +473,8 @@ object Main {
   case class CmdOpts(
     command: Command = Command.None,
     args: List[String] = Nil,
+    coverage: Boolean = false,
+    coverageOutput: Option[String] = None,
     docFormat: DocFormat = Options.Default.docFormat,
     entryPoint: Option[String] = None,
     installDeps: Boolean = true,
@@ -666,6 +670,13 @@ object Main {
       ).hidden()
 
       note("")
+
+      opt[Unit]("coverage").action((_, c) => c.copy(coverage = true)).
+        text("enables source-level coverage instrumentation for tests.")
+
+      opt[String]("coverage-output").action((p, c) => c.copy(coverageOutput = Some(p))).
+        valueName("<path>").
+        text("path to write the coverage report (JSON format). Defaults to build/coverage.json.")
 
       opt[DocFormat]("doc-format").action((arg, c) => c.copy(docFormat = arg)).
         text("selects the format that 'doc' emits (html, md, all). Defaults to html.")

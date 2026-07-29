@@ -28,6 +28,8 @@ object Options {
     lib = LibLevel.All,
     build = Build.Development,
     compilerTop = false,
+    coverage = false,
+    coverageOutput = Path.of("./build/coverage.json"),
     docFormat = DocFormat.Html,
     entryPoint = None,
     githubToken = None,
@@ -76,27 +78,31 @@ object Options {
 /**
   * General Flix options.
   *
-  * @param lib            selects the level of libraries to include.
-  * @param build          selects development or production mode.
-  * @param compilerTop    shows a live TUI of where the compiler spends its time.
-  * @param docFormat      selects the format that 'flix doc' emits.
-  * @param entryPoint     specifies the main entry point.
-  * @param githubToken    the API key to use for GitHub dependency resolution.
-  * @param incremental    enables incremental compilation.
-  * @param installDeps    enables automatic installation of dependencies.
-  * @param json           enable json output.
-  * @param outputJvm      Enable JVM bytecode output.
-  * @param outputPath     The path to the output folder.
-  * @param progress       print progress during compilation.
-  * @param threads        selects the number of threads to use.
-  * @param loadClassFiles loads the generated class files into the JVM.
-  * @param assumeYes      run non-interactively and assume answer to all prompts is yes.
-  * @param xdatalogDebug  selects which parts of the Datalog solver to trace.
-  * @param xdebug         retains let-bindings so a debugger can observe them.
+  * @param lib              selects the level of libraries to include.
+  * @param build            selects development or production mode.
+  * @param compilerTop      shows a live TUI of where the compiler spends its time.
+  * @param coverage         enables source-level coverage instrumentation.
+  * @param coverageOutput   path to write the coverage report (JSON format).
+  * @param docFormat        selects the format that 'flix doc' emits.
+  * @param entryPoint       specifies the main entry point.
+  * @param githubToken      the API key to use for GitHub dependency resolution.
+  * @param incremental      enables incremental compilation.
+  * @param installDeps      enables automatic installation of dependencies.
+  * @param json             enable json output.
+  * @param outputJvm        Enable JVM bytecode output.
+  * @param outputPath       The path to the output folder.
+  * @param progress         print progress during compilation.
+  * @param threads          selects the number of threads to use.
+  * @param loadClassFiles   loads the generated class files into the JVM.
+  * @param assumeYes        run non-interactively and assume answer to all prompts is yes.
+  * @param xdatalogDebug    selects which parts of the Datalog solver to trace.
+  * @param xdebug           emits full debug information so a debugger can step and inspect variables.
   */
 case class Options(lib: LibLevel,
                    build: Build,
                    compilerTop: Boolean,
+                   coverage: Boolean,
+                   coverageOutput: Path,
                    docFormat: DocFormat,
                    entryPoint: Option[Symbol.DefnSym],
                    githubToken: Option[String],
