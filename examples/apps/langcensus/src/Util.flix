@@ -5,12 +5,23 @@
 /// top-level `Util` module.
 ///
 mod CensusUtil {
+    import java.lang.management.ManagementFactory
     import java.util.regex.Pattern
     use Net.Http
     use Net.HttpRequest
     use Net.HttpResponse
     use Util.Json
     use Util.Json.FromJson
+
+    ///
+    /// Prints `msg` prefixed with the whole seconds elapsed since the program started.
+    ///
+    /// The elapsed time comes from the JVM uptime so that every call shares one
+    /// baseline, without threading a start timestamp through the effect handlers.
+    ///
+    pub def log(msg: String): Unit \ IO =
+        let uptimeMs = ManagementFactory.getRuntimeMXBean().getUptime();
+        println("[${uptimeMs / 1000i64}s] ${msg}")
 
     pub type alias Stat = Map[String, (BigInt, BigInt)]
 
