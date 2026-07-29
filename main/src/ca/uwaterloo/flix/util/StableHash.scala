@@ -13,7 +13,7 @@ import java.nio.charset.StandardCharsets.UTF_8
 /** Stable, identifier-safe hashes for compiler-generated names. */
 object StableHash {
   private val Base58Alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
-  private val HashLength = 13
+  private val HashLength = 11
 
   /** Returns a fixed-width Base58 encoding of an XXH3-64 hash. */
   def xxh3_64Base58(fields: List[String]): String = {
