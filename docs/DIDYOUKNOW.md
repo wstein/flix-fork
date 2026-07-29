@@ -158,6 +158,11 @@ Did you know that:
 
 - Flix has online API documentation available at https://api.flix.dev/
 
+- `flix doc` generates API documentation for a project. Pass
+  `--doc-format md` for Markdown instead of HTML: one page per module, trait,
+  effect, and enum, small enough to read in a checkout or hand to a language
+  model. `--doc-format all` emits both.
+
 - the Flix VSCode extension uses the real Flix compiler.
 
 - the Flix VSCode extension supports auto-complete, jump to definition, hover to

@@ -8,6 +8,22 @@ The project uses [Mill](https://mill-build.org/) as its build tool.
 - `./mill flix.run <file.flix>` — Run a Flix source file through the compiler (should take at most 3 minutes)
 - `./mill flix.assembly` — Build a fat JAR at `out/flix/assembly.dest/out.jar`
 
+## Generating API Documentation
+
+`./mill flix.run doc <file.flix>` writes API documentation for the standard
+library and the given file to `build/doc/`. Two backends share one model
+(`Documentor`), which turns the typed AST into a tree of documentable items:
+
+- `HtmlDocumentor` — the default; pages plus `styles.css`, `index.js`, and `favicon.png`
+- `MarkdownDocumentor` — one `.md` page per item, roughly a tenth the size
+
+Select with `--doc-format html|md|all`, e.g.
+`./mill flix.run doc --doc-format md out/empty.flix`.
+
+When changing either backend, note that `Bootstrap.isValidDocumentFile` decides
+what `flix clean` is willing to delete: a new output file type has to be added
+there too, or the build directory becomes uncleanable.
+
 ## Running Tests
 
 **Step 1:** First, verify the standard library compiles by running an empty file:
