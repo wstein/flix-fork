@@ -158,7 +158,7 @@ object MarkdownDocumentor {
     sb.append(docBlock(mod.doc))
     // On the index, `## All Pages` already lists these, and more.
     if (!mod.sym.isRoot) {
-      sb.append(docModules(mod))
+      sb.append(docModules(Some(mod)))
     }
     sb.append(docTypeAliases(mod.typeAliases))
     sb.append(docDefs("Definitions", mod.defs))
@@ -334,12 +334,7 @@ object MarkdownDocumentor {
   /**
     * Returns the `## Modules` section listing everything nested inside `mod` that has its own page.
     */
-  private def docModules(mod: Module)(implicit flix: Flix): String = docModules(Some(mod))
-
-  /**
-    * Returns the `## Modules` section listing everything nested inside `mod` that has its own page.
-    */
-  private def docModules(mod: Option[Module])(implicit flix: Flix): String = {
+  private def docModules(mod: Option[Module]): String = {
     val items: List[Item] = mod match {
       case None => Nil
       case Some(m) => m.submodules ::: m.traits ::: m.effects ::: m.enums
