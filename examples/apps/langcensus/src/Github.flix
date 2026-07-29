@@ -10,7 +10,7 @@ pub eff Github {
     ///
     /// Gets a list of the full name of repositories that the user has contributed to, regardless of privacy.
     ///
-    def getRepos(): List[String]
+    def getRepos(): (List[String], Int32)
 
     ///
     /// Gets all the commits from the user in the given repositories.
@@ -40,6 +40,12 @@ pub eff Github {
     /// credentials have to be handed over as a plain value.
     ///
     def credentials(): Map[String, List[String]]
+
+    ///
+    /// The login the token belongs to, which may differ from the login being counted.
+    ///
+    def tokenOwner(): String
+
 }
 
 mod Github {
@@ -207,6 +213,12 @@ mod Github {
         } with handler Github {
             def credentials(resume) = resume(buildHeader())
 
+            def tokenOwner(resume) = {
+                let doc = "query { viewer { login } }";
+                let data = CensusUtil.graphQl(doc, Map#{}, buildHeader());
+                resume(CensusUtil.accessJson("login", CensusUtil.accessJson("viewer", data)))
+            }
+
             def getRepos(resume) = {
                 CensusUtil.log("Fetching repositories...");
                 let includePrivate = Config.includePrivate();
@@ -225,7 +237,7 @@ mod Github {
                     CensusUtil.log("  Omitted ${omitted} non-public repositories. Set LANGCENSUS_INCLUDE_PRIVATE=true to include them.")
                 else
                     ();
-                resume(repos)
+                resume((repos, omitted))
             }
 
             def getCommits(repos, resume) = {

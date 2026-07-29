@@ -13,17 +13,31 @@ use Sys.{Env, Exit}
 ///
 def main(): Unit \ IO + Chan + NonDet =
     run {
-        let repos = Github.getRepos();
+        let (repos, omitted) = Github.getRepos();
         let repoShaMap = Github.getCommits(repos);
         let statByRepo = Analyse.analyseByRepo(repoShaMap);
-        Display.displayByRepo(statByRepo);
-        Display.displayByUser(statByRepo);
         let activeRepos =
             Map.toList(repoShaMap)
             |> List.filterMap(match (repo, shas) -> if (List.isEmpty(shas)) None else Some(repo));
         let statByByte = Analyse.analyseByByte(activeRepos);
+
+        // Account totals first: they are the answer. The per-repository breakdown is
+        // supporting detail and is printed only when asked for.
+        Display.displayByUser(statByRepo);
         Display.displayByByte(statByByte);
-        Display.writeReport(Config.getName(), Config.includePrivate(), statByRepo, statByByte)
+        if (Config.verbose()) Display.displayByRepo(statByRepo) else ();
+
+        let commitCount =
+            Map.toList(repoShaMap) |> List.map(match (_, shas) -> List.length(shas)) |> List.sum;
+        Display.writeReport({
+            user = Config.getName(),
+            tokenOwner = Github.tokenOwner(),
+            generatedAt = CensusUtil.utcNow(),
+            repositories = List.length(repos),
+            commits = commitCount,
+            omitted = omitted,
+            includePrivate = Config.includePrivate()
+        }, statByRepo, statByByte)
     } with Display.runWithIO
     with Analyse.runWithGithub
     with Github.runWithConfigHttp

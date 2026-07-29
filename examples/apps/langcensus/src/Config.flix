@@ -19,6 +19,11 @@ eff Config {
     /// names every repository it counts and is meant to be shareable.
     ///
     def includePrivate(): Bool
+
+    ///
+    /// Whether to print the per-repository breakdown as well as the summary.
+    ///
+    def verbose(): Bool
 }
 
 mod Config {
@@ -43,6 +48,15 @@ mod Config {
         Env.getEnv() |> Map.get(envName)
 
     ///
+    /// Reads a boolean environment variable, defaulting to false.
+    ///
+    def flag(envName: String): Bool \ Env =
+        getEnvOpt(envName)
+        |> Option.map(String.toLowerCase)
+        |> Option.map(v -> v == "true" or v == "1" or v == "yes")
+        |> Option.getWithDefault(false)
+
+    ///
     /// Handles Config effect through accessing environment variables.
     ///
     pub def runWithEnv(f: Unit -> a \ ef): a \ ef - Config + AnalysisFailure + Env = {
@@ -51,12 +65,9 @@ mod Config {
         } with handler Config {
             def getName(resume) = getEnv("GITHUB_NAME") |> resume
             def getToken(resume) = getEnv("GITHUB_TOKEN") |> resume
+            def verbose(resume) = flag("LANGCENSUS_VERBOSE") |> resume
             def includePrivate(resume) =
-                getEnvOpt("LANGCENSUS_INCLUDE_PRIVATE")
-                |> Option.map(String.toLowerCase)
-                |> Option.map(v -> v == "true" or v == "1" or v == "yes")
-                |> Option.getWithDefault(false)
-                |> resume
+                flag("LANGCENSUS_INCLUDE_PRIVATE") |> resume
         }
     }
 }

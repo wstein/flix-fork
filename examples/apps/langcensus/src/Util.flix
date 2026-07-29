@@ -41,6 +41,22 @@ mod CensusUtil {
         String.padLeft(4, ' ', "${uptimeMs / 1000i64}s")
 
     ///
+    /// The current UTC time, for the report's provenance block.
+    ///
+    pub def utcNow(): String \ IO =
+        let zoned = Instant.ofEpochMilli(System.currentTimeMillis()).atZone(ZoneId.of("UTC"));
+        zoned.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss 'UTC'"))
+
+    ///
+    /// Whether output is attached to a terminal.
+    ///
+    /// A redrawn progress bar only makes sense on a terminal. Redirected to a file it
+    /// collapses thousands of updates onto one unreadable line, so the fallback logs
+    /// occasional lines instead.
+    ///
+    pub def isTerminal(): Bool \ IO = not Object.isNull(System.console())
+
+    ///
     /// Writes `s` without a trailing newline, flushing so it appears immediately.
     ///
     def printInline(s: String): Unit \ IO =
@@ -65,6 +81,12 @@ mod CensusUtil {
     /// long line rather than a readable log.
     ///
     pub def progress(done: Int32, total: Int32, name: String, detail: String): Unit \ IO =
+        if (not isTerminal())
+            // Redirected: a line every so often, and always the last one.
+            (if (done == total or done `Int32.remainder` 100 == 0)
+                log("${counter(done, total)}  ${name} - ${detail}")
+             else ())
+        else
         let barWidth = 14;
         let filled = if (total <= 0) 0 else (done * barWidth) / total;
         let bar = String.repeat(filled, "=") ++ String.repeat(barWidth - filled, " ");
@@ -82,7 +104,7 @@ mod CensusUtil {
     ///
     /// Ends the current progress line so later output starts on a fresh line.
     ///
-    pub def progressDone(): Unit \ IO = println("")
+    pub def progressDone(): Unit \ IO = if (isTerminal()) println("") else ()
 
     ///
     /// Formats `i` of `total` as a right-aligned counter, e.g. `" 20/106"`.

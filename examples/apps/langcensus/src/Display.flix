@@ -11,7 +11,7 @@ eff Display {
     ///
     /// Writes the census to a Markdown file.
     ///
-    def writeReport(user: String, includePrivate: Bool, byRepo: Stats, byByte: Map[String, BigInt]): Unit
+    def writeReport(meta: {user = String, tokenOwner = String, generatedAt = String, repositories = Int32, commits = Int32, omitted = Int32, includePrivate = Bool}, byRepo: Stats, byByte: Map[String, BigInt]): Unit
 }
 
 mod Display{
@@ -35,7 +35,7 @@ mod Display{
                 println("\n==================== Analysis Result Per Repo ====================\n");
                 Map.forEach((repo, thisStat) -> {
                     println("\nRepository: ${repo}");
-                    thisStat |> statFilter |> renameAndMerge(languages) |> sortMapByValue |> printEachLanguage
+                    thisStat |> statFilter |> renameAndMerge(languages) |> sortStat |> printEachLanguage
                 }, stat);
                 resume()
             }
@@ -53,14 +53,14 @@ mod Display{
                             ext, data, map
                         )
                     };
-                    map |> MutMap.toMap |> statFilter |> renameAndMerge(languages) |> sortMapByValue |> printEachLanguage;
+                    map |> MutMap.toMap |> statFilter |> renameAndMerge(languages) |> sortStat |> printEachLanguage;
                     resume()
                 }
             }
 
-            def writeReport(user, includePrivate, byRepo, byByte, resume) = {
+            def writeReport(meta, byRepo, byByte, resume) = {
                 let path = "report.md";
-                match WriteFile.write(str = renderReport(user, includePrivate, languages, byRepo, byByte), path) {
+                match WriteFile.write(str = renderReport(meta, languages, byRepo, byByte), path) {
                     case Result.Ok(_)  => println("\nWrote ${path}")
                     case Result.Err(e) => println("\nCould not write ${path}: ${e}")
                 };
@@ -121,9 +121,22 @@ mod Display{
         }, Map.empty(), stat)
 
     ///
-    /// Sorts the map by converting it to a list.
+    /// Sorts a map into a list, largest first.
     ///
-    def sortMapByValue(map: Map[k, v]): List[(k, v)] with Order[v] = Map.toList(map) |> List.sortBy(match (_, v) -> v)
+    /// Ascending order buried the answer at the bottom of the output.
+    ///
+    def sortMapByValue(map: Map[k, v]): List[(k, v)] with Order[k], Order[v] =
+        Map.toList(map) |> List.sortBy(match (_, v) -> v) |> List.reverse
+
+    ///
+    /// Sorts languages by how much work they represent, largest first.
+    ///
+    /// Ordering by the `(adds, dels)` tuple compares additions first and only breaks
+    /// ties on deletions, so a language with many deletions and few additions sank to
+    /// the bottom regardless of how much work it was.
+    ///
+    def sortStat(stat: Stat): List[(String, (BigInt, BigInt))] =
+        Map.toList(stat) |> List.sortBy(match (_, (a, d)) -> 0ii - (a + d))
 
     ///
     /// Loads the extension-to-language table.
@@ -175,9 +188,47 @@ mod Display{
     ///
     /// Renders the census as a GitHub-flavoured Markdown document.
     ///
-    def renderReport(user: String, includePrivate: Bool, languages: Map[String, String], byRepo: Stats, byByte: Map[String, BigInt]): String =
+    ///
+    /// Provenance for the run that produced a report.
+    ///
+    /// Without it a report cannot be reproduced or dated, and two reports cannot be
+    /// told apart.
+    ///
+    def manifestSection(meta: {user = String, tokenOwner = String, generatedAt = String, repositories = Int32, commits = Int32, omitted = Int32, includePrivate = Bool}): List[String] =
+        "## This run" ::
+        "" ::
+        "| | |" ::
+        "| :-- | :-- |" ::
+        "| Commits attributed to | `${meta#user}` |" ::
+        "| Token belongs to | `${meta#tokenOwner}` |" ::
+        "| Generated | ${meta#generatedAt} |" ::
+        "| Repository scope | ${if (meta#includePrivate) "public and private" else "public only"} |" ::
+        "| Repositories examined | ${group(meta#repositories)} |" ::
+        "| Repositories omitted | ${group(meta#omitted)} |" ::
+        "| Commits examined | ${group(meta#commits)} |" ::
+        "| Commit reachability | current default branch only |" ::
+        "" :: Nil
+
+    ///
+    /// Says plainly that nothing was found, rather than presenting empty tables as
+    /// though they were a result.
+    ///
+    def emptySection(meta: {user = String, tokenOwner = String, generatedAt = String, repositories = Int32, commits = Int32, omitted = Int32, includePrivate = Bool}): List[String] =
+        "> **No commits were found.**" ::
+        ">" ::
+        "> ${group(meta#repositories)} repositories were examined and none contained commits" ::
+        "> attributed to `${meta#user}` on their default branch." ::
+        (if (meta#omitted > 0)
+            "> ${group(meta#omitted)} non-public repositories were omitted; set `LANGCENSUS_INCLUDE_PRIVATE=true` to include them."
+         else
+            "> Check that `GITHUB_NAME` is the login that authored the commits.") ::
+        "" :: Nil
+
+    def renderReport(meta: {user = String, tokenOwner = String, generatedAt = String, repositories = Int32, commits = Int32, omitted = Int32, includePrivate = Bool}, languages: Map[String, String], byRepo: Stats, byByte: Map[String, BigInt]): String =
+        let user = meta#user;
+        let includePrivate = meta#includePrivate;
         let langs = mergeRepos(byRepo) |> statFilter |> renameAndMerge(languages);
-        let langRows = descending(langs);
+        let langRows = sortStat(langs);
         let byteRows = descending(byByte);
         let scope = if (includePrivate) "public and private" else "public";
         String.unlines(
@@ -186,6 +237,8 @@ mod Display{
              "Generated by [langcensus](https://github.com/flix/flix/tree/master/examples/apps/langcensus)" ::
              "for `${user}`, covering ${scope} repositories." ::
              "" :: Nil)
+            ::: manifestSection(meta)
+            ::: (if (meta#commits == 0) emptySection(meta) else Nil)
             ::: methodologySection(includePrivate)
             ::: overviewSection(byRepo, langRows, byteRows)
             ::: bytesSection(byteRows)
