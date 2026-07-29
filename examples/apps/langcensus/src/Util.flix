@@ -6,6 +6,9 @@
 ///
 mod CensusUtil {
     import java.lang.System
+    import java.time.Instant
+    import java.time.ZoneId
+    import java.time.format.DateTimeFormatter
     import java.lang.management.ManagementFactory
     import java.util.regex.Pattern
     use Fs.MkDirs
@@ -121,7 +124,7 @@ mod CensusUtil {
             case None => ()
             case Some((remaining, resetSecs)) =>
                 let mins = resetSecs / 60;
-                log("Quota: ${remaining} requests left, resets in ${mins} minutes. This run needs up to ${needed}.");
+                log("Quota: ${remaining} requests left, resets at ${clockTime(resetSecs)} (${mins} min). This run needs up to ${needed}.");
                 if (needed > remaining)
                     log("  That is more than remains. Cached commits cost nothing, and the run waits for the reset rather than giving up.")
                 else
@@ -243,15 +246,15 @@ mod CensusUtil {
         |> List.head
 
     ///
-    /// Renders how long until the epoch-second `reset`, for the rate limit message.
+    /// Renders when the quota resets, given the epoch-second `reset` header.
     ///
-    def resetsIn(reset: String): String \ IO =
+    def resetsAt(reset: String): String \ IO =
         match Int64.fromString(reset) {
             case None      => "an unknown time"
             case Some(secs) =>
                 let nowSecs = System.currentTimeMillis() / 1000i64;
-                let mins = (secs - nowSecs) / 60i64;
-                if (mins <= 0i64) "less than a minute" else "${mins} minutes"
+                let remaining = Int64.tryToInt32(secs - nowSecs) |> Option.getWithDefault(0);
+                if (remaining <= 0) "any moment now" else "${clockTime(remaining)} (${remaining / 60} min)"
         }
 
     ///
@@ -273,7 +276,7 @@ mod CensusUtil {
                     String.unlines(
                         "GitHub rejected a request: HTTP ${status}, rate limit exhausted." ::
                         "  ${url}" ::
-                        "  The limit resets in ${resetsIn(reset)}." ::
+                        "  The limit resets at ${resetsAt(reset)}." ::
                         "  Authenticated requests get a far higher quota than anonymous ones." ::
                         "  Set GITHUB_TOKEN to a personal access token with 'repo' scope, or wait for the reset." :: Nil))
             else if (status == 401)
@@ -284,6 +287,17 @@ mod CensusUtil {
                         "  Check that GITHUB_TOKEN is set to a valid personal access token with 'repo' scope." :: Nil))
             else
                 AnalysisFailure.raiseHttpError("GitHub rejected a request: HTTP ${status} for ${url}.")
+
+    ///
+    /// Renders the local wall-clock time `inSeconds` from now, as `HH:mm:ss`.
+    ///
+    /// A waiting message is easier to act on as a time to come back than as a
+    /// duration the reader has to add to the clock themselves.
+    ///
+    def clockTime(inSeconds: Int32): String \ IO =
+        let millis = System.currentTimeMillis() + Int32.toInt64(inSeconds) * 1000i64;
+        let zoned = Instant.ofEpochMilli(millis).atZone(ZoneId.systemDefault());
+        zoned.format(DateTimeFormatter.ofPattern("HH:mm:ss"))
 
     ///
     /// Returns how many seconds remain until the quota in `response` resets.
@@ -318,7 +332,7 @@ mod CensusUtil {
             case Result.Ok(r) =>
                 if (isRateLimited(r) and attempts > 0) {
                     let waitSecs = secondsUntilReset(r);
-                    log("Quota exhausted. Waiting ${waitSecs}s for it to reset, then retrying.");
+                    log("Quota exhausted. Waiting until ${clockTime(waitSecs)} (${waitSecs / 60} min) for it to reset, then retrying.");
                     Sleep.sleep(Duration.seconds(waitSecs + 1));
                     getWithin(attempts - 1, url, headers)
                 } else
