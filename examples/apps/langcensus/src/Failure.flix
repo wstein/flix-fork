@@ -11,6 +11,12 @@ eff AnalysisFailure {
     def raiseRequestFailure(err: IoError): Void
 
     ///
+    /// This failure means GitHub refused the request, for example because a rate
+    /// limit was exhausted or the token was rejected.
+    ///
+    def raiseHttpError(msg: String): Void
+
+    ///
     /// This failure means we have trouble getting the configuration.
     ///
     def raiseConfigError(msg: String): Void
@@ -40,6 +46,10 @@ mod AnalysisFailure{
             def raiseRequestFailure(err, _k) = {
                 println(err);
                 Exit.exit(1)
+            }
+            def raiseHttpError(msg, _k) = {
+                println(msg);
+                Exit.exit(5)
             }
             def raiseConfigError(msg, _k) = {
                 println(msg);

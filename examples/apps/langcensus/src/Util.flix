@@ -5,6 +5,7 @@
 /// top-level `Util` module.
 ///
 mod CensusUtil {
+    import java.lang.System
     import java.lang.management.ManagementFactory
     import java.util.regex.Pattern
     use Fs.MkDirs
@@ -101,6 +102,59 @@ mod CensusUtil {
         }
 
     ///
+    /// Returns the first value of the response header `name`, matched case-insensitively.
+    ///
+    def header(name: String, response: HttpResponse): Option[String] =
+        HttpResponse.headers(response)
+        |> Map.toList
+        |> List.filterMap(match (k, vs) ->
+            if (String.toLowerCase(k) == name) List.head(vs) else None)
+        |> List.head
+
+    ///
+    /// Renders how long until the epoch-second `reset`, for the rate limit message.
+    ///
+    def resetsIn(reset: String): String \ IO =
+        match Int64.fromString(reset) {
+            case None      => "an unknown time"
+            case Some(secs) =>
+                let nowSecs = System.currentTimeMillis() / 1000i64;
+                let mins = (secs - nowSecs) / 60i64;
+                if (mins <= 0i64) "less than a minute" else "${mins} minutes"
+        }
+
+    ///
+    /// Raises a descriptive failure unless `response` succeeded.
+    ///
+    /// Without this a rate-limited run looked like a successful one: `getAllPages`
+    /// treated any non-200 as "no more data" and returned an empty list, so the
+    /// report came out full of zeroes.
+    ///
+    def checkStatus(url: String, response: HttpResponse): Unit \ AnalysisFailure + IO =
+        let status = HttpResponse.status(response);
+        if (status >= 200 and status < 300)
+            ()
+        else
+            let remaining = header("x-ratelimit-remaining", response) |> Option.getWithDefault("");
+            if ((status == 403 or status == 429) and remaining == "0")
+                let reset = header("x-ratelimit-reset", response) |> Option.getWithDefault("");
+                AnalysisFailure.raiseHttpError(
+                    String.unlines(
+                        "GitHub rejected a request: HTTP ${status}, rate limit exhausted." ::
+                        "  ${url}" ::
+                        "  The limit resets in ${resetsIn(reset)}." ::
+                        "  Authenticated requests get a far higher quota than anonymous ones." ::
+                        "  Set GITHUB_TOKEN to a personal access token with 'repo' scope, or wait for the reset." :: Nil))
+            else if (status == 401)
+                AnalysisFailure.raiseHttpError(
+                    String.unlines(
+                        "GitHub rejected a request: HTTP 401, the token was not accepted." ::
+                        "  ${url}" ::
+                        "  Check that GITHUB_TOKEN is set to a valid personal access token with 'repo' scope." :: Nil))
+            else
+                AnalysisFailure.raiseHttpError("GitHub rejected a request: HTTP ${status} for ${url}.")
+
+    ///
     /// Sends a GET request to `url` carrying the given `headers`.
     ///
     def get(url: String, headers: Map[String, List[String]]): Result[IoError, HttpResponse] \ Http =
@@ -109,9 +163,11 @@ mod CensusUtil {
     ///
     /// First gets the url, then parses the whole response body into a json element.
     ///
-    pub def getAndParse(url: String, header: Map[String, List[String]]): Json \ Http + AnalysisFailure =
+    pub def getAndParse(url: String, header: Map[String, List[String]]): Json \ Http + AnalysisFailure + IO =
         match get(url, header) {
-            case Result.Ok(response)  => response |> HttpResponse.body |> parse
+            case Result.Ok(response)  =>
+                checkStatus(url, response);
+                response |> HttpResponse.body |> parse
             case Result.Err(err) => AnalysisFailure.raiseRequestFailure(err)
         }
 
@@ -128,20 +184,18 @@ mod CensusUtil {
     pub def getAllPages(url: String, headers: Map[String, List[String]]): List[Json] \ Http + AnalysisFailure + IO = {
         match get(url, headers) {
             case Result.Ok(response)  =>
-                if (HttpResponse.status(response) != 200)
-                    Nil
-                else
-                    let thisPage: List[Json] = response |> HttpResponse.body |> parse |> fromJson;
-                    let nextPagesOpt = forM (
-                        linkValueList <- HttpResponse.headers(response) |> Map.get("link");
-                        linkString <- List.head(linkValueList);
-                        pattern = Pattern.compile("<([^>]*)>; rel=\"next\"");
-                        matcher = pattern.matcher(linkString);
-                        if (matcher.find());
-                        nextLink = matcher.group(1)
-                    ) yield getAllPages(nextLink, headers);
-                    let nextPages = Option.getWithDefault(Nil, nextPagesOpt);
-                    thisPage ::: nextPages
+                checkStatus(url, response);
+                let thisPage: List[Json] = response |> HttpResponse.body |> parse |> fromJson;
+                let nextPagesOpt = forM (
+                    linkValueList <- HttpResponse.headers(response) |> Map.get("link");
+                    linkString <- List.head(linkValueList);
+                    pattern = Pattern.compile("<([^>]*)>; rel=\"next\"");
+                    matcher = pattern.matcher(linkString);
+                    if (matcher.find());
+                    nextLink = matcher.group(1)
+                ) yield getAllPages(nextLink, headers);
+                let nextPages = Option.getWithDefault(Nil, nextPagesOpt);
+                thisPage ::: nextPages
             case Result.Err(err) => AnalysisFailure.raiseRequestFailure(err)
         }
     }
