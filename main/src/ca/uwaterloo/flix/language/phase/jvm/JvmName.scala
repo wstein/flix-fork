@@ -20,9 +20,11 @@ package ca.uwaterloo.flix.language.phase.jvm
 import ca.uwaterloo.flix.api.Flix
 import ca.uwaterloo.flix.language.ast.SourceLocation
 import ca.uwaterloo.flix.util.InternalCompilerException
+import com.dynatrace.hash4j.hashing.Hashing
 import org.objectweb.asm
 
 import java.nio.file.{Path, Paths}
+import java.nio.charset.StandardCharsets.UTF_8
 
 /**
   * Companion object for the [[JvmName]] class.
@@ -85,14 +87,22 @@ object JvmName {
   val RootPackage: List[String] = Nil
 
   /**
-    * Constructs a concatenated string using `JvmName.Delimiter`. The call
-    * `mkClassName("Tuple2", List(Object, Int, String))` would
-    * result in the string `"Tuple2$Obj$Int32$Obj"`.
+    * Constructs a stable generated JVM class name.
+    *
+    * The hash key is deliberately versioned and contains only the generated
+    * class kind, its prefix, and its canonical arguments. In particular, it
+    * must not acquire source locations, fresh symbol IDs, or traversal state:
+    * generated class names are part of the compiler's reproducible output.
+    *
+    * The readable prefix and arguments are retained for diagnostics. The
+    * fixed-width Base58 hash prevents names from becoming unbounded as types
+    * become more deeply nested.
     */
   def mkClassName(prefix: String, args: List[String]): String = {
     val cPrefix = mangle(prefix)
-    if (args.isEmpty) s"$cPrefix${Flix.Delimiter}"
-    else s"$cPrefix${Flix.Delimiter}${args.map(mangle).mkString(Flix.Delimiter)}"
+    val hash = generatedNameHash("jvm-class", prefix :: args)
+    val suffix = args.map(mangle)
+    (cPrefix :: s"h$hash" :: suffix).mkString(Flix.Delimiter)
   }
 
   def mkClassName(prefix: String, arg: String): String =
@@ -100,6 +110,39 @@ object JvmName {
 
   def mkClassName(prefix: String): String =
     mkClassName(prefix, Nil)
+
+  private val GeneratedNameSchemaVersion = "1"
+  private val Base58Alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+  private val GeneratedNameHashLength = 13
+
+  /** Returns a fixed-width Base58 encoding of an XXH3-64 hash. */
+  private def generatedNameHash(kind: String, fields: List[String]): String = {
+    val key = canonicalKey(kind :: fields)
+    val hash = Hashing.xxh3_64().hashBytesToLong(key.getBytes(UTF_8))
+    base58(hash)
+  }
+
+  /** Length-prefix fields so distinct sequences cannot produce the same key. */
+  private def canonicalKey(fields: List[String]): String =
+    (s"schema-version=$GeneratedNameSchemaVersion" :: fields.map(field => s"${field.length}:$field")).mkString("|")
+
+  /**
+    * Encodes all 64 hash bits using Base58. Padding is intentional: a
+    * fixed-width component makes generated names easy to recognize and keeps
+    * the first character of the component independent of the hash value.
+    */
+  private def base58(hash: Long): String = {
+    val encoded = new Array[Char](GeneratedNameHashLength)
+    var value = BigInt(java.lang.Long.toUnsignedString(hash))
+    var index = encoded.length - 1
+    while (index >= 0) {
+      val division = value /% Base58Alphabet.length
+      encoded(index) = Base58Alphabet.charAt(division._2.toInt)
+      value = division._1
+      index -= 1
+    }
+    new String(encoded)
+  }
 
   /**
     * Performs name mangling on the given string `s` to avoid issues with special characters.
