@@ -28,6 +28,7 @@ import org.commonmark.renderer.html.HtmlRenderer
 
 import java.io.IOException
 import java.net.URLEncoder
+import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path, Paths}
 
 /**
@@ -1137,7 +1138,7 @@ object HtmlDocumentor {
     * Write the documentation output string into the output directory with the given `name`.
     */
   private def writeDocFile(name: String, output: String)(implicit flix: Flix): Unit = {
-    writeFile(s"$name", output.getBytes)
+    writeFile(s"$name", output.getBytes(StandardCharsets.UTF_8))
   }
 
   /**
