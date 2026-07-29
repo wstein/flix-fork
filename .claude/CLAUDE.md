@@ -20,9 +20,18 @@ library and the given file to `build/doc/`. Two backends share one model
 Select with `--doc-format html|md|all`, e.g.
 `./mill flix.run doc --doc-format md out/empty.flix`.
 
-When changing either backend, note that `Bootstrap.isValidDocumentFile` decides
-what `flix clean` is willing to delete: a new output file type has to be added
-there too, or the build directory becomes uncleanable.
+When changing either backend, note two things:
+
+- `Bootstrap.isValidDocumentFile` decides what `flix clean` is willing to
+  delete. A new output file type has to be added there too, or the build
+  directory becomes uncleanable.
+- Every Markdown page starts with a marker comment. A run deletes marked pages
+  it did not produce, so renaming a module no longer leaves an orphan page
+  behind; files without the marker are never touched. Changing the marker text
+  strands every page written by an earlier version.
+
+Neither backend documents structs or restrictable enums: `Documentor` has no
+representation for them, and drops them in the wildcard case of `splitModules`.
 
 ## Running Tests
 
