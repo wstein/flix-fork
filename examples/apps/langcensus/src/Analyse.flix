@@ -28,7 +28,9 @@ mod Analyse {
             f()
         } with handler Analyse {
             def analyseByRepo(commits, resume) =
-                let entries = Map.toList(commits);
+                // Repos the user has no commits in contribute nothing, so drop them
+                // before counting: they would only produce empty work and noisy output.
+                let entries = Map.toList(commits) |> List.filter(match (_, shas) -> not List.isEmpty(shas));
                 let repoCount = List.length(entries);
                 let allStats : List[(String, Stat)] =
                     entries |> List.mapWithIndex((i, entry) -> {

@@ -7,6 +7,9 @@
 mod CensusUtil {
     import java.lang.management.ManagementFactory
     import java.util.regex.Pattern
+    use Fs.MkDirs
+    use Fs.ReadFile
+    use Fs.WriteFile
     use Net.Http
     use Net.HttpRequest
     use Net.HttpResponse
@@ -33,6 +36,38 @@ mod CensusUtil {
     pub def counter(i: Int32, total: Int32): String =
         let width = String.length("${total}");
         "${String.padLeft(width, ' ', "${i}")}/${total}"
+
+    ///
+    /// Where cached commit responses are kept.
+    ///
+    /// A commit is immutable once written, so its SHA is a sound cache key and an
+    /// entry never needs invalidating.
+    ///
+    pub def cacheDir(): String = ".langcensus-cache"
+
+    ///
+    /// The cache file holding the response for `sha` in `repo`.
+    ///
+    def cachePath(repo: String, sha: String): String =
+        "${cacheDir()}/${String.replace(src = "/", dst = "_", repo)}_${sha}.json"
+
+    ///
+    /// Returns the cached response for `sha`, or `None` if it has not been fetched yet.
+    ///
+    pub def cacheGet(repo: String, sha: String): Option[Json] \ ReadFile + AnalysisFailure =
+        match ReadFile.read(cachePath(repo, sha)) {
+            case Result.Err(_)   => None
+            case Result.Ok(body) => Some(parse(body))
+        }
+
+    ///
+    /// Stores the response for `sha`. A failure to write is not fatal: the cache is
+    /// an optimisation, so a broken cache should slow the run down, not stop it.
+    ///
+    pub def cachePut(repo: String, sha: String, json: Json): Unit \ MkDirs + WriteFile =
+        MkDirs.mkDirs(cacheDir()) |> Result.map(_ ->
+            WriteFile.write(str = Json.toCompactString(json), cachePath(repo, sha))
+        ) |> _ -> ()
 
     pub type alias Stat = Map[String, (BigInt, BigInt)]
 

@@ -35,6 +35,9 @@ pub eff Github {
 }
 
 mod Github {
+    use Fs.MkDirs
+    use Fs.ReadFile
+    use Fs.WriteFile
     use Net.Http
     use CensusUtil.accessJson
 
@@ -53,7 +56,7 @@ mod Github {
     ///
     /// The handler that gets data from github through REST API.
     ///
-    pub def runWithConfigHttp(f: Unit -> a \ ef): a \ ef - Github + Config + Http + AnalysisFailure + IO = {
+    pub def runWithConfigHttp(f: Unit -> a \ ef): a \ ef - Github + Config + Http + AnalysisFailure + ReadFile + WriteFile + MkDirs + IO = {
         run {
             f()
         } with handler Github {
@@ -82,8 +85,15 @@ mod Github {
             }
 
            def getCommit(repo, sha, resume) = {
-                let url = "https://api.github.com/repos/${repo}/commits/${sha}";
-                CensusUtil.getAndParse(url, buildHeader()) |> resume
+                // A commit never changes, so a cache hit is always valid.
+                match CensusUtil.cacheGet(repo, sha) {
+                    case Some(json) => resume(json)
+                    case None =>
+                        let url = "https://api.github.com/repos/${repo}/commits/${sha}";
+                        let json = CensusUtil.getAndParse(url, buildHeader());
+                        CensusUtil.cachePut(repo, sha, json);
+                        resume(json)
+                }
            }
         }
     }

@@ -1,3 +1,4 @@
+use Fs.{FileRead, FileWrite, MkDirs, ReadFile, WriteFile}
 use Net.Http
 use Sys.{Env, Exit}
 
@@ -16,13 +17,21 @@ def main(): Unit \ IO =
         let statByRepo = Analyse.analyseByRepo(repoShaMap);
         Display.displayByRepo(statByRepo);
         Display.displayByUser(statByRepo);
-        let statByByte = Analyse.analyseByByte(repos);
+        let activeRepos =
+            Map.toList(repoShaMap)
+            |> List.filterMap(match (repo, shas) -> if (List.isEmpty(shas)) None else Some(repo));
+        let statByByte = Analyse.analyseByByte(activeRepos);
         Display.displayByByte(statByByte)
     } with Display.runWithIO
     with Analyse.runWithGithub
     with Github.runWithConfigHttp
     with Config.runWithEnv
     with Http.runWithIO
+    with ReadFile.runWithFileRead
+    with WriteFile.runWithFileWrite
+    with MkDirs.runWithFileWrite
+    with FileRead.runWithIO
+    with FileWrite.runWithIO
     with Env.runWithIO
     with AnalysisFailure.handleAnalysisFailure
     with Exit.runWithIO
