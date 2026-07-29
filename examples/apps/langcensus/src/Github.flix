@@ -58,16 +58,23 @@ mod Github {
             f()
         } with handler Github {
             def getRepos(resume) = {
-                CensusUtil.getAllPages("https://api.github.com/user/repos?affiliation=owner,collaborator&per_page=100", buildHeader())
-                |> List.map(repoJson -> CensusUtil.accessJson("full_name", repoJson)) |> resume
+                println("Fetching repositories...");
+                let repos =
+                    CensusUtil.getAllPages("https://api.github.com/user/repos?affiliation=owner,collaborator&per_page=100", buildHeader())
+                    |> List.map(repoJson -> CensusUtil.accessJson("full_name", repoJson));
+                println("Found ${List.length(repos)} repositories.");
+                resume(repos)
             }
 
             def getCommits(repos, resume) = {
-                List.foldLeft((acc, repo) -> {
+                let repoCount = List.length(repos);
+                repos |> List.mapWithIndex((i, repo) -> {
+                    println("[${i + 1}/${repoCount}] ${repo}: fetching commits...");
                     let url = "https://api.github.com/repos/${repo}/commits?author=${Config.getName()}&per_page=100";
                     let shas = CensusUtil.getAllPages(url, buildHeader()) |> List.map(CensusUtil.accessJson("sha"));
-                    Map.insert(repo, shas, acc)
-                }, Map.empty(), repos) |> resume
+                    println("[${i + 1}/${repoCount}] ${repo}: ${List.length(shas)} commits");
+                    (repo, shas)
+                }) |> List.toMap |> resume
             }
 
             def getLanguages(repo, resume) = {

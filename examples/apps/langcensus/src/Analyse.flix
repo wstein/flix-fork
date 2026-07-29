@@ -23,24 +23,33 @@ mod Analyse {
     ///
     /// Handles analysis effect through Github Effect.
     ///
-    pub def runWithGithub(f: Unit -> a \ ef): a \ ef - Analyse + Github + AnalysisFailure = {
+    pub def runWithGithub(f: Unit -> a \ ef): a \ ef - Analyse + Github + AnalysisFailure + IO = {
         run {
             f()
         } with handler Analyse {
             def analyseByRepo(commits, resume) =
+                let entries = Map.toList(commits);
+                let repoCount = List.length(entries);
                 let allStats : List[(String, Stat)] =
-                    Map.toList(commits) |> List.flatMap(match (repo, shas) ->
-                        shas |> List.map(sha -> commitToAddsDels(repo, sha))
-                    );
+                    entries |> List.mapWithIndex((i, entry) -> {
+                        let (repo, shas) = entry;
+                        let shaCount = List.length(shas);
+                        shas |> List.mapWithIndex((j, sha) -> {
+                            println("[${i + 1}/${repoCount}] ${repo}: commit ${j + 1}/${shaCount}");
+                            commitToAddsDels(repo, sha)
+                        })
+                    }) |> List.flatten;
                 mergeStats(allStats) |> resume
 
             def analyseByByte(repos, resume) = {
+                let repoCount = List.length(repos);
                 let allStats: List[(String, BigInt)] =
-                    repos |> List.flatMap(repo -> {
+                    repos |> List.mapWithIndex((i, repo) -> {
+                        println("[${i + 1}/${repoCount}] ${repo}: languages");
                         let languageStat = Github.getLanguages(repo);
                         let languageStatMap: Map[String, BigInt] = CensusUtil.fromJson(languageStat);
                         Map.toList(languageStatMap)
-                    });
+                    }) |> List.flatten;
                 mergeStatsByByte(allStats) |> resume
             }
         }
