@@ -213,12 +213,13 @@ mod Github {
                     CensusUtil.workerCount(),
                     repos,
                     repo -> fetchCommits(author, headers, repo),
-                    (i, total, res) -> match res {
+                    (done, total, res) -> match res {
                         case Result.Ok((repo, shas)) =>
-                            CensusUtil.log("[${CensusUtil.counter(i, total)}] ${repo}: ${List.length(shas)} commits")
+                            CensusUtil.progress(done, total, "${repo}: ${List.length(shas)} commits")
                         case Result.Err(_) => ()
                     }
                 );
+                CensusUtil.progressDone();
 
                 // Failures are reported back on this thread, where exiting is safe.
                 let commits = results |> List.map(res -> match res {

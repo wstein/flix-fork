@@ -32,27 +32,35 @@ mod Analyse {
 
                 // Repos the user has no commits in contribute nothing, so drop them:
                 // they would only produce empty work and noisy output.
+                // Each item carries its position within its own repository, so the
+                // progress line can say how far through that repository it is even
+                // though the queue is global.
                 let pairs =
                     Map.toList(commits)
                     |> List.filter(match (_, shas) -> not List.isEmpty(shas))
-                    |> List.flatMap(match (repo, shas) -> shas |> List.map(sha -> (repo, sha)));
+                    |> List.flatMap(match (repo, shas) -> {
+                        let inRepo = List.length(shas);
+                        shas |> List.mapWithIndex((j, sha) -> (repo, sha, j + 1, inRepo))
+                    });
 
                 // Fetching a commit is a network round trip, so the whole phase is
                 // spread over the pool rather than walked one repository at a time.
                 let fetched = CensusUtil.parMap(
                     CensusUtil.workerCount(),
                     pairs,
-                    match (repo, sha) -> Github.fetchCommitJson(headers, repo, sha) |> Result.map(json -> (repo, json)),
-                    (i, total, res) -> match res {
-                        case Result.Ok((repo, _)) =>
-                            CensusUtil.log("[${CensusUtil.counter(i, total)}] ${repo}")
+                    match (repo, sha, j, inRepo) ->
+                        Github.fetchCommitJson(headers, repo, sha) |> Result.map(json -> (repo, j, inRepo, json)),
+                    (done, total, res) -> match res {
+                        case Result.Ok((repo, j, inRepo, _)) =>
+                            CensusUtil.progress(done, total, "${repo} ${CensusUtil.counter(j, inRepo)}")
                         case Result.Err(_) => ()
                     }
                 );
+                CensusUtil.progressDone();
 
                 let allStats : List[(String, Stat)] = fetched |> List.map(res -> match res {
-                    case Result.Ok((repo, json)) => (repo, statOf(json))
-                    case Result.Err(msg)         => AnalysisFailure.raiseHttpError(msg)
+                    case Result.Ok((repo, _, _, json)) => (repo, statOf(json))
+                    case Result.Err(msg)               => AnalysisFailure.raiseHttpError(msg)
                 });
                 mergeStats(allStats) |> resume
 
@@ -60,11 +68,12 @@ mod Analyse {
                 let repoCount = List.length(repos);
                 let allStats: List[(String, BigInt)] =
                     repos |> List.mapWithIndex((i, repo) -> {
-                        CensusUtil.log("[${CensusUtil.counter(i + 1, repoCount)}] ${repo}: languages");
+                        CensusUtil.progress(i + 1, repoCount, "${repo}: languages");
                         let languageStat = Github.getLanguages(repo);
                         let languageStatMap: Map[String, BigInt] = CensusUtil.fromJson(languageStat);
                         Map.toList(languageStatMap)
                     }) |> List.flatten;
+                CensusUtil.progressDone();
                 mergeStatsByByte(allStats) |> resume
             }
         }

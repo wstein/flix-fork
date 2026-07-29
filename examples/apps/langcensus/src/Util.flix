@@ -31,9 +31,49 @@ mod CensusUtil {
     /// baseline, without threading a start timestamp through the effect handlers.
     ///
     pub def log(msg: String): Unit \ IO =
+        println("[${elapsed()}] ${msg}")
+
+    ///
+    /// The elapsed wall-clock time, right-aligned, e.g. `" 76s"`.
+    ///
+    def elapsed(): String \ IO =
         let uptimeMs = ManagementFactory.getRuntimeMXBean().getUptime();
-        let secs = String.padLeft(4, ' ', "${uptimeMs / 1000i64}s");
-        println("[${secs}] ${msg}")
+        String.padLeft(4, ' ', "${uptimeMs / 1000i64}s")
+
+    ///
+    /// Writes `s` without a trailing newline, flushing so it appears immediately.
+    ///
+    def printInline(s: String): Unit \ IO =
+        System.out.print(s);
+        System.out.flush()
+
+    ///
+    /// How wide the progress line is drawn.
+    ///
+    def progressWidth(): Int32 = 110
+
+    ///
+    /// Redraws a one-line progress bar in place.
+    ///
+    /// Uses a carriage return rather than a newline, because a per-commit line for
+    /// thousands of commits scrolls everything else off the screen. Note that the
+    /// bar is redrawn unconditionally, so redirecting output to a file collects one
+    /// long line rather than a readable log.
+    ///
+    pub def progress(done: Int32, total: Int32, label: String): Unit \ IO =
+        let barWidth = 24;
+        let filled = if (total <= 0) 0 else (done * barWidth) / total;
+        let bar = String.repeat(filled, "=") ++ String.repeat(barWidth - filled, " ");
+        let pct = if (total <= 0) 0 else (done * 100) / total;
+        let line = "[${elapsed()}] [${bar}] ${counter(done, total)} ${String.padLeft(3, ' ', "${pct}")}%  ${label}";
+        // Pad to a fixed width so a shorter line cannot leave the tail of a longer
+        // one behind on screen.
+        printInline("\r" ++ String.padRight(progressWidth(), ' ', String.takeLeft(progressWidth(), line)))
+
+    ///
+    /// Ends the current progress line so later output starts on a fresh line.
+    ///
+    pub def progressDone(): Unit \ IO = println("")
 
     ///
     /// Formats `i` of `total` as a right-aligned counter, e.g. `" 20/106"`.
