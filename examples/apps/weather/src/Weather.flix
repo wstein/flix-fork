@@ -7,9 +7,10 @@ pub eff Weather {
 
 mod Weather {
     use Location.Loc
-    use Json.{FromJson, getAtKey, JsonElement, JsonError, Parse}
-    use Json.FromJson.{fromNullableJson, fromJson,fromJsonAt}
-    use Json.Path.{!!, Path}
+    use Net.Http
+    use Util.Json
+    use Util.Json.FromJson
+    use Util.Json.JsonError
     use WeatherInfoPrimitive.WeatherInfoPrimitive
     use Fs.ReadFile
 
@@ -19,12 +20,11 @@ mod Weather {
 
     instance FromJson[WeatherInfoPrimitive] {
 
-        pub def fromJsonAt(p: Path, json: JsonElement): Result[JsonError, WeatherInfoPrimitive] =
+        pub def fromJson(json: Json): Result[JsonError, WeatherInfoPrimitive] =
             forM (
-                resMap <- fromJsonAt(p, json);
-                currentMap <- getAtKey(p, "current", resMap);
-                wmoCodeNumber <- getAtKey(p !! "current", "weather_code", currentMap);
-                temp <- getAtKey(p !! "current", "temperature_2m", currentMap)
+                current <- FromJson.decodeAtKey("current", json);
+                wmoCodeNumber <- FromJson.decodeAtKey("weather_code", current);
+                temp <- FromJson.decodeAtKey("temperature_2m", current)
             ) yield WeatherInfoPrimitive.WeatherInfoPrimitive(wmoCodeNumber, temp)
 
     }
@@ -39,13 +39,13 @@ mod Weather {
     }
 
     ///
-    /// Reads a json file and parse it to JsonEelement.
-    /// Any failure during the process will result in a None.
+    /// Reads a json file and parses it to a `Json` value.
+    /// Any failure during the process results in a `None`.
     ///
-    def loadJson(f: String): Option[JsonElement] \ ReadFile =
+    def loadJson(f: String): Option[Json] \ ReadFile =
         forM (
             descriptions <- ReadFile.read(f) |> Result.toOption;
-            json <- Parse.parse(descriptions)
+            json <- Json.parse(descriptions) |> Result.toOption
         ) yield json
 
     ///
@@ -58,10 +58,9 @@ mod Weather {
             case Option.Some(descriptions) =>
                 let nString = ToString.toString(n);
                 let res = forM (
-                    descriptionsMap <- fromJson(descriptions);
-                    descriptionMap <- getAtKey(Path.Root, nString, descriptionsMap);
-                    dayDescriptionMap <- getAtKey(Path.Root !! nString, "day", descriptionMap);
-                    content <- getAtKey(Path.Root !! nString !! "day" , "description", dayDescriptionMap)
+                    description <- FromJson.decodeAtKey(nString, descriptions);
+                    day <- FromJson.decodeAtKey("day", description);
+                    content <- FromJson.decodeAtKey("description", day)
                 ) yield content;
                 res |> Result.mapErr( err ->
                     WeatherError.JsonError(err)
@@ -72,15 +71,15 @@ mod Weather {
     ///
     /// Handles Weather effect by getting the weather for the given location from open-meteo and parse it.
     ///
-    pub def weatherWithHttpAndFile(f: Unit -> a \ ef): a \ ef - Weather + HttpWithResult + ReadFile =
+    pub def weatherWithHttpAndFile(f: Unit -> a \ ef): a \ ef - Weather + Http + ReadFile =
         run {
             f()
         } with handler Weather {
         def getWeather(loc, resume) =
             let Loc.Loc(_, _, lat, lon) = loc;
             let url = "https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,weather_code";
-            let weather = Util.getAndParse(url, Map.empty()) |> Result.flatMap( resJson ->
-                match fromJson(resJson) {
+            let weather = WeatherUtil.getAndParse(url) |> Result.flatMap( resJson ->
+                match FromJson.fromJson(resJson) {
                     case Result.Ok(weatherInfoPrimitive)  =>
                         let WeatherInfoPrimitive(wmoCode, temp) = weatherInfoPrimitive;
                         parseWMOCode(wmoCode) |> Result.flatMap( weatherCondition ->

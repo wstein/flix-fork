@@ -1,13 +1,24 @@
-mod Util {
-    use Json.JsonElement
-    use Json.Parse
+///
+/// Helpers shared by the Location and Weather effects.
+///
+/// Named `WeatherUtil` rather than `Util` because the standard library owns the
+/// top-level `Util` module.
+///
+mod WeatherUtil {
+    use Net.Http
+    use Net.HttpResponse
+    use Util.Json
 
     ///
-    /// Sends a get http request and parse the response body to a JsonElement
+    /// Sends a GET request to `url` and parses the response body as JSON.
     ///
-    pub def getAndParse(url: String, header: Map[String, List[String]]): Result[WeatherError, JsonElement] \ HttpWithResult =
-        match HttpWithResult.get(url, header) {
-            case Result.Ok(response)  => response |> Http.Response.body |> Parse.parse |> Option.toOk(WeatherError.ParseError)
-            case Result.Err(err) => Err(WeatherError.RequestError(err))
-        }
+    /// Keeps the HTTP failure and the JSON failure distinct, so the caller can tell
+    /// a network problem from a malformed payload.
+    ///
+    pub def getAndParse(url: String): Result[WeatherError, Json] \ Http =
+        forM (
+            response <- Http.get(url) |> Result.mapErr(WeatherError.RequestError);
+            okResponse <- HttpResponse.expect(response) |> Result.mapErr(WeatherError.RequestError);
+            json <- Json.parse(HttpResponse.body(okResponse)) |> Result.mapErr(WeatherError.JsonError)
+        ) yield json
 }

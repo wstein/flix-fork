@@ -1,10 +1,16 @@
+use Location.Loc
+use Weather.WeatherInfo
+
+///
+/// Presents a location and its weather to the user.
+///
+pub eff Display {
+    def display(loc: Loc, weather: WeatherInfo): Unit
+}
+
 mod Display {
     use Location.Loc
     use Weather.WeatherInfo
-
-    pub eff Display {
-        def display(loc: Loc, weather: WeatherInfo): Unit
-    }
 
     ///
     /// Handles display effect by printing to stdout
