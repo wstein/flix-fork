@@ -22,7 +22,8 @@ def main(): Unit \ IO + Chan + NonDet =
             Map.toList(repoShaMap)
             |> List.filterMap(match (repo, shas) -> if (List.isEmpty(shas)) None else Some(repo));
         let statByByte = Analyse.analyseByByte(activeRepos);
-        Display.displayByByte(statByByte)
+        Display.displayByByte(statByByte);
+        Display.writeReport(statByRepo, statByByte)
     } with Display.runWithIO
     with Analyse.runWithGithub
     with Github.runWithConfigHttp
