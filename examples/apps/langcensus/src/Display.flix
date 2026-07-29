@@ -17,12 +17,17 @@ eff Display {
 mod Display{
     use CensusUtil.Stat
     use CensusUtil.Stats
+    use Fs.ReadFile
     use Fs.WriteFile
+    use Util.Json
+    use Util.Json.FromJson
+    use Util.Json.JsonError
 
     ///
     /// Handles the display effect through IO.
     ///
-    pub def runWithIO(f: Unit -> a \ ef): a \ ef - Display + WriteFile + IO = {
+    pub def runWithIO(f: Unit -> a \ ef): a \ ef - Display + WriteFile + ReadFile + IO = {
+        let languages = loadLanguages();
         run {
             f()
         } with handler Display {
@@ -30,7 +35,7 @@ mod Display{
                 println("\n==================== Analysis Result Per Repo ====================\n");
                 Map.forEach((repo, thisStat) -> {
                     println("\nRepository: ${repo}");
-                    thisStat |> statFilter |> renameAndMerge |> sortMapByValue |> printEachLanguage
+                    thisStat |> statFilter |> renameAndMerge(languages) |> sortMapByValue |> printEachLanguage
                 }, stat);
                 resume()
             }
@@ -48,14 +53,14 @@ mod Display{
                             ext, data, map
                         )
                     };
-                    map |> MutMap.toMap |> statFilter |> renameAndMerge |> sortMapByValue |> printEachLanguage;
+                    map |> MutMap.toMap |> statFilter |> renameAndMerge(languages) |> sortMapByValue |> printEachLanguage;
                     resume()
                 }
             }
 
             def writeReport(byRepo, byByte, resume) = {
                 let path = "report.md";
-                match WriteFile.write(str = renderReport(byRepo, byByte), path) {
+                match WriteFile.write(str = renderReport(languages, byRepo, byByte), path) {
                     case Result.Ok(_)  => println("\nWrote ${path}")
                     case Result.Err(e) => println("\nCould not write ${path}: ${e}")
                 };
@@ -86,9 +91,9 @@ mod Display{
     ///
     /// Renames the extention to langauges and merge entries of the same language.
     ///
-    def renameAndMerge(stat: Stat): Stat =
+    def renameAndMerge(languages: Map[String, String], stat: Stat): Stat =
         Map.foldLeftWithKey((acc, ext, data) -> {
-            match ext2Language(ext) {
+            match Map.get(String.toLowerCase(ext), languages) {
                 case Option.None        => acc
                 case Option.Some(language) =>
                     Map.insertWith(
@@ -104,66 +109,36 @@ mod Display{
     def sortMapByValue(map: Map[k, v]): List[(k, v)] with Order[v] = Map.toList(map) |> List.sortBy(match (_, v) -> v)
 
     ///
-    /// A map from extension to list.
+    /// Loads the extension-to-language table.
     ///
-    def ext2Language(ext: String): Option[String] =
-        let mapping: Map[String, String] = Map#{
-            "ASM" => "Assembly",
-            "asm" => "Assembly",
-            "bat" => "Batch Script",
-            "c" => "C",
-            "cls" => "TeX Class",
-            "cpp" => "C++",
-            "cs" => "C#",
-            "css" => "CSS",
-            "dart" => "Dart",
-            "ex" => "Elixir",
-            "flix" => "Flix",
-            "fs" => "F#",
-            "go" => "Go",
-            "gradle" => "Gradle",
-            "h" => "C Header",
-            "hs" => "Haskell",
-            "html" => "HTML",
-            "ipynb" => "Jupyter Notebook",
-            "java" => "Java",
-            "js" => "JavaScript",
-            "jsx" => "JavaScript JSX",
-            "kt" => "Kotlin",
-            "lds" => "Linker Script",
-            "lua" => "Lua",
-            "m" => "Matlab",
-            "md" => "Markdown",
-            "ml" => "OCaml",
-            "mli" => "OCaml Interface",
-            "mly" => "Menhir",
-            "opam" => "OPAM",
-            "php" => "PHP",
-            "pl" => "Perl",
-            "ps1" => "PowerShell",
-            "py" => "Python",
-            "r" => "R",
-            "rb" => "Ruby",
-            "rs" => "Rust",
-            "s" => "Assembly",
-            "S" => "Assembly",
-            "scala" => "Scala",
-            "scss" => "Sass",
-            "sh" => "Shell Script",
-            "sql" => "SQL",
-            "swift" => "Swift",
-            "sy" => "SystemVerilog",
-            "tex" => "TeX",
-            "toml" => "TOML",
-            "ts" => "TypeScript",
-            "tsx" => "TypeScript JSX",
-            "typ" => "Typst",
-            "vim" => "Vim script",
-            "vue" => "Vue",
-            "yaml" => "YAML",
-            "yml" => "YAML"
-        };
-        Map.get(ext, mapping)
+    /// The table is generated from github-linguist's `languages.yml`, which is the
+    /// database GitHub itself uses, rather than maintained by hand here.
+    ///
+    /// Extensions are looked up in lower case. Linguist resolves an extension that
+    /// several languages claim by inspecting file contents, which a census working
+    /// from commit metadata cannot do, so the generated table pins the common
+    /// ambiguous cases instead.
+    ///
+    def loadLanguages(): Map[String, String] \ ReadFile + IO =
+        let path = "data/languages.json";
+        match ReadFile.read(path) {
+            case Result.Err(err) =>
+                println("Could not read ${path}: ${err}");
+                Map.empty()
+            case Result.Ok(body) => match Json.parse(body) {
+                case Result.Err(err) =>
+                    println("Could not parse ${path}: ${err}");
+                    Map.empty()
+                case Result.Ok(json) =>
+                    let decoded: Result[JsonError, Map[String, String]] = FromJson.fromJson(json);
+                    match decoded {
+                        case Result.Ok(table) => table
+                        case Result.Err(err)  =>
+                            println("Could not decode ${path}: ${err}");
+                            Map.empty()
+                    }
+            }
+        }
 
     /////////////////////////////////////////////////////////////////////////////
     // Markdown report                                                         //
@@ -183,8 +158,8 @@ mod Display{
     ///
     /// Renders the census as a GitHub-flavoured Markdown document.
     ///
-    def renderReport(byRepo: Stats, byByte: Map[String, BigInt]): String =
-        let langs = mergeRepos(byRepo) |> statFilter |> renameAndMerge;
+    def renderReport(languages: Map[String, String], byRepo: Stats, byByte: Map[String, BigInt]): String =
+        let langs = mergeRepos(byRepo) |> statFilter |> renameAndMerge(languages);
         let langRows = descending(langs);
         let byteRows = descending(byByte);
         String.unlines(
@@ -195,7 +170,7 @@ mod Display{
             ::: overviewSection(byRepo, langRows, byteRows)
             ::: bytesSection(byteRows)
             ::: linesSection(langRows)
-            ::: reposSection(byRepo))
+            ::: reposSection(languages, byRepo))
 
     ///
     /// The headline numbers, as a table rather than a chart: a handful of unrelated
@@ -273,10 +248,10 @@ mod Display{
     ///
     /// Per-repository totals, largest first.
     ///
-    def reposSection(byRepo: Stats): List[String] =
+    def reposSection(languages: Map[String, String], byRepo: Stats): List[String] =
         let rows = Map.toList(byRepo)
             |> List.map(match (repo, stat) -> {
-                let merged = stat |> statFilter |> renameAndMerge;
+                let merged = stat |> statFilter |> renameAndMerge(languages);
                 let adds = Map.foldLeft((acc, v) -> match v { case (a, _) => acc + a }, 0ii, merged);
                 let dels = Map.foldLeft((acc, v) -> match v { case (_, d) => acc + d }, 0ii, merged);
                 (repo, adds, dels, Map.size(merged))
