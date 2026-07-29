@@ -23,7 +23,7 @@ def main(): Unit \ IO + Chan + NonDet =
             |> List.filterMap(match (repo, shas) -> if (List.isEmpty(shas)) None else Some(repo));
         let statByByte = Analyse.analyseByByte(activeRepos);
         Display.displayByByte(statByByte);
-        Display.writeReport(statByRepo, statByByte)
+        Display.writeReport(Config.getName(), Config.includePrivate(), statByRepo, statByByte)
     } with Display.runWithIO
     with Analyse.runWithGithub
     with Github.runWithConfigHttp
