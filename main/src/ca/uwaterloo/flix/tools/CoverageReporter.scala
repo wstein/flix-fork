@@ -21,6 +21,7 @@ import org.json4s.JsonDSL._
 import org.json4s.native.JsonMethods.{compact, render}
 
 import java.nio.file.{Files, Path}
+import scala.collection.immutable.ListMap
 
 /**
   * Generates coverage reports from collected coverage data.
@@ -71,23 +72,26 @@ object CoverageReporter {
     val files: List[JValue] = coverageByFile.toList.sortBy(_._1).map {
       case (path, probes) =>
         // Line status computed from ProbeKind.Line probes ONLY
-        val lines: Map[String, Boolean] = probes
+        val lines: Map[String, Boolean] = ListMap.from(probes
           .filter(_._3 == "line") // Only ProbeKind.Line probes determine line coverage
           .groupBy(_._2)
+          .toList
+          .sortBy(_._1)
           .map { case (line, lineProbes) =>
             val covered = lineProbes.map(_._1).exists(snapshot.contains)
             line.toString -> covered
-          }
+          })
 
         val branches: List[JValue] = probes
           .filter(_._3.startsWith("branch"))
           .groupBy(_._2)
           .toList
+          .sortBy(_._1)
           .map {
             case (line, probes) =>
-              val branchCoverage = probes.map { case (probeId, _, kind) =>
+              val branchCoverage = ListMap.from(probes.sortBy(_._3).map { case (probeId, _, kind) =>
                 kind -> snapshot.contains(probeId)
-              }.toMap
+              })
               ("line" -> line) ~ ("branches" -> branchCoverage)
           }
 
