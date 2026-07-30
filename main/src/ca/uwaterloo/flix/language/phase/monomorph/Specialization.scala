@@ -1000,6 +1000,9 @@ object Specialization {
       val t = subst(tpe)
       Expr.FixpointInjectInto(exps, predsAndArities, t, subst(eff), loc)
 
+    case Expr.CoverageHit(probeId, loc) =>
+      Expr.CoverageHit(probeId, loc)
+
     case Expr.Error(m, _, _) =>
       throw InternalCompilerException(s"Unexpected error expression near", m.loc)
 
@@ -1263,17 +1266,17 @@ object Specialization {
       ctx.getSpecializedName(defn.sym, tpe) match {
         case None =>
           // The function has not been specialized.
-          // Generate a fresh specialized definition symbol.
-          val freshSym = Symbol.freshDefnSym(defn.sym)
+          // Generate a stable specialized definition symbol based on the monomorphic type.
+          val specializedSym = Symbol.specializedDefnSym(defn.sym, tpe)
 
-          // Register the fresh symbol (and actual type).
-          ctx.addSpecializedName(defn.sym, tpe, freshSym)
+          // Register the specialized symbol (and actual type).
+          ctx.addSpecializedName(defn.sym, tpe, specializedSym)
 
-          // Enqueue the fresh symbol with the definition and substitution.
-          ctx.enqueueSpecialization(freshSym, defn, subst)
+          // Enqueue the specialization.
+          ctx.enqueueSpecialization(specializedSym, defn, subst)
 
-          // Now simply refer to the freshly generated symbol.
-          freshSym
+          // Now simply refer to the specialized symbol.
+          specializedSym
         case Some(specializedSym) =>
           // The function has already been specialized.
           // Simply refer to the already existing specialized symbol.

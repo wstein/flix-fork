@@ -400,6 +400,7 @@ object EffectVerifier {
       exps.foreach(visitExp)
       // TODO ?
       ()
+    case Expr.CoverageHit(_, _) => ()
     case Expr.Error(m, tpe, eff) => ()
   }
 

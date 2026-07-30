@@ -103,6 +103,39 @@ object Symbol {
   }
 
   /**
+    * Returns the stable symbol used for a monomorphized def specialization.
+    *
+    * Unlike [[freshDefnSym]], this symbol's name is independent of compiler
+    * process state. The key contains only the source def's fully-qualified
+    * name and its canonical monomorphic type.
+    */
+  def specializedDefnSym(sym: DefnSym, tpe: Type): DefnSym = {
+    val key = List(sym.toString, tpe.toString)
+    new DefnSym(None, sym.namespace, s"${sym.text}${Flix.Delimiter}${StableHash.xxh3_64Base58(key)}", sym.loc)
+  }
+
+  /**
+    * Returns a stable symbol for a compiler-generated definition.
+    *
+    * The key deliberately excludes compiler-process state. The source position
+    * is relative to the owning definition, so it distinguishes generated
+    * definitions without making the result depend on an absolute source path.
+    */
+  def generatedDefnSym(owner: DefnSym, kind: String, tpe: SimpleType, loc: SourceLocation): DefnSym = {
+    val key = List(
+      "generated-defn",
+      kind,
+      owner.toString,
+      tpe.toString,
+      loc.startLine.toString,
+      loc.startCol.toString,
+      loc.endLine.toString,
+      loc.endCol.toString
+    )
+    new DefnSym(None, owner.namespace, s"${owner.text}${Flix.Delimiter}${StableHash.xxh3_64Base58(key)}", loc)
+  }
+
+  /**
     * Returns a fresh struct symbol based on the given symbol.
     */
   def freshStructSym(sym: StructSym)(implicit flix: Flix): StructSym = {

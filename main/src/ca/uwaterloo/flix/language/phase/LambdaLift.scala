@@ -106,7 +106,7 @@ object LambdaLift {
       val liftedExp = visitExp(exp)
 
       // Generate a fresh symbol for the new lifted definition.
-      val freshSymbol = Symbol.freshDefnSym(sym0)
+      val freshSymbol = Symbol.generatedDefnSym(sym0, "closure", arrowTpe, loc)
 
       // Construct annotations and modifiers for the fresh definition.
       val ann = Annotations.Empty
@@ -195,7 +195,7 @@ object LambdaLift {
       LiftedAst.Expr.Let(sym, e1, e2, tpe, purity, loc)
 
     case SimplifiedAst.Expr.LocalDef(sym, fparams, exp1, exp2, _, _, loc) =>
-      val freshDefnSym = Symbol.freshDefnSym(sym0)
+      val freshDefnSym = Symbol.generatedDefnSym(sym0, "local-def", exp1.tpe, loc)
       val updatedLiftedLocalDefs = liftedLocalDefs + (sym -> freshDefnSym)
       // It is **very important** we add the mapping `sym -> freshDefnSym` to liftedLocalDefs
       // before visiting the body since exp1 may contain recursive calls to `sym`

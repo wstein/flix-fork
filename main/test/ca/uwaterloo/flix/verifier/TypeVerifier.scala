@@ -471,6 +471,9 @@ object TypeVerifier {
           checkJavaParameters(ts, method.getParameterTypes.toList, loc)
           checkJavaSubtype(tpe, method.getReturnType, loc)
 
+        case AtomicOp.CoverageHit(_) =>
+          check(expected = SimpleType.Unit)(actual = tpe, loc)
+
         // Vector operations are simplified to array operations in the Simplifier.
         case AtomicOp.VectorLit => throw InternalCompilerException(s"Unexpected vector operation: '$op'.", loc)
         case AtomicOp.VectorLoad => throw InternalCompilerException(s"Unexpected vector operation: '$op'.", loc)
