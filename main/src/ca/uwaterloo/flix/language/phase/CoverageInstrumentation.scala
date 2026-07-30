@@ -285,14 +285,18 @@ object CoverageInstrumentation {
         val instExps = exps.map { stmExp =>
           val (instExp, pc) = instrumentExpression(stmExp, qualifiedName, probeId, registeredLineProbes)
           probeId = pc
-          instExp
+          val (lineExp, nextProbeId) = instrumentLine(instExp, qualifiedName, probeId, registeredLineProbes)
+          probeId = nextProbeId
+          lineExp
         }
 
         // Process final expression
         val (instFinalExp, pc) = instrumentExpression(finalExp, qualifiedName, probeId, registeredLineProbes)
         probeId = pc
+        val (lineFinalExp, nextProbeId) = instrumentLine(instFinalExp, qualifiedName, probeId, registeredLineProbes)
+        probeId = nextProbeId
 
-        (e.copy(exps = instExps, exp = instFinalExp), probeId)
+        (e.copy(exps = instExps, exp = lineFinalExp), probeId)
 
       // For other expressions, recurse into structure without adding probes
       case _ => (exp, probeId)
