@@ -90,18 +90,41 @@ object CoverageInstrumentation {
           Coverage.registerProbe(probeId, sourcePath, lineNumber, ProbeKind.Function, qualifiedName)
         }
 
+        // Every compiled function contributes an executable line probe at the
+        // source location of its body. This covers expression-bodied functions
+        // that contain no let-binding.
+        val bodyLineProbe = probeCounter
+        val bodyLineKey = (qualifiedName, defn.exp.loc.source.name, defn.exp.loc.startLine)
+        val hasBodyLineProbe = defn.exp.loc.isReal && registeredLineProbes.add(bodyLineKey)
+        if (hasBodyLineProbe) {
+          probeCounter += 1
+          Coverage.registerProbe(bodyLineProbe, defn.exp.loc.source.name, defn.exp.loc.startLine, ProbeKind.Line, qualifiedName)
+        }
+
         // Instrument the function body for line and branch coverage
         val (instrumentedBody, newCounter) = instrumentExpression(
           defn.exp, qualifiedName, probeCounter, registeredLineProbes
         )
         probeCounter = newCounter
 
+        val lineInstrumentedBody = if (hasBodyLineProbe) {
+          TypedAst.Expr.Stm(
+            List(TypedAst.Expr.CoverageHit(bodyLineProbe, defn.exp.loc)),
+            instrumentedBody,
+            instrumentedBody.tpe,
+            instrumentedBody.eff,
+            defn.exp.loc
+          )
+        } else {
+          instrumentedBody
+        }
+
         // Wrap with function-level probe
         val wrappedBody = TypedAst.Expr.Stm(
           List(TypedAst.Expr.CoverageHit(probeId, defn.loc)),
-          instrumentedBody,
-          instrumentedBody.tpe,
-          instrumentedBody.eff,
+          lineInstrumentedBody,
+          lineInstrumentedBody.tpe,
+          lineInstrumentedBody.eff,
           defn.loc
         )
 
