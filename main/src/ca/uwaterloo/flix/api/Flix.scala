@@ -112,6 +112,24 @@ class Flix {
   private var cachedErrors: List[CompilationMessage] = Nil
 
   /**
+    * Coverage probe map: symbol -> probe ID.
+    * Set during CoverageInstrumentation phase if coverage is enabled.
+    */
+  private var coverageProbeMap: Map[Symbol.DefnSym, Int] = Map.empty
+
+  /**
+    * Returns the coverage probe map.
+    */
+  def getCoverageProbeMap: Map[Symbol.DefnSym, Int] = coverageProbeMap
+
+  /**
+    * Sets the coverage probe map.
+    */
+  def setCoverageProbeMap(map: Map[Symbol.DefnSym, Int]): Unit = {
+    coverageProbeMap = map
+  }
+
+  /**
     * A map to track the time spent in each phase and sub-phase.
     */
   var phaseTimers: ArrayBuffer[PhaseTime] = ArrayBuffer.empty

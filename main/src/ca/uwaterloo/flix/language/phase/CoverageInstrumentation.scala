@@ -17,6 +17,7 @@ package ca.uwaterloo.flix.language.phase
 
 import ca.uwaterloo.flix.api.Flix
 import ca.uwaterloo.flix.language.ast.TypedAst
+import ca.uwaterloo.flix.language.ast.Symbol
 import ca.uwaterloo.flix.runtime.Coverage
 
 /**
@@ -40,25 +41,15 @@ import ca.uwaterloo.flix.runtime.Coverage
 object CoverageInstrumentation {
 
   /**
-    * Data class to represent registered coverage probe information.
-    */
-  case class ProbeInfo(
-    id: Int,
-    source: String,
-    line: Int,
-    kind: String // "function", "line", "branch-true", "branch-false", etc.
-  )
-
-  /**
     * Instrument the typed AST for coverage.
     *
     * @param root the typed AST root.
     * @param flix the Flix compiler instance.
-    * @return a map from symbol to list of probes for that symbol.
+    * @return a map from symbol to probe ID.
     */
-  def run(root: TypedAst.Root)(implicit flix: Flix): Map[TypedAst.Def, List[ProbeInfo]] = {
+  def run(root: TypedAst.Root)(implicit flix: Flix): Map[Symbol.DefnSym, Int] = {
     val defs = root.defs.values.toList
-    val probes = scala.collection.mutable.Map[TypedAst.Def, List[ProbeInfo]]()
+    val probeMap = scala.collection.mutable.Map[Symbol.DefnSym, Int]()
 
     var probeCounter = 0
 
@@ -78,14 +69,16 @@ object CoverageInstrumentation {
         // Register the probe
         Coverage.registerProbe(probeId, sourcePath, lineNumber, "function")
 
-        // Store probe info for later use
-        val probeInfo = ProbeInfo(probeId, sourcePath, lineNumber, "function")
-        probes(defn) = List(probeInfo)
+        // Store probe ID mapping
+        probeMap(sym) = probeId
       }
     }
 
+    // Store the probe map on the Flix instance
+    flix.setCoverageProbeMap(probeMap.toMap)
+
     // Return the probe map
-    probes.toMap
+    probeMap.toMap
   }
 
   /**

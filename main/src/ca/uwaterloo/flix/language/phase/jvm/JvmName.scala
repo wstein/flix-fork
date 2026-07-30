@@ -237,8 +237,10 @@ object JvmName {
   //
 
   val DevFlixRuntime: List[String] = List("dev", "flix", "runtime")
+  val CaUwFlixRuntime: List[String] = List("ca", "uwaterloo", "flix", "runtime")
 
   val FlixError: JvmName = JvmName(DevFlixRuntime, mkClassName("FlixError"))
+  val Coverage: JvmName = JvmName(CaUwFlixRuntime, "Coverage")
 
 }
 
