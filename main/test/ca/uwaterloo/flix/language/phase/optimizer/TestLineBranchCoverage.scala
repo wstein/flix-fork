@@ -388,6 +388,14 @@ class TestLineBranchCoverage extends AnyFunSuite {
     val ruleIds = Coverage.getProbeMetadata.collect { case (id, pm) if pm.kind == ProbeKind.BranchRule => id }.toSet
     assert(ruleIds.size == 2, s"Expected two match rule probes, got: $ruleIds")
     assert((ruleIds intersect Coverage.snapshot().keySet).size == 1, "Exactly the selected match rule should be hit")
+    val selectedLine = program.linesIterator.indexWhere(_.contains("\"one\"")) + 1
+    val unselectedLine = program.linesIterator.indexWhere(_.contains("\"other\"")) + 1
+    val metadata = Coverage.getProbeMetadata
+    val hits = Coverage.snapshot().keySet
+    val selectedLineIds = metadata.collect { case (id, pm) if pm.kind == ProbeKind.Line && pm.line == selectedLine => id }.toSet
+    val unselectedLineIds = metadata.collect { case (id, pm) if pm.kind == ProbeKind.Line && pm.line == unselectedLine => id }.toSet
+    assert(selectedLineIds.nonEmpty && (selectedLineIds intersect hits).nonEmpty, "Selected match body line should be hit")
+    assert(unselectedLineIds.nonEmpty && (unselectedLineIds intersect hits).isEmpty, "Unselected match body line should remain uncovered")
   }
 
   test("choose rules register selected and unselected branch probes") {

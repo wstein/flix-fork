@@ -254,17 +254,21 @@ object CoverageInstrumentation {
           val instGuard = rule.guard.map { guard =>
             val (result, nextProbeId) = instrumentExpression(guard, qualifiedName, probeId, registeredLineProbes)
             probeId = nextProbeId
-            result
+            val (lineGuard, nextLineProbeId) = instrumentLine(result, qualifiedName, probeId, registeredLineProbes)
+            probeId = nextLineProbeId
+            lineGuard
           }
           val (instBody, nextProbeId) = instrumentExpression(rule.exp, qualifiedName, probeId, registeredLineProbes)
           probeId = nextProbeId
+          val (lineBody, nextLineProbeId) = instrumentLine(instBody, qualifiedName, probeId, registeredLineProbes)
+          probeId = nextLineProbeId
           if (rule.exp.loc.isReal) {
             val ruleProbeId = probeId
             probeId += 1
             Coverage.registerProbe(ruleProbeId, rule.exp.loc.source.name, rule.exp.loc.startLine, ProbeKind.BranchRule, qualifiedName)
-            rule.copy(guard = instGuard, exp = TypedAst.Expr.Stm(List(TypedAst.Expr.CoverageHit(ruleProbeId, rule.exp.loc)), instBody, instBody.tpe, instBody.eff, rule.exp.loc))
+            rule.copy(guard = instGuard, exp = TypedAst.Expr.Stm(List(TypedAst.Expr.CoverageHit(ruleProbeId, rule.exp.loc)), lineBody, lineBody.tpe, lineBody.eff, rule.exp.loc))
           } else {
-            rule.copy(guard = instGuard, exp = instBody)
+            rule.copy(guard = instGuard, exp = lineBody)
           }
         }
         (e.copy(exp = instSelector, rules = instRules), probeId)
@@ -275,12 +279,14 @@ object CoverageInstrumentation {
         val instRules = rules.map { rule =>
           val (instBody, nextProbeId) = instrumentExpression(rule.exp, qualifiedName, probeId, registeredLineProbes)
           probeId = nextProbeId
+          val (lineBody, nextLineProbeId) = instrumentLine(instBody, qualifiedName, probeId, registeredLineProbes)
+          probeId = nextLineProbeId
           if (rule.exp.loc.isReal) {
             val ruleProbeId = probeId
             probeId += 1
             Coverage.registerProbe(ruleProbeId, rule.exp.loc.source.name, rule.exp.loc.startLine, ProbeKind.BranchRule, qualifiedName)
-            rule.copy(exp = TypedAst.Expr.Stm(List(TypedAst.Expr.CoverageHit(ruleProbeId, rule.exp.loc)), instBody, instBody.tpe, instBody.eff, rule.exp.loc))
-          } else rule.copy(exp = instBody)
+            rule.copy(exp = TypedAst.Expr.Stm(List(TypedAst.Expr.CoverageHit(ruleProbeId, rule.exp.loc)), lineBody, lineBody.tpe, lineBody.eff, rule.exp.loc))
+          } else rule.copy(exp = lineBody)
         }
         (e.copy(exp = instSelector, rules = instRules), probeId)
 
