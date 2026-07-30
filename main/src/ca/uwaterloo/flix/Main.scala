@@ -343,8 +343,20 @@ object Main {
             flix.compile() match {
               case Validation.Success(compilationResult) =>
                 Tester.run(Nil, compilationResult)(flix) match {
-                  case Result.Ok(_) => System.exit(0)
-                  case Result.Err(_) => System.exit(1)
+                  case Result.Ok(_) =>
+                    // Write coverage report if enabled
+                    if (options.coverage) {
+                      CoverageReporter.writeJsonReport(options.coverageOutput)
+                      println(s"Coverage report written to ${options.coverageOutput}")
+                    }
+                    System.exit(0)
+                  case Result.Err(_) =>
+                    // Write coverage report even if tests failed
+                    if (options.coverage) {
+                      CoverageReporter.writeJsonReport(options.coverageOutput)
+                      println(s"Coverage report written to ${options.coverageOutput}")
+                    }
+                    System.exit(1)
                 }
               case Validation.Failure(errors) => exitWithErrors(flix, errors.toList, None)
             }

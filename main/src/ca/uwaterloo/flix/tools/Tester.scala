@@ -17,7 +17,7 @@ package ca.uwaterloo.flix.tools
 
 import ca.uwaterloo.flix.api.Flix
 import ca.uwaterloo.flix.language.ast.Symbol
-import ca.uwaterloo.flix.runtime.{CompilationResult, TestFn}
+import ca.uwaterloo.flix.runtime.{CompilationResult, Coverage, TestFn}
 import ca.uwaterloo.flix.util.{Duration, Result}
 import org.jline.terminal.{Terminal, TerminalBuilder}
 
@@ -35,6 +35,11 @@ object Tester {
     * Runs all tests.
     */
   def run(filters: List[Regex], compilationResult: CompilationResult)(implicit flix: Flix): Result[Unit, Int] = {
+    //
+    // Reset coverage before running tests.
+    //
+    Coverage.reset()
+
     //
     // Find all test cases (both active and ignored).
     //
