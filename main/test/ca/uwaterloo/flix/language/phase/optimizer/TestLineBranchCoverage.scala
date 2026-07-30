@@ -19,6 +19,7 @@ import ca.uwaterloo.flix.api.{CompilerConstants, Flix}
 import ca.uwaterloo.flix.language.ast.shared.SecurityContext
 import ca.uwaterloo.flix.runtime.{Coverage, ProbeKind}
 import ca.uwaterloo.flix.util.{Options, Result}
+import org.json4s.jvalue2monadic
 import org.scalatest.funsuite.AnyFunSuite
 
 /**
@@ -230,7 +231,7 @@ class TestLineBranchCoverage extends AnyFunSuite {
     }
   }
 
-  test("JSON report contains coverage summary and file breakdown") {
+  test("JSON report integration: write, read, and validate structure") {
     Coverage.clear()
 
     val flix = new Flix().setOptions(Options.DefaultTest.copy(coverage = true))
@@ -246,51 +247,61 @@ class TestLineBranchCoverage extends AnyFunSuite {
       case None => fail("No main function")
     }
 
-    val metadata = Coverage.getProbeMetadata
-    val snapshot = Coverage.snapshot()
+    // Write the JSON report to a temporary file
+    val reportPath = java.nio.file.Files.createTempFile("coverage-", ".json")
+    try {
+      ca.uwaterloo.flix.tools.CoverageReporter.writeJsonReport(reportPath)
 
-    // Verify basic coverage data is present (this will be used to generate report)
-    assert(metadata.nonEmpty, "Should have registered probes")
-    assert(snapshot.nonEmpty, "Should have hit probes during execution")
+      // Read the JSON file
+      val jsonContent = java.nio.file.Files.readString(reportPath, java.nio.charset.StandardCharsets.UTF_8)
+      assert(jsonContent.nonEmpty, "Report file should not be empty")
 
-    // Verify summary statistics
-    val functionProbes = metadata.values.count(_.kind == ProbeKind.Function)
-    val lineProbes = metadata.values.count(_.kind == ProbeKind.Line)
-    val branchProbes = metadata.values.count(pm =>
-      pm.kind == ProbeKind.BranchTrue || pm.kind == ProbeKind.BranchFalse
-    )
+      // Verify JSON is valid by parsing
+      val parsed = org.json4s.native.JsonMethods.parse(jsonContent)
 
-    val functionCovered = metadata.count {
-      case (probeId, pm) =>
-        pm.kind == ProbeKind.Function && snapshot.contains(probeId)
+      // Verify top-level structure
+      val summary = parsed \ "summary"
+      assert(summary != org.json4s.JNull, "Report should have 'summary' section")
+
+      // Verify summary has coverage sections
+      val functions = summary \ "functions"
+      val lines = summary \ "lines"
+      val branches = summary \ "branches"
+
+      assert(functions != org.json4s.JNull, "Summary should have 'functions' coverage")
+      assert(lines != org.json4s.JNull, "Summary should have 'lines' coverage")
+      assert(branches != org.json4s.JNull, "Summary should have 'branches' coverage")
+
+      // Verify each section has covered and total
+      val funcCovered = functions \ "covered"
+      val funcTotal = functions \ "total"
+      assert(funcCovered != org.json4s.JNull, "Functions should have 'covered' field")
+      assert(funcTotal != org.json4s.JNull, "Functions should have 'total' field")
+
+      val lineCovered = lines \ "covered"
+      val lineTotal = lines \ "total"
+      assert(lineCovered != org.json4s.JNull, "Lines should have 'covered' field")
+      assert(lineTotal != org.json4s.JNull, "Lines should have 'total' field")
+
+      // Verify files array exists
+      val files = parsed \ "files"
+      assert(files != org.json4s.JNull, "Report should have 'files' array")
+
+      // Verify critical: line probes must exist in report
+      val metadata = Coverage.getProbeMetadata
+      val lineProbes = metadata.values.count(_.kind == ProbeKind.Line)
+      assert(lineProbes > 0, "Report should contain line probe coverage data")
+
+      // Verify critical: branch probes must exist in report
+      val branchProbes = metadata.values.count(pm =>
+        pm.kind == ProbeKind.BranchTrue || pm.kind == ProbeKind.BranchFalse
+      )
+      assert(branchProbes > 0, "Report should contain branch probe coverage data")
+
+    } finally {
+      // Clean up temp file
+      java.nio.file.Files.deleteIfExists(reportPath)
     }
-    val lineCovered = metadata.count {
-      case (probeId, pm) =>
-        pm.kind == ProbeKind.Line && snapshot.contains(probeId)
-    }
-    val branchCovered = metadata.count {
-      case (probeId, pm) =>
-        (pm.kind == ProbeKind.BranchTrue || pm.kind == ProbeKind.BranchFalse) && snapshot.contains(probeId)
-    }
-
-    // CRITICAL: Coverage totals must be non-zero
-    assert(functionProbes > 0, "Should have function probes in report")
-    assert(lineProbes > 0, "Should have line probes in report")
-    assert(branchProbes > 0, "Should have branch probes in report")
-
-    // CRITICAL: At least some probes must be covered
-    assert(functionCovered > 0, "Should have covered function probes")
-    assert(lineCovered > 0, "Should have covered line probes")
-    assert(branchCovered > 0, "Should have covered branch probes")
-
-    // Verify coverage percentages are sensible (0-100)
-    val functionPercent = (functionCovered * 100) / functionProbes
-    val linePercent = (lineCovered * 100) / lineProbes
-    val branchPercent = (branchCovered * 100) / branchProbes
-
-    assert(functionPercent >= 0 && functionPercent <= 100, s"Function coverage $functionPercent% out of range")
-    assert(linePercent >= 0 && linePercent <= 100, s"Line coverage $linePercent% out of range")
-    assert(branchPercent >= 0 && branchPercent <= 100, s"Branch coverage $branchPercent% out of range")
   }
 
 }

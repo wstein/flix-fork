@@ -43,36 +43,51 @@ object CoverageReporter {
     val snapshot = Coverage.snapshot()
     val metadata = Coverage.getProbeMetadata
 
-    // Organize ALL probes by file (including zero-hit)
-    val coverageByFile: Map[String, List[(Int, Int, String)]] = metadata.toList.map {
+    // Deduplicate probes by (function, source, line) - keep first occurrence
+    // This prevents multiple probes on the same line from inflating coverage stats
+    val deduplicatedMetadata = metadata
+      .groupBy { case (_, pm) => (pm.qualifiedName, pm.source, pm.line) }
+      .map { case (_, probes) => probes.head } // Keep first probe per (func, file, line)
+
+    // Filter out synthetic/unknown locations
+    val validMetadata = deduplicatedMetadata.filter { case (_, pm) =>
+      pm.source.nonEmpty && pm.line > 0
+    }
+
+    // Organize probes by file (including zero-hit)
+    val coverageByFile: Map[String, List[(Int, Int, String)]] = validMetadata.toList.map {
       case (probeId, pm) => (pm.source, (probeId, pm.line, pm.kind.asString))
     }.groupBy(_._1).map { case (k, v) => k -> v.map(_._2) }
 
-    // Calculate summary statistics
-    val functionProbes = metadata.values.count(_.kind.asString == "function")
-    val lineProbes = metadata.values.count(_.kind.asString == "line")
-    val branchProbes = metadata.values.count(_.kind.asString.startsWith("branch"))
+    // Calculate summary statistics from deduplicated, valid probes
+    val functionProbes = validMetadata.values.count(_.kind.asString == "function")
+    val lineProbes = validMetadata.values.count(_.kind.asString == "line")
+    val branchProbes = validMetadata.values.count(_.kind.asString.startsWith("branch"))
 
-    val functionCovered = metadata.count {
+    val functionCovered = validMetadata.count {
       case (probeId, pm) =>
         pm.kind.asString == "function" && snapshot.contains(probeId)
     }
-    val lineCovered = metadata.count {
+    val lineCovered = validMetadata.count {
       case (probeId, pm) =>
         pm.kind.asString == "line" && snapshot.contains(probeId)
     }
-    val branchCovered = metadata.count {
+    val branchCovered = validMetadata.count {
       case (probeId, pm) =>
         pm.kind.asString.startsWith("branch") && snapshot.contains(probeId)
     }
 
-    // Build the JSON report
-    val files: List[JValue] = coverageByFile.toList.map {
+    // Build the JSON report with deterministic, sorted output
+    val files: List[JValue] = coverageByFile.toList.sortBy(_._1).map {
       case (path, probes) =>
-        val lines: Map[String, Boolean] = probes.groupBy(_._2).map { case (line, probes) =>
-          val covered = probes.map(_._1).exists(snapshot.contains)
-          line.toString -> covered
-        }
+        // Line status computed from ProbeKind.Line probes ONLY
+        val lines: Map[String, Boolean] = probes
+          .filter(_._3 == "line") // Only ProbeKind.Line probes determine line coverage
+          .groupBy(_._2)
+          .map { case (line, lineProbes) =>
+            val covered = lineProbes.map(_._1).exists(snapshot.contains)
+            line.toString -> covered
+          }
 
         val branches: List[JValue] = probes
           .filter(_._3.startsWith("branch"))
@@ -100,8 +115,8 @@ object CoverageReporter {
       )) ~
       ("files" -> files)
 
-    // Write the report to file
+    // Write the report to file with explicit UTF-8 encoding
     val jsonString = compact(render(report))
-    Files.write(outputPath, jsonString.getBytes)
+    Files.write(outputPath, jsonString.getBytes(java.nio.charset.StandardCharsets.UTF_8))
   }
 }

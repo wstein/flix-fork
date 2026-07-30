@@ -87,7 +87,7 @@ object CoverageInstrumentation {
 
         // Instrument the function body for line and branch coverage
         val (instrumentedBody, newCounter) = instrumentExpression(
-          defn.exp, qualifiedName, probeCounter, defn.loc
+          defn.exp, qualifiedName, probeCounter
         )
         probeCounter = newCounter
 
@@ -112,17 +112,43 @@ object CoverageInstrumentation {
   /**
     * Recursively instrument an expression for line and branch coverage.
     *
+    * PHASE 2.1 - Let-Binding/Statement-Entry Coverage (INCOMPLETE):
+    * ===============================================================
+    * Currently instruments only Let-binding expressions with line probes.
+    * Line probes mark the entry point of statement-level expressions.
+    *
+    * NOT YET instrumented: function-return expressions, conditions, branch bodies,
+    * function calls, or ordinary statement expressions (Stm entries).
+    * TODO: Extend to cover all executable expressions for complete line coverage.
+    *
+    * PHASE 2.2 - If-Expression Branch Coverage (COMPLETE):
+    * =======================================================
+    * Instruments IfThenElse expressions with exactly two branch probes:
+    * - ProbeKind.BranchTrue for then-branch entry (uses exp2.loc)
+    * - ProbeKind.BranchFalse for else-branch entry (uses exp3.loc)
+    * Both branch probes are recorded regardless of execution path. The snapshot
+    * only contains hit probes; unexecuted branches appear in metadata but not snapshot.
+    *
+    * Compiled-Code Coverage Semantics (KNOWN ISSUE):
+    * ================================================
+    * Instrumentation occurs BEFORE constant folding and dead-code elimination.
+    * If optimizer later removes a branch (e.g., if (true) -> removes false branch),
+    * the false branch probe remains in metadata even though its generated code was removed.
+    *
+    * This represents PRE-OPTIMIZATION reachable source coverage, NOT post-optimization
+    * compiled-code coverage. To achieve compiled-code-only semantics, instrumentation
+    * must be moved to AFTER optimization, which requires preserving source locations
+    * through the optimizer pipeline (not yet implemented).
+    *
     * @param exp the expression to instrument
     * @param qualifiedName the qualified name of the containing function
     * @param startProbeId the starting probe ID for new probes
-    * @param parentLoc the parent location context
     * @return tuple of (instrumented expression, new probe counter)
     */
   private def instrumentExpression(
     exp: TypedAst.Expr,
     qualifiedName: String,
-    startProbeId: Int,
-    parentLoc: SourceLocation
+    startProbeId: Int
   ): (TypedAst.Expr, Int) = {
     var probeId = startProbeId
 
@@ -130,7 +156,7 @@ object CoverageInstrumentation {
       // Instrument if-then-else with branch probes
       case e @ TypedAst.Expr.IfThenElse(exp1, exp2, exp3, tpe, eff, loc) =>
         // Recursively instrument condition
-        val (instExp1, pc1) = instrumentExpression(exp1, qualifiedName, probeId, loc)
+        val (instExp1, pc1) = instrumentExpression(exp1, qualifiedName, probeId)
         probeId = pc1
 
         // Register and wrap true branch (use then-branch location, not if-expression location)
@@ -139,7 +165,7 @@ object CoverageInstrumentation {
         Coverage.registerProbe(trueBranchProbeId, exp2.loc.source.name, exp2.loc.startLine, ProbeKind.BranchTrue, qualifiedName)
 
         // Recursively instrument then expression
-        val (instExp2, pc2) = instrumentExpression(exp2, qualifiedName, probeId, loc)
+        val (instExp2, pc2) = instrumentExpression(exp2, qualifiedName, probeId)
         probeId = pc2
 
         // Wrap then branch with probe
@@ -157,7 +183,7 @@ object CoverageInstrumentation {
         Coverage.registerProbe(falseBranchProbeId, exp3.loc.source.name, exp3.loc.startLine, ProbeKind.BranchFalse, qualifiedName)
 
         // Recursively instrument else expression
-        val (instExp3, pc3) = instrumentExpression(exp3, qualifiedName, probeId, loc)
+        val (instExp3, pc3) = instrumentExpression(exp3, qualifiedName, probeId)
         probeId = pc3
 
         // Wrap else branch with probe
@@ -179,7 +205,7 @@ object CoverageInstrumentation {
         Coverage.registerProbe(lineProbeId, loc.source.name, loc.startLine, ProbeKind.Line, qualifiedName)
 
         // Recursively instrument bound expression
-        val (instExp1, pc1) = instrumentExpression(exp1, qualifiedName, probeId, loc)
+        val (instExp1, pc1) = instrumentExpression(exp1, qualifiedName, probeId)
         probeId = pc1
 
         // Wrap bound expression with probe
@@ -192,7 +218,7 @@ object CoverageInstrumentation {
         )
 
         // Recursively instrument body
-        val (instExp2, pc2) = instrumentExpression(exp2, qualifiedName, probeId, loc)
+        val (instExp2, pc2) = instrumentExpression(exp2, qualifiedName, probeId)
         probeId = pc2
 
         (e.copy(exp1 = wrappedExp1, exp2 = instExp2), probeId)
@@ -201,13 +227,13 @@ object CoverageInstrumentation {
       case e @ TypedAst.Expr.Stm(exps, finalExp, tpe, eff, loc) =>
         // Process each statement
         val instExps = exps.map { stmExp =>
-          val (instExp, pc) = instrumentExpression(stmExp, qualifiedName, probeId, stmExp.loc)
+          val (instExp, pc) = instrumentExpression(stmExp, qualifiedName, probeId)
           probeId = pc
           instExp
         }
 
         // Process final expression
-        val (instFinalExp, pc) = instrumentExpression(finalExp, qualifiedName, probeId, finalExp.loc)
+        val (instFinalExp, pc) = instrumentExpression(finalExp, qualifiedName, probeId)
         probeId = pc
 
         (e.copy(exps = instExps, exp = instFinalExp), probeId)
