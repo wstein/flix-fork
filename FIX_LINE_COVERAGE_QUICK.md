@@ -3,9 +3,8 @@
 ## Implemented
 
 `CoverageInstrumentation.instrumentExpression` recursively instruments definition, signature,
-and closure applications, lambda construction, tuples, records, array literals, unchecked casts,
-`run … with handler`, function bodies, `let` bindings, statement expressions, and
-`if` conditions and bodies.
+and closure applications, lambda construction, tuples, records, structs, vectors, array literals, checked and unchecked casts,
+`run … with handler`, exception handling (`TryCatch`, `Throw`), Java interop (`InvokeMethod`, `InvokeStaticMethod`, `InvokeConstructor`, `GetField`, `PutField`, `GetStaticField`, `PutStaticField`), concurrency and lazy expressions (`Spawn`, `Lazy`, `Force`), function bodies, `let` bindings, statement expressions, and `if` conditions and bodies. Coverage reports are generated in both JSON (`coverage.json`) and LCOV (`coverage.info`) formats.
 
 A probe is attached to the reconstructed expression itself. Recursion discovers
 nested executable expressions on different source lines. Probing only call arguments

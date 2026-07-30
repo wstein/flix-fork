@@ -8,14 +8,13 @@ source-reachable expressions rather than post-optimization bytecode.
 
 Current line coverage includes function bodies, `let` bindings, statement
 expressions, `if` conditions and bodies, definition/signature/closure calls, lambda
-construction, tuples, record operations, array literals, unchecked casts, and `RunWith`.
+construction, tuples, record operations, array and vector literals, struct operations, unchecked and checked casts, `RunWith`, Java interop calls (`InvokeMethod`, `InvokeStaticMethod`, `InvokeConstructor`, `GetField`, `PutField`, `GetStaticField`, `PutStaticField`), effect handler constructs (`TryCatch`, `Throw`, `Handler`), and concurrency/lazy expressions (`Spawn`, `Lazy`, `Force`).
 Operator syntax reaches this phase as `ApplySig`. `if` uses
 `BranchTrue` and `BranchFalse`; `match`
-and restrictable `choose` rule bodies use `BranchRule`. Guard outcomes are not
-separately covered.
+and restrictable `choose` rule bodies use `BranchRule`. Pattern match guard expressions record `BranchTrue` and `BranchFalse` outcomes.
 
 Line identity is `(qualifiedName, source, line)`. Multiple expressions on a line
-share one line result; branch probes remain distinct by probe ID.
+share one line result; branch probes remain distinct by probe ID. Coverage reports can be emitted in standard JSON format (`coverage.json`) and LCOV tracefile format (`coverage.info`).
 
 ## Safe implementation pattern
 
@@ -32,22 +31,15 @@ Use `instrumentExpressions` for ordered expression lists. It allocates IDs in so
 order and reconstructs the original list order. Instrument the parent expression,
 then recurse so nested executable expressions on other lines receive probes.
 
-## Candidate forms
+## Implemented and Candidate forms
 
-- Next: `Tag`, `RestrictableTag`, `StructNew`,
-  and related enum/struct construction forms.
-- Next: `ArrayNew`, `ArrayLoad`, `ArrayStore`, `StructNew`,
-  `StructGet`, and `StructPut`. Preserve child order and effects.
-- Next: `Ascribe`, `Cast`, `CheckedCast`, and
-  `UncheckedMaskingCast`. Probe the enclosing runtime expression, not type-only data.
-- Source lambdas are `TypedAst.Expr.Lambda`; when their expression location is
-  synthetic, the formal parameter supplies the real source anchor.
-- Closure calls are `ApplyClo`; use the first real location among the call, callee,
-  and argument. Operators in the fixture are `ApplySig`; use its symbol/argument
-  locations when the outer application location is synthetic.
-- Control flow: `TryCatch`, `TryWith`, `Throw`, `Resume`, `Without`, and `Handler`.
-  Define line and branch semantics, then add selected/unselected fixtures.
-- Logic/query: `Fixpoint*`, `ConstraintSet`, `Constraint`, `Scope`, and `ScopeExit`.
+- Implemented: `Tag`, `RestrictableTag`, `StructNew`, `StructGet`, `StructPut`, `VectorLit`, `VectorLoad`, `VectorLength`.
+- Implemented: `ArrayNew`, `ArrayLoad`, `ArrayStore`, `ArrayLength`.
+- Implemented: `Ascribe`, `CheckedCast`, `UncheckedCast`.
+- Implemented: Java Interop (`InvokeConstructor`, `InvokeMethod`, `InvokeStaticMethod`, `GetField`, `PutField`, `GetStaticField`, `PutStaticField`).
+- Implemented: Control flow (`TryCatch`, `Throw`, `Handler`, `RunWith`).
+- Implemented: Concurrency and Lazy (`Spawn`, `Lazy`, `Force`).
+- Next: Logic/query (`Fixpoint*`, `ConstraintSet`, `Constraint`, `Scope`, `ScopeExit`).
   Confirm runtime lowering and retain real-source filtering.
 - Low value: literals, variables, holes, and type-only nodes normally rely on their
   containing executable expression.
@@ -61,11 +53,11 @@ A line probe records execution of a source line; a branch probe records a select
 outcome. Keep them separate:
 
 - `if`: one true and one false probe at the branch-body locations.
-- `match` and restrictable `choose`: one rule probe per body.
-- Guards, catches, handlers, and query alternatives require a documented policy and
+- `match` and restrictable `choose`: one rule probe per body; `match` guards record `BranchTrue` and `BranchFalse` probes.
+- Catches, handlers, and query alternatives require a documented policy and
   a selected/unselected runtime fixture before instrumentation.
 
-The JSON reporter preserves every branch probe, including multiple rule probes on one
+Both JSON and LCOV reporters preserve every branch probe, including multiple rule probes on one
 line, as ordered records containing `id`, `kind`, `covered`, and `function`.
 
 ## Test recipe

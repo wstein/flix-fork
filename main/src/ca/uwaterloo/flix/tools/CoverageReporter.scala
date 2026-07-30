@@ -195,4 +195,24 @@ object CoverageReporter {
 
     Files.write(outputPath, sb.toString.getBytes(java.nio.charset.StandardCharsets.UTF_8))
   }
+
+  /**
+    * Return a formatted terminal summary string for collected coverage data.
+    */
+  def formatSummary(): String = {
+    val (metadata, snapshot) = Coverage.reportSnapshot()
+    val totalFunctions = metadata.values.count(_.kind == ca.uwaterloo.flix.runtime.ProbeKind.Function)
+    val totalLines = metadata.values.count(_.kind == ca.uwaterloo.flix.runtime.ProbeKind.Line)
+    val totalBranches = metadata.values.count(_.kind.asString.startsWith("branch"))
+
+    val coveredFunctions = metadata.count { case (id, pm) => pm.kind == ca.uwaterloo.flix.runtime.ProbeKind.Function && snapshot.contains(id) }
+    val coveredLines = metadata.count { case (id, pm) => pm.kind == ca.uwaterloo.flix.runtime.ProbeKind.Line && snapshot.contains(id) }
+    val coveredBranches = metadata.count { case (id, pm) => pm.kind.asString.startsWith("branch") && snapshot.contains(id) }
+
+    def pct(covered: Int, total: Int): String = if (total == 0) "0.0%" else f"${(covered.toDouble / total) * 100.0}%.1f%%"
+
+    s"Coverage: Functions: ${pct(coveredFunctions, totalFunctions)} ($coveredFunctions/$totalFunctions), " +
+      s"Lines: ${pct(coveredLines, totalLines)} ($coveredLines/$totalLines), " +
+      s"Branches: ${pct(coveredBranches, totalBranches)} ($coveredBranches/$totalBranches)"
+  }
 }
