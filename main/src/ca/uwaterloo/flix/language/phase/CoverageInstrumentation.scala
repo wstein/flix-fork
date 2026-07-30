@@ -29,11 +29,11 @@ import ca.uwaterloo.flix.runtime.{Coverage, ProbeKind}
   * we:
   * 1. Assign a unique probe ID
   * 2. Register the probe in the Coverage registry with (source, line, "function")
-  * 3. Wrap the function body with TypedAst.Expr.CoverageHit(probeId) followed by the original body
+  * 3. Wrap the function body with TypedAst.Expr.CoverageHit(sessionId, probeId) followed by the original body
   *
   * The CoverageHit node is marked with Pure effect to preserve function type signatures.
   * It's a compiler-internal operation that prevents optimization removal while leaving the
-  * observable purity of the function unchanged. The actual Coverage.hit(probeId) call is emitted
+  * observable purity of the function unchanged. The actual Coverage.hit(sessionId, probeId) call is emitted
   * during JVM code generation and executes invisibly as a side effect.
   *
   * Filtering Strategy:
@@ -53,11 +53,11 @@ import ca.uwaterloo.flix.runtime.{Coverage, ProbeKind}
   *
   * Probe Lifecycle:
   * ================
-  * - During check(): Coverage.clear() clears metadata/counters from prior compilations
+  * - During check(): Coverage.createSession() creates a fresh per-compilation session
   * - During CoverageInstrumentation: probes are registered and inserted into AST
-  * - During JVM emission: Coverage.hit(probeId) bytecode is emitted
-  * - During execution: calls to Coverage.hit() increment atomic counters
-  * - During reporting: Coverage.snapshot() + getProbeMetadata() generate JSON report
+  * - During JVM emission: Coverage.hit(sessionId, probeId) bytecode is emitted
+  * - During execution: calls to Coverage.hit() increment atomic counters in the target session
+  * - During reporting: Coverage.reportSnapshot() generates JSON/LCOV reports
   */
 object CoverageInstrumentation {
 
@@ -69,7 +69,8 @@ object CoverageInstrumentation {
     * @return the root with instrumented function bodies.
     */
   def run(root: TypedAst.Root)(implicit flix: Flix): TypedAst.Root = {
-    Coverage.createSession()
+    val currentSession = Coverage.createSession()
+    implicit val sessionId: Long = currentSession.sessionId
     val defs = root.defs.values.toList
     var probeCounter = 0
     // Track which (qualifiedName, source, line) combinations have line probes
@@ -110,7 +111,7 @@ object CoverageInstrumentation {
 
         val lineInstrumentedBody = if (hasBodyLineProbe) {
           TypedAst.Expr.Stm(
-            List(TypedAst.Expr.CoverageHit(bodyLineProbe, defn.exp.loc)),
+            List(TypedAst.Expr.CoverageHit(sessionId, bodyLineProbe, defn.exp.loc)),
             instrumentedBody,
             instrumentedBody.tpe,
             instrumentedBody.eff,
@@ -122,7 +123,7 @@ object CoverageInstrumentation {
 
         // Wrap with function-level probe
         val wrappedBody = TypedAst.Expr.Stm(
-          List(TypedAst.Expr.CoverageHit(probeId, defn.loc)),
+          List(TypedAst.Expr.CoverageHit(sessionId, probeId, defn.loc)),
           lineInstrumentedBody,
           lineInstrumentedBody.tpe,
           lineInstrumentedBody.eff,
@@ -140,47 +141,13 @@ object CoverageInstrumentation {
 
   /**
     * Recursively instrument an expression for line and branch coverage.
-    *
-    * PHASE 2.1 - Let-Binding/Statement-Entry Coverage (INCOMPLETE):
-    * ===============================================================
-    * Instruments function bodies, let-bindings, statement expressions, if-expression
-    * conditions and bodies, definition, signature, and closure calls, lambda
-    * construction, and tuples with line probes.
-    *
-    * NOT YET instrumented: arbitrary function-return expressions, function calls,
-    * and other expression forms not represented by a let, statement, or if.
-    * TODO: Extend to cover all executable expressions for complete line coverage.
-    *
-    * PHASE 2.2 - If-Expression Branch Coverage (COMPLETE):
-    * =======================================================
-    * Instruments IfThenElse expressions with exactly two branch probes:
-    * - ProbeKind.BranchTrue for then-branch entry (uses exp2.loc)
-    * - ProbeKind.BranchFalse for else-branch entry (uses exp3.loc)
-    * Both branch probes are recorded regardless of execution path. The snapshot
-    * only contains hit probes; unexecuted branches appear in metadata but not snapshot.
-    *
-    * Compiled-Code Coverage Semantics (KNOWN ISSUE):
-    * ================================================
-    * Instrumentation occurs BEFORE constant folding and dead-code elimination.
-    * If optimizer later removes a branch (e.g., if (true) -> removes false branch),
-    * the false branch probe remains in metadata even though its generated code was removed.
-    *
-    * This represents PRE-OPTIMIZATION reachable source coverage, NOT post-optimization
-    * compiled-code coverage. To achieve compiled-code-only semantics, instrumentation
-    * must be moved to AFTER optimization, which requires preserving source locations
-    * through the optimizer pipeline (not yet implemented).
-    *
-    * @param exp the expression to instrument
-    * @param qualifiedName the qualified name of the containing function
-    * @param startProbeId the starting probe ID for new probes
-    * @return tuple of (instrumented expression, new probe counter)
     */
   private def instrumentExpression(
     exp: TypedAst.Expr,
     qualifiedName: String,
     startProbeId: Int,
     registeredLineProbes: scala.collection.mutable.Set[(String, String, Int)]
-  ): (TypedAst.Expr, Int) = {
+  )(implicit sessionId: Long): (TypedAst.Expr, Int) = {
     var probeId = startProbeId
 
     val result = exp match {
@@ -208,7 +175,7 @@ object CoverageInstrumentation {
         // Wrap then branch with probe
         val wrappedExp2 = if (exp2.loc.isReal) {
           TypedAst.Expr.Stm(
-            List(TypedAst.Expr.CoverageHit(trueBranchProbeId, exp2.loc)),
+            List(TypedAst.Expr.CoverageHit(sessionId, trueBranchProbeId, exp2.loc)),
             lineExp2,
             lineExp2.tpe,
             lineExp2.eff,
@@ -234,7 +201,7 @@ object CoverageInstrumentation {
         // Wrap else branch with probe
         val wrappedExp3 = if (exp3.loc.isReal) {
           TypedAst.Expr.Stm(
-            List(TypedAst.Expr.CoverageHit(falseBranchProbeId, exp3.loc)),
+            List(TypedAst.Expr.CoverageHit(sessionId, falseBranchProbeId, exp3.loc)),
             lineExp3,
             lineExp3.tpe,
             lineExp3.eff,
@@ -246,8 +213,7 @@ object CoverageInstrumentation {
 
         (e.copy(exp1 = lineExp1, exp2 = wrappedExp2, exp3 = wrappedExp3), probeId)
 
-      // A match rule contributes one branch when its body is selected. Guards
-      // are traversed for line coverage but are not separate branch outcomes.
+      // A match rule contributes one branch when its body is selected.
       case e @ TypedAst.Expr.Match(selector, rules, tpe, eff, loc) =>
         val (instSelector, pc1) = instrumentExpression(selector, qualifiedName, probeId, registeredLineProbes)
         probeId = pc1
@@ -268,14 +234,14 @@ object CoverageInstrumentation {
               Coverage.registerProbe(falseProbeId, guard.loc.source.name, guard.loc.startLine, ProbeKind.BranchFalse, qualifiedName)
 
               val trueBranch = TypedAst.Expr.Stm(
-                List(TypedAst.Expr.CoverageHit(trueProbeId, guard.loc)),
+                List(TypedAst.Expr.CoverageHit(sessionId, trueProbeId, guard.loc)),
                 TypedAst.Expr.Cst(ca.uwaterloo.flix.language.ast.shared.Constant.Bool(true), Type.Bool, guard.loc),
                 Type.Bool,
                 Type.Pure,
                 guard.loc
               )
               val falseBranch = TypedAst.Expr.Stm(
-                List(TypedAst.Expr.CoverageHit(falseProbeId, guard.loc)),
+                List(TypedAst.Expr.CoverageHit(sessionId, falseProbeId, guard.loc)),
                 TypedAst.Expr.Cst(ca.uwaterloo.flix.language.ast.shared.Constant.Bool(false), Type.Bool, guard.loc),
                 Type.Bool,
                 Type.Pure,
@@ -296,7 +262,7 @@ object CoverageInstrumentation {
             val ruleProbeId = probeId
             probeId += 1
             Coverage.registerProbe(ruleProbeId, rule.exp.loc.source.name, rule.exp.loc.startLine, ProbeKind.BranchRule, qualifiedName)
-            List(TypedAst.Expr.CoverageHit(ruleProbeId, rule.exp.loc))
+            List(TypedAst.Expr.CoverageHit(sessionId, ruleProbeId, rule.exp.loc))
           } else Nil
 
           val wrappedBody = if (hitsToPrepend.nonEmpty) {
@@ -321,7 +287,7 @@ object CoverageInstrumentation {
             val ruleProbeId = probeId
             probeId += 1
             Coverage.registerProbe(ruleProbeId, rule.exp.loc.source.name, rule.exp.loc.startLine, ProbeKind.BranchRule, qualifiedName)
-            rule.copy(exp = TypedAst.Expr.Stm(List(TypedAst.Expr.CoverageHit(ruleProbeId, rule.exp.loc)), lineBody, lineBody.tpe, lineBody.eff, rule.exp.loc))
+            rule.copy(exp = TypedAst.Expr.Stm(List(TypedAst.Expr.CoverageHit(sessionId, ruleProbeId, rule.exp.loc)), lineBody, lineBody.tpe, lineBody.eff, rule.exp.loc))
           } else rule.copy(exp = lineBody)
         }
         (e.copy(exp = instSelector, rules = instRules), probeId)
@@ -342,10 +308,9 @@ object CoverageInstrumentation {
         probeId = pc1
 
         // Wrap the bound expression only when this expression registered a probe.
-        // A duplicate line must not reuse an unregistered probe ID.
         val wrappedExp1 = if (registeredLineProbe) {
           TypedAst.Expr.Stm(
-            List(TypedAst.Expr.CoverageHit(lineProbeId, loc)),
+            List(TypedAst.Expr.CoverageHit(sessionId, lineProbeId, loc)),
             instExp1,
             instExp1.tpe,
             instExp1.eff,
@@ -355,7 +320,7 @@ object CoverageInstrumentation {
           instExp1
         }
 
-        // Recursively instrument body
+        // Recursively instrument body expression
         val (instExp2, pc2) = instrumentExpression(exp2, qualifiedName, probeId, registeredLineProbes)
         probeId = pc2
 
@@ -363,7 +328,6 @@ object CoverageInstrumentation {
 
       // Instrument statement expressions (blocks)
       case e @ TypedAst.Expr.Stm(exps, finalExp, tpe, eff, loc) =>
-        // Process each statement
         val instExps = exps.map { stmExp =>
           val (instExp, pc) = instrumentExpression(stmExp, qualifiedName, probeId, registeredLineProbes)
           probeId = pc
@@ -372,134 +336,12 @@ object CoverageInstrumentation {
           lineExp
         }
 
-        // Process final expression
         val (instFinalExp, pc) = instrumentExpression(finalExp, qualifiedName, probeId, registeredLineProbes)
         probeId = pc
         val (lineFinalExp, nextProbeId) = instrumentLine(instFinalExp, qualifiedName, probeId, registeredLineProbes)
         probeId = nextProbeId
 
         (e.copy(exps = instExps, exp = lineFinalExp), probeId)
-
-      // These expressions execute at their own source location. Instrument the
-      // reconstructed expression itself, then recurse so nested expressions on
-      // different source lines receive distinct probes.
-      case e @ TypedAst.Expr.ApplyDef(symUse, exps, _, _, _, _, _, loc) =>
-        val (instExps, nextProbeId) = instrumentExpressions(exps, qualifiedName, probeId, registeredLineProbes)
-        val sourceLoc = firstRealLocation(loc, (symUse.loc :: exps.map(_.loc)): _*)
-        instrumentLineAt(e.copy(exps = instExps), sourceLoc, qualifiedName, nextProbeId, registeredLineProbes)
-
-      case e @ TypedAst.Expr.ApplySig(symUse, exps, _, _, _, _, _, _, loc) =>
-        val (instExps, nextProbeId) = instrumentExpressions(exps, qualifiedName, probeId, registeredLineProbes)
-        val sourceLoc = firstRealLocation(loc, (symUse.loc :: exps.map(_.loc)): _*)
-        instrumentLineAt(e.copy(exps = instExps), sourceLoc, qualifiedName, nextProbeId, registeredLineProbes)
-
-      case e @ TypedAst.Expr.ApplyClo(exp1, exp2, _, _, _, loc) =>
-        val (instExp1, pc1) = instrumentExpression(exp1, qualifiedName, probeId, registeredLineProbes)
-        val (instExp2, pc2) = instrumentExpression(exp2, qualifiedName, pc1, registeredLineProbes)
-        val sourceLoc = firstRealLocation(loc, exp1.loc, exp2.loc)
-        instrumentLineAt(e.copy(exp1 = instExp1, exp2 = instExp2), sourceLoc, qualifiedName, pc2, registeredLineProbes)
-
-      case e @ TypedAst.Expr.Lambda(fparam, body, _, loc) =>
-        val (instBody, nextProbeId) = instrumentExpression(body, qualifiedName, probeId, registeredLineProbes)
-        val sourceLoc = if (loc.isReal) loc else fparam.loc
-        instrumentLineAt(e.copy(exp = instBody), sourceLoc, qualifiedName, nextProbeId, registeredLineProbes)
-
-      case e @ TypedAst.Expr.Tuple(exps, _, _, _) =>
-        val (instExps, nextProbeId) = instrumentExpressions(exps, qualifiedName, probeId, registeredLineProbes)
-        instrumentLine(e.copy(exps = instExps), qualifiedName, nextProbeId, registeredLineProbes)
-
-      case e @ TypedAst.Expr.RecordSelect(exp0, _, _, _, _) =>
-        val (instExp, nextProbeId) = instrumentExpression(exp0, qualifiedName, probeId, registeredLineProbes)
-        instrumentLine(e.copy(exp = instExp), qualifiedName, nextProbeId, registeredLineProbes)
-
-      case e @ TypedAst.Expr.RecordExtend(_, exp1, exp2, _, _, _) =>
-        val (instExp1, pc1) = instrumentExpression(exp1, qualifiedName, probeId, registeredLineProbes)
-        val (instExp2, pc2) = instrumentExpression(exp2, qualifiedName, pc1, registeredLineProbes)
-        instrumentLine(e.copy(exp1 = instExp1, exp2 = instExp2), qualifiedName, pc2, registeredLineProbes)
-
-      case e @ TypedAst.Expr.RecordRestrict(_, exp0, _, _, _) =>
-        val (instExp, nextProbeId) = instrumentExpression(exp0, qualifiedName, probeId, registeredLineProbes)
-        instrumentLine(e.copy(exp = instExp), qualifiedName, nextProbeId, registeredLineProbes)
-
-      case e @ TypedAst.Expr.ArrayLit(exps, region, _, _, _) =>
-        val (instExps, pc1) = instrumentExpressions(exps, qualifiedName, probeId, registeredLineProbes)
-        val (instRegion, pc2) = instrumentExpression(region, qualifiedName, pc1, registeredLineProbes)
-        instrumentLine(e.copy(exps = instExps, exp = instRegion), qualifiedName, pc2, registeredLineProbes)
-
-      case e @ TypedAst.Expr.UncheckedCast(exp0, _, _, _, _, _) =>
-        val (instExp, nextProbeId) = instrumentExpression(exp0, qualifiedName, probeId, registeredLineProbes)
-        instrumentLine(e.copy(exp = instExp), qualifiedName, nextProbeId, registeredLineProbes)
-
-      case e @ TypedAst.Expr.RunWith(exp1, exp2, _, _, _) =>
-        val (instExp1, pc1) = instrumentExpression(exp1, qualifiedName, probeId, registeredLineProbes)
-        val (instExp2, pc2) = instrumentExpression(exp2, qualifiedName, pc1, registeredLineProbes)
-        instrumentLine(e.copy(exp1 = instExp1, exp2 = instExp2), qualifiedName, pc2, registeredLineProbes)
-
-      case e @ TypedAst.Expr.Tag(_, exps, _, _, _) =>
-        val (instExps, nextProbeId) = instrumentExpressions(exps, qualifiedName, probeId, registeredLineProbes)
-        instrumentLine(e.copy(exps = instExps), qualifiedName, nextProbeId, registeredLineProbes)
-
-      case e @ TypedAst.Expr.RestrictableTag(_, exps, _, _, _) =>
-        val (instExps, nextProbeId) = instrumentExpressions(exps, qualifiedName, probeId, registeredLineProbes)
-        instrumentLine(e.copy(exps = instExps), qualifiedName, nextProbeId, registeredLineProbes)
-
-      case e @ TypedAst.Expr.ArrayNew(exp1, exp2, exp3, _, _, _) =>
-        val (instExp1, pc1) = instrumentExpression(exp1, qualifiedName, probeId, registeredLineProbes)
-        val (instExp2, pc2) = instrumentExpression(exp2, qualifiedName, pc1, registeredLineProbes)
-        val (instExp3, pc3) = instrumentExpression(exp3, qualifiedName, pc2, registeredLineProbes)
-        instrumentLine(e.copy(exp1 = instExp1, exp2 = instExp2, exp3 = instExp3), qualifiedName, pc3, registeredLineProbes)
-
-      case e @ TypedAst.Expr.ArrayLoad(exp1, exp2, _, _, _) =>
-        val (instExp1, pc1) = instrumentExpression(exp1, qualifiedName, probeId, registeredLineProbes)
-        val (instExp2, pc2) = instrumentExpression(exp2, qualifiedName, pc1, registeredLineProbes)
-        instrumentLine(e.copy(exp1 = instExp1, exp2 = instExp2), qualifiedName, pc2, registeredLineProbes)
-
-      case e @ TypedAst.Expr.ArrayStore(exp1, exp2, exp3, _, _) =>
-        val (instExp1, pc1) = instrumentExpression(exp1, qualifiedName, probeId, registeredLineProbes)
-        val (instExp2, pc2) = instrumentExpression(exp2, qualifiedName, pc1, registeredLineProbes)
-        val (instExp3, pc3) = instrumentExpression(exp3, qualifiedName, pc2, registeredLineProbes)
-        instrumentLine(e.copy(exp1 = instExp1, exp2 = instExp2, exp3 = instExp3), qualifiedName, pc3, registeredLineProbes)
-
-      case e @ TypedAst.Expr.ArrayLength(exp0, _, _) =>
-        val (instExp, nextProbeId) = instrumentExpression(exp0, qualifiedName, probeId, registeredLineProbes)
-        instrumentLine(e.copy(exp = instExp), qualifiedName, nextProbeId, registeredLineProbes)
-
-      case e @ TypedAst.Expr.Ascribe(exp0, _, _, _, _, _) =>
-        val (instExp, nextProbeId) = instrumentExpression(exp0, qualifiedName, probeId, registeredLineProbes)
-        instrumentLine(e.copy(exp = instExp), qualifiedName, nextProbeId, registeredLineProbes)
-
-      case e @ TypedAst.Expr.CheckedCast(_, exp0, _, _, _) =>
-        val (instExp, nextProbeId) = instrumentExpression(exp0, qualifiedName, probeId, registeredLineProbes)
-        instrumentLine(e.copy(exp = instExp), qualifiedName, nextProbeId, registeredLineProbes)
-
-      case e @ TypedAst.Expr.InvokeConstructor(_, exps, _, _, _) =>
-        val (instExps, nextProbeId) = instrumentExpressions(exps, qualifiedName, probeId, registeredLineProbes)
-        instrumentLine(e.copy(exps = instExps), qualifiedName, nextProbeId, registeredLineProbes)
-
-      case e @ TypedAst.Expr.InvokeMethod(_, exp0, exps, _, _, _) =>
-        val (instExp0, pc1) = instrumentExpression(exp0, qualifiedName, probeId, registeredLineProbes)
-        val (instExps, pc2) = instrumentExpressions(exps, qualifiedName, pc1, registeredLineProbes)
-        instrumentLine(e.copy(exp = instExp0, exps = instExps), qualifiedName, pc2, registeredLineProbes)
-
-      case e @ TypedAst.Expr.InvokeStaticMethod(_, exps, _, _, _) =>
-        val (instExps, nextProbeId) = instrumentExpressions(exps, qualifiedName, probeId, registeredLineProbes)
-        instrumentLine(e.copy(exps = instExps), qualifiedName, nextProbeId, registeredLineProbes)
-
-      case e @ TypedAst.Expr.GetField(_, exp0, _, _, _) =>
-        val (instExp0, nextProbeId) = instrumentExpression(exp0, qualifiedName, probeId, registeredLineProbes)
-        instrumentLine(e.copy(exp = instExp0), qualifiedName, nextProbeId, registeredLineProbes)
-
-      case e @ TypedAst.Expr.PutField(_, exp1, exp2, _, _, _) =>
-        val (instExp1, pc1) = instrumentExpression(exp1, qualifiedName, probeId, registeredLineProbes)
-        val (instExp2, pc2) = instrumentExpression(exp2, qualifiedName, pc1, registeredLineProbes)
-        instrumentLine(e.copy(exp1 = instExp1, exp2 = instExp2), qualifiedName, pc2, registeredLineProbes)
-
-      case e @ TypedAst.Expr.GetStaticField(_, _, _, _) =>
-        instrumentLine(e, qualifiedName, probeId, registeredLineProbes)
-
-      case e @ TypedAst.Expr.PutStaticField(_, exp0, _, _, _) =>
-        val (instExp0, nextProbeId) = instrumentExpression(exp0, qualifiedName, probeId, registeredLineProbes)
-        instrumentLine(e.copy(exp = instExp0), qualifiedName, nextProbeId, registeredLineProbes)
 
       case e @ TypedAst.Expr.TryCatch(exp0, rules, tpe, eff, loc) =>
         val (instExp0, pc1) = instrumentExpression(exp0, qualifiedName, probeId, registeredLineProbes)
@@ -514,7 +356,7 @@ object CoverageInstrumentation {
             val ruleProbeId = probeId
             probeId += 1
             Coverage.registerProbe(ruleProbeId, rule.exp.loc.source.name, rule.exp.loc.startLine, ProbeKind.BranchRule, qualifiedName)
-            TypedAst.Expr.Stm(List(TypedAst.Expr.CoverageHit(ruleProbeId, rule.exp.loc)), lineRuleExp, lineRuleExp.tpe, lineRuleExp.eff, rule.exp.loc)
+            TypedAst.Expr.Stm(List(TypedAst.Expr.CoverageHit(sessionId, ruleProbeId, rule.exp.loc)), lineRuleExp, lineRuleExp.tpe, lineRuleExp.eff, rule.exp.loc)
           } else lineRuleExp
 
           rule.copy(exp = wrappedBody)
@@ -536,7 +378,7 @@ object CoverageInstrumentation {
             val ruleProbeId = probeId
             probeId += 1
             Coverage.registerProbe(ruleProbeId, rule.exp.loc.source.name, rule.exp.loc.startLine, ProbeKind.BranchRule, qualifiedName)
-            TypedAst.Expr.Stm(List(TypedAst.Expr.CoverageHit(ruleProbeId, rule.exp.loc)), lineRuleExp, lineRuleExp.tpe, lineRuleExp.eff, rule.exp.loc)
+            TypedAst.Expr.Stm(List(TypedAst.Expr.CoverageHit(sessionId, ruleProbeId, rule.exp.loc)), lineRuleExp, lineRuleExp.tpe, lineRuleExp.eff, rule.exp.loc)
           } else lineRuleExp
 
           rule.copy(exp = wrappedBody)
@@ -593,6 +435,149 @@ object CoverageInstrumentation {
         val (instExp0, nextProbeId) = instrumentExpression(exp0, qualifiedName, probeId, registeredLineProbes)
         instrumentLine(e.copy(exp = instExp0), qualifiedName, nextProbeId, registeredLineProbes)
 
+      // Traversed-child expression forms
+      case e @ TypedAst.Expr.ApplyDef(_, exps, _, _, _, _, _, _) =>
+        val (instExps, nextProbeId) = instrumentExpressions(exps, qualifiedName, probeId, registeredLineProbes)
+        instrumentLine(e.copy(exps = instExps), qualifiedName, nextProbeId, registeredLineProbes)
+
+      case e @ TypedAst.Expr.ApplyClo(exp1, exp2, _, _, _, loc) =>
+        val (instExp1, pc1) = instrumentExpression(exp1, qualifiedName, probeId, registeredLineProbes)
+        val (instExp2, pc2) = instrumentExpression(exp2, qualifiedName, pc1, registeredLineProbes)
+        val sourceLoc = firstRealLocation(loc, exp1.loc, exp2.loc)
+        instrumentLineAt(e.copy(exp1 = instExp1, exp2 = instExp2), sourceLoc, qualifiedName, pc2, registeredLineProbes)
+
+      case e @ TypedAst.Expr.Lambda(fparam, body, _, loc) =>
+        val (instBody, nextProbeId) = instrumentExpression(body, qualifiedName, probeId, registeredLineProbes)
+        val sourceLoc = if (loc.isReal) loc else fparam.loc
+        instrumentLineAt(e.copy(exp = instBody), sourceLoc, qualifiedName, nextProbeId, registeredLineProbes)
+
+      case e @ TypedAst.Expr.Tuple(exps, _, _, _) =>
+        val (instExps, nextProbeId) = instrumentExpressions(exps, qualifiedName, probeId, registeredLineProbes)
+        instrumentLine(e.copy(exps = instExps), qualifiedName, nextProbeId, registeredLineProbes)
+
+      case e @ TypedAst.Expr.LocalDef(_, _, _, exp1, exp2, _, _, _) =>
+        val (instExp1, pc1) = instrumentExpression(exp1, qualifiedName, probeId, registeredLineProbes)
+        val (instExp2, pc2) = instrumentExpression(exp2, qualifiedName, pc1, registeredLineProbes)
+        (e.copy(exp1 = instExp1, exp2 = instExp2), pc2)
+
+      case e @ TypedAst.Expr.ApplyLocalDef(_, exps, _, _, _, _, _) =>
+        val (instExps, nextProbeId) = instrumentExpressions(exps, qualifiedName, probeId, registeredLineProbes)
+        (e.copy(exps = instExps), nextProbeId)
+
+      case e @ TypedAst.Expr.ApplyOp(_, exps, _, _, _, _) =>
+        val (instExps, nextProbeId) = instrumentExpressions(exps, qualifiedName, probeId, registeredLineProbes)
+        (e.copy(exps = instExps), nextProbeId)
+
+      case e @ TypedAst.Expr.ApplySig(_, exps, _, _, _, _, _, _, _) =>
+        val (instExps, nextProbeId) = instrumentExpressions(exps, qualifiedName, probeId, registeredLineProbes)
+        (e.copy(exps = instExps), nextProbeId)
+
+      case e @ TypedAst.Expr.Region(_, _, exp0, _, _, _) =>
+        val (instExp0, nextProbeId) = instrumentExpression(exp0, qualifiedName, probeId, registeredLineProbes)
+        (e.copy(exp = instExp0), nextProbeId)
+
+      case e @ TypedAst.Expr.Discard(exp0, _, _) =>
+        val (instExp0, nextProbeId) = instrumentExpression(exp0, qualifiedName, probeId, registeredLineProbes)
+        (e.copy(exp = instExp0), nextProbeId)
+
+      case e @ TypedAst.Expr.ExtMatch(selector, rules, _, _, _) =>
+        val (instSelector, pc1) = instrumentExpression(selector, qualifiedName, probeId, registeredLineProbes)
+        var pc = pc1
+        val instRules = rules.map { rule =>
+          val (instBody, nextProbeId) = instrumentExpression(rule.exp, qualifiedName, pc, registeredLineProbes)
+          pc = nextProbeId
+          rule.copy(exp = instBody)
+        }
+        (e.copy(exp = instSelector, rules = instRules), pc)
+
+      case e @ TypedAst.Expr.ExtTag(_, exps, _, _, _) =>
+        val (instExps, nextProbeId) = instrumentExpressions(exps, qualifiedName, probeId, registeredLineProbes)
+        (e.copy(exps = instExps), nextProbeId)
+
+      case e @ TypedAst.Expr.Unsafe(exp0, _, _, _, _, _) =>
+        val (instExp0, nextProbeId) = instrumentExpression(exp0, qualifiedName, probeId, registeredLineProbes)
+        (e.copy(exp = instExp0), nextProbeId)
+
+      case e @ TypedAst.Expr.NewChannel(exp0, _, _, _) =>
+        val (instExp0, nextProbeId) = instrumentExpression(exp0, qualifiedName, probeId, registeredLineProbes)
+        (e.copy(exp = instExp0), nextProbeId)
+
+      case e @ TypedAst.Expr.GetChannel(exp0, _, _, _) =>
+        val (instExp0, nextProbeId) = instrumentExpression(exp0, qualifiedName, probeId, registeredLineProbes)
+        (e.copy(exp = instExp0), nextProbeId)
+
+      case e @ TypedAst.Expr.PutChannel(exp1, exp2, _, _, _) =>
+        val (instExp1, pc1) = instrumentExpression(exp1, qualifiedName, probeId, registeredLineProbes)
+        val (instExp2, pc2) = instrumentExpression(exp2, qualifiedName, pc1, registeredLineProbes)
+        (e.copy(exp1 = instExp1, exp2 = instExp2), pc2)
+
+      case e @ TypedAst.Expr.SelectChannel(rules, default, _, _, _) =>
+        var pc = probeId
+        val instRules = rules.map { rule =>
+          val (instChan, pc1) = instrumentExpression(rule.chan, qualifiedName, pc, registeredLineProbes)
+          val (instExp, pc2) = instrumentExpression(rule.exp, qualifiedName, pc1, registeredLineProbes)
+          pc = pc2
+          rule.copy(chan = instChan, exp = instExp)
+        }
+        val (instDefault, finalPc) = default match {
+          case Some(d) =>
+            val (iD, pD) = instrumentExpression(d, qualifiedName, pc, registeredLineProbes)
+            (Some(iD), pD)
+          case None => (None, pc)
+        }
+        (e.copy(rules = instRules, default = instDefault), finalPc)
+
+      case e @ TypedAst.Expr.InvokeSuperConstructor(_, exps, _, _, _) =>
+        val (instExps, nextProbeId) = instrumentExpressions(exps, qualifiedName, probeId, registeredLineProbes)
+        (e.copy(exps = instExps), nextProbeId)
+
+      case e @ TypedAst.Expr.InvokeSuperMethod(_, exps, _, _, _) =>
+        val (instExps, nextProbeId) = instrumentExpressions(exps, qualifiedName, probeId, registeredLineProbes)
+        (e.copy(exps = instExps), nextProbeId)
+
+      case e @ TypedAst.Expr.ParYield(frags, exp0, _, _, _) =>
+        var pc = probeId
+        val instFrags = frags.map { frag =>
+          val (instExp, pc1) = instrumentExpression(frag.exp, qualifiedName, pc, registeredLineProbes)
+          pc = pc1
+          frag.copy(exp = instExp)
+        }
+        val (instExp0, finalPc) = instrumentExpression(exp0, qualifiedName, pc, registeredLineProbes)
+        (e.copy(frags = instFrags, exp = instExp0), finalPc)
+
+      case e @ TypedAst.Expr.FixpointLambda(_, exp0, _, _, _) =>
+        val (instExp0, nextProbeId) = instrumentExpression(exp0, qualifiedName, probeId, registeredLineProbes)
+        (e.copy(exp = instExp0), nextProbeId)
+
+      case e @ TypedAst.Expr.FixpointMerge(exp1, exp2, _, _, _) =>
+        val (instExp1, pc1) = instrumentExpression(exp1, qualifiedName, probeId, registeredLineProbes)
+        val (instExp2, pc2) = instrumentExpression(exp2, qualifiedName, pc1, registeredLineProbes)
+        (e.copy(exp1 = instExp1, exp2 = instExp2), pc2)
+
+      case e @ TypedAst.Expr.FixpointQueryWithProvenance(exps, _, _, _, _, _) =>
+        val (instExps, nextProbeId) = instrumentExpressions(exps, qualifiedName, probeId, registeredLineProbes)
+        (e.copy(exps = instExps), nextProbeId)
+
+      case e @ TypedAst.Expr.FixpointQueryWithSelect(exps, queryExp, selects, _, where, _, _, _, _) =>
+        val (instExps, pc1) = instrumentExpressions(exps, qualifiedName, probeId, registeredLineProbes)
+        val (instQueryExp, pc2) = instrumentExpression(queryExp, qualifiedName, pc1, registeredLineProbes)
+        val (instSelects, pc3) = instrumentExpressions(selects, qualifiedName, pc2, registeredLineProbes)
+        val (instWhere, pc4) = instrumentExpressions(where, qualifiedName, pc3, registeredLineProbes)
+        (e.copy(exps = instExps, queryExp = instQueryExp, selects = instSelects, where = instWhere), pc4)
+
+      case e @ TypedAst.Expr.FixpointSolveWithProject(exps, _, _, _, _, _) =>
+        val (instExps, nextProbeId) = instrumentExpressions(exps, qualifiedName, probeId, registeredLineProbes)
+        (e.copy(exps = instExps), nextProbeId)
+
+      case e @ TypedAst.Expr.FixpointInjectInto(exps, _, _, _, _) =>
+        val (instExps, nextProbeId) = instrumentExpressions(exps, qualifiedName, probeId, registeredLineProbes)
+        (e.copy(exps = instExps), nextProbeId)
+
+      case e @ TypedAst.Expr.RunWith(exp1, exp2, _, _, _) =>
+        val (instExp1, pc1) = instrumentExpression(exp1, qualifiedName, probeId, registeredLineProbes)
+        val (instExp2, pc2) = instrumentExpression(exp2, qualifiedName, pc1, registeredLineProbes)
+        (e.copy(exp1 = instExp1, exp2 = instExp2), pc2)
+
       // Leave expression forms without explicit execution semantics uninstrumented.
       case _ => (exp, probeId)
     }
@@ -606,7 +591,7 @@ object CoverageInstrumentation {
     qualifiedName: String,
     startProbeId: Int,
     registeredLineProbes: scala.collection.mutable.Set[(String, String, Int)]
-  ): (List[TypedAst.Expr], Int) = {
+  )(implicit sessionId: Long): (List[TypedAst.Expr], Int) = {
     val (reversedExps, nextProbeId) = exps.foldLeft((List.empty[TypedAst.Expr], startProbeId)) {
       case ((acc, probeId), exp) =>
         val (instExp, nextProbeId) = instrumentExpression(exp, qualifiedName, probeId, registeredLineProbes)
@@ -621,7 +606,7 @@ object CoverageInstrumentation {
     qualifiedName: String,
     probeId: Int,
     registeredLineProbes: scala.collection.mutable.Set[(String, String, Int)]
-  ): (TypedAst.Expr, Int) = {
+  )(implicit sessionId: Long): (TypedAst.Expr, Int) = {
     instrumentLineAt(exp, exp.loc, qualifiedName, probeId, registeredLineProbes)
   }
 
@@ -632,11 +617,11 @@ object CoverageInstrumentation {
     qualifiedName: String,
     probeId: Int,
     registeredLineProbes: scala.collection.mutable.Set[(String, String, Int)]
-  ): (TypedAst.Expr, Int) = {
+  )(implicit sessionId: Long): (TypedAst.Expr, Int) = {
     val key = (qualifiedName, loc.source.name, loc.startLine)
     if (loc.isReal && registeredLineProbes.add(key)) {
       Coverage.registerProbe(probeId, loc.source.name, loc.startLine, ProbeKind.Line, qualifiedName)
-      val wrapped = TypedAst.Expr.Stm(List(TypedAst.Expr.CoverageHit(probeId, loc)), exp, exp.tpe, exp.eff, loc)
+      val wrapped = TypedAst.Expr.Stm(List(TypedAst.Expr.CoverageHit(sessionId, probeId, loc)), exp, exp.tpe, exp.eff, loc)
       (wrapped, probeId + 1)
     } else {
       (exp, probeId)
@@ -648,7 +633,7 @@ object CoverageInstrumentation {
     (primary :: alternatives.toList).find(_.isReal).getOrElse(primary)
 
   /**
-   * Determine if a definition should be instrumented for coverage.
+    * Determine if a definition should be instrumented for coverage.
     *
     * Only instrument user-provided source code (Input.RealFile and Input.VirtualFile).
     * Exclude bundled libraries, packages, and compiler-internal code.
