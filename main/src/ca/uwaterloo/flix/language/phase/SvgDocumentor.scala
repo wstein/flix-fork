@@ -49,11 +49,6 @@ object SvgDocumentor {
     flix.options.outputPath.resolve("doc").resolve(SubDirectory)
 
   /**
-    * Runs diagram generation for the given module tree, writing SVG files to disk.
-    *
-    * Returns a set of the file names of the generated SVG diagrams.
-    */
-  /**
     * A format-neutral manifest of generated SVG diagrams.
     */
   case class DiagramManifest(diagrams: Map[String, String]) {
@@ -76,46 +71,12 @@ object SvgDocumentor {
       Files.createDirectories(dir)
     }
 
-    val datalogDiagrams = generateDatalogDiagrams(root)
-    val allDiagrams = diagrams ++ datalogDiagrams
-
-    for ((fileName, content) <- allDiagrams) {
+    for ((fileName, content) <- diagrams) {
       writeDiagramFile(fileName, content)
     }
 
-    deleteStaleDiagrams(allDiagrams.keySet)
-    DiagramManifest(allDiagrams)
-  }
-
-  def generateDatalogDiagrams(root: TypedAst.Root)(implicit flix: Flix): Map[String, String] = {
-    if (!flix.options.docExtended) {
-      return Map.empty
-    }
-
-    val relDefs = root.defs.values.map(_.sym.name).filter(n => n.startsWith("rel") || n.contains("Rel") || n.contains("Edge") || n.contains("Path") || n.contains("Parent") || n.contains("Child")).toList.distinct.sorted
-    val relNames = if (relDefs.nonEmpty) relDefs else List("EDB_Facts", "IDB_Rules")
-
-    val sb = new StringBuilder()
-    sb.append(s"<!-- ${Documentor.GeneratedMarker} -->\n")
-    sb.append("""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 220" width="100%" height="100%">""")
-    sb.append("""<defs><marker id="arrow" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#555" /></marker></defs>""")
-    sb.append("""<style>.edb-node { fill: #e8f5e9; stroke: #2e7d32; stroke-width: 2; rx: 8; ry: 8; } .idb-node { fill: #e3f2fd; stroke: #1565c0; stroke-width: 2; rx: 8; ry: 8; } .text { font-family: system-ui, sans-serif; font-size: 14px; fill: #1c1e21; text-anchor: middle; dominant-baseline: middle; } .edge { stroke: #555; stroke-width: 2; }</style>""")
-
-    val edbName = xmlEscape(relNames.headOption.getOrElse("EDB_Facts"))
-    val idbName = xmlEscape(relNames.drop(1).headOption.getOrElse("IDB_Rules"))
-
-    sb.append(s"""<rect x="40" y="40" width="240" height="130" class="edb-node" />""")
-    sb.append(s"""<text x="160" y="80" class="text">$edbName</text>""")
-    sb.append("""<text x="160" y="115" class="text" font-size="12px">Extensional Database (EDB)</text>""")
-
-    sb.append(s"""<rect x="320" y="40" width="240" height="130" class="idb-node" />""")
-    sb.append(s"""<text x="440" y="80" class="text">$idbName</text>""")
-    sb.append("""<text x="440" y="115" class="text" font-size="12px">Intensional Database (IDB)</text>""")
-
-    sb.append("""<path d="M 280 105 L 320 105" class="edge" marker-end="url(#arrow)" />""")
-    sb.append("</svg>\n")
-
-    Map("datalog/DatalogSchema.svg" -> sb.toString())
+    deleteStaleDiagrams(diagrams.keySet)
+    DiagramManifest(diagrams)
   }
 
   /**
@@ -317,4 +278,3 @@ object SvgDocumentor {
     }
   }
 }
-

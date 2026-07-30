@@ -75,7 +75,7 @@ class TestMarkdownDocumentor extends AnyFunSuite {
     implicit val flix: Flix = new Flix().setOptions(Options.TestWithLibNix.copy(outputPath = outputPath))
     flix.addVirtualPath(CompilerConstants.VirtualTestFile, input)
     flix.check() match {
-      case (Some(root), Nil) => MarkdownDocumentor.run(root, PackageModules.All)
+      case (Some(root), Nil) => Documentor.run(root, PackageModules.All, ca.uwaterloo.flix.util.DocFormat.Markdown)
       case (_, errors) => fail(CompilationMessage.formatAll(errors)(Formatter.NoFormatter, None))
     }
   }
@@ -639,8 +639,6 @@ class TestMarkdownDocumentor extends AnyFunSuite {
         |pub struct Person[r] {
         |    name: String
         |}
-        |
-        |pub def hello(): Unit \ IO = println("hello")
         |""".stripMargin)
 
     // Structs are currently omitted by Documentor.build, so no Person.md page is generated.
@@ -650,12 +648,12 @@ class TestMarkdownDocumentor extends AnyFunSuite {
   test("page.omission.restrictable_enum.01") {
     val pages = document(
       """
-        |pub restrictable enum Color[a] {
+        |pub restrictable enum Color[s] {
         |    case Red,
-        |    case Custom(a)
+        |    case Custom
         |}
         |
-        |pub def hello(): Unit \ IO = println("hello")
+        |pub def anchor(): Int32 = 1
         |""".stripMargin)
 
     // Restrictable enums are currently omitted by Documentor.build, so no Color.md page is generated.
@@ -715,7 +713,7 @@ class TestMarkdownDocumentor extends AnyFunSuite {
         |}
         |
         |mod Math {
-        |    pub def add(x: Int32, y: Int32): Int32 = x + y
+        |    pub def add(x: Int32): Int32 = x
         |}
         |""".stripMargin)
 

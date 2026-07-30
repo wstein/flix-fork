@@ -79,8 +79,6 @@ Did you know that:
 - the Flix type and effect system supports complete type inference, i.e. if a
   program is typeable then the type inference with find the typing.
 
-- Flix documentation backends (`flix doc`) render embedded GFM ` ```mermaid ` blocks inside `///` doc comments. You can write state machine diagrams (`stateDiagram-v2`), sequence flowcharts (`sequenceDiagram`), and data flow pipelines (`flowchart LR`) directly in function and type docstrings.
-
 - The Flix "Everyday Programming"-section https://doc.flix.dev/everyday-programming.html
   describes many commonly used features of the language.
 
@@ -162,9 +160,8 @@ Did you know that:
 
 - `flix doc` generates API documentation for a project. Pass
   `--doc-format md` for Markdown instead of HTML: one page per module, trait,
-  effect, and enum. Pass `flix doc --extended` to generate standalone SVG structure
-  diagrams (`build/doc/diagrams/`) for trait supertype hierarchies, module trees, and
-  Datalog relation schema overviews. Stale generated SVGs and pages carrying marker
+  effect, and enum. Documentation also generates standalone SVG structure diagrams
+  (`build/doc/diagrams/`) for trait supertype hierarchies and module trees. Stale generated SVGs and pages carrying marker
   headers are automatically cleaned up recursively on subsequent runs. `--doc-format all`
   emits both HTML and Markdown backends.
 
