@@ -647,6 +647,11 @@ class Flix {
     // Initialize fork-join thread pool.
     initForkJoinPool()
 
+    // Instrument for coverage if enabled.
+    if (flix.options.coverage) {
+      CoverageInstrumentation.run(typedAst)
+    }
+
     // Enable the Datalog solver's tracing hooks before the optimizer folds their switches away.
     val tracedAst = DatalogDebugging.run(typedAst)
 
