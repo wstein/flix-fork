@@ -250,6 +250,31 @@ class TestLineBranchCoverage extends AnyFunSuite {
     assert((ruleIds intersect Coverage.snapshot().keySet).size == 1, "Exactly the selected match rule should be hit")
   }
 
+  test("choose rules register selected and unselected branch probes") {
+    Coverage.clear()
+    val program =
+      """
+        |restrictable enum Choice[s] { case First, Second }
+        |
+        |def main(): Unit \ IO = {
+        |    choose Choice.First {
+        |        case Choice.First => println("first")
+        |        case Choice.Second => println("second")
+        |    }
+        |}
+        |""".stripMargin
+    val flix = new Flix().setOptions(Options.DefaultTest.copy(coverage = true))
+    flix.addVirtualPath(CompilerConstants.VirtualTestFile, program)
+    val result = flix.compile().toResult match {
+      case Result.Ok(value) => value
+      case Result.Err(errors) => fail(s"Compilation failed: $errors")
+    }
+    result.getMain.fold(fail("No main function"))(_(Array()))
+    val ruleIds = Coverage.getProbeMetadata.collect { case (id, pm) if pm.kind == ProbeKind.BranchRule => id }.toSet
+    assert(ruleIds.size == 2, s"Expected two choose rule probes, got: $ruleIds")
+    assert((ruleIds intersect Coverage.snapshot().keySet).size == 1, "Exactly the selected choose rule should be hit")
+  }
+
   test("probe metadata organized by function and line") {
     Coverage.clear()
 
