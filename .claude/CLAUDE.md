@@ -96,20 +96,16 @@ The coverage system adds instrumentation probes to track which functions and def
 - User functions remain pure; coverage is a compiler-internal detail
 - **Optimizer barrier prevents elimination:** Dead-code elimination and pure statement filtering check `mustPreserve()` predicate
 
-**Filtering Input Types:**
-- Coverage probes inserted only for `Input.RealFile` and `Input.VirtualFile` definitions
-- Excluded: `Input.BundledLibraryFile` (stdlib), package definitions, etc.
-- See `CoverageInstrumentation.shouldInstrument()` for the definitive filter
-
 **Testing Coverage:**
-- Regression test: `TestCoverageOptimization` — verifies probes survive optimizer
-- Integration testing recommended: compile with `--coverage` and verify `build/coverage.json` contains expected probes
+- Regression test: `TestCoverageOptimization` — verifies coverage probes are preserved through optimization and hits are recorded at runtime
+- Probes must survive dead-code elimination (checked by `Inliner.mustPreserve()`)
+- Execute code to verify `Coverage.snapshot()` contains expected probe hits
 
 ### Common Pitfalls
 
 1. **Probes disappear at runtime**: Check that `Inliner.mustPreserve()` is applied; probes are optimized away if barrier is removed
-2. **Zero hits recorded**: Likely probes were eliminated by optimizer (see #1); verify barrier is engaged
-3. **Unexpected probes in stdlib**: Check that `shouldInstrument()` correctly filters `Input.BundledLibraryFile`
+2. **Zero hits recorded**: Verify that compiled code is actually executed; coverage data is only recorded when probes are called
+3. **Compilation succeeds but no hits**: May indicate optimizer eliminated probes; run regression tests to verify mustPreserve barrier is working
 
 ## Benchmarking Performance
 

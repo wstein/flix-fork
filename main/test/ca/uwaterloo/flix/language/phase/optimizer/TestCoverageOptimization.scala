@@ -87,22 +87,25 @@ class TestCoverageOptimization extends AnyFunSuite {
     assert(metadata.nonEmpty, "No coverage metadata recorded during compilation")
     assert(snapshot.nonEmpty, "No coverage hits recorded during execution")
 
-    // Verify that probe counts are positive (not just existence)
-    val allHitsPositive = snapshot.values.forall(_ > 0)
-    assert(allHitsPositive, s"Some probes have zero or negative hits: $snapshot")
-
-    // Verify that both functions (helper and main) have coverage probes
-    // At minimum, we expect probes to be recorded for user-defined functions
+    // Extract function-level probes
     val functionProbes = metadata.filter { case (_, (_, _, kind)) => kind == "function" }
-    assert(functionProbes.nonEmpty,
-      s"Expected function-level coverage probes, but got: ${metadata.values.map(_._3).toList}")
 
-    // Verify that at least one function probe was hit
-    val hitFunctionProbes = functionProbes.filter { case (probeId, _) =>
-      snapshot.contains(probeId) && snapshot(probeId) > 0
-    }
-    assert(hitFunctionProbes.nonEmpty,
-      s"Expected at least one function probe to be hit, but snapshot is: $snapshot")
+    // Assert we have exactly 2 function probes (helper and main).
+    // This catches accidental instrumentation of library functions or missing probes.
+    assert(functionProbes.size == 2,
+      s"Expected exactly 2 function probes (helper and main), but got ${functionProbes.size}. " +
+      s"Probes: ${functionProbes.map { case (id, (source, line, _)) => s"$id@$source:$line" }}")
+
+    // Verify both function probes are in the snapshot (were hit at runtime).
+    // Coverage.snapshot() only includes probes with positive hit counts.
+    val functionProbeIds = functionProbes.keySet
+    val hitProbeIds = functionProbeIds.filter(id => snapshot.contains(id))
+
+    assert(hitProbeIds.size == 2,
+      s"Expected both function probes to be hit, but only ${hitProbeIds.size} were. " +
+      s"Hit probes: ${hitProbeIds.map(id => s"$id").mkString(", ")}. " +
+      s"All probes: ${functionProbeIds.map(id => s"$id").mkString(", ")}. " +
+      s"Snapshot: ${snapshot.map { case (id, count) => s"$id->$count" }.mkString(", ")}")
   }
 
 }
