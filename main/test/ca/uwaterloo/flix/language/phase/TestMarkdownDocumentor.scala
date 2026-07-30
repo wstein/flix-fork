@@ -49,7 +49,10 @@ class TestMarkdownDocumentor extends AnyFunSuite {
 
   private def deleteRecursively(path: Path): Unit = {
     if (Files.isDirectory(path)) {
-      Files.list(path).forEach(deleteRecursively)
+      import scala.util.Using
+      Using(Files.list(path)) { stream =>
+        stream.forEach(deleteRecursively)
+      }
     }
     Files.deleteIfExists(path)
   }
@@ -625,14 +628,15 @@ class TestMarkdownDocumentor extends AnyFunSuite {
       val text = new String(bytes, StandardCharsets.UTF_8)
       assert(text.contains("`def one(): Int32` — Returns one."), text)
       // Round-tripping through UTF-8 must be lossless: a mis-encoded em dash becomes '?' or U+FFFD.
-      assert(!text.contains(""), "output is not valid UTF-8")
+      assert(!text.contains("?"), "output contains U+003F replacement")
+      assert(!text.contains("\uFFFD"), "output contains U+FFFD replacement")
     }
   }
 
   test("page.omission.struct.01") {
     val pages = document(
       """
-        |pub struct Person {
+        |pub struct Person[r] {
         |    name: String
         |}
         |
@@ -641,6 +645,21 @@ class TestMarkdownDocumentor extends AnyFunSuite {
 
     // Structs are currently omitted by Documentor.build, so no Person.md page is generated.
     assert(!pages.contains("Person.md"), "struct Person should be omitted upstream by Documentor.build")
+  }
+
+  test("page.omission.restrictable_enum.01") {
+    val pages = document(
+      """
+        |pub restrictable enum Color[a] {
+        |    case Red,
+        |    case Custom(a)
+        |}
+        |
+        |pub def hello(): Unit \ IO = println("hello")
+        |""".stripMargin)
+
+    // Restrictable enums are currently omitted by Documentor.build, so no Color.md page is generated.
+    assert(!pages.contains("Color.md"), "restrictable enum Color should be omitted upstream by Documentor.build")
   }
 
   test("page.source_attribution.user_list.01") {
@@ -660,8 +679,25 @@ class TestMarkdownDocumentor extends AnyFunSuite {
     }
   }
 
+  test("page.source_attribution.collision.01") {
+    withTempDir { dir =>
+      val listFile = dir.resolve("List.flix")
+      Files.writeString(listFile, "pub def userDef(): Int32 = 1")
+      implicit val flix: Flix = new Flix().setOptions(Options.TestWithLibNix.copy(outputPath = dir))
+      flix.addFile(listFile)
+      flix.check() match {
+        case (Some(root), Nil) =>
+          val pages = MarkdownDocumentor.documentAll(root, PackageModules.All)
+          val indexMd = page(pages, "index.md")
+          // When multiple distinct inputs exist, no single-file attribution statement should be rendered
+          assert(!indexMd.contains("main/src/library/List.flix"))
+        case (_, errors) => fail(CompilationMessage.formatAll(errors)(Formatter.NoFormatter, None))
+      }
+    }
+  }
+
   test("page.links.validation.01") {
-    // Every link target `[text](target.md)` in generated pages must correspond to an actual page.
+    // Every link target `[text](target.md)` in generated pages must correspond to an actual page in the document set.
     val pages = document(
       """
         |pub trait Eq[a] {

@@ -22,6 +22,7 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
 import java.util.concurrent.{Executors, TimeUnit}
 import scala.jdk.CollectionConverters._
+import scala.util.Using
 
 class TestDocCLI extends AnyFunSuite {
 
@@ -52,12 +53,19 @@ class TestDocCLI extends AnyFunSuite {
     })
 
     val completed = process.waitFor(120, TimeUnit.SECONDS)
-    if (!completed) process.destroyForcibly()
+    if (!completed) {
+      process.destroyForcibly()
+      process.waitFor(5, TimeUnit.SECONDS)
+    }
     pool.shutdown()
     pool.awaitTermination(5, TimeUnit.SECONDS)
 
     stdoutFuture.get()
     stderrFuture.get()
+
+    if (!completed) {
+      fail(s"Subprocess timed out after 120 seconds!\nCmd: ${cmd.mkString(" ")}\nCwd: $projectDir\nSTDOUT:\n$stdout\nSTDERR:\n$stderr")
+    }
 
     (process.exitValue(), stdout, stderr)
   }
@@ -74,7 +82,9 @@ class TestDocCLI extends AnyFunSuite {
 
   private def deleteRecursively(path: Path): Unit = {
     if (Files.isDirectory(path)) {
-      Files.list(path).forEach(deleteRecursively)
+      Using(Files.list(path)) { stream =>
+        stream.forEach(deleteRecursively)
+      }
     }
     Files.deleteIfExists(path)
   }
@@ -120,32 +130,56 @@ class TestDocCLI extends AnyFunSuite {
     }
   }
 
-  test("CLI E2E: flix doc cleans stale generated files and preserves non-generated files") {
+  test("CLI E2E: flix doc --doc-format all cleans stale generated HTML and Markdown files symmetrically") {
     withProject { p =>
       Files.writeString(p.resolve("src/Main.flix"),
         """|pub enum First { case A }
            |""".stripMargin)
 
-      val (exitCode1, _, stderr1) = runCliSubprocess(Array("doc", "--doc-format", "md"), p)
+      val (exitCode1, _, stderr1) = runCliSubprocess(Array("doc", "--doc-format", "all"), p)
       assert(exitCode1 == 0, s"Expected exit 0, got $exitCode1.\nSTDERR:\n$stderr1")
 
       val docDir = p.resolve("build/doc")
       val firstMd = docDir.resolve("First.md")
+      val firstHtml = docDir.resolve("First.html")
       val notesFile = docDir.resolve("NOTES.txt")
+      val handWrittenHtml = docDir.resolve("NOTES.html")
+
       assert(Files.exists(firstMd))
+      assert(Files.exists(firstHtml))
       Files.writeString(notesFile, "User hand-written notes")
+      Files.writeString(handWrittenHtml, "<h1>Custom User Page</h1>")
 
       // Change code to remove First and add Second
       Files.writeString(p.resolve("src/Main.flix"),
         """|pub enum Second { case B }
            |""".stripMargin)
 
-      val (exitCode2, _, stderr2) = runCliSubprocess(Array("doc", "--doc-format", "md"), p)
+      val (exitCode2, _, stderr2) = runCliSubprocess(Array("doc", "--doc-format", "all"), p)
       assert(exitCode2 == 0, s"Expected exit 0, got $exitCode2.\nSTDERR:\n$stderr2")
 
       assert(!Files.exists(firstMd), "Stale generated page First.md should be deleted")
+      assert(!Files.exists(firstHtml), "Stale generated page First.html should be deleted")
       assert(Files.exists(docDir.resolve("Second.md")), "Newly generated page Second.md should exist")
+      assert(Files.exists(docDir.resolve("Second.html")), "Newly generated page Second.html should exist")
       assert(Files.exists(notesFile), "Non-generated user file NOTES.txt should be preserved")
+      assert(Files.exists(handWrittenHtml), "Non-generated user file NOTES.html without marker should be preserved")
+    }
+  }
+
+  test("CLI E2E negative: invalid --doc-format option exits with non-zero exit code") {
+    withProject { p =>
+      Files.writeString(p.resolve("src/Main.flix"), "pub def f(): Int32 = 1")
+      val (exitCode, stdout, stderr) = runCliSubprocess(Array("doc", "--doc-format", "invalid-format"), p)
+      assert(exitCode != 0, "Invalid doc-format option should fail")
+    }
+  }
+
+  test("CLI E2E negative: compilation errors in project exit with non-zero exit code") {
+    withProject { p =>
+      Files.writeString(p.resolve("src/Main.flix"), "pub def f(): Int32 = \"type-error\" + 42")
+      val (exitCode, stdout, stderr) = runCliSubprocess(Array("doc", "--doc-format", "md"), p)
+      assert(exitCode != 0, "Compilation errors should cause flix doc to exit with non-zero code")
     }
   }
 }

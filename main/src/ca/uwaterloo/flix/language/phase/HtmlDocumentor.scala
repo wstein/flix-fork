@@ -74,9 +74,35 @@ object HtmlDocumentor {
   private val LibraryGitHub: String = "https://github.com/flix/flix/blob/master/main/src/library/"
 
   def run(root: TypedAst.Root, packageModules: PackageModules)(implicit flix: Flix): Unit = {
-    visitMod(Documentor.build(root, packageModules))
+    val writtenPages = visitMod(Documentor.build(root, packageModules)).toSet
 
     writeAssets()
+    deleteStalePages(writtenPages)
+  }
+
+  /**
+    * Deletes HTML pages left in the output directory by an earlier run that this run does not produce.
+    */
+  private def deleteStalePages(writtenPages: Set[String])(implicit flix: Flix): Unit = {
+    val dir = OutputDirectory
+    if (Files.exists(dir) && Files.isDirectory(dir)) {
+      import scala.util.Using
+      Using(Files.list(dir)) { stream =>
+        stream.forEach { path =>
+          val name = path.getFileName.toString
+          if (name.endsWith(s".$Extension") && !writtenPages.contains(name)) {
+            try {
+              val content = Files.readString(path, StandardCharsets.UTF_8)
+              if (content.contains(Documentor.GeneratedMarker)) {
+                Files.deleteIfExists(path)
+              }
+            } catch {
+              case _: IOException => // Ignore unreadable files
+            }
+          }
+        }
+      }
+    }
   }
 
   /**
@@ -496,7 +522,8 @@ object HtmlDocumentor {
     * Generates the string representing the head of the HTML document.
     */
   private def mkHead(name: String, fileName: String): String = {
-    s"""<!doctype html><html lang='en'>
+    s"""<!-- ${Documentor.GeneratedMarker} -->
+       |<!doctype html><html lang='en'>
        |<head>
        |<meta charset='utf-8'>
        |<meta name='viewport' content='width=device-width,initial-scale=1'>
