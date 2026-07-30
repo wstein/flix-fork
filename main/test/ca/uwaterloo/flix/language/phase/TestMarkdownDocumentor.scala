@@ -757,4 +757,20 @@ class TestMarkdownDocumentor extends AnyFunSuite {
       assert(xml.label == "svg", "Generated SVG must be valid XML with root tag <svg>")
     }
   }
+
+  test("diagram.svg.02") {
+    val pages = document(
+      """
+        |pub trait Base[a] {
+        |    pub def base(x: a): Bool
+        |}
+        |
+        |pub trait Derived[a] with Base[a] {
+        |    pub def derived(x: a): Bool
+        |}
+        |""".stripMargin)
+
+    assert(!page(pages, "Derived.md").contains("diagrams/Derived.svg"),
+      "In-memory pages must not link to an SVG that was not materialized by Documentor.run")
+  }
 }

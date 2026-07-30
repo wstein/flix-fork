@@ -100,7 +100,7 @@ object MarkdownDocumentor {
     * Writes Markdown documentation for `root`, restricted to `packageModules`, to the output directory.
     */
   def run(root: TypedAst.Root, packageModules: PackageModules, manifest: SvgDocumentor.DiagramManifest = SvgDocumentor.DiagramManifest(Map.empty))(implicit flix: Flix): Unit = {
-    val pages = documentAll(root, packageModules)
+    val pages = documentAll(root, packageModules, manifest)
     deleteStalePages(pages.keySet)
     for ((name, content) <- pages) {
       writeDocFile(name, content)
@@ -156,12 +156,15 @@ object MarkdownDocumentor {
     * This is the whole backend; [[run]] only puts the result on disk. Keeping it separate means the
     * output can be inspected without a file system.
     */
-  def documentAll(root: TypedAst.Root, packageModules: PackageModules)(implicit flix: Flix): Map[String, String] = {
+  def documentAll(root: TypedAst.Root,
+                  packageModules: PackageModules,
+                  manifest: SvgDocumentor.DiagramManifest = SvgDocumentor.DiagramManifest(Map.empty))(implicit flix: Flix): Map[String, String] = {
     // Which items get a page is decided before anything is rendered, so that a page can tell
     // whether the page it is about to link to will exist. Deriving the set from the same
     // traversal that renders keeps the two from drifting apart.
     val items = collect(Documentor.build(root, packageModules))
     implicit val pages: Pages = Pages(items.map(fileName).toSet)
+    implicit val diagrams: SvgDocumentor.DiagramManifest = manifest
 
     val rendered = items.map(i => fileName(i) -> document(i)).toMap
     // Documenting the root module always yields the index, so it is there to be extended.
@@ -222,7 +225,7 @@ object MarkdownDocumentor {
   /**
     * Returns the Markdown page of `item`.
     */
-  private def document(item: Item)(implicit flix: Flix, pages: Pages): String = item match {
+  private def document(item: Item)(implicit flix: Flix, pages: Pages, diagrams: SvgDocumentor.DiagramManifest): String = item match {
     case m: Module => documentModule(m)
     case t: Trait => documentTrait(t)
     case e: Effect => documentEffect(e)
@@ -251,7 +254,7 @@ object MarkdownDocumentor {
   /**
     * Returns the Markdown page of the trait `trt`.
     */
-  private def documentTrait(trt: Trait)(implicit flix: Flix, pages: Pages): String = {
+  private def documentTrait(trt: Trait)(implicit flix: Flix, pages: Pages, diagrams: SvgDocumentor.DiagramManifest): String = {
     val sb = new StringBuilder()
 
     val comp = trt.companionMod
@@ -267,8 +270,9 @@ object MarkdownDocumentor {
     decl.append(docTypeParams(List(trt.decl.tparam)))
     decl.append(docTraitConstraints(trt.decl.superTraits))
     sb.append(docDeclaration(trt.decl.ann, decl.toString()))
-    if (SvgDocumentor.generateDiagram(trt).nonEmpty) {
-      sb.append(s"![Trait Hierarchy](diagrams/${SvgDocumentor.diagramFileName(trt)})\n\n")
+    val diagramFileName = SvgDocumentor.diagramFileName(trt)
+    if (diagrams.contains(diagramFileName)) {
+      sb.append(s"![Trait Hierarchy](diagrams/$diagramFileName)\n\n")
     }
     sb.append(docBlock(trt.decl.doc))
 

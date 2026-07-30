@@ -74,6 +74,7 @@ object HtmlDocumentor {
   private val LibraryGitHub: String = "https://github.com/flix/flix/blob/master/main/src/library/"
 
   def run(root: TypedAst.Root, packageModules: PackageModules, manifest: SvgDocumentor.DiagramManifest = SvgDocumentor.DiagramManifest(Map.empty))(implicit flix: Flix): Unit = {
+    implicit val diagrams: SvgDocumentor.DiagramManifest = manifest
     val writtenPages = visitMod(Documentor.build(root, packageModules)).toSet
     writeAssets()
     deleteStalePages(writtenPages)
@@ -109,7 +110,7 @@ object HtmlDocumentor {
     *
     * Returns a list of the names of the generated files.
     */
-  private def visitMod(mod: Module)(implicit flix: Flix): List[String] = {
+  private def visitMod(mod: Module)(implicit flix: Flix, diagrams: SvgDocumentor.DiagramManifest): List[String] = {
     val out = documentModule(mod)
     writeDocFile(fileName(mod), out)
 
@@ -127,7 +128,7 @@ object HtmlDocumentor {
     *
     * Returns a list of the names of the generated files.
     */
-  private def visitTrait(trt: Trait)(implicit flix: Flix): List[String] = {
+  private def visitTrait(trt: Trait)(implicit flix: Flix, diagrams: SvgDocumentor.DiagramManifest): List[String] = {
     val out = documentTrait(trt)
     writeDocFile(fileName(trt), out)
 
@@ -147,7 +148,7 @@ object HtmlDocumentor {
     *
     * Returns a list of the names of the generated files.
     */
-  private def visitEffect(eff: Effect)(implicit flix: Flix): List[String] = {
+  private def visitEffect(eff: Effect)(implicit flix: Flix, diagrams: SvgDocumentor.DiagramManifest): List[String] = {
     val out = documentEffect(eff)
     writeDocFile(fileName(eff), out)
 
@@ -167,7 +168,7 @@ object HtmlDocumentor {
     *
     * Returns a list of the names of the generated files.
     */
-  private def visitEnum(enm: Enum)(implicit flix: Flix): List[String] = {
+  private def visitEnum(enm: Enum)(implicit flix: Flix, diagrams: SvgDocumentor.DiagramManifest): List[String] = {
     val out = documentEnum(enm)
     writeDocFile(fileName(enm), out)
 
@@ -268,7 +269,7 @@ object HtmlDocumentor {
   /**
     * Documents the given `Trait`, `trt`, returning a string of HTML.
     */
-  private def documentTrait(trt: Trait)(implicit flix: Flix): String = {
+  private def documentTrait(trt: Trait)(implicit flix: Flix, diagrams: SvgDocumentor.DiagramManifest): String = {
     implicit val sb: StringBuilder = new StringBuilder()
 
     val sortedAssocs = trt.decl.assocs.sortBy(_.sym.name)
@@ -341,8 +342,8 @@ object HtmlDocumentor {
     sb.append("</code>")
     docActions(None, trt.decl.loc)
     sb.append("</div>")
-    if (SvgDocumentor.generateDiagram(trt).nonEmpty) {
-      val diagramFileName = SvgDocumentor.diagramFileName(trt)
+    val diagramFileName = SvgDocumentor.diagramFileName(trt)
+    if (diagrams.contains(diagramFileName)) {
       sb.append(s"<div class='diagram'><img src='diagrams/${escUrl(diagramFileName)}' alt='Hierarchy diagram'></div>")
     }
     docDoc(trt.decl.doc)
