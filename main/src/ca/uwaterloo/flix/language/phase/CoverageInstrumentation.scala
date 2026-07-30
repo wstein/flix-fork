@@ -436,6 +436,111 @@ object CoverageInstrumentation {
         val (instExp, nextProbeId) = instrumentExpression(exp0, qualifiedName, probeId, registeredLineProbes)
         instrumentLine(e.copy(exp = instExp), qualifiedName, nextProbeId, registeredLineProbes)
 
+      case e @ TypedAst.Expr.InvokeConstructor(_, exps, _, _, _) =>
+        val (instExps, nextProbeId) = instrumentExpressions(exps, qualifiedName, probeId, registeredLineProbes)
+        instrumentLine(e.copy(exps = instExps), qualifiedName, nextProbeId, registeredLineProbes)
+
+      case e @ TypedAst.Expr.InvokeMethod(_, exp0, exps, _, _, _) =>
+        val (instExp0, pc1) = instrumentExpression(exp0, qualifiedName, probeId, registeredLineProbes)
+        val (instExps, pc2) = instrumentExpressions(exps, qualifiedName, pc1, registeredLineProbes)
+        instrumentLine(e.copy(exp = instExp0, exps = instExps), qualifiedName, pc2, registeredLineProbes)
+
+      case e @ TypedAst.Expr.InvokeStaticMethod(_, exps, _, _, _) =>
+        val (instExps, nextProbeId) = instrumentExpressions(exps, qualifiedName, probeId, registeredLineProbes)
+        instrumentLine(e.copy(exps = instExps), qualifiedName, nextProbeId, registeredLineProbes)
+
+      case e @ TypedAst.Expr.GetField(_, exp0, _, _, _) =>
+        val (instExp0, nextProbeId) = instrumentExpression(exp0, qualifiedName, probeId, registeredLineProbes)
+        instrumentLine(e.copy(exp = instExp0), qualifiedName, nextProbeId, registeredLineProbes)
+
+      case e @ TypedAst.Expr.PutField(_, exp1, exp2, _, _, _) =>
+        val (instExp1, pc1) = instrumentExpression(exp1, qualifiedName, probeId, registeredLineProbes)
+        val (instExp2, pc2) = instrumentExpression(exp2, qualifiedName, pc1, registeredLineProbes)
+        instrumentLine(e.copy(exp1 = instExp1, exp2 = instExp2), qualifiedName, pc2, registeredLineProbes)
+
+      case e @ TypedAst.Expr.GetStaticField(_, _, _, _) =>
+        instrumentLine(e, qualifiedName, probeId, registeredLineProbes)
+
+      case e @ TypedAst.Expr.PutStaticField(_, exp0, _, _, _) =>
+        val (instExp0, nextProbeId) = instrumentExpression(exp0, qualifiedName, probeId, registeredLineProbes)
+        instrumentLine(e.copy(exp = instExp0), qualifiedName, nextProbeId, registeredLineProbes)
+
+      case e @ TypedAst.Expr.TryCatch(exp0, rules, tpe, eff, loc) =>
+        val (instExp0, pc1) = instrumentExpression(exp0, qualifiedName, probeId, registeredLineProbes)
+        probeId = pc1
+        val instRules = rules.map { rule =>
+          val (instRuleExp, pcRule) = instrumentExpression(rule.exp, qualifiedName, probeId, registeredLineProbes)
+          probeId = pcRule
+          val (lineRuleExp, pcLine) = instrumentLine(instRuleExp, qualifiedName, probeId, registeredLineProbes)
+          probeId = pcLine
+          rule.copy(exp = lineRuleExp)
+        }
+        instrumentLine(e.copy(exp = instExp0, rules = instRules), qualifiedName, probeId, registeredLineProbes)
+
+      case e @ TypedAst.Expr.Throw(exp0, _, _, _) =>
+        val (instExp0, nextProbeId) = instrumentExpression(exp0, qualifiedName, probeId, registeredLineProbes)
+        instrumentLine(e.copy(exp = instExp0), qualifiedName, nextProbeId, registeredLineProbes)
+
+      case e @ TypedAst.Expr.Handler(symUse, rules, bodyType, bodyEff, handledEff, tpe, loc) =>
+        val instRules = rules.map { rule =>
+          val (instRuleExp, pcRule) = instrumentExpression(rule.exp, qualifiedName, probeId, registeredLineProbes)
+          probeId = pcRule
+          val (lineRuleExp, pcLine) = instrumentLine(instRuleExp, qualifiedName, probeId, registeredLineProbes)
+          probeId = pcLine
+          rule.copy(exp = lineRuleExp)
+        }
+        instrumentLine(e.copy(rules = instRules), qualifiedName, probeId, registeredLineProbes)
+
+      case e @ TypedAst.Expr.Spawn(exp1, exp2, _, _, _) =>
+        val (instExp1, pc1) = instrumentExpression(exp1, qualifiedName, probeId, registeredLineProbes)
+        val (instExp2, pc2) = instrumentExpression(exp2, qualifiedName, pc1, registeredLineProbes)
+        instrumentLine(e.copy(exp1 = instExp1, exp2 = instExp2), qualifiedName, pc2, registeredLineProbes)
+
+      case e @ TypedAst.Expr.Lazy(exp0, _, _) =>
+        val (instExp0, nextProbeId) = instrumentExpression(exp0, qualifiedName, probeId, registeredLineProbes)
+        instrumentLine(e.copy(exp = instExp0), qualifiedName, nextProbeId, registeredLineProbes)
+
+      case e @ TypedAst.Expr.Force(exp0, _, _, _) =>
+        val (instExp0, nextProbeId) = instrumentExpression(exp0, qualifiedName, probeId, registeredLineProbes)
+        instrumentLine(e.copy(exp = instExp0), qualifiedName, nextProbeId, registeredLineProbes)
+
+      case e @ TypedAst.Expr.StructNew(sym, fields, region, _, _, _) =>
+        val (instFields, pc1) = fields.foldLeft((List.empty[(ca.uwaterloo.flix.language.ast.shared.SymUse.StructFieldSymUse, TypedAst.Expr)], probeId)) {
+          case ((acc, currentProbeId), (symField, expField)) =>
+            val (instField, nextProbeId) = instrumentExpression(expField, qualifiedName, currentProbeId, registeredLineProbes)
+            ((symField, instField) :: acc, nextProbeId)
+        }
+        probeId = pc1
+        val (instRegion, pc2) = region match {
+          case Some(r) =>
+            val (iR, pR) = instrumentExpression(r, qualifiedName, probeId, registeredLineProbes)
+            (Some(iR), pR)
+          case None => (None, probeId)
+        }
+        instrumentLine(e.copy(fields = instFields.reverse, region = instRegion), qualifiedName, pc2, registeredLineProbes)
+
+      case e @ TypedAst.Expr.StructGet(exp0, _, _, _, _) =>
+        val (instExp0, nextProbeId) = instrumentExpression(exp0, qualifiedName, probeId, registeredLineProbes)
+        instrumentLine(e.copy(exp = instExp0), qualifiedName, nextProbeId, registeredLineProbes)
+
+      case e @ TypedAst.Expr.StructPut(exp1, symUse, exp2, _, _, _) =>
+        val (instExp1, pc1) = instrumentExpression(exp1, qualifiedName, probeId, registeredLineProbes)
+        val (instExp2, pc2) = instrumentExpression(exp2, qualifiedName, pc1, registeredLineProbes)
+        instrumentLine(e.copy(exp1 = instExp1, exp2 = instExp2), qualifiedName, pc2, registeredLineProbes)
+
+      case e @ TypedAst.Expr.VectorLit(exps, _, _, _) =>
+        val (instExps, nextProbeId) = instrumentExpressions(exps, qualifiedName, probeId, registeredLineProbes)
+        instrumentLine(e.copy(exps = instExps), qualifiedName, nextProbeId, registeredLineProbes)
+
+      case e @ TypedAst.Expr.VectorLoad(exp1, exp2, _, _, _) =>
+        val (instExp1, pc1) = instrumentExpression(exp1, qualifiedName, probeId, registeredLineProbes)
+        val (instExp2, pc2) = instrumentExpression(exp2, qualifiedName, pc1, registeredLineProbes)
+        instrumentLine(e.copy(exp1 = instExp1, exp2 = instExp2), qualifiedName, pc2, registeredLineProbes)
+
+      case e @ TypedAst.Expr.VectorLength(exp0, _) =>
+        val (instExp0, nextProbeId) = instrumentExpression(exp0, qualifiedName, probeId, registeredLineProbes)
+        instrumentLine(e.copy(exp = instExp0), qualifiedName, nextProbeId, registeredLineProbes)
+
       // Leave expression forms without explicit execution semantics uninstrumented.
       case _ => (exp, probeId)
     }

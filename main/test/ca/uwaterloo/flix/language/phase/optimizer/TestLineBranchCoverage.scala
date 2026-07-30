@@ -547,4 +547,97 @@ class TestLineBranchCoverage extends AnyFunSuite {
     }
   }
 
+  test("java interop expressions are covered") {
+    Coverage.clear()
+    val program =
+      """
+        |import java.lang.String
+        |
+        |def main(): Unit \ IO = {
+        |    let s = String.valueOf(42);
+        |    let len = s.length();
+        |    println(len)
+        |}
+        |""".stripMargin
+    val flix = new Flix().setOptions(Options.DefaultTest.copy(coverage = true))
+    flix.addVirtualPath(CompilerConstants.VirtualTestFile, program)
+    val staticMethodLine = program.linesIterator.indexWhere(_.contains("String.valueOf")) + 1
+    val instanceMethodLine = program.linesIterator.indexWhere(_.contains("s.length()")) + 1
+
+    flix.compile().toResult match {
+      case Result.Ok(result) =>
+        result.getMain.fold(fail("No main function"))(_(Array()))
+        val metadata = Coverage.getProbeMetadata
+        val hits = Coverage.snapshot().keySet
+        val staticIds = metadata.collect { case (id, probe) if probe.kind == ProbeKind.Line && probe.line == staticMethodLine => id }.toSet
+        val instanceIds = metadata.collect { case (id, probe) if probe.kind == ProbeKind.Line && probe.line == instanceMethodLine => id }.toSet
+        assert(staticIds.nonEmpty && (staticIds intersect hits).nonEmpty, "Java static method line should be registered and hit")
+        assert(instanceIds.nonEmpty && (instanceIds intersect hits).nonEmpty, "Java instance method line should be registered and hit")
+      case Result.Err(errors) => fail(s"Compilation failed: $errors")
+    }
+  }
+
+  test("try-catch and throw expressions are covered") {
+    Coverage.clear()
+    val program =
+      """
+        |import java.lang.Exception
+        |import java.lang.RuntimeException
+        |
+        |def main(): Unit \ IO = {
+        |    try {
+        |        let _ = throw new RuntimeException("err");
+        |        ()
+        |    } catch {
+        |        case _: Exception => println("caught")
+        |    }
+        |}
+        |""".stripMargin
+    val flix = new Flix().setOptions(Options.DefaultTest.copy(coverage = true))
+    flix.addVirtualPath(CompilerConstants.VirtualTestFile, program)
+    val throwLine = program.linesIterator.indexWhere(_.contains("throw new RuntimeException")) + 1
+    val catchLine = program.linesIterator.indexWhere(_.contains("case _: Exception")) + 1
+
+    flix.compile().toResult match {
+      case Result.Ok(result) =>
+        result.getMain.fold(fail("No main function"))(_(Array()))
+        val metadata = Coverage.getProbeMetadata
+        val hits = Coverage.snapshot().keySet
+        val throwIds = metadata.collect { case (id, probe) if probe.kind == ProbeKind.Line && probe.line == throwLine => id }.toSet
+        val catchIds = metadata.collect { case (id, probe) if probe.kind == ProbeKind.Line && probe.line == catchLine => id }.toSet
+        assert(throwIds.nonEmpty && (throwIds intersect hits).nonEmpty, "Throw line should be registered and hit")
+        assert(catchIds.nonEmpty && (catchIds intersect hits).nonEmpty, "Catch rule body line should be registered and hit")
+      case Result.Err(errors) => fail(s"Compilation failed: $errors")
+    }
+  }
+
+  test("lazy and force expressions are covered") {
+    Coverage.clear()
+    val program =
+      """
+        |def main(): Unit \ IO = {
+        |    let l = lazy (1 + 2);
+        |    let v = force l;
+        |    println(v)
+        |}
+        |""".stripMargin
+    val flix = new Flix().setOptions(Options.DefaultTest.copy(coverage = true))
+    flix.addVirtualPath(CompilerConstants.VirtualTestFile, program)
+    val lazyLine = program.linesIterator.indexWhere(_.contains("lazy (1 + 2)")) + 1
+    val forceLine = program.linesIterator.indexWhere(_.contains("force l")) + 1
+
+    flix.compile().toResult match {
+      case Result.Ok(result) =>
+        result.getMain.fold(fail("No main function"))(_(Array()))
+        val metadata = Coverage.getProbeMetadata
+        val hits = Coverage.snapshot().keySet
+        val lazyIds = metadata.collect { case (id, probe) if probe.kind == ProbeKind.Line && probe.line == lazyLine => id }.toSet
+        val forceIds = metadata.collect { case (id, probe) if probe.kind == ProbeKind.Line && probe.line == forceLine => id }.toSet
+        assert(lazyIds.nonEmpty && (lazyIds intersect hits).nonEmpty, "Lazy expression line should be registered and hit")
+        assert(forceIds.nonEmpty && (forceIds intersect hits).nonEmpty, "Force expression line should be registered and hit")
+      case Result.Err(errors) => fail(s"Compilation failed: $errors")
+    }
+  }
+
 }
+
