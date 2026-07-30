@@ -19,7 +19,7 @@ import ca.uwaterloo.flix.api.{CompilerConstants, Flix}
 import ca.uwaterloo.flix.language.ast.shared.SecurityContext
 import ca.uwaterloo.flix.runtime.{Coverage, ProbeKind}
 import ca.uwaterloo.flix.util.{Options, Result}
-import org.json4s.jvalue2monadic
+import org.json4s.{DefaultFormats, jvalue2extractable, jvalue2monadic}
 import org.scalatest.funsuite.AnyFunSuite
 
 /**
@@ -35,6 +35,7 @@ import org.scalatest.funsuite.AnyFunSuite
 class TestLineBranchCoverage extends AnyFunSuite {
 
   private implicit val sctx: SecurityContext = SecurityContext.Unrestricted
+  private implicit val formats: org.json4s.Formats = DefaultFormats
 
   /**
     * A multi-line program that exercises different code paths.
@@ -263,7 +264,7 @@ class TestLineBranchCoverage extends AnyFunSuite {
       val summary = parsed \ "summary"
       assert(summary != org.json4s.JNull, "Report should have 'summary' section")
 
-      // Verify summary has coverage sections
+      // Verify summary has coverage sections with numeric values
       val functions = summary \ "functions"
       val lines = summary \ "lines"
       val branches = summary \ "branches"
@@ -272,31 +273,48 @@ class TestLineBranchCoverage extends AnyFunSuite {
       assert(lines != org.json4s.JNull, "Summary should have 'lines' coverage")
       assert(branches != org.json4s.JNull, "Summary should have 'branches' coverage")
 
-      // Verify each section has covered and total
-      val funcCovered = functions \ "covered"
-      val funcTotal = functions \ "total"
-      assert(funcCovered != org.json4s.JNull, "Functions should have 'covered' field")
-      assert(funcTotal != org.json4s.JNull, "Functions should have 'total' field")
+      // Extract and validate numeric values from each section
+      val funcCovered = (functions \ "covered").extractOpt[Int]
+      val funcTotal = (functions \ "total").extractOpt[Int]
+      assert(funcCovered.isDefined && funcTotal.isDefined, "Functions should have numeric covered and total")
+      assert(funcCovered.get >= 0 && funcTotal.get > 0, "Functions coverage should be non-zero")
+      assert(funcCovered.get <= funcTotal.get, "Functions covered should be <= total")
 
-      val lineCovered = lines \ "covered"
-      val lineTotal = lines \ "total"
-      assert(lineCovered != org.json4s.JNull, "Lines should have 'covered' field")
-      assert(lineTotal != org.json4s.JNull, "Lines should have 'total' field")
+      val lineCovered = (lines \ "covered").extractOpt[Int]
+      val lineTotal = (lines \ "total").extractOpt[Int]
+      assert(lineCovered.isDefined && lineTotal.isDefined, "Lines should have numeric covered and total")
+      assert(lineCovered.get >= 0 && lineTotal.get > 0, "Lines coverage should be non-zero")
+      assert(lineCovered.get <= lineTotal.get, "Lines covered should be <= total")
 
-      // Verify files array exists
+      val branchCovered = (branches \ "covered").extractOpt[Int]
+      val branchTotal = (branches \ "total").extractOpt[Int]
+      assert(branchCovered.isDefined && branchTotal.isDefined, "Branches should have numeric covered and total")
+      assert(branchCovered.get >= 0 && branchTotal.get > 0, "Branches coverage should be non-zero")
+      assert(branchCovered.get <= branchTotal.get, "Branches covered should be <= total")
+
+      // Verify files array exists and has entries
       val files = parsed \ "files"
       assert(files != org.json4s.JNull, "Report should have 'files' array")
 
-      // Verify critical: line probes must exist in report
-      val metadata = Coverage.getProbeMetadata
-      val lineProbes = metadata.values.count(_.kind == ProbeKind.Line)
-      assert(lineProbes > 0, "Report should contain line probe coverage data")
+      val filesList = files.asInstanceOf[org.json4s.JArray].arr
+      assert(filesList.nonEmpty, "Files array should have entries for instrumented source")
 
-      // Verify critical: branch probes must exist in report
-      val branchProbes = metadata.values.count(pm =>
+      // Verify at least one file has line coverage data
+      val filesWithLineData = filesList.filter { f =>
+        val lines = f \ "lines"
+        lines != org.json4s.JNull && lines.asInstanceOf[org.json4s.JObject].values.nonEmpty
+      }
+      assert(filesWithLineData.nonEmpty, "At least one file should have line coverage data")
+
+      // Critical: Verify distinct probes are not deduplicated away
+      val metadata = Coverage.getProbeMetadata
+      val branchProbes = metadata.values.filter(pm =>
         pm.kind == ProbeKind.BranchTrue || pm.kind == ProbeKind.BranchFalse
       )
-      assert(branchProbes > 0, "Report should contain branch probe coverage data")
+      // Check we have both true and false branch probes (not deduplicated together)
+      val hasTrue = branchProbes.exists(_.kind == ProbeKind.BranchTrue)
+      val hasFalse = branchProbes.exists(_.kind == ProbeKind.BranchFalse)
+      assert(hasTrue && hasFalse, "Both branch-true and branch-false probes must exist (not deduplicated together)")
 
     } finally {
       // Clean up temp file

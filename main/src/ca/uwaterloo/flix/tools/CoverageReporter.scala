@@ -43,36 +43,26 @@ object CoverageReporter {
     val snapshot = Coverage.snapshot()
     val metadata = Coverage.getProbeMetadata
 
-    // Deduplicate probes by (function, source, line) - keep first occurrence
-    // This prevents multiple probes on the same line from inflating coverage stats
-    val deduplicatedMetadata = metadata
-      .groupBy { case (_, pm) => (pm.qualifiedName, pm.source, pm.line) }
-      .map { case (_, probes) => probes.head } // Keep first probe per (func, file, line)
-
-    // Filter out synthetic/unknown locations
-    val validMetadata = deduplicatedMetadata.filter { case (_, pm) =>
-      pm.source.nonEmpty && pm.line > 0
-    }
-
-    // Organize probes by file (including zero-hit)
-    val coverageByFile: Map[String, List[(Int, Int, String)]] = validMetadata.toList.map {
+    // Filter out synthetic/unknown locations (use loc.isReal check during registration instead)
+    // Organize ALL probes by file (including zero-hit)
+    val coverageByFile: Map[String, List[(Int, Int, String)]] = metadata.toList.map {
       case (probeId, pm) => (pm.source, (probeId, pm.line, pm.kind.asString))
     }.groupBy(_._1).map { case (k, v) => k -> v.map(_._2) }
 
-    // Calculate summary statistics from deduplicated, valid probes
-    val functionProbes = validMetadata.values.count(_.kind.asString == "function")
-    val lineProbes = validMetadata.values.count(_.kind.asString == "line")
-    val branchProbes = validMetadata.values.count(_.kind.asString.startsWith("branch"))
+    // Calculate summary statistics from all probes
+    val functionProbes = metadata.values.count(_.kind.asString == "function")
+    val lineProbes = metadata.values.count(_.kind.asString == "line")
+    val branchProbes = metadata.values.count(_.kind.asString.startsWith("branch"))
 
-    val functionCovered = validMetadata.count {
+    val functionCovered = metadata.count {
       case (probeId, pm) =>
         pm.kind.asString == "function" && snapshot.contains(probeId)
     }
-    val lineCovered = validMetadata.count {
+    val lineCovered = metadata.count {
       case (probeId, pm) =>
         pm.kind.asString == "line" && snapshot.contains(probeId)
     }
-    val branchCovered = validMetadata.count {
+    val branchCovered = metadata.count {
       case (probeId, pm) =>
         pm.kind.asString.startsWith("branch") && snapshot.contains(probeId)
     }

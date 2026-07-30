@@ -71,6 +71,9 @@ object CoverageInstrumentation {
   def run(root: TypedAst.Root)(implicit flix: Flix): TypedAst.Root = {
     val defs = root.defs.values.toList
     var probeCounter = 0
+    // Track which (qualifiedName, source, line) combinations have line probes
+    // to prevent duplicate line probes on the same line
+    val registeredLineProbes = scala.collection.mutable.Set[(String, String, Int)]()
 
     // Transform each definition that should be instrumented
     val instrumentedDefs = defs.map { defn =>
@@ -82,12 +85,14 @@ object CoverageInstrumentation {
         val lineNumber = defn.loc.startLine
         val qualifiedName = defn.sym.toString
 
-        // Register the function-level probe
-        Coverage.registerProbe(probeId, sourcePath, lineNumber, ProbeKind.Function, qualifiedName)
+        // Register the function-level probe (only if location is real)
+        if (defn.loc.isReal) {
+          Coverage.registerProbe(probeId, sourcePath, lineNumber, ProbeKind.Function, qualifiedName)
+        }
 
         // Instrument the function body for line and branch coverage
         val (instrumentedBody, newCounter) = instrumentExpression(
-          defn.exp, qualifiedName, probeCounter
+          defn.exp, qualifiedName, probeCounter, registeredLineProbes
         )
         probeCounter = newCounter
 
@@ -148,7 +153,8 @@ object CoverageInstrumentation {
   private def instrumentExpression(
     exp: TypedAst.Expr,
     qualifiedName: String,
-    startProbeId: Int
+    startProbeId: Int,
+    registeredLineProbes: scala.collection.mutable.Set[(String, String, Int)]
   ): (TypedAst.Expr, Int) = {
     var probeId = startProbeId
 
@@ -156,69 +162,93 @@ object CoverageInstrumentation {
       // Instrument if-then-else with branch probes
       case e @ TypedAst.Expr.IfThenElse(exp1, exp2, exp3, tpe, eff, loc) =>
         // Recursively instrument condition
-        val (instExp1, pc1) = instrumentExpression(exp1, qualifiedName, probeId)
+        val (instExp1, pc1) = instrumentExpression(exp1, qualifiedName, probeId, registeredLineProbes)
         probeId = pc1
 
         // Register and wrap true branch (use then-branch location, not if-expression location)
         val trueBranchProbeId = probeId
         probeId += 1
-        Coverage.registerProbe(trueBranchProbeId, exp2.loc.source.name, exp2.loc.startLine, ProbeKind.BranchTrue, qualifiedName)
+        if (exp2.loc.isReal) {
+          Coverage.registerProbe(trueBranchProbeId, exp2.loc.source.name, exp2.loc.startLine, ProbeKind.BranchTrue, qualifiedName)
+        }
 
         // Recursively instrument then expression
-        val (instExp2, pc2) = instrumentExpression(exp2, qualifiedName, probeId)
+        val (instExp2, pc2) = instrumentExpression(exp2, qualifiedName, probeId, registeredLineProbes)
         probeId = pc2
 
         // Wrap then branch with probe
-        val wrappedExp2 = TypedAst.Expr.Stm(
-          List(TypedAst.Expr.CoverageHit(trueBranchProbeId, loc)),
-          instExp2,
-          instExp2.tpe,
-          instExp2.eff,
-          loc
-        )
+        val wrappedExp2 = if (exp2.loc.isReal) {
+          TypedAst.Expr.Stm(
+            List(TypedAst.Expr.CoverageHit(trueBranchProbeId, exp2.loc)),
+            instExp2,
+            instExp2.tpe,
+            instExp2.eff,
+            exp2.loc
+          )
+        } else {
+          instExp2
+        }
 
         // Register and wrap false branch (use else-branch location, not if-expression location)
         val falseBranchProbeId = probeId
         probeId += 1
-        Coverage.registerProbe(falseBranchProbeId, exp3.loc.source.name, exp3.loc.startLine, ProbeKind.BranchFalse, qualifiedName)
+        if (exp3.loc.isReal) {
+          Coverage.registerProbe(falseBranchProbeId, exp3.loc.source.name, exp3.loc.startLine, ProbeKind.BranchFalse, qualifiedName)
+        }
 
         // Recursively instrument else expression
-        val (instExp3, pc3) = instrumentExpression(exp3, qualifiedName, probeId)
+        val (instExp3, pc3) = instrumentExpression(exp3, qualifiedName, probeId, registeredLineProbes)
         probeId = pc3
 
         // Wrap else branch with probe
-        val wrappedExp3 = TypedAst.Expr.Stm(
-          List(TypedAst.Expr.CoverageHit(falseBranchProbeId, loc)),
-          instExp3,
-          instExp3.tpe,
-          instExp3.eff,
-          loc
-        )
+        val wrappedExp3 = if (exp3.loc.isReal) {
+          TypedAst.Expr.Stm(
+            List(TypedAst.Expr.CoverageHit(falseBranchProbeId, exp3.loc)),
+            instExp3,
+            instExp3.tpe,
+            instExp3.eff,
+            exp3.loc
+          )
+        } else {
+          instExp3
+        }
 
         (e.copy(exp1 = instExp1, exp2 = wrappedExp2, exp3 = wrappedExp3), probeId)
 
       // Instrument let-expressions with line probes
       case e @ TypedAst.Expr.Let(sym, exp1, exp2, tpe, eff, loc) =>
-        // Register line probe for this let-binding
+        // Register line probe for this let-binding (only once per unique line)
         val lineProbeId = probeId
-        probeId += 1
-        Coverage.registerProbe(lineProbeId, loc.source.name, loc.startLine, ProbeKind.Line, qualifiedName)
+        val lineProbeKey = (qualifiedName, loc.source.name, loc.startLine)
+        if (loc.isReal && !registeredLineProbes.contains(lineProbeKey)) {
+          probeId += 1
+          Coverage.registerProbe(lineProbeId, loc.source.name, loc.startLine, ProbeKind.Line, qualifiedName)
+          registeredLineProbes.add(lineProbeKey)
+        } else if (!loc.isReal) {
+          probeId += 1  // Skip probe ID even if not registering (to maintain consistency)
+        } else {
+          // Line probe already registered for this line, skip
+        }
 
         // Recursively instrument bound expression
-        val (instExp1, pc1) = instrumentExpression(exp1, qualifiedName, probeId)
+        val (instExp1, pc1) = instrumentExpression(exp1, qualifiedName, probeId, registeredLineProbes)
         probeId = pc1
 
-        // Wrap bound expression with probe
-        val wrappedExp1 = TypedAst.Expr.Stm(
-          List(TypedAst.Expr.CoverageHit(lineProbeId, loc)),
-          instExp1,
-          instExp1.tpe,
-          instExp1.eff,
-          loc
-        )
+        // Wrap bound expression with probe (only if we registered one)
+        val wrappedExp1 = if (loc.isReal && registeredLineProbes.contains(lineProbeKey)) {
+          TypedAst.Expr.Stm(
+            List(TypedAst.Expr.CoverageHit(lineProbeId, loc)),
+            instExp1,
+            instExp1.tpe,
+            instExp1.eff,
+            loc
+          )
+        } else {
+          instExp1
+        }
 
         // Recursively instrument body
-        val (instExp2, pc2) = instrumentExpression(exp2, qualifiedName, probeId)
+        val (instExp2, pc2) = instrumentExpression(exp2, qualifiedName, probeId, registeredLineProbes)
         probeId = pc2
 
         (e.copy(exp1 = wrappedExp1, exp2 = instExp2), probeId)
@@ -227,13 +257,13 @@ object CoverageInstrumentation {
       case e @ TypedAst.Expr.Stm(exps, finalExp, tpe, eff, loc) =>
         // Process each statement
         val instExps = exps.map { stmExp =>
-          val (instExp, pc) = instrumentExpression(stmExp, qualifiedName, probeId)
+          val (instExp, pc) = instrumentExpression(stmExp, qualifiedName, probeId, registeredLineProbes)
           probeId = pc
           instExp
         }
 
         // Process final expression
-        val (instFinalExp, pc) = instrumentExpression(finalExp, qualifiedName, probeId)
+        val (instFinalExp, pc) = instrumentExpression(finalExp, qualifiedName, probeId, registeredLineProbes)
         probeId = pc
 
         (e.copy(exps = instExps, exp = instFinalExp), probeId)
@@ -250,6 +280,9 @@ object CoverageInstrumentation {
     *
     * Only instrument user-provided source code (Input.RealFile and Input.VirtualFile).
     * Exclude bundled libraries, packages, and compiler-internal code.
+    *
+    * Note: Individual probes are additionally filtered by loc.isReal before registration
+    * to exclude synthetic/generated code even within instrumented functions.
     *
     * @param defn the definition to check.
     * @return true if the definition should be instrumented.
