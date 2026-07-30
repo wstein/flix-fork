@@ -337,11 +337,50 @@ object CoverageInstrumentation {
 
         (e.copy(exps = instExps, exp = lineFinalExp), probeId)
 
+      // These expressions execute at their own source location. Instrument the
+      // reconstructed expression itself, then recurse so nested expressions on
+      // different source lines receive distinct probes.
+      case e @ TypedAst.Expr.ApplyDef(_, exps, _, _, _, _, _, _) =>
+        val (instExps, nextProbeId) = instrumentExpressions(exps, qualifiedName, probeId, registeredLineProbes)
+        instrumentLine(e.copy(exps = instExps), qualifiedName, nextProbeId, registeredLineProbes)
+
+      case e @ TypedAst.Expr.ApplyOp(_, exps, _, _, _, _) =>
+        val (instExps, nextProbeId) = instrumentExpressions(exps, qualifiedName, probeId, registeredLineProbes)
+        instrumentLine(e.copy(exps = instExps), qualifiedName, nextProbeId, registeredLineProbes)
+
+      case e @ TypedAst.Expr.Binary(_, exp1, exp2, _, _, _) =>
+        val (instExp1, pc1) = instrumentExpression(exp1, qualifiedName, probeId, registeredLineProbes)
+        val (instExp2, pc2) = instrumentExpression(exp2, qualifiedName, pc1, registeredLineProbes)
+        instrumentLine(e.copy(exp1 = instExp1, exp2 = instExp2), qualifiedName, pc2, registeredLineProbes)
+
+      case e @ TypedAst.Expr.Lambda(_, body, _, _) =>
+        val (instBody, nextProbeId) = instrumentExpression(body, qualifiedName, probeId, registeredLineProbes)
+        instrumentLine(e.copy(exp = instBody), qualifiedName, nextProbeId, registeredLineProbes)
+
+      case e @ TypedAst.Expr.Tuple(exps, _, _, _) =>
+        val (instExps, nextProbeId) = instrumentExpressions(exps, qualifiedName, probeId, registeredLineProbes)
+        instrumentLine(e.copy(exps = instExps), qualifiedName, nextProbeId, registeredLineProbes)
+
       // For other expressions, recurse into structure without adding probes
       case _ => (exp, probeId)
     }
 
     result
+  }
+
+  /** Recursively instruments a list of expressions without changing their evaluation order. */
+  private def instrumentExpressions(
+    exps: List[TypedAst.Expr],
+    qualifiedName: String,
+    startProbeId: Int,
+    registeredLineProbes: scala.collection.mutable.Set[(String, String, Int)]
+  ): (List[TypedAst.Expr], Int) = {
+    val (reversedExps, nextProbeId) = exps.foldLeft((List.empty[TypedAst.Expr], startProbeId)) {
+      case ((acc, probeId), exp) =>
+        val (instExp, nextProbeId) = instrumentExpression(exp, qualifiedName, probeId, registeredLineProbes)
+        (instExp :: acc, nextProbeId)
+    }
+    (reversedExps.reverse, nextProbeId)
   }
 
   /** Registers and inserts one line probe for a real source expression. */

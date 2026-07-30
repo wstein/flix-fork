@@ -227,6 +227,37 @@ class TestLineBranchCoverage extends AnyFunSuite {
       s"Executed line probes should retain their registered IDs: $lineProbes")
   }
 
+  test("nested call expressions on their own line are covered") {
+    Coverage.clear()
+    val program =
+      """
+        |def increment(x: Int32): Int32 = x + 1
+        |
+        |def compute(x: Int32): Int32 =
+        |    increment(
+        |        increment(x)
+        |    )
+        |
+        |def main(): Unit \ IO = println(compute(40))
+        |""".stripMargin
+    val nestedCallLine = program.linesIterator.indexWhere(_.contains("increment(x)")) + 1
+    val flix = new Flix().setOptions(Options.DefaultTest.copy(coverage = true))
+    flix.addVirtualPath(CompilerConstants.VirtualTestFile, program)
+
+    val result = flix.compile().toResult match {
+      case Result.Ok(value) => value
+      case Result.Err(errors) => fail(s"Compilation failed: $errors")
+    }
+    result.getMain.fold(fail("No main function"))(_(Array()))
+
+    val nestedCallProbes = Coverage.getProbeMetadata.collect {
+      case (id, metadata) if metadata.kind == ProbeKind.Line && metadata.line == nestedCallLine => id
+    }.toSet
+    assert(nestedCallProbes.nonEmpty, s"Expected a line probe at nested call line $nestedCallLine")
+    assert((nestedCallProbes intersect Coverage.snapshot().keySet).nonEmpty,
+      "The nested call line probe should be hit when compute executes")
+  }
+
   test("match rules register selected and unselected branch probes") {
     Coverage.clear()
     val program =
