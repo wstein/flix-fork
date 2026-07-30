@@ -33,6 +33,7 @@ sealed trait ProbeKind {
     case ProbeKind.Line => "line"
     case ProbeKind.BranchTrue => "branch-true"
     case ProbeKind.BranchFalse => "branch-false"
+    case ProbeKind.BranchRule => "branch-rule"
   }
 }
 
@@ -41,6 +42,7 @@ object ProbeKind {
   case object Line extends ProbeKind
   case object BranchTrue extends ProbeKind
   case object BranchFalse extends ProbeKind
+  case object BranchRule extends ProbeKind
 
   /**
     * Parse a string into a ProbeKind.
@@ -51,6 +53,7 @@ object ProbeKind {
     case "line" => Some(Line)
     case "branch-true" => Some(BranchTrue)
     case "branch-false" => Some(BranchFalse)
+    case "branch-rule" => Some(BranchRule)
     case _ => None
   }
 }

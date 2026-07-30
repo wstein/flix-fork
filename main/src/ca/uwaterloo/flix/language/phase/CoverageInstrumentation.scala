@@ -244,6 +244,30 @@ object CoverageInstrumentation {
 
         (e.copy(exp1 = lineExp1, exp2 = wrappedExp2, exp3 = wrappedExp3), probeId)
 
+      // A match rule contributes one branch when its body is selected. Guards
+      // are traversed for line coverage but are not separate branch outcomes.
+      case e @ TypedAst.Expr.Match(selector, rules, tpe, eff, loc) =>
+        val (instSelector, pc1) = instrumentExpression(selector, qualifiedName, probeId, registeredLineProbes)
+        probeId = pc1
+        val instRules = rules.map { rule =>
+          val instGuard = rule.guard.map { guard =>
+            val (result, nextProbeId) = instrumentExpression(guard, qualifiedName, probeId, registeredLineProbes)
+            probeId = nextProbeId
+            result
+          }
+          val (instBody, nextProbeId) = instrumentExpression(rule.exp, qualifiedName, probeId, registeredLineProbes)
+          probeId = nextProbeId
+          if (rule.loc.isReal) {
+            val ruleProbeId = probeId
+            probeId += 1
+            Coverage.registerProbe(ruleProbeId, rule.exp.loc.source.name, rule.exp.loc.startLine, ProbeKind.BranchRule, qualifiedName)
+            rule.copy(guard = instGuard, exp = TypedAst.Expr.Stm(List(TypedAst.Expr.CoverageHit(ruleProbeId, rule.exp.loc)), instBody, instBody.tpe, instBody.eff, rule.exp.loc))
+          } else {
+            rule.copy(guard = instGuard, exp = instBody)
+          }
+        }
+        (e.copy(exp = instSelector, rules = instRules), probeId)
+
       // Instrument let-expressions with line probes
       case e @ TypedAst.Expr.Let(sym, exp1, exp2, tpe, eff, loc) =>
         // Register line probe for this let-binding (only once per unique line)
