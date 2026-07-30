@@ -476,7 +476,7 @@ class TestLineBranchCoverage extends AnyFunSuite {
     // Write the JSON report to a temporary file
     val reportPath = java.nio.file.Files.createTempFile("coverage-", ".json")
     try {
-      ca.uwaterloo.flix.tools.CoverageReporter.writeJsonReport(reportPath)
+      ca.uwaterloo.flix.tools.CoverageReporter.writeJsonReport(ca.uwaterloo.flix.runtime.Coverage.getSession, reportPath)
 
       // Read the JSON file
       val jsonContent = java.nio.file.Files.readString(reportPath, java.nio.charset.StandardCharsets.UTF_8)

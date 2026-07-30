@@ -70,8 +70,9 @@ object CoverageInstrumentation {
     */
   def run(root: TypedAst.Root)(implicit flix: Flix): TypedAst.Root = {
     val currentSession = Coverage.createSession()
+    implicit val session: Coverage.Session = currentSession
     implicit val sessionId: Long = currentSession.sessionId
-    val defs = root.defs.values.toList
+    val defs = root.defs.values.toList.sortBy(d => (d.loc.source.name, d.loc.startLine, d.sym.toString))
     var probeCounter = 0
     // Track which (qualifiedName, source, line) combinations have line probes
     // to prevent duplicate line probes on the same line
@@ -89,7 +90,7 @@ object CoverageInstrumentation {
 
         // Register the function-level probe (only if location is real)
         if (defn.loc.isReal) {
-          Coverage.registerProbe(probeId, sourcePath, lineNumber, ProbeKind.Function, qualifiedName)
+          currentSession.registerProbe(probeId, sourcePath, lineNumber, ProbeKind.Function, qualifiedName)
         }
 
         // Every compiled function contributes an executable line probe at the
@@ -100,7 +101,7 @@ object CoverageInstrumentation {
         val hasBodyLineProbe = defn.exp.loc.isReal && registeredLineProbes.add(bodyLineKey)
         if (hasBodyLineProbe) {
           probeCounter += 1
-          Coverage.registerProbe(bodyLineProbe, defn.exp.loc.source.name, defn.exp.loc.startLine, ProbeKind.Line, qualifiedName)
+          currentSession.registerProbe(bodyLineProbe, defn.exp.loc.source.name, defn.exp.loc.startLine, ProbeKind.Line, qualifiedName)
         }
 
         // Instrument the function body for line and branch coverage
@@ -147,7 +148,7 @@ object CoverageInstrumentation {
     qualifiedName: String,
     startProbeId: Int,
     registeredLineProbes: scala.collection.mutable.Set[(String, String, Int)]
-  )(implicit sessionId: Long): (TypedAst.Expr, Int) = {
+  )(implicit session: Coverage.Session, sessionId: Long): (TypedAst.Expr, Int) = {
     var probeId = startProbeId
 
     val result = exp match {
@@ -163,7 +164,7 @@ object CoverageInstrumentation {
         val trueBranchProbeId = probeId
         probeId += 1
         if (exp2.loc.isReal) {
-          Coverage.registerProbe(trueBranchProbeId, exp2.loc.source.name, exp2.loc.startLine, ProbeKind.BranchTrue, qualifiedName)
+          session.registerProbe(trueBranchProbeId, exp2.loc.source.name, exp2.loc.startLine, ProbeKind.BranchTrue, qualifiedName)
         }
 
         // Recursively instrument then expression
@@ -189,7 +190,7 @@ object CoverageInstrumentation {
         val falseBranchProbeId = probeId
         probeId += 1
         if (exp3.loc.isReal) {
-          Coverage.registerProbe(falseBranchProbeId, exp3.loc.source.name, exp3.loc.startLine, ProbeKind.BranchFalse, qualifiedName)
+          session.registerProbe(falseBranchProbeId, exp3.loc.source.name, exp3.loc.startLine, ProbeKind.BranchFalse, qualifiedName)
         }
 
         // Recursively instrument else expression
@@ -227,11 +228,11 @@ object CoverageInstrumentation {
             if (guard.loc.isReal) {
               val trueProbeId = probeId
               probeId += 1
-              Coverage.registerProbe(trueProbeId, guard.loc.source.name, guard.loc.startLine, ProbeKind.BranchTrue, qualifiedName)
+              session.registerProbe(trueProbeId, guard.loc.source.name, guard.loc.startLine, ProbeKind.BranchTrue, qualifiedName)
 
               val falseProbeId = probeId
               probeId += 1
-              Coverage.registerProbe(falseProbeId, guard.loc.source.name, guard.loc.startLine, ProbeKind.BranchFalse, qualifiedName)
+              session.registerProbe(falseProbeId, guard.loc.source.name, guard.loc.startLine, ProbeKind.BranchFalse, qualifiedName)
 
               val trueBranch = TypedAst.Expr.Stm(
                 List(TypedAst.Expr.CoverageHit(sessionId, trueProbeId, guard.loc)),
@@ -261,7 +262,7 @@ object CoverageInstrumentation {
           val hitsToPrepend = if (rule.exp.loc.isReal) {
             val ruleProbeId = probeId
             probeId += 1
-            Coverage.registerProbe(ruleProbeId, rule.exp.loc.source.name, rule.exp.loc.startLine, ProbeKind.BranchRule, qualifiedName)
+            session.registerProbe(ruleProbeId, rule.exp.loc.source.name, rule.exp.loc.startLine, ProbeKind.BranchRule, qualifiedName)
             List(TypedAst.Expr.CoverageHit(sessionId, ruleProbeId, rule.exp.loc))
           } else Nil
 
@@ -286,7 +287,7 @@ object CoverageInstrumentation {
           if (rule.exp.loc.isReal) {
             val ruleProbeId = probeId
             probeId += 1
-            Coverage.registerProbe(ruleProbeId, rule.exp.loc.source.name, rule.exp.loc.startLine, ProbeKind.BranchRule, qualifiedName)
+            session.registerProbe(ruleProbeId, rule.exp.loc.source.name, rule.exp.loc.startLine, ProbeKind.BranchRule, qualifiedName)
             rule.copy(exp = TypedAst.Expr.Stm(List(TypedAst.Expr.CoverageHit(sessionId, ruleProbeId, rule.exp.loc)), lineBody, lineBody.tpe, lineBody.eff, rule.exp.loc))
           } else rule.copy(exp = lineBody)
         }
@@ -300,7 +301,7 @@ object CoverageInstrumentation {
         val registeredLineProbe = loc.isReal && registeredLineProbes.add(lineProbeKey)
         if (registeredLineProbe) {
           probeId += 1
-          Coverage.registerProbe(lineProbeId, loc.source.name, loc.startLine, ProbeKind.Line, qualifiedName)
+          session.registerProbe(lineProbeId, loc.source.name, loc.startLine, ProbeKind.Line, qualifiedName)
         }
 
         // Recursively instrument bound expression
@@ -355,7 +356,7 @@ object CoverageInstrumentation {
           val wrappedBody = if (rule.exp.loc.isReal) {
             val ruleProbeId = probeId
             probeId += 1
-            Coverage.registerProbe(ruleProbeId, rule.exp.loc.source.name, rule.exp.loc.startLine, ProbeKind.BranchRule, qualifiedName)
+            session.registerProbe(ruleProbeId, rule.exp.loc.source.name, rule.exp.loc.startLine, ProbeKind.BranchRule, qualifiedName)
             TypedAst.Expr.Stm(List(TypedAst.Expr.CoverageHit(sessionId, ruleProbeId, rule.exp.loc)), lineRuleExp, lineRuleExp.tpe, lineRuleExp.eff, rule.exp.loc)
           } else lineRuleExp
 
@@ -377,7 +378,7 @@ object CoverageInstrumentation {
           val wrappedBody = if (rule.exp.loc.isReal) {
             val ruleProbeId = probeId
             probeId += 1
-            Coverage.registerProbe(ruleProbeId, rule.exp.loc.source.name, rule.exp.loc.startLine, ProbeKind.BranchRule, qualifiedName)
+            session.registerProbe(ruleProbeId, rule.exp.loc.source.name, rule.exp.loc.startLine, ProbeKind.BranchRule, qualifiedName)
             TypedAst.Expr.Stm(List(TypedAst.Expr.CoverageHit(sessionId, ruleProbeId, rule.exp.loc)), lineRuleExp, lineRuleExp.tpe, lineRuleExp.eff, rule.exp.loc)
           } else lineRuleExp
 
@@ -591,7 +592,7 @@ object CoverageInstrumentation {
     qualifiedName: String,
     startProbeId: Int,
     registeredLineProbes: scala.collection.mutable.Set[(String, String, Int)]
-  )(implicit sessionId: Long): (List[TypedAst.Expr], Int) = {
+  )(implicit session: Coverage.Session, sessionId: Long): (List[TypedAst.Expr], Int) = {
     val (reversedExps, nextProbeId) = exps.foldLeft((List.empty[TypedAst.Expr], startProbeId)) {
       case ((acc, probeId), exp) =>
         val (instExp, nextProbeId) = instrumentExpression(exp, qualifiedName, probeId, registeredLineProbes)
@@ -606,7 +607,7 @@ object CoverageInstrumentation {
     qualifiedName: String,
     probeId: Int,
     registeredLineProbes: scala.collection.mutable.Set[(String, String, Int)]
-  )(implicit sessionId: Long): (TypedAst.Expr, Int) = {
+  )(implicit session: Coverage.Session, sessionId: Long): (TypedAst.Expr, Int) = {
     instrumentLineAt(exp, exp.loc, qualifiedName, probeId, registeredLineProbes)
   }
 
@@ -617,10 +618,10 @@ object CoverageInstrumentation {
     qualifiedName: String,
     probeId: Int,
     registeredLineProbes: scala.collection.mutable.Set[(String, String, Int)]
-  )(implicit sessionId: Long): (TypedAst.Expr, Int) = {
+  )(implicit session: Coverage.Session, sessionId: Long): (TypedAst.Expr, Int) = {
     val key = (qualifiedName, loc.source.name, loc.startLine)
     if (loc.isReal && registeredLineProbes.add(key)) {
-      Coverage.registerProbe(probeId, loc.source.name, loc.startLine, ProbeKind.Line, qualifiedName)
+      session.registerProbe(probeId, loc.source.name, loc.startLine, ProbeKind.Line, qualifiedName)
       val wrapped = TypedAst.Expr.Stm(List(TypedAst.Expr.CoverageHit(sessionId, probeId, loc)), exp, exp.tpe, exp.eff, loc)
       (wrapped, probeId + 1)
     } else {

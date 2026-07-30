@@ -15,7 +15,7 @@
  */
 package ca.uwaterloo.flix.tools
 
-import ca.uwaterloo.flix.runtime.Coverage
+import ca.uwaterloo.flix.runtime.{Coverage, ProbeKind, ProbeMetadata}
 import org.json4s.{JObject, JValue}
 import org.json4s.JsonDSL._
 import org.json4s.native.JsonMethods.{compact, render}
@@ -25,59 +25,83 @@ import scala.collection.immutable.ListMap
 
 /**
   * Generates coverage reports from collected coverage data.
+  *
+  * All public methods accept an explicit [[Coverage.Session]] and take exactly one
+  * immutable snapshot via [[Coverage.Session.reportSnapshot()]].  This ensures that
+  * the JSON, LCOV, and summary artifacts are always consistent with each other and
+  * are never polluted by a concurrently executing compilation.
   */
 object CoverageReporter {
 
   /**
-    * Generate and write a JSON coverage report.
+    * Generate and write a JSON coverage report for the given session.
     *
+    * @param session    the coverage session to report on.
     * @param outputPath the path to write the report to.
     */
-  def writeJsonReport(outputPath: Path): Unit = {
-    // Create parent directories if needed
+  def writeJsonReport(session: Coverage.Session, outputPath: Path): Unit = {
     val parentDir = outputPath.getParent
     if (parentDir != null && !Files.exists(parentDir)) {
       Files.createDirectories(parentDir)
     }
 
-    // Get the snapshot of coverage data and ALL registered metadata
-    val (metadata, snapshot) = Coverage.reportSnapshot()
+    // Single immutable snapshot — the same snapshot drives all artifacts.
+    val (metadata, snapshot) = session.reportSnapshot()
+    val jsonString = compact(render(buildJson(metadata, snapshot)))
+    Files.write(outputPath, jsonString.getBytes(java.nio.charset.StandardCharsets.UTF_8))
+  }
 
-    // Filter out synthetic/unknown locations (use loc.isReal check during registration instead)
-    // Organize ALL probes by file (including zero-hit)
+  /**
+    * Generate and write an LCOV tracefile report (`.info`) for the given session.
+    *
+    * @param session    the coverage session to report on.
+    * @param outputPath the path to write the LCOV report to.
+    */
+  def writeLcovReport(session: Coverage.Session, outputPath: Path): Unit = {
+    val parentDir = outputPath.getParent
+    if (parentDir != null && !Files.exists(parentDir)) {
+      Files.createDirectories(parentDir)
+    }
+
+    val (metadata, snapshot) = session.reportSnapshot()
+    val content = buildLcov(metadata, snapshot)
+    Files.write(outputPath, content.getBytes(java.nio.charset.StandardCharsets.UTF_8))
+  }
+
+  /**
+    * Return a formatted terminal summary string for the given session.
+    *
+    * @param session the coverage session to summarize.
+    */
+  def formatSummary(session: Coverage.Session): String = {
+    val (metadata, snapshot) = session.reportSnapshot()
+    buildSummary(metadata, snapshot)
+  }
+
+  // ─── Private helpers ───────────────────────────────────────────────────────
+
+  private def buildJson(metadata: Map[Int, ProbeMetadata], snapshot: Map[Int, Long]): JValue = {
     val coverageByFile: Map[String, List[(Int, Int, String, String)]] = metadata.toList.map {
       case (probeId, pm) => (pm.source, (probeId, pm.line, pm.kind.asString, pm.qualifiedName))
     }.groupBy(_._1).map { case (k, v) => k -> v.map(_._2) }
 
-    // Calculate summary statistics from all probes
     val functionProbes = metadata.values.count(_.kind.asString == "function")
-    val lineProbes = metadata.values.count(_.kind.asString == "line")
-    val branchProbes = metadata.values.count(_.kind.asString.startsWith("branch"))
+    val lineProbes     = metadata.values.count(_.kind.asString == "line")
+    val branchProbes   = metadata.values.count(_.kind.asString.startsWith("branch"))
 
-    val functionCovered = metadata.count {
-      case (probeId, pm) =>
-        pm.kind.asString == "function" && snapshot.contains(probeId)
-    }
-    val lineCovered = metadata.count {
-      case (probeId, pm) =>
-        pm.kind.asString == "line" && snapshot.contains(probeId)
-    }
-    val branchCovered = metadata.count {
-      case (probeId, pm) =>
-        pm.kind.asString.startsWith("branch") && snapshot.contains(probeId)
-    }
+    val functionCovered = metadata.count { case (id, pm) => pm.kind.asString == "function" && snapshot.contains(id) }
+    val lineCovered     = metadata.count { case (id, pm) => pm.kind.asString == "line"     && snapshot.contains(id) }
+    val branchCovered   = metadata.count { case (id, pm) => pm.kind.asString.startsWith("branch") && snapshot.contains(id) }
 
-    // Build the JSON report with deterministic, sorted output
     val files: List[JValue] = coverageByFile.toList.sortBy(_._1).map {
       case (path, probes) =>
-        // Line status computed from ProbeKind.Line probes ONLY
         val lines: Map[String, Boolean] = ListMap.from(probes
-          .filter(_._3 == "line") // Only ProbeKind.Line probes determine line coverage
+          .filter(_._3 == "line")
           .groupBy(_._2)
           .toList
           .sortBy(_._1)
-          .map { case (line, lineProbes) =>
-              val covered = lineProbes.map(_._1).exists(snapshot.contains)
+          .map { case (line, lps) =>
+            val covered = lps.map(_._1).exists(snapshot.contains)
             line.toString -> covered
           })
 
@@ -88,15 +112,12 @@ object CoverageReporter {
           .sortBy(_._1)
           .map {
             case (line, lineProbes) =>
-              // A source line can have multiple probes of the same kind, e.g. two
-              // match rules written on one line. Use a list of probe records rather
-              // than a map keyed by kind so every compiled branch remains visible.
               val branchCoverage: List[JValue] = lineProbes.sortBy(_._1).map {
                 case (probeId, _, kind, qualifiedName) =>
-                  ("id" -> probeId) ~
-                    ("kind" -> kind) ~
-                    ("covered" -> snapshot.contains(probeId)) ~
-                    ("function" -> qualifiedName)
+                  ("id"       -> probeId) ~
+                  ("kind"     -> kind) ~
+                  ("covered"  -> snapshot.contains(probeId)) ~
+                  ("function" -> qualifiedName)
               }
               ("line" -> line) ~ ("branches" -> branchCoverage)
           }
@@ -106,45 +127,28 @@ object CoverageReporter {
           .sortBy(_._1)
           .map { case (probeId, line, _, qualifiedName) =>
             ("qualifiedName" -> qualifiedName) ~
-              ("source" -> path) ~
-              ("line" -> line) ~
-              ("covered" -> snapshot.contains(probeId)) ~
-              ("hitCount" -> snapshot.getOrElse(probeId, 0L))
+            ("source"        -> path) ~
+            ("line"          -> line) ~
+            ("covered"       -> snapshot.contains(probeId)) ~
+            ("hitCount"      -> snapshot.getOrElse(probeId, 0L))
           }
 
-        ("path" -> path) ~
-          ("functionsCount" -> probes.filter(_._3 == "function").length) ~
-          ("functions" -> functionsList) ~
-          ("lines" -> lines) ~
-          ("branches" -> branches)
+        ("path"           -> path) ~
+        ("functionsCount" -> probes.filter(_._3 == "function").length) ~
+        ("functions"      -> functionsList) ~
+        ("lines"          -> lines) ~
+        ("branches"       -> branches)
     }
 
-    val report: JValue =
-      ("summary" -> (
-        ("functions" -> (("covered" -> functionCovered) ~ ("total" -> functionProbes))) ~
-        ("lines" -> (("covered" -> lineCovered) ~ ("total" -> lineProbes))) ~
-        ("branches" -> (("covered" -> branchCovered) ~ ("total" -> branchProbes)))
-      )) ~
-      ("files" -> files)
-
-    // Write the report to file with explicit UTF-8 encoding
-    val jsonString = compact(render(report))
-    Files.write(outputPath, jsonString.getBytes(java.nio.charset.StandardCharsets.UTF_8))
+    ("summary" ->
+      ("functions" -> (("covered" -> functionCovered) ~ ("total" -> functionProbes))) ~
+      ("lines"     -> (("covered" -> lineCovered)     ~ ("total" -> lineProbes))) ~
+      ("branches"  -> (("covered" -> branchCovered)   ~ ("total" -> branchProbes)))
+    ) ~
+    ("files" -> files)
   }
 
-  /**
-    * Generate and write an LCOV tracefile report (`.info`).
-    *
-    * @param outputPath the path to write the LCOV report to.
-    */
-  def writeLcovReport(outputPath: Path): Unit = {
-    val parentDir = outputPath.getParent
-    if (parentDir != null && !Files.exists(parentDir)) {
-      Files.createDirectories(parentDir)
-    }
-
-    val (metadata, snapshot) = Coverage.reportSnapshot()
-
+  private def buildLcov(metadata: Map[Int, ProbeMetadata], snapshot: Map[Int, Long]): String = {
     val coverageByFile = metadata.toList.map {
       case (probeId, pm) => (pm.source, (probeId, pm.line, pm.kind, pm.qualifiedName))
     }.groupBy(_._1).map { case (k, v) => k -> v.map(_._2) }
@@ -155,46 +159,33 @@ object CoverageReporter {
       sb.append("TN:\n")
       sb.append(s"SF:$sourcePath\n")
 
-      // Functions
-      val funcProbes = probes.filter(_._3 == ca.uwaterloo.flix.runtime.ProbeKind.Function)
-      val funcHitCount = funcProbes.count { case (id, _, _, _) => snapshot.contains(id) }
+      val funcProbes    = probes.filter(_._3 == ProbeKind.Function)
+      val funcHitCount  = funcProbes.count { case (id, _, _, _) => snapshot.contains(id) }
 
-      funcProbes.sortBy(_._2).foreach { case (_, line, _, name) =>
-        sb.append(s"FN:$line,$name\n")
-      }
-      funcProbes.sortBy(_._2).foreach { case (id, _, _, name) =>
-        val hits = snapshot.getOrElse(id, 0L)
-        sb.append(s"FNDA:$hits,$name\n")
-      }
+      funcProbes.sortBy(_._2).foreach { case (_, line, _, name) => sb.append(s"FN:$line,$name\n") }
+      funcProbes.sortBy(_._2).foreach { case (id, _, _, name)   => sb.append(s"FNDA:${snapshot.getOrElse(id, 0L)},$name\n") }
       sb.append(s"FNF:${funcProbes.size}\n")
       sb.append(s"FNH:$funcHitCount\n")
 
-      // Lines
-      val lineProbesByLine = probes.filter(_._3 == ca.uwaterloo.flix.runtime.ProbeKind.Line).groupBy(_._2)
+      val lineProbesByLine = probes.filter(_._3 == ProbeKind.Line).groupBy(_._2)
       var lineHitCount = 0
-
-      lineProbesByLine.toList.sortBy(_._1).foreach { case (line, lineProbes) =>
-        val hits = lineProbes.map(_._1).map(id => snapshot.getOrElse(id, 0L)).foldLeft(0L)(_ max _)
+      lineProbesByLine.toList.sortBy(_._1).foreach { case (line, lps) =>
+        val hits = lps.map(_._1).map(id => snapshot.getOrElse(id, 0L)).foldLeft(0L)(_ max _)
         if (hits > 0) lineHitCount += 1
         sb.append(s"DA:$line,$hits\n")
       }
       sb.append(s"LF:${lineProbesByLine.size}\n")
       sb.append(s"LH:$lineHitCount\n")
 
-      // Branches
       val branchProbesByLine = probes.filter(_._3.asString.startsWith("branch")).groupBy(_._2)
-      var branchTotalCount = 0
-      var branchHitCount = 0
-
+      var branchTotalCount   = 0
+      var branchHitCount     = 0
       branchProbesByLine.toList.sortBy(_._1).foreach { case (line, branchProbes) =>
         branchProbes.sortBy(_._1).zipWithIndex.foreach { case ((id, _, _, _), idx) =>
           branchTotalCount += 1
-          val hits = snapshot.get(id)
-          val hitStr = hits match {
-            case Some(h) =>
-              branchHitCount += 1
-              h.toString
-            case None => "-"
+          val hitStr = snapshot.get(id) match {
+            case Some(h) => branchHitCount += 1; h.toString
+            case None    => "-"
           }
           sb.append(s"BRDA:$line,0,$idx,$hitStr\n")
         }
@@ -205,26 +196,22 @@ object CoverageReporter {
       sb.append("end_of_record\n")
     }
 
-    Files.write(outputPath, sb.toString.getBytes(java.nio.charset.StandardCharsets.UTF_8))
+    sb.toString
   }
 
-  /**
-    * Return a formatted terminal summary string for collected coverage data.
-    */
-  def formatSummary(): String = {
-    val (metadata, snapshot) = Coverage.reportSnapshot()
-    val totalFunctions = metadata.values.count(_.kind == ca.uwaterloo.flix.runtime.ProbeKind.Function)
-    val totalLines = metadata.values.count(_.kind == ca.uwaterloo.flix.runtime.ProbeKind.Line)
-    val totalBranches = metadata.values.count(_.kind.asString.startsWith("branch"))
+  private def buildSummary(metadata: Map[Int, ProbeMetadata], snapshot: Map[Int, Long]): String = {
+    val totalFunctions    = metadata.values.count(_.kind == ProbeKind.Function)
+    val totalLines        = metadata.values.count(_.kind == ProbeKind.Line)
+    val totalBranches     = metadata.values.count(_.kind.asString.startsWith("branch"))
+    val coveredFunctions  = metadata.count { case (id, pm) => pm.kind == ProbeKind.Function && snapshot.contains(id) }
+    val coveredLines      = metadata.count { case (id, pm) => pm.kind == ProbeKind.Line     && snapshot.contains(id) }
+    val coveredBranches   = metadata.count { case (id, pm) => pm.kind.asString.startsWith("branch") && snapshot.contains(id) }
 
-    val coveredFunctions = metadata.count { case (id, pm) => pm.kind == ca.uwaterloo.flix.runtime.ProbeKind.Function && snapshot.contains(id) }
-    val coveredLines = metadata.count { case (id, pm) => pm.kind == ca.uwaterloo.flix.runtime.ProbeKind.Line && snapshot.contains(id) }
-    val coveredBranches = metadata.count { case (id, pm) => pm.kind.asString.startsWith("branch") && snapshot.contains(id) }
-
-    def pct(covered: Int, total: Int): String = if (total == 0) "0.0%" else f"${(covered.toDouble / total) * 100.0}%.1f%%"
+    def pct(covered: Int, total: Int): String =
+      if (total == 0) "0.0%" else f"${(covered.toDouble / total) * 100.0}%.1f%%"
 
     s"Coverage: Functions: ${pct(coveredFunctions, totalFunctions)} ($coveredFunctions/$totalFunctions), " +
-      s"Lines: ${pct(coveredLines, totalLines)} ($coveredLines/$totalLines), " +
-      s"Branches: ${pct(coveredBranches, totalBranches)} ($coveredBranches/$totalBranches)"
+    s"Lines: ${pct(coveredLines, totalLines)} ($coveredLines/$totalLines), " +
+    s"Branches: ${pct(coveredBranches, totalBranches)} ($coveredBranches/$totalBranches)"
   }
 }

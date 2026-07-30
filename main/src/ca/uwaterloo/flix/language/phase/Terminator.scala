@@ -839,7 +839,7 @@ object Terminator {
           val es = ListOps.mapWithReuse(exps0)(visitExp(contexts, _, ApplyPosition.NonTail))
           if (es eq exps0) exp0 else Expr.FixpointInjectInto(es, idents, tpe, eff, loc)
 
-        case Expr.CoverageHit(probeId, loc) => exp0
+        case Expr.CoverageHit(_, _, _) => exp0
 
         case Expr.Error(_, _, _) => exp0
       }

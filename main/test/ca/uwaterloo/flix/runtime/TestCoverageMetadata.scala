@@ -182,13 +182,14 @@ class TestCoverageMetadata extends AnyFunSuite {
 
   test("report preserves same-line rule probes independently") {
     Coverage.clear()
-    Coverage.registerProbe(0, "Test.flix", 10, ProbeKind.BranchRule, "Test.classify")
-    Coverage.registerProbe(1, "Test.flix", 10, ProbeKind.BranchRule, "Test.classify")
-    Coverage.hit(0)
+    val s = Coverage.createSession()
+    s.registerProbe(0, "Test.flix", 10, ProbeKind.BranchRule, "Test.classify")
+    s.registerProbe(1, "Test.flix", 10, ProbeKind.BranchRule, "Test.classify")
+    s.hit(0)
 
     val reportPath = Files.createTempFile("coverage-", ".json")
     try {
-      CoverageReporter.writeJsonReport(reportPath)
+      CoverageReporter.writeJsonReport(s, reportPath)
       val report = parse(Files.readString(reportPath, StandardCharsets.UTF_8))
       val files = (report \ "files").asInstanceOf[org.json4s.JArray].arr
       val branches = (files.head \ "branches").asInstanceOf[org.json4s.JArray].arr
@@ -211,14 +212,32 @@ class TestCoverageMetadata extends AnyFunSuite {
     val s2 = Coverage.createSession()
     s2.registerProbe(0, "B.flix", 1, ProbeKind.Line, "B.main")
 
-    // Record hit for session 1 explicitly
+    // Record hit for session 1 explicitly using two-arg hit; s2 must not be affected
     Coverage.hit(s1.sessionId, 0)
 
-    val snapshot1 = s1.getHitCount(0)
-    val snapshot2 = s2.getHitCount(0)
+    assert(s1.getHitCount(0) == 1L, "Session 1 should have 1 hit")
+    assert(s2.getHitCount(0) == 0L, "Session 2 should have 0 hits (no fallback to s1)")
+  }
 
-    assert(snapshot1 == 1L, "Session 1 should have 1 hit")
-    assert(snapshot2 == 0L, "Session 2 should have 0 hits")
+  test("unknown sessionId is a no-op and does not corrupt any session") {
+    val s = Coverage.createSession()
+    s.registerProbe(0, "C.flix", 1, ProbeKind.Line, "C.main")
+
+    val bogusId = Long.MaxValue
+    Coverage.hit(bogusId, 0) // must not throw and must not hit s
+
+    assert(s.getHitCount(0) == 0L, "Hit with unknown sessionId must not affect any real session")
+  }
+
+  test("evicted session hit becomes a no-op") {
+    val s = Coverage.createSession()
+    s.registerProbe(0, "D.flix", 1, ProbeKind.Line, "D.main")
+    val id = s.sessionId
+
+    Coverage.closeSession(id)
+    Coverage.hit(id, 0) // must be a silent no-op
+
+    assert(s.getHitCount(0) == 0L, "Hit after closeSession must be ignored")
   }
 
 }

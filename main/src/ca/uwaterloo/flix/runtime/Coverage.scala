@@ -90,6 +90,24 @@ object Coverage {
       probes = new AtomicLongArray(0)
       probeMetadata.clear()
     }
+
+    /**
+      * Take an immutable atomic snapshot of this session's metadata and hit counts.
+      * All artifacts (JSON, LCOV, summary) must be rendered from a single call to this method.
+      *
+      * @return a tuple of (metadata map, hits map) where hits only includes probes with count > 0.
+      */
+    def reportSnapshot(): (Map[Int, ProbeMetadata], Map[Int, Long]) = synchronized {
+      val currentProbes = probes
+      val hits = mutable.Map[Int, Long]()
+      for (i <- 0 until currentProbes.length()) {
+        val count = currentProbes.get(i)
+        if (count > 0) {
+          hits(i) = count
+        }
+      }
+      (probeMetadata.toMap, hits.toMap)
+    }
   }
 
   private val nextSessionId = new java.util.concurrent.atomic.AtomicLong(1L)
@@ -122,14 +140,20 @@ object Coverage {
 
   /**
     * Record a hit on a probe in the session specified by sessionId.
+    * If the session is unknown or has been evicted, this call is a safe no-op.
     */
   def hit(sessionId: Long, probeId: Int): Unit = {
     val s = sessions.get(sessionId)
     if (s != null) {
       s.hit(probeId)
-    } else {
-      activeSession.hit(probeId)
     }
+  }
+
+  /**
+    * Evict and close a coverage session by its ID.
+    */
+  def closeSession(sessionId: Long): Unit = {
+    sessions.remove(sessionId)
   }
 
   /**

@@ -112,7 +112,7 @@ object AtomicOp {
 
   case class HoleError(sym: Symbol.HoleSym) extends AtomicOp
 
-  case class CoverageHit(probeId: Int) extends AtomicOp
+  case class CoverageHit(sessionId: Long, probeId: Int) extends AtomicOp
 
   case object MatchError extends AtomicOp
 

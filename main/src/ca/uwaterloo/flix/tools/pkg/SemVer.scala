@@ -27,10 +27,10 @@ object SemVer {
 
   def ofString(input: String): Option[SemVer] = {
     val numPattern = raw"0|[1-9]\d*".r
-    val pattern = raw"^($numPattern)\.($numPattern)\.($numPattern)$$".r
+    val pattern = raw"^($numPattern)\.($numPattern)\.($numPattern)(?:[\+-](.+))?$$".r
     input match {
-      case pattern(major, minor, patch) =>
-        Some(SemVer(major.toInt, minor.toInt, patch.toInt))
+      case pattern(major, minor, patch, qualifier) =>
+        Some(SemVer(major.toInt, minor.toInt, patch.toInt, Option(qualifier)))
       case _ => None
     }
   }
@@ -39,8 +39,11 @@ object SemVer {
 /**
   * A semantic version number.
   */
-case class SemVer(major: Int, minor: Int, patch: Int) {
-  override def toString: String = s"$major.$minor.$patch"
+case class SemVer(major: Int, minor: Int, patch: Int, qualifier: Option[String] = None) {
+  override def toString: String = qualifier match {
+    case Some(q) => s"$major.$minor.$patch+$q"
+    case None => s"$major.$minor.$patch"
+  }
 
   /**
     * Of the given `versions`, get the newest version which is a major update, if one exists.

@@ -222,14 +222,9 @@ object ManifestParser {
     * The only allowed format is "x.x.x"
     */
   private def toFlixVer(s: String, p: Path): Result[SemVer, ManifestError] = {
-    try {
-      s.split('.') match {
-        case Array(major, minor, patch) =>
-          Ok(SemVer(major.toInt, minor.toInt, patch.toInt))
-        case _ => Err(ManifestError.FlixVersionHasWrongLength(p, s))
-      }
-    } catch {
-      case e: NumberFormatException => Err(ManifestError.VersionNumberWrong(p, s, e.getMessage))
+    SemVer.ofString(s) match {
+      case Some(v) => Ok(v)
+      case None => Err(ManifestError.FlixVersionHasWrongLength(p, s))
     }
   }
 

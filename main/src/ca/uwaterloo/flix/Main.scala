@@ -23,6 +23,7 @@ import ca.uwaterloo.flix.language.ast.shared.SecurityContext
 import ca.uwaterloo.flix.language.ast.{Symbol, TypedAst}
 import ca.uwaterloo.flix.language.phase.Documentor
 import ca.uwaterloo.flix.language.phase.unification.zhegalkin.ZhegalkinPerf
+import ca.uwaterloo.flix.runtime.Coverage
 import ca.uwaterloo.flix.runtime.shell.Shell
 import ca.uwaterloo.flix.tools.*
 import ca.uwaterloo.flix.tools.pkg.PackageModules
@@ -348,16 +349,18 @@ object Main {
                 Tester.run(Nil, compilationResult)(flix) match {
                   case Result.Ok(_) =>
                     if (options.coverage) {
-                      CoverageReporter.writeJsonReport(options.coverageOutput)
-                      CoverageReporter.writeLcovReport(options.coverageLcovOutput)
-                      println(CoverageReporter.formatSummary())
+                      val session = Coverage.getSession
+                      CoverageReporter.writeJsonReport(session, options.coverageOutput)
+                      CoverageReporter.writeLcovReport(session, options.coverageLcovOutput)
+                      println(CoverageReporter.formatSummary(session))
                     }
                     System.exit(0)
                   case Result.Err(_) =>
                     if (options.coverage) {
-                      CoverageReporter.writeJsonReport(options.coverageOutput)
-                      CoverageReporter.writeLcovReport(options.coverageLcovOutput)
-                      println(CoverageReporter.formatSummary())
+                      val session = Coverage.getSession
+                      CoverageReporter.writeJsonReport(session, options.coverageOutput)
+                      CoverageReporter.writeLcovReport(session, options.coverageLcovOutput)
+                      println(CoverageReporter.formatSummary(session))
                     }
                     System.exit(1)
                 }
@@ -826,9 +829,10 @@ object Main {
     */
   private def exitOnResult[T](result: Result[T, BootstrapError], options: Options)(implicit formatter: Formatter): Unit = {
     if (options.coverage) {
-      CoverageReporter.writeJsonReport(options.coverageOutput)
-      CoverageReporter.writeLcovReport(options.coverageLcovOutput)
-      println(CoverageReporter.formatSummary())
+      val session = Coverage.getSession
+      CoverageReporter.writeJsonReport(session, options.coverageOutput)
+      CoverageReporter.writeLcovReport(session, options.coverageLcovOutput)
+      println(CoverageReporter.formatSummary(session))
     }
     result match {
       case Result.Ok(_) => System.exit(0)
