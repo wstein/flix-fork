@@ -150,9 +150,6 @@ object Tester {
                 s"Skipped: ${yellow(skipped.toString)}. " +
                 s"Elapsed: ${elapsed.fmt}."
             )
-            if (flix.options.coverage) {
-              writer.println(CoverageReporter.formatSummary())
-            }
             terminal.flush()
             finished = true
 

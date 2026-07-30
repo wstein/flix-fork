@@ -16,32 +16,44 @@
 package ca.uwaterloo.flix.tools
 
 import ca.uwaterloo.flix.api.Bootstrap
-import ca.uwaterloo.flix.runtime.Coverage
-import ca.uwaterloo.flix.util.{Formatter, Options}
-import ca.uwaterloo.flix.tools.pkg.PkgTestUtils
 import org.scalatest.funsuite.AnyFunSuite
 
-import java.nio.file.Files
+import java.nio.charset.StandardCharsets
+import java.nio.file.{Files, Path}
+import scala.jdk.CollectionConverters._
 
 class TestCoverageCLI extends AnyFunSuite {
 
   private val ProjectPrefix = "flix-cov-test-"
 
-  test("project test with coverage generates JSON and LCOV reports") {
-    Coverage.clear()
+  private def runCliSubprocess(args: Array[String], projectDir: Path): (Int, String, String) = {
+    val javaBin = System.getProperty("java.home") + "/bin/java"
+    val classpath = System.getProperty("java.class.path")
+    val cmd = List(javaBin, "-cp", classpath, "ca.uwaterloo.flix.Main") ++ args
+
+    val processBuilder = new ProcessBuilder(cmd.asJava)
+    processBuilder.directory(projectDir.toFile)
+
+    val process = processBuilder.start()
+    val stdout = new String(process.getInputStream.readAllBytes(), StandardCharsets.UTF_8)
+    val stderr = new String(process.getErrorStream.readAllBytes(), StandardCharsets.UTF_8)
+    val exitCode = process.waitFor()
+
+    (exitCode, stdout, stderr)
+  }
+
+  test("CLI E2E: flix test --coverage generates JSON and LCOV reports") {
     val p = Files.createTempDirectory(ProjectPrefix)
     Bootstrap.init(p)(System.out)
 
-    // Overwrite src/Main.flix with public compute function
+    // Write source file and test file
     val srcFile = p.resolve("src/Main.flix")
     Files.writeString(srcFile,
       """
         |pub def compute(x: Int32): Int32 = x + 1
-        |
         |def main(): Unit \ IO = println(compute(41))
         |""".stripMargin)
 
-    // Overwrite test/TestMain.flix so test01 calls compute
     val testFile = p.resolve("test/TestMain.flix")
     Files.writeString(testFile,
       """
@@ -49,64 +61,60 @@ class TestCoverageCLI extends AnyFunSuite {
         |def test01(): Unit \ Assert = Assert.assertEq(expected = 42, compute(41))
         |""".stripMargin)
 
-    val flix = PkgTestUtils.mkFlix.setOptions(Options.Default.copy(coverage = true, progress = false))
-    val b = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
-    b.test(flix)
+    val (exitCode, stdout, stderr) = runCliSubprocess(Array("test", "--coverage"), p)
 
-    // Finalize reports as Main does
-    CoverageReporter.writeJsonReport(p.resolve("build/coverage.json"))
-    CoverageReporter.writeLcovReport(p.resolve("build/coverage.info"))
-
+    assert(exitCode == 0, s"Expected exit code 0, got $exitCode. Stderr: $stderr")
     val jsonReport = p.resolve("build/coverage.json")
     val lcovReport = p.resolve("build/coverage.info")
 
-    assert(Files.exists(jsonReport), "JSON coverage report should be generated in project test mode")
-    assert(Files.exists(lcovReport), "LCOV coverage report should be generated in project test mode")
-    assert(Files.readString(jsonReport).contains("summary"), "JSON report should contain summary")
-    assert(Files.readString(lcovReport).contains("end_of_record"), "LCOV report should contain end_of_record")
+    assert(Files.exists(jsonReport), "build/coverage.json should be generated")
+    assert(Files.exists(lcovReport), "build/coverage.info should be generated")
+    assert(stdout.contains("Coverage:"), "Terminal output should contain coverage summary")
   }
 
-  test("project run with coverage generates JSON and LCOV reports") {
-    Coverage.clear()
+  test("CLI E2E: flix test --coverage with custom output paths") {
     val p = Files.createTempDirectory(ProjectPrefix)
     Bootstrap.init(p)(System.out)
 
-    val flix = PkgTestUtils.mkFlix.setOptions(Options.Default.copy(coverage = true, progress = false))
-    val b = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
-    b.run(flix, Array.empty)
+    val customJson = "custom/my_cov.json"
+    val customLcov = "custom/my_cov.info"
 
-    CoverageReporter.writeJsonReport(p.resolve("build/coverage.json"))
-    CoverageReporter.writeLcovReport(p.resolve("build/coverage.info"))
+    val (exitCode, stdout, stderr) = runCliSubprocess(
+      Array("test", "--coverage", "--coverage-output", customJson, "--coverage-lcov-output", customLcov),
+      p
+    )
 
-    val jsonReport = p.resolve("build/coverage.json")
-    val lcovReport = p.resolve("build/coverage.info")
-
-    assert(Files.exists(jsonReport), "JSON coverage report should be generated in project run mode")
-    assert(Files.exists(lcovReport), "LCOV coverage report should be generated in project run mode")
+    assert(exitCode == 0, s"Expected exit code 0, got $exitCode. Stderr: $stderr")
+    assert(Files.exists(p.resolve(customJson)), "Custom JSON coverage report should exist")
+    assert(Files.exists(p.resolve(customLcov)), "Custom LCOV coverage report should exist")
   }
 
-  test("custom output path options for JSON and LCOV reports") {
-    Coverage.clear()
+  test("CLI E2E: flix run --coverage generates reports") {
     val p = Files.createTempDirectory(ProjectPrefix)
     Bootstrap.init(p)(System.out)
 
-    val customJson = p.resolve("custom/my_cov.json")
-    val customLcov = p.resolve("custom/my_cov.info")
+    val (exitCode, stdout, stderr) = runCliSubprocess(Array("run", "--coverage"), p)
 
-    val flix = PkgTestUtils.mkFlix.setOptions(Options.Default.copy(
-      coverage = true,
-      coverageOutput = customJson,
-      coverageLcovOutput = customLcov,
-      progress = false
-    ))
-    val b = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
-    b.test(flix)
-
-    CoverageReporter.writeJsonReport(customJson)
-    CoverageReporter.writeLcovReport(customLcov)
-
-    assert(Files.exists(customJson), "Custom JSON coverage report path should be respected")
-    assert(Files.exists(customLcov), "Custom LCOV coverage report path should be respected")
+    assert(exitCode == 0, s"Expected exit code 0, got $exitCode. Stderr: $stderr")
+    assert(Files.exists(p.resolve("build/coverage.json")), "build/coverage.json should exist")
+    assert(Files.exists(p.resolve("build/coverage.info")), "build/coverage.info should exist")
   }
 
+  test("CLI E2E: test failure with --coverage generates report and exits with code 1") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out)
+
+    val testFile = p.resolve("test/TestMain.flix")
+    Files.writeString(testFile,
+      """
+        |@Test
+        |def testFailing(): Unit \ Assert = Assert.assertEq(expected = 100, 42)
+        |""".stripMargin)
+
+    val (exitCode, stdout, stderr) = runCliSubprocess(Array("test", "--coverage"), p)
+
+    assert(exitCode == 1, s"Expected exit code 1 on test failure, got $exitCode")
+    assert(Files.exists(p.resolve("build/coverage.json")), "build/coverage.json should exist even after test failure")
+    assert(Files.exists(p.resolve("build/coverage.info")), "build/coverage.info should exist even after test failure")
+  }
 }

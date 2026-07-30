@@ -322,41 +322,47 @@ object Main {
             println("The 'run' command does not support file arguments.")
             System.exit(1)
           }
-          exitOnResult(options) {
+          exitOnResult(
             Bootstrap.bootstrap(cwd, options.githubToken).flatMap { bootstrap =>
               val flix = new Flix().setFormatter(formatter)
               flix.setOptions(options)
               bootstrap.run(flix, cmdOpts.args.toArray)
-            }
-          }
+            },
+            options
+          )
 
         case Command.Test =>
           if (cmdOpts.files.isEmpty) {
-            exitOnResult(options) {
+            exitOnResult(
               Bootstrap.bootstrap(cwd, options.githubToken).flatMap { bootstrap =>
                 val flix = new Flix().setFormatter(formatter)
                 flix.setOptions(options.copy(progress = false))
                 bootstrap.test(flix)
-              }
-            }
+              },
+              options
+            )
           } else {
             val flix = mkFlixWithFiles(cmdOpts.files, options.copy(progress = false))
-            val exitCode: Int = flix.compile() match {
+            flix.compile() match {
               case Validation.Success(compilationResult) =>
                 Tester.run(Nil, compilationResult)(flix) match {
-                  case Result.Ok(_) => 0
-                  case Result.Err(_) => 1
+                  case Result.Ok(_) =>
+                    if (options.coverage) {
+                      CoverageReporter.writeJsonReport(options.coverageOutput)
+                      CoverageReporter.writeLcovReport(options.coverageLcovOutput)
+                      println(CoverageReporter.formatSummary())
+                    }
+                    System.exit(0)
+                  case Result.Err(_) =>
+                    if (options.coverage) {
+                      CoverageReporter.writeJsonReport(options.coverageOutput)
+                      CoverageReporter.writeLcovReport(options.coverageLcovOutput)
+                      println(CoverageReporter.formatSummary())
+                    }
+                    System.exit(1)
                 }
-              case Validation.Failure(errors) =>
-                exitWithErrors(flix, errors.toList, None)
-                1
+              case Validation.Failure(errors) => exitWithErrors(flix, errors.toList, None)
             }
-            if (options.coverage) {
-              CoverageReporter.writeJsonReport(options.coverageOutput)
-              CoverageReporter.writeLcovReport(options.coverageLcovOutput)
-              println(s"Coverage reports written to ${options.coverageOutput} and ${options.coverageLcovOutput}")
-            }
-            System.exit(exitCode)
           }
 
         case Command.Repl =>
@@ -818,16 +824,24 @@ object Main {
   /**
     * Exits with code 0 on success, or prints the error and exits with code 1 on failure.
     */
-  private def exitOnResult[T](result: Result[T, BootstrapError])(implicit formatter: Formatter): Unit = {
-    exitOnResult(Options.Default)(result)
-  }
-
-  private def exitOnResult[T](options: Options)(result: Result[T, BootstrapError])(implicit formatter: Formatter): Unit = {
+  private def exitOnResult[T](result: Result[T, BootstrapError], options: Options)(implicit formatter: Formatter): Unit = {
     if (options.coverage) {
       CoverageReporter.writeJsonReport(options.coverageOutput)
       CoverageReporter.writeLcovReport(options.coverageLcovOutput)
-      println(s"Coverage reports written to ${options.coverageOutput} and ${options.coverageLcovOutput}")
+      println(CoverageReporter.formatSummary())
     }
+    result match {
+      case Result.Ok(_) => System.exit(0)
+      case Result.Err(error) =>
+        println(error.message(formatter))
+        System.exit(1)
+    }
+  }
+
+  /**
+    * Exits with code 0 on success, or prints the error and exits with code 1 on failure.
+    */
+  private def exitOnResult[T](result: Result[T, BootstrapError])(implicit formatter: Formatter): Unit = {
     result match {
       case Result.Ok(_) => System.exit(0)
       case Result.Err(error) =>

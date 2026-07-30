@@ -101,8 +101,20 @@ object CoverageReporter {
               ("line" -> line) ~ ("branches" -> branchCoverage)
           }
 
+        val functionsList: List[JValue] = probes
+          .filter(_._3 == "function")
+          .sortBy(_._1)
+          .map { case (probeId, line, _, qualifiedName) =>
+            ("qualifiedName" -> qualifiedName) ~
+              ("source" -> path) ~
+              ("line" -> line) ~
+              ("covered" -> snapshot.contains(probeId)) ~
+              ("hitCount" -> snapshot.getOrElse(probeId, 0L))
+          }
+
         ("path" -> path) ~
-          ("functions" -> probes.filter(_._3 == "function").length) ~
+          ("functionsCount" -> probes.filter(_._3 == "function").length) ~
+          ("functions" -> functionsList) ~
           ("lines" -> lines) ~
           ("branches" -> branches)
     }
