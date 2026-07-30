@@ -227,6 +227,29 @@ class TestLineBranchCoverage extends AnyFunSuite {
       s"Executed line probes should retain their registered IDs: $lineProbes")
   }
 
+  test("match rules register selected and unselected branch probes") {
+    Coverage.clear()
+    val program =
+      """
+        |def classify(x: Int32): String = match x {
+        |    case 1 => "one"
+        |    case _ => "other"
+        |}
+        |
+        |def main(): Unit \ IO = println(classify(1))
+        |""".stripMargin
+    val flix = new Flix().setOptions(Options.DefaultTest.copy(coverage = true))
+    flix.addVirtualPath(CompilerConstants.VirtualTestFile, program)
+    val result = flix.compile().toResult match {
+      case Result.Ok(value) => value
+      case Result.Err(errors) => fail(s"Compilation failed: $errors")
+    }
+    result.getMain.fold(fail("No main function"))(_(Array()))
+    val ruleIds = Coverage.getProbeMetadata.collect { case (id, pm) if pm.kind == ProbeKind.BranchRule => id }.toSet
+    assert(ruleIds.size == 2, s"Expected two match rule probes, got: $ruleIds")
+    assert((ruleIds intersect Coverage.snapshot().keySet).size == 1, "Exactly the selected match rule should be hit")
+  }
+
   test("probe metadata organized by function and line") {
     Coverage.clear()
 

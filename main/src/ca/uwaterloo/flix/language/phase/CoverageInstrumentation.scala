@@ -268,6 +268,21 @@ object CoverageInstrumentation {
         }
         (e.copy(exp = instSelector, rules = instRules), probeId)
 
+      case e @ TypedAst.Expr.RestrictableChoose(star, selector, rules, tpe, eff, loc) =>
+        val (instSelector, pc1) = instrumentExpression(selector, qualifiedName, probeId, registeredLineProbes)
+        probeId = pc1
+        val instRules = rules.map { rule =>
+          val (instBody, nextProbeId) = instrumentExpression(rule.exp, qualifiedName, probeId, registeredLineProbes)
+          probeId = nextProbeId
+          if (rule.exp.loc.isReal) {
+            val ruleProbeId = probeId
+            probeId += 1
+            Coverage.registerProbe(ruleProbeId, rule.exp.loc.source.name, rule.exp.loc.startLine, ProbeKind.BranchRule, qualifiedName)
+            rule.copy(exp = TypedAst.Expr.Stm(List(TypedAst.Expr.CoverageHit(ruleProbeId, rule.exp.loc)), instBody, instBody.tpe, instBody.eff, rule.exp.loc))
+          } else rule.copy(exp = instBody)
+        }
+        (e.copy(exp = instSelector, rules = instRules), probeId)
+
       // Instrument let-expressions with line probes
       case e @ TypedAst.Expr.Let(sym, exp1, exp2, tpe, eff, loc) =>
         // Register line probe for this let-binding (only once per unique line)
