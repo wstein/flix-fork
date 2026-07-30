@@ -220,22 +220,19 @@ object CoverageInstrumentation {
         // Register line probe for this let-binding (only once per unique line)
         val lineProbeId = probeId
         val lineProbeKey = (qualifiedName, loc.source.name, loc.startLine)
-        if (loc.isReal && !registeredLineProbes.contains(lineProbeKey)) {
+        val registeredLineProbe = loc.isReal && registeredLineProbes.add(lineProbeKey)
+        if (registeredLineProbe) {
           probeId += 1
           Coverage.registerProbe(lineProbeId, loc.source.name, loc.startLine, ProbeKind.Line, qualifiedName)
-          registeredLineProbes.add(lineProbeKey)
-        } else if (!loc.isReal) {
-          probeId += 1  // Skip probe ID even if not registering (to maintain consistency)
-        } else {
-          // Line probe already registered for this line, skip
         }
 
         // Recursively instrument bound expression
         val (instExp1, pc1) = instrumentExpression(exp1, qualifiedName, probeId, registeredLineProbes)
         probeId = pc1
 
-        // Wrap bound expression with probe (only if we registered one)
-        val wrappedExp1 = if (loc.isReal && registeredLineProbes.contains(lineProbeKey)) {
+        // Wrap the bound expression only when this expression registered a probe.
+        // A duplicate line must not reuse an unregistered probe ID.
+        val wrappedExp1 = if (registeredLineProbe) {
           TypedAst.Expr.Stm(
             List(TypedAst.Expr.CoverageHit(lineProbeId, loc)),
             instExp1,

@@ -198,6 +198,35 @@ class TestLineBranchCoverage extends AnyFunSuite {
       "Should have line probes for let-bindings and expressions within functions")
   }
 
+  test("line probes are deduplicated without reusing probe IDs") {
+    Coverage.clear()
+
+    val program =
+      """
+        |def main(): Unit \ IO =
+        |    let x = 1; let y = 2;
+        |    println(x + y)
+        |""".stripMargin
+
+    val flix = new Flix().setOptions(Options.DefaultTest.copy(coverage = true))
+    flix.addVirtualPath(CompilerConstants.VirtualTestFile, program)
+    val compilationResult = flix.compile().toResult match {
+      case Result.Ok(result) => result
+      case Result.Err(errors) => fail(s"Compilation failed: $errors")
+    }
+    compilationResult.getMain match {
+      case Some(main) => main(Array())
+      case None => fail("No main function")
+    }
+
+    val metadata = Coverage.getProbeMetadata
+    val lineProbes = metadata.collect { case (id, pm) if pm.kind == ProbeKind.Line => id -> pm }
+    assert(lineProbes.values.groupBy(pm => (pm.qualifiedName, pm.source, pm.line)).values.forall(_.size == 1),
+      s"Expected at most one line probe per source line, got: $lineProbes")
+    assert(lineProbes.keySet.subsetOf(Coverage.snapshot().keySet),
+      s"Executed line probes should retain their registered IDs: $lineProbes")
+  }
+
   test("probe metadata organized by function and line") {
     Coverage.clear()
 
