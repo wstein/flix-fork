@@ -31,11 +31,28 @@ import java.nio.file.{Files, Path}
   * The assertions are structural rather than a comparison against a checked-in page: the standard
   * library's documentation comments change constantly, and a test that has to be regenerated after
   * every such change stops being read. What must hold is that a page names what it documents,
-  * states its conventions truthfully, and drops nothing.
+  * states its conventions truthfully, and drops nothing supported by the shared document model (`Documentor`).
+  * Note: `struct` definitions and restrictable enums are omitted upstream by `Documentor.build`.
   */
 class TestMarkdownDocumentor extends AnyFunSuite {
 
   private implicit val sctx: SecurityContext = SecurityContext.Unrestricted
+
+  private def withTempDir[A](body: Path => A): A = {
+    val dir = Files.createTempDirectory("flix-doc-")
+    try {
+      body(dir)
+    } finally {
+      deleteRecursively(dir)
+    }
+  }
+
+  private def deleteRecursively(path: Path): Unit = {
+    if (Files.isDirectory(path)) {
+      Files.list(path).forEach(deleteRecursively)
+    }
+    Files.deleteIfExists(path)
+  }
 
   /** Returns the Markdown pages of `input`, which must compile without errors. */
   private def document(input: String,
@@ -567,45 +584,111 @@ class TestMarkdownDocumentor extends AnyFunSuite {
   test("run.stale.01") {
     // A page for code that no longer exists must not survive a regeneration: it is still readable,
     // and no longer reachable from the index, which is the worst of both.
-    val dir = Files.createTempDirectory("flix-doc-")
-    generate("pub enum Color { case Red }", dir)
-    val colorPage = dir.resolve("doc").resolve("Color.md")
-    assert(Files.exists(colorPage))
+    withTempDir { dir =>
+      generate("pub enum Color { case Red }", dir)
+      val colorPage = dir.resolve("doc").resolve("Color.md")
+      assert(Files.exists(colorPage))
 
-    generate("pub enum Shape { case Square }", dir)
-    assert(Files.exists(dir.resolve("doc").resolve("Shape.md")))
-    assert(!Files.exists(colorPage), "a page for a removed enum survived regeneration")
+      generate("pub enum Shape { case Square }", dir)
+      assert(Files.exists(dir.resolve("doc").resolve("Shape.md")))
+      assert(!Files.exists(colorPage), "a page for a removed enum survived regeneration")
+    }
   }
 
   test("run.stale.02") {
     // Only files this backend wrote may be deleted. Anything else in the directory is not ours.
-    val dir = Files.createTempDirectory("flix-doc-")
-    generate("pub enum Color { case Red }", dir)
-    val handWritten = dir.resolve("doc").resolve("NOTES.md")
-    Files.write(handWritten, "# Notes\n".getBytes(StandardCharsets.UTF_8))
+    withTempDir { dir =>
+      generate("pub enum Color { case Red }", dir)
+      val handWritten = dir.resolve("doc").resolve("NOTES.md")
+      Files.write(handWritten, "# Notes\n".getBytes(StandardCharsets.UTF_8))
 
-    generate("pub enum Shape { case Square }", dir)
-    assert(Files.exists(handWritten), "a file this backend did not write was deleted")
+      generate("pub enum Shape { case Square }", dir)
+      assert(Files.exists(handWritten), "a file this backend did not write was deleted")
+    }
   }
 
   test("run.encoding.01") {
     // The format itself uses an em dash and a middle dot, so the bytes on disk must be UTF-8
     // whatever the platform default charset happens to be.
-    val dir = Files.createTempDirectory("flix-doc-")
-    generate(
-      """
-        |mod Api {
-        |    ///
-        |    /// Returns one.
-        |    ///
-        |    pub def one(): Int32 = 1
-        |}
-        |""".stripMargin, dir)
+    withTempDir { dir =>
+      generate(
+        """
+          |mod Api {
+          |    ///
+          |    /// Returns one.
+          |    ///
+          |    pub def one(): Int32 = 1
+          |}
+          |""".stripMargin, dir)
 
-    val bytes = Files.readAllBytes(dir.resolve("doc").resolve("Api.md"))
-    val text = new String(bytes, StandardCharsets.UTF_8)
-    assert(text.contains("`def one(): Int32` — Returns one."), text)
-    // Round-tripping through UTF-8 must be lossless: a mis-encoded em dash becomes '?' or U+FFFD.
-    assert(!text.contains("�"), "output is not valid UTF-8")
+      val bytes = Files.readAllBytes(dir.resolve("doc").resolve("Api.md"))
+      val text = new String(bytes, StandardCharsets.UTF_8)
+      assert(text.contains("`def one(): Int32` — Returns one."), text)
+      // Round-tripping through UTF-8 must be lossless: a mis-encoded em dash becomes '?' or U+FFFD.
+      assert(!text.contains(""), "output is not valid UTF-8")
+    }
+  }
+
+  test("page.omission.struct.01") {
+    val pages = document(
+      """
+        |pub struct Person {
+        |    name: String
+        |}
+        |
+        |pub def hello(): Unit \ IO = println("hello")
+        |""".stripMargin)
+
+    // Structs are currently omitted by Documentor.build, so no Person.md page is generated.
+    assert(!pages.contains("Person.md"), "struct Person should be omitted upstream by Documentor.build")
+  }
+
+  test("page.source_attribution.user_list.01") {
+    withTempDir { dir =>
+      val listFile = dir.resolve("List.flix")
+      Files.writeString(listFile, "pub def customUserDef(): Int32 = 42")
+      implicit val flix: Flix = new Flix().setOptions(Options.TestWithLibNix.copy(outputPath = dir))
+      flix.addFile(listFile)
+      flix.check() match {
+        case (Some(root), Nil) =>
+          val pages = MarkdownDocumentor.documentAll(root, PackageModules.All)
+          val md = page(pages, "index.md")
+          assert(!md.contains("main/src/library/List.flix"), "User List.flix was misattributed as stdlib")
+          assert(md.contains("List.flix"), "User List.flix should be attributed to its file path")
+        case (_, errors) => fail(CompilationMessage.formatAll(Formatter.NoFormatter, None))
+      }
+    }
+  }
+
+  test("page.links.validation.01") {
+    // Every link target `[text](target.md)` in generated pages must correspond to an actual page.
+    val pages = document(
+      """
+        |pub trait Eq[a] {
+        |    pub def eq(x: a, y: a): Bool
+        |}
+        |
+        |pub enum Option[t] {
+        |    case None
+        |    case Some(t)
+        |}
+        |
+        |pub enum Result[t, e] {
+        |    case Ok(t)
+        |    case Err(e)
+        |}
+        |
+        |mod Math {
+        |    pub def add(x: Int32, y: Int32): Int32 = x + y
+        |}
+        |""".stripMargin)
+
+    val linkPattern = """\[[^\]]+\]\(([^)]+\.md)\)""".r
+    for ((pageName, content) <- pages) {
+      for (m <- linkPattern.findAllMatchIn(content)) {
+        val target = m.group(1)
+        assert(pages.contains(target), s"Page $pageName contains broken link to '$target'")
+      }
+    }
   }
 }

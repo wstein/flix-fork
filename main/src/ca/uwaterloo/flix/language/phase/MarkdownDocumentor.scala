@@ -350,9 +350,9 @@ object MarkdownDocumentor {
     // at `List.md` because it happens to be top-level, and a name may have no page at all.
     sb.append(s"> Cross-references: each page is named after the fully qualified item it documents, e.g. `List.$Extension`, `Util.Json.ToJson.$Extension`. [index]($IndexFile) lists every page; a name absent from it is not documented here.\n")
     // "Every definition lives in F" is only true when there is exactly one F.
-    locs.map(_.source.name).distinct match {
-      case name :: Nil =>
-        sb.append(s"> Source: every definition lives in ${docSourcePath(name)}; search the file for `def <name>`.\n")
+    locs.map(_.source).distinctBy(_.name) match {
+      case source :: Nil =>
+        sb.append(s"> Source: every definition lives in ${docSourcePath(source)}; search the file for `def <name>`.\n")
       case _ => // Several sources, or none: say nothing rather than something false.
     }
     sb.append("\n")
@@ -360,13 +360,16 @@ object MarkdownDocumentor {
   }
 
   /**
-    * Returns `name` as a path a reader can open, in backticks.
+    * Returns `source` as a path a reader can open, in backticks.
     */
-  private def docSourcePath(name: String): String = {
-    // Library sources are named with a forward slash, but a Path prints with the platform separator.
-    val normalized = name.replace('\\', '/')
-    if (LibraryFileNames.contains(normalized)) s"`$LibraryDirectory$normalized` (flix/flix repo)"
-    else s"`$name`"
+  private def docSourcePath(source: Source): String = {
+    val normalized = source.name.replace('\\', '/')
+    source.input match {
+      case Input.RealFile(_, _) => s"`$normalized`"
+      case Input.VirtualFile(_, _, _) if LibraryFileNames.contains(normalized) =>
+        s"`$LibraryDirectory$normalized` (flix/flix repo)"
+      case _ => s"`$normalized`"
+    }
   }
 
   /**
