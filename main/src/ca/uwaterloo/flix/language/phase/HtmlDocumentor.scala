@@ -173,10 +173,10 @@ object HtmlDocumentor {
 
     val generatedPages = List(fileName(enm)) :::
       enm.companionMod.map { mod =>
-        mod.submodules.flatMap(visitMod)
-        mod.traits.flatMap(visitTrait)
-        mod.effects.flatMap(visitEffect)
-        mod.enums.flatMap(visitEnum)
+        mod.submodules.flatMap(visitMod) :::
+          mod.traits.flatMap(visitTrait) :::
+          mod.effects.flatMap(visitEffect) :::
+          mod.enums.flatMap(visitEnum)
       }.getOrElse(Nil)
 
     generatedPages

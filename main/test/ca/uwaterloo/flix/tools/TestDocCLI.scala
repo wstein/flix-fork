@@ -219,6 +219,9 @@ class TestDocCLI extends AnyFunSuite {
       assert(svgText.contains("<svg") && svgText.contains("</svg>"), "Must contain valid SVG tag structure")
       assert(svgText.contains("relParent") || svgText.contains("relChild"), "Must contain actual Datalog relation names from fixture")
 
+      val xml = scala.xml.XML.loadString(svgText)
+      assert(xml.label == "svg", "Generated Datalog SVG must be valid XML")
+
       // 3. Add handwritten user file in datalog/ directory
       val userHandwritten = p.resolve("build/doc/diagrams/datalog/CustomUserDiagram.svg")
       Files.writeString(userHandwritten, "<svg>User Custom Diagram</svg>", StandardCharsets.UTF_8)

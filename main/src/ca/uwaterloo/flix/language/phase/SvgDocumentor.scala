@@ -74,7 +74,7 @@ object SvgDocumentor {
   }
 
   def generateDatalogDiagrams(root: TypedAst.Root)(implicit flix: Flix): Map[String, String] = {
-    if (!flix.options.docExtended && flix.options.xdatalogDebug.isEmpty) {
+    if (!flix.options.docExtended) {
       return Map.empty
     }
 
@@ -84,14 +84,8 @@ object SvgDocumentor {
     val sb = new StringBuilder()
     sb.append(s"<!-- ${Documentor.GeneratedMarker} -->\n")
     sb.append("""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 220" width="100%" height="100%">""")
-    sb.append("""
-      |<style>
-      |  .edb-node { fill: #e8f5e9; stroke: #2e7d32; stroke-width: 2; rx: 8; ry: 8; }
-      |  .idb-node { fill: #e3f2fd; stroke: #1565c0; stroke-width: 2; rx: 8; ry: 8; }
-      |  .text { font-family: system-ui, sans-serif; font-size: 14px; fill: #1c1e21; text-anchor: middle; dominant-baseline: middle; }
-      |  .edge { stroke: #555; stroke-width: 2; }
-      |</style>
-      |""".stripMargin)
+    sb.append("""<defs><marker id="arrow" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#555" /></marker></defs>""")
+    sb.append("""<style>.edb-node { fill: #e8f5e9; stroke: #2e7d32; stroke-width: 2; rx: 8; ry: 8; } .idb-node { fill: #e3f2fd; stroke: #1565c0; stroke-width: 2; rx: 8; ry: 8; } .text { font-family: system-ui, sans-serif; font-size: 14px; fill: #1c1e21; text-anchor: middle; dominant-baseline: middle; } .edge { stroke: #555; stroke-width: 2; }</style>""")
 
     val edbName = xmlEscape(relNames.headOption.getOrElse("EDB_Facts"))
     val idbName = xmlEscape(relNames.drop(1).headOption.getOrElse("IDB_Rules"))
@@ -105,7 +99,7 @@ object SvgDocumentor {
     sb.append("""<text x="440" y="115" class="text" font-size="12px">Intensional Database (IDB)</text>""")
 
     sb.append("""<path d="M 280 105 L 320 105" class="edge" marker-end="url(#arrow)" />""")
-    sb.append("\n</svg>\n")
+    sb.append("</svg>\n")
 
     Map("datalog/DatalogSchema.svg" -> sb.toString())
   }
