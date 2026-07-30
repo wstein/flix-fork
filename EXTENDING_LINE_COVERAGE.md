@@ -8,7 +8,8 @@ source-reachable expressions rather than post-optimization bytecode.
 
 Current line coverage includes function bodies, `let` bindings, statement
 expressions, `if` conditions and bodies, definition/signature/closure calls, lambda
-construction, and tuples. Operator syntax reaches this phase as `ApplySig`. `if` uses
+construction, tuples, record operations, array literals, unchecked casts, and `RunWith`.
+Operator syntax reaches this phase as `ApplySig`. `if` uses
 `BranchTrue` and `BranchFalse`; `match`
 and restrictable `choose` rule bodies use `BranchRule`. Guard outcomes are not
 separately covered.
@@ -33,12 +34,11 @@ then recurse so nested executable expressions on other lines receive probes.
 
 ## Candidate forms
 
-- Next: `Tag`, `RestrictableTag`, `RecordSelect`, `RecordExtend`, and
-  `RecordRestrict`. Probe the enclosing construction or access after recursively
-  transforming values.
-- Next: `ArrayLit`, `ArrayNew`, `ArrayLoad`, `ArrayStore`, `StructNew`,
+- Next: `Tag`, `RestrictableTag`, `StructNew`,
+  and related enum/struct construction forms.
+- Next: `ArrayNew`, `ArrayLoad`, `ArrayStore`, `StructNew`,
   `StructGet`, and `StructPut`. Preserve child order and effects.
-- Next: `Ascribe`, `Cast`, `CheckedCast`, `UncheckedCast`, and
+- Next: `Ascribe`, `Cast`, `CheckedCast`, and
   `UncheckedMaskingCast`. Probe the enclosing runtime expression, not type-only data.
 - Source lambdas are `TypedAst.Expr.Lambda`; when their expression location is
   synthetic, the formal parameter supplies the real source anchor.

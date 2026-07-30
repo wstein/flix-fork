@@ -3,8 +3,8 @@
 ## Implemented
 
 `CoverageInstrumentation.instrumentExpression` recursively instruments definition, signature,
-and closure applications, lambda construction, tuple construction, function bodies, `let` bindings,
-statement expressions, and
+and closure applications, lambda construction, tuples, records, array literals, unchecked casts,
+`run … with handler`, function bodies, `let` bindings, statement expressions, and
 `if` conditions and bodies.
 
 A probe is attached to the reconstructed expression itself. Recursion discovers
