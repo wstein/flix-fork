@@ -79,6 +79,8 @@ Did you know that:
 - the Flix type and effect system supports complete type inference, i.e. if a
   program is typeable then the type inference with find the typing.
 
+- Flix documentation backends (`flix doc`) render embedded GFM ` ```mermaid ` blocks inside `///` doc comments. You can write state machine diagrams (`stateDiagram-v2`), sequence flowcharts (`sequenceDiagram`), and data flow pipelines (`flowchart LR`) directly in function and type docstrings.
+
 - The Flix "Everyday Programming"-section https://doc.flix.dev/everyday-programming.html
   describes many commonly used features of the language.
 
