@@ -23,8 +23,8 @@ import ca.uwaterloo.flix.runtime.{Coverage, ProbeKind}
 /**
   * Instrument Flix source code for coverage analysis by inserting CoverageHit AST nodes.
   *
-  * Function-entry probes only.
-  * ===============================================
+  * Function, line, and branch probes.
+  * ==================================
   * For each user-defined non-test function in project source (not bundled libraries),
   * we:
   * 1. Assign a unique probe ID
@@ -142,11 +142,11 @@ object CoverageInstrumentation {
     *
     * PHASE 2.1 - Let-Binding/Statement-Entry Coverage (INCOMPLETE):
     * ===============================================================
-    * Currently instruments only Let-binding expressions with line probes.
-    * Line probes mark the entry point of statement-level expressions.
+    * Instruments function bodies, let-bindings, statement expressions, and
+    * if-expression conditions and bodies with line probes.
     *
-    * NOT YET instrumented: function-return expressions, conditions, branch bodies,
-    * function calls, or ordinary statement expressions (Stm entries).
+    * NOT YET instrumented: arbitrary function-return expressions, function calls,
+    * and other expression forms not represented by a let, statement, or if.
     * TODO: Extend to cover all executable expressions for complete line coverage.
     *
     * PHASE 2.2 - If-Expression Branch Coverage (COMPLETE):
@@ -257,7 +257,7 @@ object CoverageInstrumentation {
           }
           val (instBody, nextProbeId) = instrumentExpression(rule.exp, qualifiedName, probeId, registeredLineProbes)
           probeId = nextProbeId
-          if (rule.loc.isReal) {
+          if (rule.exp.loc.isReal) {
             val ruleProbeId = probeId
             probeId += 1
             Coverage.registerProbe(ruleProbeId, rule.exp.loc.source.name, rule.exp.loc.startLine, ProbeKind.BranchRule, qualifiedName)

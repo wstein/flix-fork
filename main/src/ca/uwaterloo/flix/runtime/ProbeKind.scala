@@ -23,6 +23,7 @@ package ca.uwaterloo.flix.runtime
   * - Line: Executable statement or expression within a function
   * - BranchTrue: True branch of an if-expression
   * - BranchFalse: False branch of an if-expression
+  * - BranchRule: Selected body of a match or restrictable choose rule
   */
 sealed trait ProbeKind {
   /**

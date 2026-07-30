@@ -79,14 +79,14 @@ Examples:
 The coverage system adds instrumentation probes to compiled project definitions:
 
 - `--coverage` flag enables coverage instrumentation during compilation
-- `Coverage.hit(probeId)` is called at function, executable-line, and `if` branch entry
+- `Coverage.hit(probeId)` is called at function, executable-line, `if` branch, and `match`/restrictable `choose` rule entry
 - Coverage probes are inserted after the first tree-shaking pass, during `CoverageInstrumentation`
 - Coverage data is recorded to `build/coverage.json` when instrumented code runs
 
 ### Implementation Details
 
 **Phases Involved:**
-1. **TreeShaker1 / CoverageInstrumentation** — Retains reachable definitions, then inserts function, body-line, selected `let`-line, and `if` branch probes
+1. **TreeShaker1 / CoverageInstrumentation** — Retains reachable definitions, then inserts function, line, `if` branch, and `match`/restrictable `choose` rule probes
 2. **Monomorphization/Lowering** — Lowers `CoverageHit` to `ApplyAtomic(AtomicOp.CoverageHit, ...)` typed as `Type.Pure`
 3. **Optimizer/Inliner** — **Critical**: Preserves `CoverageHit` via `mustPreserve()` barrier to prevent dead-code elimination
 

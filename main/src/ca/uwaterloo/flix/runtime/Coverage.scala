@@ -23,7 +23,7 @@ import scala.collection.mutable
   *
   * @param source source file path
   * @param line line number (1-based)
-  * @param kind probe kind (function, line, branch-true, branch-false)
+  * @param kind probe kind (function, line, if branch, or match/choose rule)
   * @param qualifiedName fully-qualified function name where the probe is located
   */
 case class ProbeMetadata(
