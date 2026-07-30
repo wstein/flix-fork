@@ -187,6 +187,8 @@ object CoverageInstrumentation {
         // Recursively instrument condition
         val (instExp1, pc1) = instrumentExpression(exp1, qualifiedName, probeId, registeredLineProbes)
         probeId = pc1
+        val (lineExp1, pc2) = instrumentLine(instExp1, qualifiedName, probeId, registeredLineProbes)
+        probeId = pc2
 
         // Register and wrap true branch (use then-branch location, not if-expression location)
         val trueBranchProbeId = probeId
@@ -196,16 +198,18 @@ object CoverageInstrumentation {
         }
 
         // Recursively instrument then expression
-        val (instExp2, pc2) = instrumentExpression(exp2, qualifiedName, probeId, registeredLineProbes)
-        probeId = pc2
+        val (instExp2, pc3) = instrumentExpression(exp2, qualifiedName, probeId, registeredLineProbes)
+        probeId = pc3
+        val (lineExp2, pc4) = instrumentLine(instExp2, qualifiedName, probeId, registeredLineProbes)
+        probeId = pc4
 
         // Wrap then branch with probe
         val wrappedExp2 = if (exp2.loc.isReal) {
           TypedAst.Expr.Stm(
             List(TypedAst.Expr.CoverageHit(trueBranchProbeId, exp2.loc)),
-            instExp2,
-            instExp2.tpe,
-            instExp2.eff,
+            lineExp2,
+            lineExp2.tpe,
+            lineExp2.eff,
             exp2.loc
           )
         } else {
@@ -220,23 +224,25 @@ object CoverageInstrumentation {
         }
 
         // Recursively instrument else expression
-        val (instExp3, pc3) = instrumentExpression(exp3, qualifiedName, probeId, registeredLineProbes)
-        probeId = pc3
+        val (instExp3, pc5) = instrumentExpression(exp3, qualifiedName, probeId, registeredLineProbes)
+        probeId = pc5
+        val (lineExp3, pc6) = instrumentLine(instExp3, qualifiedName, probeId, registeredLineProbes)
+        probeId = pc6
 
         // Wrap else branch with probe
         val wrappedExp3 = if (exp3.loc.isReal) {
           TypedAst.Expr.Stm(
             List(TypedAst.Expr.CoverageHit(falseBranchProbeId, exp3.loc)),
-            instExp3,
-            instExp3.tpe,
-            instExp3.eff,
+            lineExp3,
+            lineExp3.tpe,
+            lineExp3.eff,
             exp3.loc
           )
         } else {
           instExp3
         }
 
-        (e.copy(exp1 = instExp1, exp2 = wrappedExp2, exp3 = wrappedExp3), probeId)
+        (e.copy(exp1 = lineExp1, exp2 = wrappedExp2, exp3 = wrappedExp3), probeId)
 
       // Instrument let-expressions with line probes
       case e @ TypedAst.Expr.Let(sym, exp1, exp2, tpe, eff, loc) =>
@@ -293,6 +299,23 @@ object CoverageInstrumentation {
     }
 
     result
+  }
+
+  /** Registers and inserts one line probe for a real source expression. */
+  private def instrumentLine(
+    exp: TypedAst.Expr,
+    qualifiedName: String,
+    probeId: Int,
+    registeredLineProbes: scala.collection.mutable.Set[(String, String, Int)]
+  ): (TypedAst.Expr, Int) = {
+    val key = (qualifiedName, exp.loc.source.name, exp.loc.startLine)
+    if (exp.loc.isReal && registeredLineProbes.add(key)) {
+      Coverage.registerProbe(probeId, exp.loc.source.name, exp.loc.startLine, ProbeKind.Line, qualifiedName)
+      val wrapped = TypedAst.Expr.Stm(List(TypedAst.Expr.CoverageHit(probeId, exp.loc)), exp, exp.tpe, exp.eff, exp.loc)
+      (wrapped, probeId + 1)
+    } else {
+      (exp, probeId)
+    }
   }
 
   /**
