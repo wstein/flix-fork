@@ -509,7 +509,15 @@ object CoverageInstrumentation {
           probeId = pcRule
           val (lineRuleExp, pcLine) = instrumentLine(instRuleExp, qualifiedName, probeId, registeredLineProbes)
           probeId = pcLine
-          rule.copy(exp = lineRuleExp)
+
+          val wrappedBody = if (rule.exp.loc.isReal) {
+            val ruleProbeId = probeId
+            probeId += 1
+            Coverage.registerProbe(ruleProbeId, rule.exp.loc.source.name, rule.exp.loc.startLine, ProbeKind.BranchRule, qualifiedName)
+            TypedAst.Expr.Stm(List(TypedAst.Expr.CoverageHit(ruleProbeId, rule.exp.loc)), lineRuleExp, lineRuleExp.tpe, lineRuleExp.eff, rule.exp.loc)
+          } else lineRuleExp
+
+          rule.copy(exp = wrappedBody)
         }
         instrumentLine(e.copy(exp = instExp0, rules = instRules), qualifiedName, probeId, registeredLineProbes)
 
@@ -523,7 +531,15 @@ object CoverageInstrumentation {
           probeId = pcRule
           val (lineRuleExp, pcLine) = instrumentLine(instRuleExp, qualifiedName, probeId, registeredLineProbes)
           probeId = pcLine
-          rule.copy(exp = lineRuleExp)
+
+          val wrappedBody = if (rule.exp.loc.isReal) {
+            val ruleProbeId = probeId
+            probeId += 1
+            Coverage.registerProbe(ruleProbeId, rule.exp.loc.source.name, rule.exp.loc.startLine, ProbeKind.BranchRule, qualifiedName)
+            TypedAst.Expr.Stm(List(TypedAst.Expr.CoverageHit(ruleProbeId, rule.exp.loc)), lineRuleExp, lineRuleExp.tpe, lineRuleExp.eff, rule.exp.loc)
+          } else lineRuleExp
+
+          rule.copy(exp = wrappedBody)
         }
         instrumentLine(e.copy(rules = instRules), qualifiedName, probeId, registeredLineProbes)
 

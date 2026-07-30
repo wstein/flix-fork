@@ -605,8 +605,10 @@ class TestLineBranchCoverage extends AnyFunSuite {
         val hits = Coverage.snapshot().keySet
         val throwIds = metadata.collect { case (id, probe) if probe.kind == ProbeKind.Line && probe.line == throwLine => id }.toSet
         val catchIds = metadata.collect { case (id, probe) if probe.kind == ProbeKind.Line && probe.line == catchLine => id }.toSet
+        val catchBranchIds = metadata.collect { case (id, probe) if probe.kind == ProbeKind.BranchRule && probe.line == catchLine => id }.toSet
         assert(throwIds.nonEmpty && (throwIds intersect hits).nonEmpty, "Throw line should be registered and hit")
         assert(catchIds.nonEmpty && (catchIds intersect hits).nonEmpty, "Catch rule body line should be registered and hit")
+        assert(catchBranchIds.nonEmpty && (catchBranchIds intersect hits).nonEmpty, "Catch rule BranchRule probe should be registered and hit")
       case Result.Err(errors) => fail(s"Compilation failed: $errors")
     }
   }
