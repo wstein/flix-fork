@@ -53,10 +53,24 @@ object SvgDocumentor {
     *
     * Returns a set of the file names of the generated SVG diagrams.
     */
-  def run(root: TypedAst.Root, packageModules: PackageModules)(implicit flix: Flix): Set[String] = {
+  /**
+    * A format-neutral manifest of generated SVG diagrams.
+    */
+  case class DiagramManifest(diagrams: Map[String, String]) {
+    def contains(name: String): Boolean = diagrams.contains(name)
+    def get(name: String): Option[String] = diagrams.get(name)
+    def keySet: Set[String] = diagrams.keySet
+  }
+
+  /**
+    * Runs diagram generation for the given module tree, writing SVG files to disk.
+    *
+    * Returns a format-neutral DiagramManifest of the generated SVG diagrams.
+    */
+  def run(root: TypedAst.Root, packageModules: PackageModules)(implicit flix: Flix): DiagramManifest = {
     val moduleTree = Documentor.build(root, packageModules)
     val diagrams = generateAll(moduleTree)
-    
+
     val dir = DiagramDirectory
     if (!Files.exists(dir)) {
       Files.createDirectories(dir)
@@ -70,7 +84,7 @@ object SvgDocumentor {
     }
 
     deleteStaleDiagrams(allDiagrams.keySet)
-    allDiagrams.keySet
+    DiagramManifest(allDiagrams)
   }
 
   def generateDatalogDiagrams(root: TypedAst.Root)(implicit flix: Flix): Map[String, String] = {
@@ -78,7 +92,7 @@ object SvgDocumentor {
       return Map.empty
     }
 
-    val relDefs = root.defs.values.map(_.sym.name).filter(n => n.startsWith("rel") || n.contains("Rel") || n.contains("Edge") || n.contains("Path") || n.contains("Parent") || n.contains("Child")).toList.distinct
+    val relDefs = root.defs.values.map(_.sym.name).filter(n => n.startsWith("rel") || n.contains("Rel") || n.contains("Edge") || n.contains("Path") || n.contains("Parent") || n.contains("Child")).toList.distinct.sorted
     val relNames = if (relDefs.nonEmpty) relDefs else List("EDB_Facts", "IDB_Rules")
 
     val sb = new StringBuilder()
@@ -132,8 +146,10 @@ object SvgDocumentor {
     * Generates an SVG diagram for a Trait showing supertraits above and instances/subtraits below.
     */
   private def generateTraitDiagram(trt: Trait)(implicit flix: Flix): Option[String] = {
-    val superTraits = trt.decl.superTraits.map(_.symUse.sym.name)
-    val instances = trt.instances.map(inst => ca.uwaterloo.flix.language.fmt.FormatType.formatType(inst.tpe)).distinct.take(5)
+    val superTraits = trt.decl.superTraits.map(_.symUse.sym.name).sorted
+    val rawInstances = trt.instances.map(inst => ca.uwaterloo.flix.language.fmt.FormatType.formatType(inst.tpe)).distinct.sorted
+    val (shownInsts, restInsts) = if (rawInstances.size > 4) (rawInstances.take(4), rawInstances.drop(4)) else (rawInstances, Nil)
+    val instances = if (restInsts.nonEmpty) shownInsts :+ s"+${restInsts.size} more" else shownInsts
 
     if (superTraits.isEmpty && instances.isEmpty) {
       return None
@@ -193,10 +209,12 @@ object SvgDocumentor {
     * Generates an SVG diagram for a Module showing submodules.
     */
   private def generateModuleDiagram(mod: Module): Option[String] = {
-    val submodules = mod.submodules.map(_.name).take(5)
-    if (submodules.isEmpty) {
+    val rawSubmodules = mod.submodules.map(_.name).sorted
+    if (rawSubmodules.isEmpty) {
       return None
     }
+    val (shownSubs, restSubs) = if (rawSubmodules.size > 4) (rawSubmodules.take(4), rawSubmodules.drop(4)) else (rawSubmodules, Nil)
+    val submodules = if (restSubs.nonEmpty) shownSubs :+ s"+${restSubs.size} more" else shownSubs
 
     val width = 480
     val nodeWidth = 120
@@ -253,11 +271,16 @@ object SvgDocumentor {
     s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;").replace("'", "&apos;")
 
   private def collect(mod: Module): List[Item] = {
+    val sortedSubmodules = mod.submodules.sortBy(_.name)
+    val sortedTraits = mod.traits.sortBy(_.name)
+    val sortedEffects = mod.effects.sortBy(_.name)
+    val sortedEnums = mod.enums.sortBy(_.name)
+
     mod ::
-      mod.submodules.flatMap(collect) :::
-      mod.traits.flatMap(t => t :: t.companionMod.toList.flatMap(collect)) :::
-      mod.effects.flatMap(e => e :: e.companionMod.toList.flatMap(collect)) :::
-      mod.enums.flatMap(e => e :: e.companionMod.toList.flatMap(collect))
+      sortedSubmodules.flatMap(collect) :::
+      sortedTraits.flatMap(t => t :: t.companionMod.toList.flatMap(collect)) :::
+      sortedEffects.flatMap(e => e :: e.companionMod.toList.flatMap(collect)) :::
+      sortedEnums.flatMap(e => e :: e.companionMod.toList.flatMap(collect))
   }
 
   private def writeDiagramFile(fileName: String, content: String)(implicit flix: Flix): Unit = {
@@ -294,3 +317,4 @@ object SvgDocumentor {
     }
   }
 }
+

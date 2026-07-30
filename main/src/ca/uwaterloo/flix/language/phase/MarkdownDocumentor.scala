@@ -99,7 +99,7 @@ object MarkdownDocumentor {
   /**
     * Writes Markdown documentation for `root`, restricted to `packageModules`, to the output directory.
     */
-  def run(root: TypedAst.Root, packageModules: PackageModules)(implicit flix: Flix): Unit = {
+  def run(root: TypedAst.Root, packageModules: PackageModules, manifest: SvgDocumentor.DiagramManifest = SvgDocumentor.DiagramManifest(Map.empty))(implicit flix: Flix): Unit = {
     val pages = documentAll(root, packageModules)
     deleteStalePages(pages.keySet)
     for ((name, content) <- pages) {

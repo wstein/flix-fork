@@ -162,8 +162,11 @@ Did you know that:
 
 - `flix doc` generates API documentation for a project. Pass
   `--doc-format md` for Markdown instead of HTML: one page per module, trait,
-  effect, and enum, small enough to read in a checkout or hand to a language
-  model. `--doc-format all` emits both.
+  effect, and enum. Pass `flix doc --extended` to generate standalone SVG structure
+  diagrams (`build/doc/diagrams/`) for trait supertype hierarchies, module trees, and
+  Datalog relation schema overviews. Stale generated SVGs and pages carrying marker
+  headers are automatically cleaned up recursively on subsequent runs. `--doc-format all`
+  emits both HTML and Markdown backends.
 
 - the Flix VSCode extension uses the real Flix compiler.
 
