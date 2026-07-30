@@ -44,6 +44,9 @@ case class StratificationError(cycle: List[(Name.Pred, SourceLocation)], tpe: Ty
        |
        |  ${cyan(FormatType.formatType(tpe))}
        |
+       |Stratification Dependency Cycle:
+       |
+       |${fmtCycleDiagram(fmt)}
        |The following predicate symbols are on the cycle:
        |
        |  ${cycle.map(_._1).mkString(" <- ")}
@@ -51,6 +54,19 @@ case class StratificationError(cycle: List[(Name.Pred, SourceLocation)], tpe: Ty
        |The following constraints are part of the cycle:
        |${fmtConstraints(fmt)}
        |""".stripMargin
+  }
+
+  /**
+    * Formats an ASCII dependency graph of the stratification cycle.
+    */
+  private def fmtCycleDiagram(fmt: Formatter): String = {
+    if (cycle.isEmpty) return ""
+    val preds = cycle.map(_._1.name)
+    val cyclePath = (preds :+ preds.head).mkString(" --(strong/negated)--> ")
+    val line = "─" * (cyclePath.length + 4)
+    s"""  ┌$line┐
+       |  │  ${fmt.cyan(cyclePath)}  │
+       |  └$line┘""".stripMargin
   }
 
   /**
