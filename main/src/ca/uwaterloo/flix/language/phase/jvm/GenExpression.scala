@@ -1182,8 +1182,6 @@ object GenExpression {
       ct match {
       case ExpPosition.Tail =>
         val defJvmName = BackendObjType.Defn(sym).jvmName
-        // Type of the function abstract class
-        val functionInterface = JvmOps.getErasedFunctionInterfaceType(root.defs(sym).arrowType)
 
         // Put the def on the stack
         mv.visitTypeInsn(NEW, defJvmName.toInternalName)
@@ -1195,7 +1193,8 @@ object GenExpression {
           mv.visitInsn(DUP)
           // Evaluating the expression
           compileExpr(arg)
-          BytecodeInstructions.PUTFIELD(functionInterface.ArgField(i))
+          mv.visitFieldInsn(PUTFIELD, defJvmName.toInternalName,
+            s"arg$i", BackendType.toErasedBackendType(arg.tpe).toDescriptor)
         }
         // Return the def
         mv.visitInsn(ARETURN)
@@ -1203,7 +1202,7 @@ object GenExpression {
       case ExpPosition.NonTail =>
         val defn = root.defs(sym)
         val targetIsFunction = defn.cparams.isEmpty
-        val canCallStaticMethod = Purity.isControlPure(defn.expr.purity) && targetIsFunction
+        val canCallStaticMethod = Purity.isControlPure(defn.expr.purity) && targetIsFunction && exps.length == defn.fparams.length
         if (canCallStaticMethod) {
           val paramTpes = defn.fparams.map(fp => BackendType.toBackendType(fp.tpe))
           // Call the static method, using exact types
