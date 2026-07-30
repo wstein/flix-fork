@@ -16,27 +16,38 @@
 package ca.uwaterloo.flix.language.phase
 
 import ca.uwaterloo.flix.api.Flix
-import ca.uwaterloo.flix.language.ast.TypedAst
-import ca.uwaterloo.flix.language.ast.Symbol
+import ca.uwaterloo.flix.language.ast.{Type, TypedAst}
+import ca.uwaterloo.flix.language.ast.shared.Input
 import ca.uwaterloo.flix.runtime.Coverage
 
 /**
-  * Instrument Flix source code for coverage analysis.
+  * Instrument Flix source code for coverage analysis by inserting CoverageHit AST nodes.
   *
-  * This phase registers coverage probes for:
-  * - Function entry points
-  * - Executable lines
-  * - Branch targets (if, match, guards)
+  * Function-entry probes only.
+  * ===============================================
+  * For each user-defined non-test function in project source (not stdlib), we:
+  * 1. Assign a unique probe ID
+  * 2. Register the probe in the Coverage registry with (source, line, "function")
+  * 3. Wrap the function body with TypedAst.Expr.CoverageHit(probeId) followed by the original body
   *
-  * During this phase, we:
-  * 1. Traverse the typed AST
-  * 2. Identify coverage points (functions, lines, branches)
-  * 3. Assign unique probe IDs
-  * 4. Register probes in the Coverage registry
-  * 5. Store probe information for later instrumentation
+  * The CoverageHit node is marked with Pure effect to preserve function type signatures.
+  * It's a compiler-internal operation that prevents optimization removal while leaving the
+  * observable purity of the function unchanged. The actual Coverage.hit(probeId) call is emitted
+  * during JVM code generation and executes invisibly as a side effect.
   *
-  * The actual bytecode instrumentation that calls Coverage.hit(probeId)
-  * happens during JVM code generation.
+  * Probe Lifecycle:
+  * - During check(): Coverage.clear() clears metadata/counters from prior compilations
+  * - During CoverageInstrumentation: probes are registered and inserted into AST
+  * - During JVM emission: Coverage.hit(probeId) bytecode is emitted
+  * - During execution: calls to Coverage.hit() increment atomic counters
+  * - During reporting: Coverage.snapshot() + getProbeMetadata() generate JSON report
+  *
+  * Filtering:
+  * - Excludes @Test-marked functions (tested separately)
+  * - Excludes compiler internal packages (ca.uwaterloo.flix.*, flix.*)
+  * - Excludes standard library modules (Prelude, Array, List, etc.)
+  * - Excludes functions from stdlib source files
+  * This ensures reports focus on user/project code, not compiler/library overhead.
   */
 object CoverageInstrumentation {
 
@@ -45,71 +56,48 @@ object CoverageInstrumentation {
     *
     * @param root the typed AST root.
     * @param flix the Flix compiler instance.
-    * @return a map from symbol to probe ID.
+    * @return the root with instrumented function bodies.
     */
-  def run(root: TypedAst.Root)(implicit flix: Flix): Map[Symbol.DefnSym, Int] = {
+  def run(root: TypedAst.Root)(implicit flix: Flix): TypedAst.Root = {
     val defs = root.defs.values.toList
-    val probeMap = scala.collection.mutable.Map[Symbol.DefnSym, Int]()
-
     var probeCounter = 0
-    var instrumentedCount = 0
-    var skippedCount = 0
 
-    // Debug: collect info about all functions
-    val debugInfo = scala.collection.mutable.ArrayBuffer[String]()
-    debugInfo += s"Total definitions: ${defs.size}"
-    debugInfo += ""
-
-    // Register a probe for each user-defined function
-    for (defn <- defs) {
-      val sym = defn.sym
-      val loc = sym.loc
-      val name = sym.name
-      val namespace = sym.namespace.mkString(".")
-
-      // Check if should instrument
+    // Transform each definition that should be instrumented
+    val instrumentedDefs = defs.map { defn =>
       if (shouldInstrument(defn)) {
         val probeId = probeCounter
         probeCounter += 1
-        instrumentedCount += 1
 
-        val sourcePath = loc.source.name
-        val lineNumber = loc.startLine
+        val sourcePath = defn.loc.source.name
+        val lineNumber = defn.loc.startLine
 
-        // Register the probe
+        // Register the probe in the Coverage runtime
         Coverage.registerProbe(probeId, sourcePath, lineNumber, "function")
 
-        // Store probe ID mapping
-        probeMap(sym) = probeId
+        // Wrap the function body with CoverageHit
+        val instrumentedBody = TypedAst.Expr.Stm(
+          List(TypedAst.Expr.CoverageHit(probeId, defn.loc)),
+          defn.exp,
+          defn.exp.tpe,
+          Type.mkUnion(Type.IO :: defn.exp.eff :: Nil, defn.loc),
+          defn.loc
+        )
 
-        debugInfo += s"[$probeId] INSTRUMENTED: $name at $sourcePath:$lineNumber (namespace: $namespace)"
+        // Return the instrumented definition
+        defn.copy(exp = instrumentedBody)
       } else {
-        skippedCount += 1
-        debugInfo += s"[SKIP] $name (namespace: $namespace)"
+        defn
       }
     }
 
-    debugInfo += ""
-    debugInfo += s"Instrumented: $instrumentedCount, Skipped: $skippedCount"
-
-    // Write debug info
-    try {
-      val debugFile = java.nio.file.Paths.get("out/coverage_debug.txt")
-      java.nio.file.Files.createDirectories(debugFile.getParent)
-      java.nio.file.Files.write(debugFile, debugInfo.mkString("\n").getBytes)
-    } catch {
-      case _: Exception => // Ignore errors writing debug file
-    }
-
-    // Store the probe map on the Flix instance
-    flix.setCoverageProbeMap(probeMap.toMap)
-
-    // Return the probe map
-    probeMap.toMap
+    // Rebuild the root with instrumented definitions
+    root.copy(defs = instrumentedDefs.map(d => d.sym -> d).toMap)
   }
 
   /**
     * Determine if a definition should be instrumented for coverage.
+    *
+    * Only instrument user-provided source code, not standard library or compiler-internal functions.
     *
     * @param defn the definition to check.
     * @return true if the definition should be instrumented.
@@ -117,16 +105,52 @@ object CoverageInstrumentation {
   private def shouldInstrument(defn: TypedAst.Def): Boolean = {
     val sym = defn.sym
     val spec = defn.spec
+    val sourceFileName = defn.loc.source.name
 
     // Skip test functions (marked with @Test)
     if (spec.ann.isTest) {
       return false
     }
 
-    // Skip compiler-generated functions (internal builtins, standard library internals)
-    // Check if namespace starts with compiler packages
+    // Only project inputs are part of a project's coverage report.
+    defn.loc.source.input match {
+      case Input.RealFile(_, _) => ()
+      case _ => return false
+    }
+
+    // Skip compiler-generated functions (internal builtins).
     val namespacePath = sym.namespace.mkString(".")
+
+    // Skip compiler packages
     if (namespacePath.startsWith("ca.uwaterloo.flix") || namespacePath.startsWith("flix")) {
+      return false
+    }
+
+    // Skip standard library modules (typically have capital first letter in namespace)
+    val stdlibModules = Set(
+      "Prelude", "Array", "List", "Option", "Result", "Map", "Set", "String",
+      "Vector", "Chain", "Queue", "Stack", "Nec", "Nel", "OrderedMap",
+      "OrderedSet", "HashMap", "HashSet", "MutableList", "MutableMap",
+      "MutableSet", "Choice", "Lazy", "Validation", "Try", "Error",
+      "Sys", "File", "Path", "IO", "Time", "Time/Duration", "Time/Instant",
+      "Random", "Time/Timestamp", "Env", "Process", "Hash", "Crypto",
+      "Digest", "Json", "Url", "Http", "Net", "Dns", "Tcp", "Udp",
+      "Dev", "Regex", "Format", "Console", "Debug", "Bench", "Test",
+      "Logger", "Applicative", "Monad", "Functor", "Enum", "Order",
+      "Show", "Eq", "Hash", "Semigroupal", "Category", "Comparable",
+      "Parallel", "Foldable", "Traversable", "Reducible"
+    )
+
+    val topLevelModule = sym.namespace.headOption.getOrElse("")
+    if (stdlibModules.contains(topLevelModule)) {
+      return false
+    }
+
+    // Skip files that appear to be from the standard library or examples
+    if (sourceFileName.contains("Prelude") ||
+        sourceFileName.contains("stdlib") ||
+        sourceFileName.contains("examples/") ||
+        sourceFileName.contains("library/")) {
       return false
     }
 

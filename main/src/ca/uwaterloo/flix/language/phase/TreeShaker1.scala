@@ -305,6 +305,9 @@ object TreeShaker1 {
     case Expr.FixpointInjectInto(exps, _, _, _, _) =>
       visitExps(exps)
 
+    case Expr.CoverageHit(_, _) =>
+      Set.empty
+
     case Expr.Error(m, _, _) =>
       throw InternalCompilerException(s"Unexpected error expression near", m.loc)
   }

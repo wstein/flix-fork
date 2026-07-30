@@ -25,10 +25,9 @@ import scala.collection.mutable
   *
   * @param classes A map from internal names (strings) to JvmClasses.
   *
-  * We use the current thread's context classloader as parent to ensure access to runtime classes
-  * (like Coverage) that are on the application classpath. This is important when running as a JAR
-  * where all dependencies are packaged together.
-  */
+ * The context class loader exposes the compiler runtime to generated code, including
+ * coverage instrumentation, while the loader still resolves generated classes itself.
+ */
 class FlixClassLoader(classes: Map[String, JvmClass])(implicit flix: Flix) extends ClassLoader(Thread.currentThread().getContextClassLoader) {
 
   /**

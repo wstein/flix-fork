@@ -526,6 +526,9 @@ object Dependencies {
       visitType(tpe)
       visitType(eff)
 
+    case Expr.CoverageHit(_, _) =>
+      ()
+
     case Expr.Error(_, tpe, eff) =>
       visitType(tpe)
       visitType(eff)

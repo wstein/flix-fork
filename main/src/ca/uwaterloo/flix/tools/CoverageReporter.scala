@@ -39,48 +39,13 @@ object CoverageReporter {
       Files.createDirectories(parentDir)
     }
 
-    // Get the snapshot of coverage data and metadata
+    // Get the snapshot of coverage data and ALL registered metadata
     val snapshot = Coverage.snapshot()
     val metadata = Coverage.getProbeMetadata
 
-    // Debug: Write all probe data to file
-    try {
-      val debugLines = scala.collection.mutable.ArrayBuffer[String]()
-      debugLines += s"Total probes registered: ${metadata.size}"
-      debugLines += s"Total probes with hits: ${snapshot.size}"
-      debugLines += ""
-      
-      // Show probes with hits
-      debugLines += "Probes with hits:"
-      snapshot.foreach { case (probeId, count) =>
-        metadata.get(probeId) match {
-          case Some((source, line, kind)) =>
-            debugLines += s"  [$probeId] $source:$line ($kind) = $count hits"
-          case None =>
-            debugLines += s"  [$probeId] METADATA NOT FOUND = $count hits"
-        }
-      }
-      
-      // Show test file probes
-      debugLines += ""
-      debugLines += "Test file probes (hit count):"
-      metadata.filter(_._2._1.contains("coverage_test")).foreach { case (probeId, (source, line, kind)) =>
-        val hits = snapshot.getOrElse(probeId, 0L)
-        debugLines += s"  [$probeId] $source:$line ($kind) = $hits hits"
-      }
-      
-      val debugFile = java.nio.file.Paths.get("out/coverage_reporter_debug.txt")
-      java.nio.file.Files.write(debugFile, debugLines.mkString("\n").getBytes)
-    } catch {
-      case _: Exception => // Ignore errors writing debug file
-    }
-
-    // Organize coverage by file
-    val coverageByFile: Map[String, List[(Int, Int, String)]] = snapshot.toList.flatMap {
-      case (probeId, count) =>
-        metadata.get(probeId).map {
-          case (source, line, kind) => (source, (probeId, line, kind))
-        }
+    // Organize ALL probes by file (including zero-hit)
+    val coverageByFile: Map[String, List[(Int, Int, String)]] = metadata.toList.map {
+      case (probeId, (source, line, kind)) => (source, (probeId, line, kind))
     }.groupBy(_._1).map { case (k, v) => k -> v.map(_._2) }
 
     // Calculate summary statistics
@@ -88,17 +53,17 @@ object CoverageReporter {
     val lineProbes = metadata.values.count(_._3 == "line")
     val branchProbes = metadata.values.count(_._3.startsWith("branch"))
 
-    val functionCovered = snapshot.count {
-      case (probeId, _) =>
-        metadata.get(probeId).exists(_._3 == "function")
+    val functionCovered = metadata.count {
+      case (probeId, (_, _, kind)) =>
+        kind == "function" && snapshot.contains(probeId)
     }
-    val lineCovered = snapshot.count {
-      case (probeId, _) =>
-        metadata.get(probeId).exists(_._3 == "line")
+    val lineCovered = metadata.count {
+      case (probeId, (_, _, kind)) =>
+        kind == "line" && snapshot.contains(probeId)
     }
-    val branchCovered = snapshot.count {
-      case (probeId, _) =>
-        metadata.get(probeId).exists(_._3.startsWith("branch"))
+    val branchCovered = metadata.count {
+      case (probeId, (_, _, kind)) =>
+        kind.startsWith("branch") && snapshot.contains(probeId)
     }
 
     // Build the JSON report

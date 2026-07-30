@@ -103,6 +103,7 @@ object TypedAstPrinter {
     case Expr.FixpointQueryWithSelect(_, _, _, _, _, _, _, _, _) => DocAst.Expr.Unknown
     case Expr.FixpointSolveWithProject(_, _, _, _, _, _) => DocAst.Expr.Unknown
     case Expr.FixpointInjectInto(_, _, _, _, _) => DocAst.Expr.Unknown
+    case Expr.CoverageHit(_, _) => DocAst.Expr.Unknown
     case Expr.Error(_, _, _) => DocAst.Expr.Error
   }
 

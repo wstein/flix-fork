@@ -299,20 +299,6 @@ object GenFunAndClosureClasses {
     implicit val lines: LineNumbers = new LineNumbers(smap)
     BytecodeInstructions.addLoc(defn.loc)
 
-    // Instrument for coverage if enabled
-    if (flix.options.coverage) {
-      val probeMap = flix.getCoverageProbeMap
-      probeMap.get(defn.sym) match {
-        case Some(probeId) =>
-          // Call Coverage.hit(probeId) at the start of the function
-          m.visitLdcInsn(probeId)
-          m.visitMethodInsn(Opcodes.INVOKESTATIC, JvmName.Coverage.toInternalName, "hit",
-            MethodDescriptor(List(BackendType.Int32), VoidableType.Void).toDescriptor, false)
-        case None =>
-          // No probe registered for this function (e.g., compiler-generated)
-      }
-    }
-
     // used for self-recursive tail calls
     val enterLabel = new Label()
     m.visitLabel(enterLabel)
@@ -413,20 +399,6 @@ object GenFunAndClosureClasses {
     m.visitCode()
     implicit val lines: LineNumbers = new LineNumbers(smap)
     BytecodeInstructions.addLoc(defn.loc)
-
-    // Instrument for coverage if enabled
-    if (flix.options.coverage) {
-      val probeMap = flix.getCoverageProbeMap
-      probeMap.get(defn.sym) match {
-        case Some(probeId) =>
-          // Call Coverage.hit(probeId) at the start of the function
-          m.visitLdcInsn(probeId)
-          m.visitMethodInsn(Opcodes.INVOKESTATIC, JvmName.Coverage.toInternalName, "hit",
-            MethodDescriptor(List(BackendType.Int32), VoidableType.Void).toDescriptor, false)
-        case None =>
-          // No probe registered for this function (e.g., compiler-generated)
-      }
-    }
 
     loadParamsOf(lparams)
 

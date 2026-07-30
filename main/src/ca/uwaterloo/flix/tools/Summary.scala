@@ -292,6 +292,7 @@ object Summary {
       exps.map(countCheckedEcasts).sum + countCheckedEcasts(queryExp) + selects.map(countCheckedEcasts).sum + where.map(countCheckedEcasts).sum
     case Expr.FixpointSolveWithProject(exps, _, _, _, _, _) => exps.map(countCheckedEcasts).sum
     case Expr.FixpointInjectInto(exps, _, _, _, _) => exps.map(countCheckedEcasts).sum
+    case Expr.CoverageHit(_, _) => 0
     case Expr.Error(_, _, _) => 0
   }
 

@@ -280,6 +280,11 @@ object TypedAst {
 
     case class FixpointInjectInto(exps: List[Expr], predsAndArities: List[PredicateAndArity], tpe: Type, eff: Type, loc: SourceLocation) extends Expr
 
+    case class CoverageHit(probeId: Int, loc: SourceLocation) extends Expr {
+      def tpe: Type = Type.Unit
+      def eff: Type = Type.Pure // Compiler-internal side effect: must not change source purity
+    }
+
     case class Error(m: CompilationMessage, tpe: Type, eff: Type) extends Expr {
       override def loc: SourceLocation = m.loc
     }

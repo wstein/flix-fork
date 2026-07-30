@@ -603,6 +603,8 @@ object Visitor {
       case Expr.FixpointInjectInto(exps, _, _, _, _) =>
         exps.foreach(visitExpr)
 
+      case Expr.CoverageHit(_, _) => ()
+
       case Expr.Error(_, _, _) => ()
     }
   }

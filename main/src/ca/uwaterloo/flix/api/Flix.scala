@@ -25,7 +25,7 @@ import ca.uwaterloo.flix.language.phase.jvm.{CodeGen, JvmLoader, JvmWriter}
 import ca.uwaterloo.flix.language.phase.monomorph.Specialization
 import ca.uwaterloo.flix.language.phase.optimizer.{LambdaDrop, Optimizer}
 import ca.uwaterloo.flix.language.{CompilationMessage, GenSym}
-import ca.uwaterloo.flix.runtime.CompilationResult
+import ca.uwaterloo.flix.runtime.{CompilationResult, Coverage}
 import ca.uwaterloo.flix.tools.Summary
 import ca.uwaterloo.flix.tools.compilertop.{CompilerTop, Profiler}
 import ca.uwaterloo.flix.util.*
@@ -110,24 +110,6 @@ class Flix {
     * A cache of error messages for incremental compilation.
     */
   private var cachedErrors: List[CompilationMessage] = Nil
-
-  /**
-    * Coverage probe map: symbol -> probe ID.
-    * Set during CoverageInstrumentation phase if coverage is enabled.
-    */
-  private var coverageProbeMap: Map[Symbol.DefnSym, Int] = Map.empty
-
-  /**
-    * Returns the coverage probe map.
-    */
-  def getCoverageProbeMap: Map[Symbol.DefnSym, Int] = coverageProbeMap
-
-  /**
-    * Sets the coverage probe map.
-    */
-  def setCoverageProbeMap(map: Map[Symbol.DefnSym, Int]): Unit = {
-    coverageProbeMap = map
-  }
 
   /**
     * A map to track the time spent in each phase and sub-phase.
@@ -505,6 +487,11 @@ class Flix {
     // Mark this object as implicit.
     implicit val flix: Flix = this
 
+    // Clear coverage registry at the start of each compilation to isolate probe metadata
+    if (options.coverage) {
+      Coverage.clear()
+    }
+
     // Initialize fork-join thread pool.
     initForkJoinPool()
 
@@ -665,13 +652,16 @@ class Flix {
     // Initialize fork-join thread pool.
     initForkJoinPool()
 
-    // Instrument for coverage if enabled.
-    if (flix.options.coverage) {
+    // Instrument for coverage if enabled - this wraps function bodies with CoverageHit nodes
+    // that carry probe IDs through all subsequent transformations
+    val coveredAst = if (flix.options.coverage) {
       CoverageInstrumentation.run(typedAst)
+    } else {
+      typedAst
     }
 
     // Enable the Datalog solver's tracing hooks before the optimizer folds their switches away.
-    val tracedAst = DatalogDebugging.run(typedAst)
+    val tracedAst = DatalogDebugging.run(coveredAst)
 
     var treeShaker1Ast = TreeShaker1.run(tracedAst)
 
