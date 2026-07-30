@@ -258,6 +258,45 @@ class TestLineBranchCoverage extends AnyFunSuite {
       "The nested call line probe should be hit when compute executes")
   }
 
+  test("nested tuple expressions are covered") {
+    Coverage.clear()
+    val program =
+      """
+        |def main(): Unit \ IO = {
+        |    let f =
+        |        x -> x + 1;
+        |    let pair =
+        |        (
+        |            f(40),
+        |            1 + f(1)
+        |        );
+        |    let (a, b) = pair;
+        |    println(a + b)
+        |}
+        |""".stripMargin
+    val expectedLines = Set(
+      program.linesIterator.indexWhere(_.trim == "(") + 1
+    )
+    val flix = new Flix().setOptions(Options.DefaultTest.copy(coverage = true))
+    flix.addVirtualPath(CompilerConstants.VirtualTestFile, program)
+
+    val result = flix.compile().toResult match {
+      case Result.Ok(value) => value
+      case Result.Err(errors) => fail(s"Compilation failed: $errors")
+    }
+    result.getMain.fold(fail("No main function"))(_(Array()))
+
+    val metadata = Coverage.getProbeMetadata
+    val hitProbeIds = Coverage.snapshot().keySet
+    expectedLines.foreach { line =>
+      val lineProbeIds = metadata.collect {
+        case (id, probe) if probe.kind == ProbeKind.Line && probe.line == line => id
+      }.toSet
+      assert(lineProbeIds.nonEmpty, s"Expected a line probe at line $line")
+      assert((lineProbeIds intersect hitProbeIds).nonEmpty, s"Expected line $line to be hit")
+    }
+  }
+
   test("match rules register selected and unselected branch probes") {
     Coverage.clear()
     val program =

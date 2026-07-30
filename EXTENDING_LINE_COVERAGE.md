@@ -7,8 +7,8 @@ pass. Probes are inserted before the optimizer, so they describe instrumented
 source-reachable expressions rather than post-optimization bytecode.
 
 Current line coverage includes function bodies, `let` bindings, statement
-expressions, `if` conditions and bodies, direct/operator calls, binary expressions,
-tuples, and lambda construction. `if` uses `BranchTrue` and `BranchFalse`; `match`
+expressions, `if` conditions and bodies, direct calls, and tuples. `if` uses
+`BranchTrue` and `BranchFalse`; `match`
 and restrictable `choose` rule bodies use `BranchRule`. Guard outcomes are not
 separately covered.
 
@@ -39,6 +39,11 @@ then recurse so nested executable expressions on other lines receive probes.
   `StructGet`, and `StructPut`. Preserve child order and effects.
 - Next: `Ascribe`, `Cast`, `CheckedCast`, `UncheckedCast`, and
   `UncheckedMaskingCast`. Probe the enclosing runtime expression, not type-only data.
+- Lambda coverage requires locating the transformed lambda representation at this
+  phase, or moving that probe to an earlier phase; `TypedAst.Expr.Lambda` is not
+  reached for the source-level lambda fixture.
+- Binary and operator coverage likewise requires identifying the representation that
+  reaches this phase before adding a probe and claiming source-level coverage.
 - Control flow: `TryCatch`, `TryWith`, `Throw`, `Resume`, `Without`, and `Handler`.
   Define line and branch semantics, then add selected/unselected fixtures.
 - Logic/query: `Fixpoint*`, `ConstraintSet`, `Constraint`, `Scope`, and `ScopeExit`.

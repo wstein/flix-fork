@@ -143,8 +143,7 @@ object CoverageInstrumentation {
     * PHASE 2.1 - Let-Binding/Statement-Entry Coverage (INCOMPLETE):
     * ===============================================================
     * Instruments function bodies, let-bindings, statement expressions, if-expression
-    * conditions and bodies, calls, binary expressions, tuples, and lambda construction
-    * with line probes.
+    * conditions and bodies, direct calls, and tuples with line probes.
     *
     * NOT YET instrumented: arbitrary function-return expressions, function calls,
     * and other expression forms not represented by a let, statement, or if.
@@ -348,15 +347,6 @@ object CoverageInstrumentation {
       case e @ TypedAst.Expr.ApplyOp(_, exps, _, _, _, _) =>
         val (instExps, nextProbeId) = instrumentExpressions(exps, qualifiedName, probeId, registeredLineProbes)
         instrumentLine(e.copy(exps = instExps), qualifiedName, nextProbeId, registeredLineProbes)
-
-      case e @ TypedAst.Expr.Binary(_, exp1, exp2, _, _, _) =>
-        val (instExp1, pc1) = instrumentExpression(exp1, qualifiedName, probeId, registeredLineProbes)
-        val (instExp2, pc2) = instrumentExpression(exp2, qualifiedName, pc1, registeredLineProbes)
-        instrumentLine(e.copy(exp1 = instExp1, exp2 = instExp2), qualifiedName, pc2, registeredLineProbes)
-
-      case e @ TypedAst.Expr.Lambda(_, body, _, _) =>
-        val (instBody, nextProbeId) = instrumentExpression(body, qualifiedName, probeId, registeredLineProbes)
-        instrumentLine(e.copy(exp = instBody), qualifiedName, nextProbeId, registeredLineProbes)
 
       case e @ TypedAst.Expr.Tuple(exps, _, _, _) =>
         val (instExps, nextProbeId) = instrumentExpressions(exps, qualifiedName, probeId, registeredLineProbes)

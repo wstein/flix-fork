@@ -2,9 +2,8 @@
 
 ## Implemented
 
-`CoverageInstrumentation.instrumentExpression` recursively instruments function and
-operator applications, binary expressions, tuple construction, lambda construction
-and body traversal, function bodies, `let` bindings, statement expressions, and
+`CoverageInstrumentation.instrumentExpression` recursively instruments direct function
+applications, tuple construction, function bodies, `let` bindings, statement expressions, and
 `if` conditions and bodies.
 
 A probe is attached to the reconstructed expression itself. Recursion discovers
