@@ -133,10 +133,10 @@ object CoverageInstrumentation {
         val (instExp1, pc1) = instrumentExpression(exp1, qualifiedName, probeId, loc)
         probeId = pc1
 
-        // Register and wrap true branch
+        // Register and wrap true branch (use then-branch location, not if-expression location)
         val trueBranchProbeId = probeId
         probeId += 1
-        Coverage.registerProbe(trueBranchProbeId, loc.source.name, loc.startLine, ProbeKind.BranchTrue, qualifiedName)
+        Coverage.registerProbe(trueBranchProbeId, exp2.loc.source.name, exp2.loc.startLine, ProbeKind.BranchTrue, qualifiedName)
 
         // Recursively instrument then expression
         val (instExp2, pc2) = instrumentExpression(exp2, qualifiedName, probeId, loc)
@@ -151,10 +151,10 @@ object CoverageInstrumentation {
           loc
         )
 
-        // Register and wrap false branch
+        // Register and wrap false branch (use else-branch location, not if-expression location)
         val falseBranchProbeId = probeId
         probeId += 1
-        Coverage.registerProbe(falseBranchProbeId, loc.source.name, loc.startLine, ProbeKind.BranchFalse, qualifiedName)
+        Coverage.registerProbe(falseBranchProbeId, exp3.loc.source.name, exp3.loc.startLine, ProbeKind.BranchFalse, qualifiedName)
 
         // Recursively instrument else expression
         val (instExp3, pc3) = instrumentExpression(exp3, qualifiedName, probeId, loc)

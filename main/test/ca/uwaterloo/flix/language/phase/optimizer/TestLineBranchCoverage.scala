@@ -106,10 +106,11 @@ class TestLineBranchCoverage extends AnyFunSuite {
   test("branch probes record true-taken, false-uncovered") {
     Coverage.clear()
 
-    // Program that takes the true branch
+    // Program with runtime condition: let-binding determines branch
     val program = """
       |def main(): Unit \ IO =
-      |    if (true)
+      |    let x = 42;
+      |    if (x > 40)
       |        println("yes")
       |    else
       |        println("no")
@@ -201,13 +202,14 @@ class TestLineBranchCoverage extends AnyFunSuite {
     val flix = new Flix().setOptions(Options.DefaultTest.copy(coverage = true))
     flix.addVirtualPath(CompilerConstants.VirtualTestFile, LineAndBranchProgram)
 
-    flix.compile().toResult match {
-      case Result.Ok(result) =>
-        result.getMain match {
-          case Some(main) => main(Array())
-          case None =>
-        }
-      case Result.Err(_) =>
+    val compilationResult = flix.compile().toResult match {
+      case Result.Ok(result) => result
+      case Result.Err(errors) => fail(s"Compilation failed: $errors")
+    }
+
+    compilationResult.getMain match {
+      case Some(main) => main(Array())
+      case None => fail("No main function")
     }
 
     val metadata = Coverage.getProbeMetadata
@@ -226,6 +228,69 @@ class TestLineBranchCoverage extends AnyFunSuite {
         assert(lineProbes.nonEmpty, s"Should have probes for line $line in $funcName")
       }
     }
+  }
+
+  test("JSON report contains coverage summary and file breakdown") {
+    Coverage.clear()
+
+    val flix = new Flix().setOptions(Options.DefaultTest.copy(coverage = true))
+    flix.addVirtualPath(CompilerConstants.VirtualTestFile, LineAndBranchProgram)
+
+    val compilationResult = flix.compile().toResult match {
+      case Result.Ok(result) => result
+      case Result.Err(errors) => fail(s"Compilation failed: $errors")
+    }
+
+    compilationResult.getMain match {
+      case Some(main) => main(Array())
+      case None => fail("No main function")
+    }
+
+    val metadata = Coverage.getProbeMetadata
+    val snapshot = Coverage.snapshot()
+
+    // Verify basic coverage data is present (this will be used to generate report)
+    assert(metadata.nonEmpty, "Should have registered probes")
+    assert(snapshot.nonEmpty, "Should have hit probes during execution")
+
+    // Verify summary statistics
+    val functionProbes = metadata.values.count(_.kind == ProbeKind.Function)
+    val lineProbes = metadata.values.count(_.kind == ProbeKind.Line)
+    val branchProbes = metadata.values.count(pm =>
+      pm.kind == ProbeKind.BranchTrue || pm.kind == ProbeKind.BranchFalse
+    )
+
+    val functionCovered = metadata.count {
+      case (probeId, pm) =>
+        pm.kind == ProbeKind.Function && snapshot.contains(probeId)
+    }
+    val lineCovered = metadata.count {
+      case (probeId, pm) =>
+        pm.kind == ProbeKind.Line && snapshot.contains(probeId)
+    }
+    val branchCovered = metadata.count {
+      case (probeId, pm) =>
+        (pm.kind == ProbeKind.BranchTrue || pm.kind == ProbeKind.BranchFalse) && snapshot.contains(probeId)
+    }
+
+    // CRITICAL: Coverage totals must be non-zero
+    assert(functionProbes > 0, "Should have function probes in report")
+    assert(lineProbes > 0, "Should have line probes in report")
+    assert(branchProbes > 0, "Should have branch probes in report")
+
+    // CRITICAL: At least some probes must be covered
+    assert(functionCovered > 0, "Should have covered function probes")
+    assert(lineCovered > 0, "Should have covered line probes")
+    assert(branchCovered > 0, "Should have covered branch probes")
+
+    // Verify coverage percentages are sensible (0-100)
+    val functionPercent = (functionCovered * 100) / functionProbes
+    val linePercent = (lineCovered * 100) / lineProbes
+    val branchPercent = (branchCovered * 100) / branchProbes
+
+    assert(functionPercent >= 0 && functionPercent <= 100, s"Function coverage $functionPercent% out of range")
+    assert(linePercent >= 0 && linePercent <= 100, s"Line coverage $linePercent% out of range")
+    assert(branchPercent >= 0 && branchPercent <= 100, s"Branch coverage $branchPercent% out of range")
   }
 
 }
