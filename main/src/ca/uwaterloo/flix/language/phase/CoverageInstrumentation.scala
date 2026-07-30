@@ -16,9 +16,9 @@
 package ca.uwaterloo.flix.language.phase
 
 import ca.uwaterloo.flix.api.Flix
-import ca.uwaterloo.flix.language.ast.{Type, TypedAst}
+import ca.uwaterloo.flix.language.ast.{SourceLocation, Type, TypedAst}
 import ca.uwaterloo.flix.language.ast.shared.Input
-import ca.uwaterloo.flix.runtime.Coverage
+import ca.uwaterloo.flix.runtime.{Coverage, ProbeKind}
 
 /**
   * Instrument Flix source code for coverage analysis by inserting CoverageHit AST nodes.
@@ -80,30 +80,143 @@ object CoverageInstrumentation {
 
         val sourcePath = defn.loc.source.name
         val lineNumber = defn.loc.startLine
+        val qualifiedName = defn.sym.toString
 
-        // Register the probe in the Coverage runtime
-        Coverage.registerProbe(probeId, sourcePath, lineNumber, "function")
+        // Register the function-level probe
+        Coverage.registerProbe(probeId, sourcePath, lineNumber, ProbeKind.Function, qualifiedName)
 
-        // Wrap the function body with CoverageHit
-        // Note: CoverageHit is Pure effect to preserve observable function purity.
-        // Coverage execution is compiler-internal and invisible to the type system.
-        val instrumentedBody = TypedAst.Expr.Stm(
+        // Instrument the function body for line and branch coverage
+        val (instrumentedBody, newCounter) = instrumentExpression(
+          defn.exp, qualifiedName, probeCounter, defn.loc
+        )
+        probeCounter = newCounter
+
+        // Wrap with function-level probe
+        val wrappedBody = TypedAst.Expr.Stm(
           List(TypedAst.Expr.CoverageHit(probeId, defn.loc)),
-          defn.exp,
-          defn.exp.tpe,
-          defn.exp.eff,
+          instrumentedBody,
+          instrumentedBody.tpe,
+          instrumentedBody.eff,
           defn.loc
         )
 
-        // Return the instrumented definition
-        defn.copy(exp = instrumentedBody)
+        defn.copy(exp = wrappedBody)
       } else {
         defn
       }
     }
 
-    // Rebuild the root with instrumented definitions
     root.copy(defs = instrumentedDefs.map(d => d.sym -> d).toMap)
+  }
+
+  /**
+    * Recursively instrument an expression for line and branch coverage.
+    *
+    * @param exp the expression to instrument
+    * @param qualifiedName the qualified name of the containing function
+    * @param startProbeId the starting probe ID for new probes
+    * @param parentLoc the parent location context
+    * @return tuple of (instrumented expression, new probe counter)
+    */
+  private def instrumentExpression(
+    exp: TypedAst.Expr,
+    qualifiedName: String,
+    startProbeId: Int,
+    parentLoc: SourceLocation
+  ): (TypedAst.Expr, Int) = {
+    var probeId = startProbeId
+
+    val result = exp match {
+      // Instrument if-then-else with branch probes
+      case e @ TypedAst.Expr.IfThenElse(exp1, exp2, exp3, tpe, eff, loc) =>
+        // Recursively instrument condition
+        val (instExp1, pc1) = instrumentExpression(exp1, qualifiedName, probeId, loc)
+        probeId = pc1
+
+        // Register and wrap true branch
+        val trueBranchProbeId = probeId
+        probeId += 1
+        Coverage.registerProbe(trueBranchProbeId, loc.source.name, loc.startLine, ProbeKind.BranchTrue, qualifiedName)
+
+        // Recursively instrument then expression
+        val (instExp2, pc2) = instrumentExpression(exp2, qualifiedName, probeId, loc)
+        probeId = pc2
+
+        // Wrap then branch with probe
+        val wrappedExp2 = TypedAst.Expr.Stm(
+          List(TypedAst.Expr.CoverageHit(trueBranchProbeId, loc)),
+          instExp2,
+          instExp2.tpe,
+          instExp2.eff,
+          loc
+        )
+
+        // Register and wrap false branch
+        val falseBranchProbeId = probeId
+        probeId += 1
+        Coverage.registerProbe(falseBranchProbeId, loc.source.name, loc.startLine, ProbeKind.BranchFalse, qualifiedName)
+
+        // Recursively instrument else expression
+        val (instExp3, pc3) = instrumentExpression(exp3, qualifiedName, probeId, loc)
+        probeId = pc3
+
+        // Wrap else branch with probe
+        val wrappedExp3 = TypedAst.Expr.Stm(
+          List(TypedAst.Expr.CoverageHit(falseBranchProbeId, loc)),
+          instExp3,
+          instExp3.tpe,
+          instExp3.eff,
+          loc
+        )
+
+        (e.copy(exp1 = instExp1, exp2 = wrappedExp2, exp3 = wrappedExp3), probeId)
+
+      // Instrument let-expressions with line probes
+      case e @ TypedAst.Expr.Let(sym, exp1, exp2, tpe, eff, loc) =>
+        // Register line probe for this let-binding
+        val lineProbeId = probeId
+        probeId += 1
+        Coverage.registerProbe(lineProbeId, loc.source.name, loc.startLine, ProbeKind.Line, qualifiedName)
+
+        // Recursively instrument bound expression
+        val (instExp1, pc1) = instrumentExpression(exp1, qualifiedName, probeId, loc)
+        probeId = pc1
+
+        // Wrap bound expression with probe
+        val wrappedExp1 = TypedAst.Expr.Stm(
+          List(TypedAst.Expr.CoverageHit(lineProbeId, loc)),
+          instExp1,
+          instExp1.tpe,
+          instExp1.eff,
+          loc
+        )
+
+        // Recursively instrument body
+        val (instExp2, pc2) = instrumentExpression(exp2, qualifiedName, probeId, loc)
+        probeId = pc2
+
+        (e.copy(exp1 = wrappedExp1, exp2 = instExp2), probeId)
+
+      // Instrument statement expressions (blocks)
+      case e @ TypedAst.Expr.Stm(exps, finalExp, tpe, eff, loc) =>
+        // Process each statement
+        val instExps = exps.map { stmExp =>
+          val (instExp, pc) = instrumentExpression(stmExp, qualifiedName, probeId, stmExp.loc)
+          probeId = pc
+          instExp
+        }
+
+        // Process final expression
+        val (instFinalExp, pc) = instrumentExpression(finalExp, qualifiedName, probeId, finalExp.loc)
+        probeId = pc
+
+        (e.copy(exps = instExps, exp = instFinalExp), probeId)
+
+      // For other expressions, recurse into structure without adding probes
+      case _ => (exp, probeId)
+    }
+
+    result
   }
 
   /**

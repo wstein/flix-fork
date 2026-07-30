@@ -19,11 +19,29 @@ import java.util.concurrent.atomic.AtomicLongArray
 import scala.collection.mutable
 
 /**
+  * Probe metadata entry with enhanced information for coverage reporting.
+  *
+  * @param source source file path
+  * @param line line number (1-based)
+  * @param kind probe kind (function, line, branch-true, branch-false)
+  * @param qualifiedName fully-qualified function name where the probe is located
+  */
+case class ProbeMetadata(
+  source: String,
+  line: Int,
+  kind: ProbeKind,
+  qualifiedName: String
+)
+
+/**
   * Thread-safe coverage registry for tracking source-level probe hits.
   *
   * This registry maintains a global set of probe counters indexed by probe ID.
   * Each probe is executed at specific source locations (function entry, line, branch).
   * Counters are thread-safe using AtomicLongArray.
+  *
+  * Metadata is stored with enhanced information including probe kind as a sealed ADT
+  * and qualified function names for better reporting.
   */
 object Coverage {
 
@@ -34,20 +52,21 @@ object Coverage {
   private var probes: AtomicLongArray = new AtomicLongArray(0)
 
   /**
-    * Probe metadata: maps probe ID to (source file, line, kind).
-    * kind: "function", "line", "branch-true", "branch-false", etc.
+    * Probe metadata: maps probe ID to ProbeMetadata.
+    * Includes source file, line number, probe kind, and qualified function name.
     */
-  private val probeMetadata: mutable.Map[Int, (String, Int, String)] = mutable.Map()
+  private val probeMetadata: mutable.Map[Int, ProbeMetadata] = mutable.Map()
 
   /**
-    * Register a new probe.
+    * Register a new probe with enhanced metadata.
     *
     * @param probeId the unique probe identifier.
     * @param source  the source file path.
     * @param line    the line number (1-based).
-    * @param kind    the probe kind ("function", "line", "branch-true", etc.).
+    * @param kind    the probe kind.
+    * @param qualifiedName the fully-qualified function name.
     */
-  def registerProbe(probeId: Int, source: String, line: Int, kind: String): Unit = synchronized {
+  def registerProbe(probeId: Int, source: String, line: Int, kind: ProbeKind, qualifiedName: String): Unit = synchronized {
     if (probeId >= probes.length()) {
       // Grow the array as needed
       val newSize = Math.max(probeId + 1, probes.length() * 2)
@@ -57,8 +76,10 @@ object Coverage {
       }
       probes = newProbes
     }
-    probeMetadata(probeId) = (source, line, kind)
+    probeMetadata(probeId) = ProbeMetadata(source, line, kind, qualifiedName)
   }
+
+
 
   /**
     * Record a hit on a probe.
@@ -86,13 +107,15 @@ object Coverage {
   }
 
   /**
-    * Get all probe metadata.
+    * Get all probe metadata with enhanced information.
     *
-    * @return a map from probe ID to (source, line, kind).
+    * @return a map from probe ID to ProbeMetadata.
     */
-  def getProbeMetadata: Map[Int, (String, Int, String)] = synchronized {
+  def getProbeMetadata: Map[Int, ProbeMetadata] = synchronized {
     probeMetadata.toMap
   }
+
+
 
   /**
     * Reset all probe counters to zero.

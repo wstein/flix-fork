@@ -91,13 +91,13 @@ class TestCoverageOptimization extends AnyFunSuite {
     assert(snapshot.nonEmpty, "No coverage hits recorded during execution")
 
     // Extract function-level probes
-    val functionProbes = metadata.filter { case (_, (_, _, kind)) => kind == "function" }
+    val functionProbes = metadata.filter { case (_, pm) => pm.kind.asString == "function" }
 
     // Assert only the compiled definitions (helper and main) are reported. The
     // unreachable `unused` definition is removed before instrumentation.
     assert(functionProbes.size == 2,
       s"Expected exactly 2 function probes (helper and main), but got ${functionProbes.size}. " +
-      s"Probes: ${functionProbes.map { case (id, (source, line, _)) => s"$id@$source:$line" }}")
+      s"Probes: ${functionProbes.map { case (id, pm) => s"$id@${pm.source}:${pm.line}" }}")
 
     // Verify both function probes are in the snapshot (were hit at runtime).
     // Coverage.snapshot() only includes probes with positive hit counts.
