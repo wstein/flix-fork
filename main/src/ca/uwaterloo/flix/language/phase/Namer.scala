@@ -216,6 +216,7 @@ object Namer {
         val optPath = loc.source.input match {
           case Input.RealFile(realPath, _)  => Some(realPath)
           case Input.VirtualFile(virtualPath, _, _) => Some(virtualPath)
+          case Input.BundledLibraryFile(virtualPath, _, _) => Some(virtualPath)
           case Input.VirtualUri(virtualUri, _, _) => try {
             Some(Path.of(virtualUri))
           } catch {

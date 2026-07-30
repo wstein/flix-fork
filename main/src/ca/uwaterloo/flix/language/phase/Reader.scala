@@ -52,6 +52,10 @@ object Reader {
             val src = Source.fromString(input, text)
             result += (src -> ())
 
+          case Input.BundledLibraryFile(_, text, _) =>
+            val src = Source.fromString(input, text)
+            result += (src -> ())
+
           case Input.VirtualUri(_, text, _) =>
             val src = Source.fromString(input, text)
             result += (src -> ())

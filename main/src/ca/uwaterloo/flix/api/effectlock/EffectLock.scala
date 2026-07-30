@@ -95,6 +95,7 @@ object EffectLock {
   private def isFromLocalProject(input: Input): Boolean = input match {
     case Input.RealFile(_, _) => true
     case Input.VirtualFile(_, _, _) => true
+    case Input.BundledLibraryFile(_, _, _) => false  // Bundled libraries are not project code
     case Input.VirtualUri(_, _, _) => true
     case Input.PkgFile(_, _) => false
     case Input.FileInPackage(_, _, _, _) => false
@@ -105,6 +106,7 @@ object EffectLock {
   private def isLibraryFunction(input: Input): Boolean = input match {
     case Input.RealFile(_, _) => false
     case Input.VirtualFile(_, _, _) => false
+    case Input.BundledLibraryFile(_, _, _) => true  // Bundled libraries are library code
     case Input.VirtualUri(_, _, _) => false
     case Input.PkgFile(_, _) => true
     case Input.FileInPackage(_, _, _, _) => true

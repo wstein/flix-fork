@@ -29,6 +29,7 @@ sealed trait Input {
   def security: SecurityContext = this match {
     case Input.RealFile(_, sctx) => sctx
     case Input.VirtualFile(_, _, sctx) => sctx
+    case Input.BundledLibraryFile(_, _, sctx) => sctx
     case Input.VirtualUri(_, _, sctx) => sctx
     case Input.PkgFile(_, sctx) => sctx
     case Input.FileInPackage(_, _, _, sctx) => sctx
@@ -52,6 +53,21 @@ object Input {
 
     override def equals(obj: Any): Boolean = obj match {
       case that: VirtualFile => this.virtualPath == that.virtualPath
+      case _ => false
+    }
+
+    override def toString: String = virtualPath.toString
+  }
+
+  /**
+    * Represents a bundled standard library file with the source code text `src` located at `virtualPath`.
+    * Distinct from VirtualFile to enable source-based coverage filtering without path/namespace guessing.
+    */
+  case class BundledLibraryFile(virtualPath: Path, src: String, sctx: SecurityContext) extends Input {
+    override def hashCode(): Int = virtualPath.hashCode
+
+    override def equals(obj: Any): Boolean = obj match {
+      case that: BundledLibraryFile => this.virtualPath == that.virtualPath
       case _ => false
     }
 

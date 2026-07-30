@@ -52,6 +52,9 @@ class TestCoverageOptimization extends AnyFunSuite {
       |def helper(): Int32 =
       |    42
       |
+      |def unused(): Int32 =
+      |    0
+      |
       |def main(): Unit \ IO =
       |    println(helper())
       |""".stripMargin
@@ -90,8 +93,8 @@ class TestCoverageOptimization extends AnyFunSuite {
     // Extract function-level probes
     val functionProbes = metadata.filter { case (_, (_, _, kind)) => kind == "function" }
 
-    // Assert we have exactly 2 function probes (helper and main).
-    // This catches accidental instrumentation of library functions or missing probes.
+    // Assert only the compiled definitions (helper and main) are reported. The
+    // unreachable `unused` definition is removed before instrumentation.
     assert(functionProbes.size == 2,
       s"Expected exactly 2 function probes (helper and main), but got ${functionProbes.size}. " +
       s"Probes: ${functionProbes.map { case (id, (source, line, _)) => s"$id@$source:$line" }}")
@@ -109,5 +112,4 @@ class TestCoverageOptimization extends AnyFunSuite {
   }
 
 }
-
 

@@ -652,18 +652,16 @@ class Flix {
     // Initialize fork-join thread pool.
     initForkJoinPool()
 
-    // Instrument for coverage if enabled - this wraps function bodies with CoverageHit nodes
-    // that carry probe IDs through all subsequent transformations
-    val coveredAst = if (flix.options.coverage) {
-      CoverageInstrumentation.run(typedAst)
-    } else {
-      typedAst
-    }
-
     // Enable the Datalog solver's tracing hooks before the optimizer folds their switches away.
-    val tracedAst = DatalogDebugging.run(coveredAst)
+    val tracedAst = DatalogDebugging.run(typedAst)
 
     var treeShaker1Ast = TreeShaker1.run(tracedAst)
+
+    // Instrument only definitions that survive tree shaking. This matches the
+    // conventional coverage scope of compiled code rather than all parsed code.
+    if (flix.options.coverage) {
+      treeShaker1Ast = CoverageInstrumentation.run(treeShaker1Ast)
+    }
 
     var monomorpherAst = Specialization.run(treeShaker1Ast)
     treeShaker1Ast = null // Explicitly null-out such that the memory becomes eligible for GC.
@@ -868,9 +866,10 @@ class Flix {
 
   /**
     * Returns the inputs for the given list of (path, text) pairs.
+    * Bundled libraries are created as Input.BundledLibraryFile to enable explicit coverage filtering.
     */
   private def getLibraryInputs(l: List[(String, String)]): List[Input] = l.foldLeft(List.empty[Input]) {
-    case (xs, (virtualPath, text)) => Input.VirtualFile(Path.of(virtualPath), text, SecurityContext.Unrestricted) :: xs
+    case (xs, (virtualPath, text)) => Input.BundledLibraryFile(Path.of(virtualPath), text, SecurityContext.Unrestricted) :: xs
   }
 
   /**
