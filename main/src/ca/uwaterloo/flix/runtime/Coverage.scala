@@ -49,7 +49,7 @@ object Coverage {
     * Global registry of probe hit counts.
     * Indexed by probe ID, each entry tracks how many times that probe was hit.
     */
-  private var probes: AtomicLongArray = new AtomicLongArray(0)
+  @volatile private var probes: AtomicLongArray = new AtomicLongArray(0)
 
   /**
     * Probe metadata: maps probe ID to ProbeMetadata.
@@ -87,8 +87,9 @@ object Coverage {
     * @param probeId the probe identifier.
     */
   def hit(probeId: Int): Unit = {
-    if (probeId >= 0 && probeId < probes.length()) {
-      probes.incrementAndGet(probeId)
+    val currentProbes = probes
+    if (probeId >= 0 && probeId < currentProbes.length()) {
+      currentProbes.incrementAndGet(probeId)
     }
   }
 
@@ -99,8 +100,9 @@ object Coverage {
     * @return the number of times the probe was hit, or 0 if not found.
     */
   def getHitCount(probeId: Int): Long = {
-    if (probeId >= 0 && probeId < probes.length()) {
-      probes.get(probeId)
+    val currentProbes = probes
+    if (probeId >= 0 && probeId < currentProbes.length()) {
+      currentProbes.get(probeId)
     } else {
       0L
     }
@@ -132,14 +134,33 @@ object Coverage {
     * @return a map from probe ID to hit count.
     */
   def snapshot(): Map[Int, Long] = {
+    val currentProbes = probes
     val result = mutable.Map[Int, Long]()
-    for (i <- 0 until probes.length()) {
-      val count = probes.get(i)
+    for (i <- 0 until currentProbes.length()) {
+      val count = currentProbes.get(i)
       if (count > 0) {
         result(i) = count
       }
     }
     result.toMap
+  }
+
+  /**
+    * Returns probe metadata and hit counts from one synchronized registry state.
+    *
+    * The returned snapshot can safely be rendered as a report without combining
+    * metadata from one compilation lifecycle with counters from another.
+    */
+  def reportSnapshot(): (Map[Int, ProbeMetadata], Map[Int, Long]) = synchronized {
+    val currentProbes = probes
+    val hits = mutable.Map[Int, Long]()
+    for (i <- 0 until currentProbes.length()) {
+      val count = currentProbes.get(i)
+      if (count > 0) {
+        hits(i) = count
+      }
+    }
+    (probeMetadata.toMap, hits.toMap)
   }
 
   /**

@@ -170,6 +170,16 @@ class TestCoverageMetadata extends AnyFunSuite {
     assert(snapshot(0) == 3, "Probe should have 3 hits")
   }
 
+  test("report snapshot returns coherent metadata and hits") {
+    Coverage.clear()
+    Coverage.registerProbe(0, "Test.flix", 10, ProbeKind.Line, "Test.foo")
+    Coverage.hit(0)
+
+    val (metadata, hits) = Coverage.reportSnapshot()
+    assert(metadata.keySet == Set(0))
+    assert(hits == Map(0 -> 1L))
+  }
+
   test("report preserves same-line rule probes independently") {
     Coverage.clear()
     Coverage.registerProbe(0, "Test.flix", 10, ProbeKind.BranchRule, "Test.classify")

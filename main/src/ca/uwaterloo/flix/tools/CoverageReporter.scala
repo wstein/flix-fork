@@ -41,8 +41,7 @@ object CoverageReporter {
     }
 
     // Get the snapshot of coverage data and ALL registered metadata
-    val snapshot = Coverage.snapshot()
-    val metadata = Coverage.getProbeMetadata
+    val (metadata, snapshot) = Coverage.reportSnapshot()
 
     // Filter out synthetic/unknown locations (use loc.isReal check during registration instead)
     // Organize ALL probes by file (including zero-hit)
