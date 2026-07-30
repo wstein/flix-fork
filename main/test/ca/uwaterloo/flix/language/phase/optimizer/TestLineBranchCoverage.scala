@@ -334,6 +334,39 @@ class TestLineBranchCoverage extends AnyFunSuite {
     }
   }
 
+  test("cast and handler expressions are covered") {
+    Coverage.clear()
+    val program =
+      """
+        |import java.lang.Object
+        |
+        |eff Ping {
+        |    def ping(): Unit
+        |}
+        |
+        |def main(): Unit \ IO = {
+        |    run { Ping.ping() } with handler Ping { def ping(_cont) = () };
+        |    let _ = unchecked_cast(null as Object);
+        |    println("ok")
+        |}
+        |""".stripMargin
+    val flix = new Flix().setOptions(Options.DefaultTest.copy(coverage = true))
+    flix.addVirtualPath(CompilerConstants.VirtualTestFile, program)
+    val handlerLine = program.linesIterator.indexWhere(_.contains("run { Ping.ping")) + 1
+    val castLine = program.linesIterator.indexWhere(_.contains("unchecked_cast")) + 1
+    flix.compile().toResult match {
+      case Result.Ok(result) =>
+        result.getMain.fold(fail("No main function"))(_(Array()))
+        val metadata = Coverage.getProbeMetadata
+        val hits = Coverage.snapshot().keySet
+        val handlerIds = metadata.collect { case (id, probe) if probe.kind == ProbeKind.Line && probe.line == handlerLine => id }.toSet
+        val castIds = metadata.collect { case (id, probe) if probe.kind == ProbeKind.Line && probe.line == castLine => id }.toSet
+        assert(handlerIds.nonEmpty && (handlerIds intersect hits).nonEmpty, "Handler line should be registered and hit")
+        assert(castIds.nonEmpty, "Unchecked-cast line should remain in coverage metadata")
+      case Result.Err(errors) => fail(s"Compilation failed: $errors")
+    }
+  }
+
   test("match rules register selected and unselected branch probes") {
     Coverage.clear()
     val program =

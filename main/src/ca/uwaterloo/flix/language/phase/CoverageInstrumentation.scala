@@ -384,6 +384,15 @@ object CoverageInstrumentation {
         val (instRegion, pc2) = instrumentExpression(region, qualifiedName, pc1, registeredLineProbes)
         instrumentLine(e.copy(exps = instExps, exp = instRegion), qualifiedName, pc2, registeredLineProbes)
 
+      case e @ TypedAst.Expr.UncheckedCast(exp0, _, _, _, _, _) =>
+        val (instExp, nextProbeId) = instrumentExpression(exp0, qualifiedName, probeId, registeredLineProbes)
+        instrumentLine(e.copy(exp = instExp), qualifiedName, nextProbeId, registeredLineProbes)
+
+      case e @ TypedAst.Expr.RunWith(exp1, exp2, _, _, _) =>
+        val (instExp1, pc1) = instrumentExpression(exp1, qualifiedName, probeId, registeredLineProbes)
+        val (instExp2, pc2) = instrumentExpression(exp2, qualifiedName, pc1, registeredLineProbes)
+        instrumentLine(e.copy(exp1 = instExp1, exp2 = instExp2), qualifiedName, pc2, registeredLineProbes)
+
       // Leave expression forms without explicit execution semantics uninstrumented.
       case _ => (exp, probeId)
     }
