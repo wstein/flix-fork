@@ -648,7 +648,10 @@ class TestLineBranchCoverage extends AnyFunSuite {
         |    case _ => "small"
         |}
         |
-        |def main(): Unit \ IO = println(checkGuard(15))
+        |def main(): Unit \ IO = {
+        |    println(checkGuard(15));
+        |    println(checkGuard(5))
+        |}
         |""".stripMargin
     val flix = new Flix().setOptions(Options.DefaultTest.copy(coverage = true))
     flix.addVirtualPath(CompilerConstants.VirtualTestFile, program)
@@ -665,6 +668,7 @@ class TestLineBranchCoverage extends AnyFunSuite {
         assert(guardTrueProbes.nonEmpty, "Guard line should have BranchTrue probe registered")
         assert(guardFalseProbes.nonEmpty, "Guard line should have BranchFalse probe registered")
         assert((guardTrueProbes.toSet intersect hits).nonEmpty, "Successful guard should record BranchTrue hit")
+        assert((guardFalseProbes.toSet intersect hits).nonEmpty, "Failing guard should record BranchFalse hit")
       case Result.Err(errors) => fail(s"Compilation failed: $errors")
     }
   }
