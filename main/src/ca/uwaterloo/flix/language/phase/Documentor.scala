@@ -54,12 +54,15 @@ object Documentor {
   /**
     * Writes documentation for `root`, restricted to `packageModules`, in the requested `format`.
     */
-  def run(root: TypedAst.Root, packageModules: PackageModules, format: DocFormat)(implicit flix: Flix): Unit = format match {
-    case DocFormat.Html => HtmlDocumentor.run(root, packageModules)
-    case DocFormat.Markdown => MarkdownDocumentor.run(root, packageModules)
-    case DocFormat.All =>
-      HtmlDocumentor.run(root, packageModules)
-      MarkdownDocumentor.run(root, packageModules)
+  def run(root: TypedAst.Root, packageModules: PackageModules, format: DocFormat)(implicit flix: Flix): Unit = {
+    SvgDocumentor.run(root, packageModules)
+    format match {
+      case DocFormat.Html => HtmlDocumentor.run(root, packageModules)
+      case DocFormat.Markdown => MarkdownDocumentor.run(root, packageModules)
+      case DocFormat.All =>
+        HtmlDocumentor.run(root, packageModules)
+        MarkdownDocumentor.run(root, packageModules)
+    }
   }
 
   /**

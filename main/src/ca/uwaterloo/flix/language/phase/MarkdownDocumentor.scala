@@ -100,10 +100,8 @@ object MarkdownDocumentor {
     * Writes Markdown documentation for `root`, restricted to `packageModules`, to the output directory.
     */
   def run(root: TypedAst.Root, packageModules: PackageModules)(implicit flix: Flix): Unit = {
-    val diagrams = SvgDocumentor.run(root, packageModules)
     val pages = documentAll(root, packageModules)
     deleteStalePages(pages.keySet)
-    SvgDocumentor.deleteStaleDiagrams(diagrams)
     for ((name, content) <- pages) {
       writeDocFile(name, content)
     }

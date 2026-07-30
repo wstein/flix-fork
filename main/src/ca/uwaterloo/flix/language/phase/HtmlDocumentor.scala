@@ -74,12 +74,9 @@ object HtmlDocumentor {
   private val LibraryGitHub: String = "https://github.com/flix/flix/blob/master/main/src/library/"
 
   def run(root: TypedAst.Root, packageModules: PackageModules)(implicit flix: Flix): Unit = {
-    val diagrams = SvgDocumentor.run(root, packageModules)
     val writtenPages = visitMod(Documentor.build(root, packageModules)).toSet
-
     writeAssets()
     deleteStalePages(writtenPages)
-    SvgDocumentor.deleteStaleDiagrams(diagrams)
   }
 
   /**

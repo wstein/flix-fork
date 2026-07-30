@@ -347,7 +347,7 @@ class VSCodeLspServer(port: Int, o: Options) extends WebSocketServer(new InetSoc
       ("id" -> id) ~ ("status" -> ResponseStatus.Success) ~ ("result" -> JArray(FoldingRangeProvider.getFoldingRanges(uri)(root).map(_.toJSON)))
 
     case Request.GetDiagram(id, itemName) =>
-      val diagrams = SvgDocumentor.generateAll(Documentor.build(root, PackageModules.All))
+      val diagrams = SvgDocumentor.generateAll(Documentor.build(root, PackageModules.All))(flix)
       diagrams.get(s"$itemName.svg") match {
         case Some(svg: String) => ("id" -> id) ~ ("status" -> ResponseStatus.Success) ~ ("result" -> JString(svg))
         case _ => ("id" -> id) ~ ("status" -> ResponseStatus.InvalidRequest) ~ ("message" -> s"No diagram found for '$itemName'.")

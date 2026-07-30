@@ -77,14 +77,13 @@ object SvgDocumentor {
     if (!flix.options.docExtended && flix.options.xdatalogDebug.isEmpty) {
       return Map.empty
     }
-    val datalogDir = DiagramDirectory.resolve("datalog")
-    if (!Files.exists(datalogDir)) {
-      Files.createDirectories(datalogDir)
-    }
+
+    val relDefs = root.defs.values.map(_.sym.name).filter(n => n.startsWith("rel") || n.contains("Rel") || n.contains("Edge") || n.contains("Path") || n.contains("Parent") || n.contains("Child")).toList.distinct
+    val relNames = if (relDefs.nonEmpty) relDefs else List("EDB_Facts", "IDB_Rules")
 
     val sb = new StringBuilder()
-    sb.append(s"""<!-- ${Documentor.GeneratedMarker} -->\n""")
-    sb.append("""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 200" width="100%" height="100%">""")
+    sb.append(s"<!-- ${Documentor.GeneratedMarker} -->\n")
+    sb.append("""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 220" width="100%" height="100%">""")
     sb.append("""
       |<style>
       |  .edb-node { fill: #e8f5e9; stroke: #2e7d32; stroke-width: 2; rx: 8; ry: 8; }
@@ -93,13 +92,19 @@ object SvgDocumentor {
       |  .edge { stroke: #555; stroke-width: 2; }
       |</style>
       |""".stripMargin)
-    sb.append("""<rect x="50" y="40" width="220" height="120" class="edb-node" />""")
-    sb.append("""<text x="160" y="80" class="text">EDB Fact Relation</text>""")
-    sb.append("""<text x="160" y="110" class="text" font-size="12px">(Extensional Database)</text>""")
-    sb.append("""<rect x="330" y="40" width="220" height="120" class="idb-node" />""")
-    sb.append("""<text x="440" y="80" class="text">IDB Derived Rule</text>""")
-    sb.append("""<text x="440" y="110" class="text" font-size="12px">(Intensional Database)</text>""")
-    sb.append("""<path d="M 270 100 L 330 100" class="edge" marker-end="url(#arrow)" />""")
+
+    val edbName = xmlEscape(relNames.headOption.getOrElse("EDB_Facts"))
+    val idbName = xmlEscape(relNames.drop(1).headOption.getOrElse("IDB_Rules"))
+
+    sb.append(s"""<rect x="40" y="40" width="240" height="130" class="edb-node" />""")
+    sb.append(s"""<text x="160" y="80" class="text">$edbName</text>""")
+    sb.append("""<text x="160" y="115" class="text" font-size="12px">Extensional Database (EDB)</text>""")
+
+    sb.append(s"""<rect x="320" y="40" width="240" height="130" class="idb-node" />""")
+    sb.append(s"""<text x="440" y="80" class="text">$idbName</text>""")
+    sb.append("""<text x="440" y="115" class="text" font-size="12px">Intensional Database (IDB)</text>""")
+
+    sb.append("""<path d="M 280 105 L 320 105" class="edge" marker-end="url(#arrow)" />""")
     sb.append("\n</svg>\n")
 
     Map("datalog/DatalogSchema.svg" -> sb.toString())
@@ -108,7 +113,7 @@ object SvgDocumentor {
   /**
     * Generates SVG diagrams for `mod` and all nested items.
     */
-  def generateAll(mod: Module): Map[String, String] = {
+  def generateAll(mod: Module)(implicit flix: Flix): Map[String, String] = {
     val items = collect(mod)
     items.flatMap { item =>
       generateDiagram(item).map(svg => (diagramFileName(item), svg))
@@ -123,7 +128,7 @@ object SvgDocumentor {
   /**
     * Generates an SVG diagram string for `item` if it has non-trivial structural relationships, or None otherwise.
     */
-  def generateDiagram(item: Item): Option[String] = item match {
+  def generateDiagram(item: Item)(implicit flix: Flix): Option[String] = item match {
     case trt: Trait => generateTraitDiagram(trt)
     case mod: Module if mod.submodules.nonEmpty => generateModuleDiagram(mod)
     case _ => None
@@ -132,9 +137,9 @@ object SvgDocumentor {
   /**
     * Generates an SVG diagram for a Trait showing supertraits above and instances/subtraits below.
     */
-  private def generateTraitDiagram(trt: Trait): Option[String] = {
+  private def generateTraitDiagram(trt: Trait)(implicit flix: Flix): Option[String] = {
     val superTraits = trt.decl.superTraits.map(_.symUse.sym.name)
-    val instances = trt.instances.map(inst => inst.trt.sym.name).distinct.take(5)
+    val instances = trt.instances.map(inst => ca.uwaterloo.flix.language.fmt.FormatType.formatType(inst.tpe)).distinct.take(5)
 
     if (superTraits.isEmpty && instances.isEmpty) {
       return None
@@ -148,45 +153,41 @@ object SvgDocumentor {
     val sb = new StringBuilder()
     sb.append(s"<!-- ${Documentor.GeneratedMarker} -->\n")
     sb.append(s"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 $width 220" width="$width" height="220" class="flix-diagram">""")
-    sb.append("\n  <defs>\n")
-    sb.append("""    <marker id="arrow" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">""")
-    sb.append("""\n      <path d="M 0 0 L 10 5 L 0 10 z" fill="#555" />""")
-    sb.append("\n    </marker>\n  </defs>\n")
-    sb.append("""  <style>
-                |    .node { fill: #f8f9fa; stroke: #ced4da; stroke-width: 1.5px; rx: 6px; }
-                |    .node-target { fill: #e7f5ff; stroke: #1c7ed6; stroke-width: 2px; rx: 6px; }
-                |    .text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 13px; fill: #212529; text-anchor: middle; dominant-baseline: central; }
-                |    .text-target { font-weight: bold; fill: #1864ab; }
-                |    .edge { stroke: #adb5bd; stroke-width: 1.5px; fill: none; }
-                |  </style>
-                |""".stripMargin)
+    sb.append("""
+      |<style>
+      |  .node { fill: #f8f9fa; stroke: #6c757d; stroke-width: 1.5; rx: 4; ry: 4; }
+      |  .node-target { fill: #e7f5ff; stroke: #228be6; stroke-width: 2; rx: 4; ry: 4; }
+      |  .text { font-family: system-ui, sans-serif; font-size: 13px; fill: #212529; text-anchor: middle; dominant-baseline: middle; }
+      |  .text-target { font-weight: bold; fill: #1864ab; }
+      |  .edge { stroke: #adb5bd; stroke-width: 1.5; }
+      |</style>
+      |<defs>
+      |  <marker id="arrow" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      |    <path d="M 0 0 L 10 5 L 0 10 z" fill="#adb5bd" />
+      |  </marker>
+      |</defs>
+      |""".stripMargin)
 
-    // Render SuperTraits Top Row
-    val topY = 30
-    val midY = 110
-    val botY = 180
+    val targetY = 92
+    renderNode(sb, trt.name, centerX - nodeWidth / 2, targetY, nodeWidth, nodeHeight, isTarget = true)
 
     if (superTraits.nonEmpty) {
-      val count = superTraits.size
-      val spacing = width / (count + 1)
-      superTraits.zipWithIndex.foreach { case (stName, idx) =>
-        val stX = spacing * (idx + 1)
-        renderNode(sb, stName, stX - nodeWidth / 2, topY - nodeHeight / 2, nodeWidth, nodeHeight, isTarget = false)
-        renderLine(sb, stX, topY + nodeHeight / 2, centerX, midY - nodeHeight / 2)
+      val stY = 20
+      val startX = centerX - ((superTraits.size - 1) * 70)
+      superTraits.zipWithIndex.foreach { case (name, idx) =>
+        val stX = startX + idx * 140 - nodeWidth / 2
+        renderNode(sb, name, stX, stY, nodeWidth, nodeHeight, isTarget = false)
+        renderLine(sb, stX + nodeWidth / 2, stY + nodeHeight, centerX, targetY)
       }
     }
 
-    // Render Main Target Trait Node
-    renderNode(sb, trt.name, centerX - nodeWidth / 2, midY - nodeHeight / 2, nodeWidth, nodeHeight, isTarget = true)
-
-    // Render Instances / Subtraits Bottom Row
     if (instances.nonEmpty) {
-      val count = instances.size
-      val spacing = width / (count + 1)
-      instances.zipWithIndex.foreach { case (instName, idx) =>
-        val instX = spacing * (idx + 1)
-        renderNode(sb, instName, instX - nodeWidth / 2, botY - nodeHeight / 2, nodeWidth, nodeHeight, isTarget = false)
-        renderLine(sb, centerX, midY + nodeHeight / 2, instX, botY - nodeHeight / 2)
+      val instY = 164
+      val startX = centerX - ((instances.size - 1) * 70)
+      instances.zipWithIndex.foreach { case (name, idx) =>
+        val instX = startX + idx * 140 - nodeWidth / 2
+        renderNode(sb, name, instX, instY, nodeWidth, nodeHeight, isTarget = false)
+        renderLine(sb, centerX, targetY + nodeHeight, instX + nodeWidth / 2, instY)
       }
     }
 
@@ -195,43 +196,45 @@ object SvgDocumentor {
   }
 
   /**
-    * Generates an SVG diagram for a Module showing parent and submodules.
+    * Generates an SVG diagram for a Module showing submodules.
     */
   private def generateModuleDiagram(mod: Module): Option[String] = {
-    val subMods = mod.submodules.map(_.name).take(4)
-    if (subMods.isEmpty) return None
+    val submodules = mod.submodules.map(_.name).take(5)
+    if (submodules.isEmpty) {
+      return None
+    }
 
     val width = 480
-    val nodeWidth = 110
-    val nodeHeight = 34
+    val nodeWidth = 120
+    val nodeHeight = 36
     val centerX = width / 2
-
-    val topY = 40
-    val botY = 140
 
     val sb = new StringBuilder()
     sb.append(s"<!-- ${Documentor.GeneratedMarker} -->\n")
-    sb.append(s"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 $width 190" width="$width" height="190" class="flix-diagram">""")
-    sb.append("\n  <defs>\n")
-    sb.append("""    <marker id="arrow" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">""")
-    sb.append("""\n      <path d="M 0 0 L 10 5 L 0 10 z" fill="#555" />""")
-    sb.append("\n    </marker>\n  </defs>\n")
-    sb.append("""  <style>
-                |    .node { fill: #f8f9fa; stroke: #ced4da; stroke-width: 1.5px; rx: 6px; }
-                |    .node-target { fill: #e7f5ff; stroke: #1c7ed6; stroke-width: 2px; rx: 6px; }
-                |    .text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 13px; fill: #212529; text-anchor: middle; dominant-baseline: central; }
-                |    .text-target { font-weight: bold; fill: #1864ab; }
-                |    .edge { stroke: #adb5bd; stroke-width: 1.5px; fill: none; }
-                |  </style>
-                |""".stripMargin)
+    sb.append(s"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 $width 160" width="$width" height="160" class="flix-diagram">""")
+    sb.append("""
+      |<style>
+      |  .node { fill: #f8f9fa; stroke: #6c757d; stroke-width: 1.5; rx: 4; ry: 4; }
+      |  .node-target { fill: #e7f5ff; stroke: #228be6; stroke-width: 2; rx: 4; ry: 4; }
+      |  .text { font-family: system-ui, sans-serif; font-size: 13px; fill: #212529; text-anchor: middle; dominant-baseline: middle; }
+      |  .text-target { font-weight: bold; fill: #1864ab; }
+      |  .edge { stroke: #adb5bd; stroke-width: 1.5; }
+      |</style>
+      |<defs>
+      |  <marker id="arrow" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      |    <path d="M 0 0 L 10 5 L 0 10 z" fill="#adb5bd" />
+      |  </marker>
+      |</defs>
+      |""".stripMargin)
 
-    renderNode(sb, mod.name, centerX - nodeWidth / 2, topY - nodeHeight / 2, nodeWidth, nodeHeight, isTarget = true)
+    val topY = 20
+    val botY = 100
+    renderNode(sb, mod.name, centerX - nodeWidth / 2, topY, nodeWidth, nodeHeight, isTarget = true)
 
-    val count = subMods.size
-    val spacing = width / (count + 1)
-    subMods.zipWithIndex.foreach { case (smName, idx) =>
-      val smX = spacing * (idx + 1)
-      renderNode(sb, smName, smX - nodeWidth / 2, botY - nodeHeight / 2, nodeWidth, nodeHeight, isTarget = false)
+    val startX = centerX - ((submodules.size - 1) * 70)
+    submodules.zipWithIndex.foreach { case (name, idx) =>
+      val smX = startX + idx * 140 - nodeWidth / 2
+      renderNode(sb, name, smX, botY, nodeWidth, nodeHeight, isTarget = false)
       renderLine(sb, centerX, topY + nodeHeight / 2, smX, botY - nodeHeight / 2)
     }
 
@@ -277,17 +280,19 @@ object SvgDocumentor {
   def deleteStaleDiagrams(currentDiagrams: Set[String])(implicit flix: Flix): Unit = {
     val dir = DiagramDirectory
     if (Files.exists(dir) && Files.isDirectory(dir)) {
-      Using(Files.list(dir)) { stream =>
+      Using(Files.walk(dir)) { stream =>
         stream.forEach { path =>
-          val name = path.getFileName.toString
-          if (name.endsWith(s".$Extension") && !currentDiagrams.contains(name)) {
-            try {
-              val text = Files.readString(path, StandardCharsets.UTF_8)
-              if (text.contains(Documentor.GeneratedMarker)) {
-                Files.deleteIfExists(path)
+          if (Files.isRegularFile(path)) {
+            val relPath = dir.relativize(path).toString.replace('\\', '/')
+            if (relPath.endsWith(s".$Extension") && !currentDiagrams.contains(relPath)) {
+              try {
+                val text = Files.readString(path, StandardCharsets.UTF_8)
+                if (text.contains(Documentor.GeneratedMarker)) {
+                  Files.deleteIfExists(path)
+                }
+              } catch {
+                case _: IOException => // Ignore unreadable files
               }
-            } catch {
-              case _: IOException => // Ignore unreadable files
             }
           }
         }
