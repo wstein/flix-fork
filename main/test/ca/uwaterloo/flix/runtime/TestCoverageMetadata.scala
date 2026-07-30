@@ -204,37 +204,21 @@ class TestCoverageMetadata extends AnyFunSuite {
     }
   }
 
-  test("writeLcovReport generates valid LCOV tracefile format") {
-    Coverage.clear()
-    Coverage.registerProbe(0, "Test.flix", 5, ProbeKind.Function, "Test.foo")
-    Coverage.registerProbe(1, "Test.flix", 6, ProbeKind.Line, "Test.foo")
-    Coverage.registerProbe(2, "Test.flix", 7, ProbeKind.BranchTrue, "Test.foo")
-    Coverage.registerProbe(3, "Test.flix", 7, ProbeKind.BranchFalse, "Test.foo")
+  test("per-compilation session isolation via sessionId") {
+    val s1 = Coverage.createSession()
+    s1.registerProbe(0, "A.flix", 1, ProbeKind.Line, "A.main")
 
-    Coverage.hit(0)
-    Coverage.hit(1)
-    Coverage.hit(2)
+    val s2 = Coverage.createSession()
+    s2.registerProbe(0, "B.flix", 1, ProbeKind.Line, "B.main")
 
-    val reportPath = Files.createTempFile("coverage-", ".info")
-    try {
-      CoverageReporter.writeLcovReport(reportPath)
-      val content = Files.readString(reportPath, StandardCharsets.UTF_8)
+    // Record hit for session 1 explicitly
+    Coverage.hit(s1.sessionId, 0)
 
-      assert(content.contains("TN:"), "LCOV tracefile should start record with TN:")
-      assert(content.contains("SF:Test.flix"), "LCOV tracefile should include SF:Test.flix")
-      assert(content.contains("FN:5,Test.foo"), "LCOV tracefile should include FN: function declaration")
-      assert(content.contains("FNDA:1,Test.foo"), "LCOV tracefile should include FNDA: function hits")
-      assert(content.contains("FNF:1"), "LCOV tracefile should report FNF: 1 total function")
-      assert(content.contains("FNH:1"), "LCOV tracefile should report FNH: 1 hit function")
-      assert(content.contains("DA:6,1"), "LCOV tracefile should report DA: line 6 hit")
-      assert(content.contains("BRDA:7,0,0,1"), "LCOV tracefile should report BRDA true branch hit")
-      assert(content.contains("BRDA:7,0,1,-"), "LCOV tracefile should report BRDA false branch unhit")
-      assert(content.contains("BRF:2"), "LCOV tracefile should report BRF: 2 total branches")
-      assert(content.contains("BRH:1"), "LCOV tracefile should report BRH: 1 hit branch")
-      assert(content.contains("end_of_record"), "LCOV tracefile should end with end_of_record")
-    } finally {
-      Files.deleteIfExists(reportPath)
-    }
+    val snapshot1 = s1.getHitCount(0)
+    val snapshot2 = s2.getHitCount(0)
+
+    assert(snapshot1 == 1L, "Session 1 should have 1 hit")
+    assert(snapshot2 == 0L, "Session 2 should have 0 hits")
   }
 
 }

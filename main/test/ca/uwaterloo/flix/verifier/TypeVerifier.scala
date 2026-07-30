@@ -471,7 +471,7 @@ object TypeVerifier {
           checkJavaParameters(ts, method.getParameterTypes.toList, loc)
           checkJavaSubtype(tpe, method.getReturnType, loc)
 
-        case AtomicOp.CoverageHit(_) =>
+        case AtomicOp.CoverageHit(_, _) =>
           check(expected = SimpleType.Unit)(actual = tpe, loc)
 
         // Vector operations are simplified to array operations in the Simplifier.

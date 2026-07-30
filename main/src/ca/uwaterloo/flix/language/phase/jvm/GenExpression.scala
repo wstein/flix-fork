@@ -1080,11 +1080,12 @@ object GenExpression {
         INVOKESPECIAL(BackendObjType.HoleError.Constructor) // HoleError
         ATHROW()
 
-      case AtomicOp.CoverageHit(probeId) =>
+      case AtomicOp.CoverageHit(sessionId, probeId) =>
         import BytecodeInstructions.*
-        // Call Coverage.hit(probeId)
+        // Call Coverage.hit(sessionId, probeId)
+        pushLong(sessionId) // Push session ID onto stack
         pushInt(probeId) // Push probe ID onto stack
-        INVOKESTATIC(JvmName.Coverage, "hit", MethodDescriptor(List(BackendType.Int32), VoidableType.Void))
+        INVOKESTATIC(JvmName.Coverage, "hit", MethodDescriptor(List(BackendType.Int64, BackendType.Int32), VoidableType.Void))
         // Push unit value onto stack (Unit is represented as null)
         ACONST_NULL()
 

@@ -201,7 +201,7 @@ object Eraser {
         case AtomicOp.Force =>
           castExp(ErasedAst.Expr.ApplyAtomic(op, es, erase(tpe), purity, loc), t, purity, loc)
         case AtomicOp.HoleError(_) => ErasedAst.Expr.ApplyAtomic(op, es, t, purity, loc)
-        case AtomicOp.CoverageHit(_) => ErasedAst.Expr.ApplyAtomic(op, es, t, purity, loc)
+        case AtomicOp.CoverageHit(_, _) => ErasedAst.Expr.ApplyAtomic(op, es, t, purity, loc)
         case AtomicOp.MatchError => ErasedAst.Expr.ApplyAtomic(op, es, t, purity, loc)
         case AtomicOp.CastError(_, _) => ErasedAst.Expr.ApplyAtomic(op, es, t, purity, loc)
         // Vector operations are simplified to array operations in the Simplifier.

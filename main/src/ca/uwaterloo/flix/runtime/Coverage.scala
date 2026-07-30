@@ -48,7 +48,7 @@ object Coverage {
   /**
     * Represents an isolated coverage session holding metadata and probe hit counters.
     */
-  class Session {
+  class Session(val sessionId: Long) {
     @volatile private[Coverage] var probes: AtomicLongArray = new AtomicLongArray(0)
     private[Coverage] val probeMetadata: mutable.Map[Int, ProbeMetadata] = mutable.Map()
 
@@ -64,6 +64,22 @@ object Coverage {
       probeMetadata(probeId) = ProbeMetadata(source, line, kind, qualifiedName)
     }
 
+    def hit(probeId: Int): Unit = {
+      val currentProbes = probes
+      if (probeId >= 0 && probeId < currentProbes.length()) {
+        currentProbes.incrementAndGet(probeId)
+      }
+    }
+
+    def getHitCount(probeId: Int): Long = {
+      val currentProbes = probes
+      if (probeId >= 0 && probeId < currentProbes.length()) {
+        currentProbes.get(probeId)
+      } else {
+        0L
+      }
+    }
+
     def reset(): Unit = synchronized {
       for (i <- 0 until probes.length()) {
         probes.set(i, 0)
@@ -76,69 +92,79 @@ object Coverage {
     }
   }
 
-  @volatile private var session: Session = new Session()
+  private val nextSessionId = new java.util.concurrent.atomic.AtomicLong(1L)
+  private val sessions = new java.util.concurrent.ConcurrentHashMap[Long, Session]()
+
+  @volatile private var activeSession: Session = createSession()
 
   /**
     * Create and activate a fresh coverage session for a new compilation lifecycle.
     */
   def createSession(): Session = synchronized {
-    session = new Session()
-    session
+    val id = nextSessionId.getAndIncrement()
+    val s = new Session(id)
+    sessions.put(id, s)
+    activeSession = s
+    s
   }
 
   /**
     * Returns the currently active coverage session.
     */
-  def getSession: Session = session
+  def getSession: Session = activeSession
 
   /**
     * Register a new probe with enhanced metadata in the active session.
     */
   def registerProbe(probeId: Int, source: String, line: Int, kind: ProbeKind, qualifiedName: String): Unit = {
-    session.registerProbe(probeId, source, line, kind, qualifiedName)
+    activeSession.registerProbe(probeId, source, line, kind, qualifiedName)
+  }
+
+  /**
+    * Record a hit on a probe in the session specified by sessionId.
+    */
+  def hit(sessionId: Long, probeId: Int): Unit = {
+    val s = sessions.get(sessionId)
+    if (s != null) {
+      s.hit(probeId)
+    } else {
+      activeSession.hit(probeId)
+    }
   }
 
   /**
     * Record a hit on a probe in the active session.
     */
   def hit(probeId: Int): Unit = {
-    val currentProbes = session.probes
-    if (probeId >= 0 && probeId < currentProbes.length()) {
-      currentProbes.incrementAndGet(probeId)
-    }
+    activeSession.hit(probeId)
   }
 
   /**
     * Get the hit count for a probe in the active session.
     */
   def getHitCount(probeId: Int): Long = {
-    val currentProbes = session.probes
-    if (probeId >= 0 && probeId < currentProbes.length()) {
-      currentProbes.get(probeId)
-    } else {
-      0L
-    }
+    activeSession.getHitCount(probeId)
   }
 
   /**
     * Get all probe metadata from the active session.
     */
   def getProbeMetadata: Map[Int, ProbeMetadata] = synchronized {
-    session.probeMetadata.toMap
+    activeSession.probeMetadata.toMap
   }
 
   /**
     * Reset all probe counters to zero in the active session.
     */
   def reset(): Unit = synchronized {
-    session.reset()
+    activeSession.reset()
   }
 
   /**
     * Take a snapshot of all current probe hit counts in the active session.
     */
   def snapshot(): Map[Int, Long] = {
-    val currentProbes = session.probes
+    val currentProbes = activeSession.probes
     val result = mutable.Map[Int, Long]()
     for (i <- 0 until currentProbes.length()) {
       val count = currentProbes.get(i)
@@ -153,7 +179,7 @@ object Coverage {
     * Returns probe metadata and hit counts from the current active session state.
     */
   def reportSnapshot(): (Map[Int, ProbeMetadata], Map[Int, Long]) = synchronized {
-    val currentProbes = session.probes
+    val currentProbes = activeSession.probes
     val hits = mutable.Map[Int, Long]()
     for (i <- 0 until currentProbes.length()) {
       val count = currentProbes.get(i)
@@ -161,13 +187,13 @@ object Coverage {
         hits(i) = count
       }
     }
-    (session.probeMetadata.toMap, hits.toMap)
+    (activeSession.probeMetadata.toMap, hits.toMap)
   }
 
   /**
     * Clear all probes and metadata in the active session.
     */
   def clear(): Unit = synchronized {
-    session.clear()
+    activeSession.clear()
   }
 }

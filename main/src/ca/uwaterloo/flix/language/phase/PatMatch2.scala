@@ -873,7 +873,7 @@ object PatMatch2 {
 
       case Expr.FixpointInjectInto(exps, _, _, _, _) => exps.foreach(visitExp)
 
-      case Expr.CoverageHit(_, _) => ()
+      case Expr.CoverageHit(_, _, _) => ()
 
       case Expr.Error(_, _, _) => ()
     }

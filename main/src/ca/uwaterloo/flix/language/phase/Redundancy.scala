@@ -897,7 +897,7 @@ object Redundancy {
     case Expr.FixpointInjectInto(exps, _, _, _, _) =>
       visitExps(exps, env0, rc)
 
-    case Expr.CoverageHit(_, _) =>
+    case Expr.CoverageHit(_, _, _) =>
       Used.empty
 
     case Expr.Error(_, _, _) =>

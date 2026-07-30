@@ -893,7 +893,7 @@ object Inliner {
     * the optimizer must still preserve these calls as a barrier to elimination.
     */
   private def mustPreserve(exp: MonoAst.Expr): Boolean = exp match {
-    case Expr.ApplyAtomic(AtomicOp.CoverageHit(_), _, _, _, _) => true
+    case Expr.ApplyAtomic(AtomicOp.CoverageHit(_, _), _, _, _, _) => true
     case _ => false
   }
 

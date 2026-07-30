@@ -441,7 +441,7 @@ object Stratifier {
       val es = ListOps.mapWithReuse(exps)(visitExp)
       if (es eq exps) exp0 else Expr.FixpointInjectInto(es, predsAndArities, tpe, eff, loc)
 
-    case Expr.CoverageHit(probeId, loc) =>
+    case Expr.CoverageHit(_, _, _) =>
       exp0
 
     case Expr.Error(_, _, _) =>

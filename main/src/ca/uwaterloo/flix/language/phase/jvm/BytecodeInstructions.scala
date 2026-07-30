@@ -428,6 +428,12 @@ object BytecodeInstructions {
     case _ => mv.visitLoadConstantInstruction(i)
   }
 
+  def pushLong(l: Long)(implicit mv: MethodVisitor): Unit = l match {
+    case 0L => LCONST_0()
+    case 1L => LCONST_1()
+    case _ => mv.visitLoadConstantInstruction(l)
+  }
+
   def pushLoc(loc: SourceLocation)(implicit mv: MethodVisitor): Unit = {
     NEW(BackendObjType.ReifiedSourceLocation.jvmName)
     DUP()

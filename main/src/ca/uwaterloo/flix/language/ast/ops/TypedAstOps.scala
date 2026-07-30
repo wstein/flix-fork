@@ -114,7 +114,7 @@ object TypedAstOps {
     case Expr.FixpointQueryWithSelect(exps, queryExp, selects, _, where, _, _, _, _) => exps.flatMap(sigSymsOf).toSet ++ sigSymsOf(queryExp) ++ selects.flatMap(sigSymsOf).toSet ++ where.flatMap(sigSymsOf).toSet
     case Expr.FixpointSolveWithProject(exps, _, _, _, _, _) => exps.flatMap(sigSymsOf).toSet
     case Expr.FixpointInjectInto(exps, _, _, _, _) => exps.flatMap(sigSymsOf).toSet
-    case Expr.CoverageHit(_, _) => Set.empty
+    case Expr.CoverageHit(_, _, _) => Set.empty
     case Expr.Error(_, _, _) => Set.empty
   }
 
@@ -436,7 +436,7 @@ object TypedAstOps {
     case Expr.FixpointInjectInto(exps, _, _, _, _) =>
       freeVars(exps)
 
-    case Expr.CoverageHit(_, _) =>
+    case Expr.CoverageHit(_, _, _) =>
       Map.empty
 
     case Expr.Error(_, _, _) =>

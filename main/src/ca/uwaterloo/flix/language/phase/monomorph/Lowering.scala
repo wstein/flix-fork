@@ -647,9 +647,9 @@ object Lowering {
     case TypedAst.Expr.FixpointInjectInto(exps, predsAndArities, _, _, loc) =>
       lowerInjectInto(exps, predsAndArities, loc)
 
-    case TypedAst.Expr.CoverageHit(probeId, loc) =>
+    case TypedAst.Expr.CoverageHit(sessionId, probeId, loc) =>
       // CoverageHit is Pure effect: compiler-internal operation invisible to observable purity
-      MonoAst.Expr.ApplyAtomic(AtomicOp.CoverageHit(probeId), List.empty, Type.Unit, Type.Pure, loc)
+      MonoAst.Expr.ApplyAtomic(AtomicOp.CoverageHit(sessionId, probeId), List.empty, Type.Unit, Type.Pure, loc)
 
     case TypedAst.Expr.ApplySig(_, _, _, _, _, _, _, _, _) =>
       throw InternalCompilerException(s"Unexpected ApplySig", exp0.loc)

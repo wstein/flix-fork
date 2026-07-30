@@ -701,7 +701,7 @@ object SemanticTokensProvider {
     case Expr.FixpointInjectInto(exps, _, _, _, _) =>
       visitExps(exps)
 
-    case Expr.CoverageHit(_, _) =>
+    case Expr.CoverageHit(_, _, _) =>
       Iterator.empty
 
     case Expr.Error(_, _, _) =>
