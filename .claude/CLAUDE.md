@@ -15,7 +15,7 @@ library and the given file to `build/doc/`. Two backends share one model
 (`Documentor`), which turns the typed AST into a tree of documentable items:
 
 - `HtmlDocumentor` — the default; pages plus `styles.css`, `index.js`, and `favicon.png`
-- `MarkdownDocumentor` — one `.md` page per item, roughly a tenth the size
+- `MarkdownDocumentor` — one `.md` page per documentable item
 
 Select with `--doc-format html|md|all`, e.g.
 `./mill flix.run doc --doc-format md out/empty.flix`.
@@ -29,9 +29,18 @@ When changing either backend, note two things:
   it did not produce, so renaming a module no longer leaves an orphan page
   behind; files without the marker are never touched. Changing the marker text
   strands every page written by an earlier version.
+- `SvgDocumentor` writes trait-hierarchy and module-structure diagrams under
+  `build/doc/diagrams/`. `Documentor.run` creates one diagram manifest and
+  passes it to both renderers, so pages link only to files generated in that
+  run. Stale marker-tagged SVGs are cleaned recursively; handwritten files are
+  preserved.
 
 Neither backend documents structs or restrictable enums: `Documentor` has no
 representation for them, and drops them in the wildcard case of `splitModules`.
+
+The LSP request `flix/getDiagram` accepts an `itemName` and returns the SVG for
+a documentable trait or module when one exists. Keep request parsing and SVG
+payload tests aligned when extending the diagram model.
 
 ## Running Tests
 

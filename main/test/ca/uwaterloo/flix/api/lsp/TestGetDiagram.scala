@@ -42,7 +42,11 @@ class TestGetDiagram extends AnyFunSuite {
 
   test("SvgDocumentor.generateAll: returns SVG diagram payload for documentable trait") {
     val input =
-      """|pub trait Equatable[a] {
+      """|pub trait Comparable[a] {
+         |  pub def compare(x: a, y: a): Int32
+         |}
+         |
+         |pub trait Equatable[a] with Comparable[a] {
          |  pub def isEq(x: a, y: a): Bool
          |}
          |""".stripMargin
