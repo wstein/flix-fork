@@ -76,17 +76,17 @@ Examples:
 
 ## Coverage Instrumentation
 
-The coverage system adds instrumentation probes to track which functions and definitions are executed:
+The coverage system adds instrumentation probes to compiled project definitions:
 
 - `--coverage` flag enables coverage instrumentation during compilation
-- `Coverage.hit(probeId)` is called at function entry (Coverage effect in stdlib)
-- Coverage probes are inserted after type checking, during `CoverageInstrumentation` phase
+- `Coverage.hit(probeId)` is called at function, executable-line, and `if` branch entry
+- Coverage probes are inserted after the first tree-shaking pass, during `CoverageInstrumentation`
 - Coverage data is recorded to `build/coverage.json` when instrumented code runs
 
 ### Implementation Details
 
 **Phases Involved:**
-1. **CoverageInstrumentation** — After typer, inserts `CoverageHit` probes at function entry
+1. **TreeShaker1 / CoverageInstrumentation** — Retains reachable definitions, then inserts function, body-line, selected `let`-line, and `if` branch probes
 2. **Monomorphization/Lowering** — Lowers `CoverageHit` to `ApplyAtomic(AtomicOp.CoverageHit, ...)` typed as `Type.Pure`
 3. **Optimizer/Inliner** — **Critical**: Preserves `CoverageHit` via `mustPreserve()` barrier to prevent dead-code elimination
 
@@ -100,6 +100,12 @@ The coverage system adds instrumentation probes to track which functions and def
 - Regression test: `TestCoverageOptimization` — verifies coverage probes are preserved through optimization and hits are recorded at runtime
 - Probes must survive dead-code elimination (checked by `Inliner.mustPreserve()`)
 - Execute code to verify `Coverage.snapshot()` contains expected probe hits
+
+**Current Semantics and Limits:**
+- Reports exclude bundled libraries, packages, dependencies, and tree-shaken definitions.
+- Line probes cover function bodies and `let` bindings; full expression-level line coverage is not implemented.
+- Branch probes cover `if` then/else entries only. Match, choose, and guard coverage are not implemented.
+- Probes are placed before optimization. An optimizer-folded branch can remain in source coverage metadata; this is not a post-optimization bytecode coverage mode.
 
 ### Common Pitfalls
 
