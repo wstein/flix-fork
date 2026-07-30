@@ -641,6 +641,8 @@ object Main {
       cmd("doc").action((_, c) => c.copy(command = Command.Doc)).text("  generates API documentation.").children(
         opt[DocFormat]("doc-format").action((arg, c) => c.copy(docFormat = arg)).
           text("selects the format that 'doc' emits (html, md, all). Defaults to html."),
+        opt[Unit]("extended").action((_, c) => c.copy(docExtended = true)).
+          text("emits extended Datalog EDB/IDB relation schemas and rule dependency graphs.")
       )
 
       cmd("format").action((_, c) => c.copy(command = Command.Format)).text("  formats Flix source code files.")
@@ -705,9 +707,6 @@ object Main {
       opt[String]("coverage-lcov-output").action((p, c) => c.copy(coverageLcovOutput = Some(p))).
         valueName("<path>").
         text("path to write the LCOV coverage report (.info format). Defaults to build/coverage.info.")
-
-      opt[Unit]("extended").action((_, c) => c.copy(docExtended = true)).
-        text("emits extended Datalog EDB/IDB relation schemas and rule dependency graphs.")
 
       opt[String]("entrypoint").action((s, c) => c.copy(entryPoint = Some(s))).
         text("specifies the main entry point.")
