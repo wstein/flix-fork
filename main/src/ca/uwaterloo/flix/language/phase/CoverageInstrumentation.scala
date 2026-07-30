@@ -344,10 +344,6 @@ object CoverageInstrumentation {
         val (instExps, nextProbeId) = instrumentExpressions(exps, qualifiedName, probeId, registeredLineProbes)
         instrumentLine(e.copy(exps = instExps), qualifiedName, nextProbeId, registeredLineProbes)
 
-      case e @ TypedAst.Expr.ApplyOp(_, exps, _, _, _, _) =>
-        val (instExps, nextProbeId) = instrumentExpressions(exps, qualifiedName, probeId, registeredLineProbes)
-        instrumentLine(e.copy(exps = instExps), qualifiedName, nextProbeId, registeredLineProbes)
-
       case e @ TypedAst.Expr.Tuple(exps, _, _, _) =>
         val (instExps, nextProbeId) = instrumentExpressions(exps, qualifiedName, probeId, registeredLineProbes)
         instrumentLine(e.copy(exps = instExps), qualifiedName, nextProbeId, registeredLineProbes)
