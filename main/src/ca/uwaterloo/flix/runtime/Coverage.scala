@@ -46,61 +46,73 @@ case class ProbeMetadata(
 object Coverage {
 
   /**
-    * Global registry of probe hit counts.
-    * Indexed by probe ID, each entry tracks how many times that probe was hit.
+    * Represents an isolated coverage session holding metadata and probe hit counters.
     */
-  @volatile private var probes: AtomicLongArray = new AtomicLongArray(0)
+  class Session {
+    @volatile private[Coverage] var probes: AtomicLongArray = new AtomicLongArray(0)
+    private[Coverage] val probeMetadata: mutable.Map[Int, ProbeMetadata] = mutable.Map()
 
-  /**
-    * Probe metadata: maps probe ID to ProbeMetadata.
-    * Includes source file, line number, probe kind, and qualified function name.
-    */
-  private val probeMetadata: mutable.Map[Int, ProbeMetadata] = mutable.Map()
-
-  /**
-    * Register a new probe with enhanced metadata.
-    *
-    * @param probeId the unique probe identifier.
-    * @param source  the source file path.
-    * @param line    the line number (1-based).
-    * @param kind    the probe kind.
-    * @param qualifiedName the fully-qualified function name.
-    */
-  def registerProbe(probeId: Int, source: String, line: Int, kind: ProbeKind, qualifiedName: String): Unit = synchronized {
-    if (probeId >= probes.length()) {
-      // Grow the array as needed
-      val newSize = Math.max(probeId + 1, probes.length() * 2)
-      val newProbes = new AtomicLongArray(newSize)
-      for (i <- 0 until probes.length()) {
-        newProbes.set(i, probes.get(i))
+    def registerProbe(probeId: Int, source: String, line: Int, kind: ProbeKind, qualifiedName: String): Unit = synchronized {
+      if (probeId >= probes.length()) {
+        val newSize = Math.max(probeId + 1, probes.length() * 2)
+        val newProbes = new AtomicLongArray(newSize)
+        for (i <- 0 until probes.length()) {
+          newProbes.set(i, probes.get(i))
+        }
+        probes = newProbes
       }
-      probes = newProbes
+      probeMetadata(probeId) = ProbeMetadata(source, line, kind, qualifiedName)
     }
-    probeMetadata(probeId) = ProbeMetadata(source, line, kind, qualifiedName)
+
+    def reset(): Unit = synchronized {
+      for (i <- 0 until probes.length()) {
+        probes.set(i, 0)
+      }
+    }
+
+    def clear(): Unit = synchronized {
+      probes = new AtomicLongArray(0)
+      probeMetadata.clear()
+    }
   }
 
-
+  @volatile private var session: Session = new Session()
 
   /**
-    * Record a hit on a probe.
-    *
-    * @param probeId the probe identifier.
+    * Create and activate a fresh coverage session for a new compilation lifecycle.
+    */
+  def createSession(): Session = synchronized {
+    session = new Session()
+    session
+  }
+
+  /**
+    * Returns the currently active coverage session.
+    */
+  def getSession: Session = session
+
+  /**
+    * Register a new probe with enhanced metadata in the active session.
+    */
+  def registerProbe(probeId: Int, source: String, line: Int, kind: ProbeKind, qualifiedName: String): Unit = {
+    session.registerProbe(probeId, source, line, kind, qualifiedName)
+  }
+
+  /**
+    * Record a hit on a probe in the active session.
     */
   def hit(probeId: Int): Unit = {
-    val currentProbes = probes
+    val currentProbes = session.probes
     if (probeId >= 0 && probeId < currentProbes.length()) {
       currentProbes.incrementAndGet(probeId)
     }
   }
 
   /**
-    * Get the hit count for a probe.
-    *
-    * @param probeId the probe identifier.
-    * @return the number of times the probe was hit, or 0 if not found.
+    * Get the hit count for a probe in the active session.
     */
   def getHitCount(probeId: Int): Long = {
-    val currentProbes = probes
+    val currentProbes = session.probes
     if (probeId >= 0 && probeId < currentProbes.length()) {
       currentProbes.get(probeId)
     } else {
@@ -109,32 +121,24 @@ object Coverage {
   }
 
   /**
-    * Get all probe metadata with enhanced information.
-    *
-    * @return a map from probe ID to ProbeMetadata.
+    * Get all probe metadata from the active session.
     */
   def getProbeMetadata: Map[Int, ProbeMetadata] = synchronized {
-    probeMetadata.toMap
+    session.probeMetadata.toMap
   }
 
-
-
   /**
-    * Reset all probe counters to zero.
+    * Reset all probe counters to zero in the active session.
     */
   def reset(): Unit = synchronized {
-    for (i <- 0 until probes.length()) {
-      probes.set(i, 0)
-    }
+    session.reset()
   }
 
   /**
-    * Take a snapshot of all current probe hit counts.
-    *
-    * @return a map from probe ID to hit count.
+    * Take a snapshot of all current probe hit counts in the active session.
     */
   def snapshot(): Map[Int, Long] = {
-    val currentProbes = probes
+    val currentProbes = session.probes
     val result = mutable.Map[Int, Long]()
     for (i <- 0 until currentProbes.length()) {
       val count = currentProbes.get(i)
@@ -146,13 +150,10 @@ object Coverage {
   }
 
   /**
-    * Returns probe metadata and hit counts from one synchronized registry state.
-    *
-    * The returned snapshot can safely be rendered as a report without combining
-    * metadata from one compilation lifecycle with counters from another.
+    * Returns probe metadata and hit counts from the current active session state.
     */
   def reportSnapshot(): (Map[Int, ProbeMetadata], Map[Int, Long]) = synchronized {
-    val currentProbes = probes
+    val currentProbes = session.probes
     val hits = mutable.Map[Int, Long]()
     for (i <- 0 until currentProbes.length()) {
       val count = currentProbes.get(i)
@@ -160,14 +161,13 @@ object Coverage {
         hits(i) = count
       }
     }
-    (probeMetadata.toMap, hits.toMap)
+    (session.probeMetadata.toMap, hits.toMap)
   }
 
   /**
-    * Clear all probes and metadata.
+    * Clear all probes and metadata in the active session.
     */
   def clear(): Unit = synchronized {
-    probes = new AtomicLongArray(0)
-    probeMetadata.clear()
+    session.clear()
   }
 }

@@ -69,6 +69,7 @@ object CoverageInstrumentation {
     * @return the root with instrumented function bodies.
     */
   def run(root: TypedAst.Root)(implicit flix: Flix): TypedAst.Root = {
+    Coverage.createSession()
     val defs = root.defs.values.toList
     var probeCounter = 0
     // Track which (qualifiedName, source, line) combinations have line probes
