@@ -142,8 +142,9 @@ object CoverageInstrumentation {
     *
     * PHASE 2.1 - Let-Binding/Statement-Entry Coverage (INCOMPLETE):
     * ===============================================================
-    * Instruments function bodies, let-bindings, statement expressions, and
-    * if-expression conditions and bodies with line probes.
+    * Instruments function bodies, let-bindings, statement expressions, if-expression
+    * conditions and bodies, calls, binary expressions, tuples, and lambda construction
+    * with line probes.
     *
     * NOT YET instrumented: arbitrary function-return expressions, function calls,
     * and other expression forms not represented by a let, statement, or if.
@@ -361,7 +362,7 @@ object CoverageInstrumentation {
         val (instExps, nextProbeId) = instrumentExpressions(exps, qualifiedName, probeId, registeredLineProbes)
         instrumentLine(e.copy(exps = instExps), qualifiedName, nextProbeId, registeredLineProbes)
 
-      // For other expressions, recurse into structure without adding probes
+      // Leave expression forms without explicit execution semantics uninstrumented.
       case _ => (exp, probeId)
     }
 
