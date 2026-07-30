@@ -20,7 +20,7 @@ import org.json4s.{JObject, JValue}
 import org.json4s.JsonDSL._
 import org.json4s.native.JsonMethods.{compact, render}
 
-import java.nio.file.Path
+import java.nio.file.{Files, Path}
 
 /**
   * Generates coverage reports from collected coverage data.
@@ -33,6 +33,12 @@ object CoverageReporter {
     * @param outputPath the path to write the report to.
     */
   def writeJsonReport(outputPath: Path): Unit = {
+    // Create parent directories if needed
+    val parentDir = outputPath.getParent
+    if (parentDir != null && !Files.exists(parentDir)) {
+      Files.createDirectories(parentDir)
+    }
+
     // Get the snapshot of coverage data and metadata
     val snapshot = Coverage.snapshot()
     val metadata = Coverage.getProbeMetadata
@@ -99,6 +105,6 @@ object CoverageReporter {
 
     // Write the report to file
     val jsonString = compact(render(report))
-    java.nio.file.Files.write(outputPath, jsonString.getBytes)
+    Files.write(outputPath, jsonString.getBytes)
   }
 }
