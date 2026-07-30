@@ -46,8 +46,8 @@ object CoverageReporter {
 
     // Filter out synthetic/unknown locations (use loc.isReal check during registration instead)
     // Organize ALL probes by file (including zero-hit)
-    val coverageByFile: Map[String, List[(Int, Int, String)]] = metadata.toList.map {
-      case (probeId, pm) => (pm.source, (probeId, pm.line, pm.kind.asString))
+    val coverageByFile: Map[String, List[(Int, Int, String, String)]] = metadata.toList.map {
+      case (probeId, pm) => (pm.source, (probeId, pm.line, pm.kind.asString, pm.qualifiedName))
     }.groupBy(_._1).map { case (k, v) => k -> v.map(_._2) }
 
     // Calculate summary statistics from all probes
@@ -78,7 +78,7 @@ object CoverageReporter {
           .toList
           .sortBy(_._1)
           .map { case (line, lineProbes) =>
-            val covered = lineProbes.map(_._1).exists(snapshot.contains)
+              val covered = lineProbes.map(_._1).exists(snapshot.contains)
             line.toString -> covered
           })
 
@@ -88,10 +88,17 @@ object CoverageReporter {
           .toList
           .sortBy(_._1)
           .map {
-            case (line, probes) =>
-              val branchCoverage = ListMap.from(probes.sortBy(_._3).map { case (probeId, _, kind) =>
-                kind -> snapshot.contains(probeId)
-              })
+            case (line, lineProbes) =>
+              // A source line can have multiple probes of the same kind, e.g. two
+              // match rules written on one line. Use a list of probe records rather
+              // than a map keyed by kind so every compiled branch remains visible.
+              val branchCoverage: List[JValue] = lineProbes.sortBy(_._1).map {
+                case (probeId, _, kind, qualifiedName) =>
+                  ("id" -> probeId) ~
+                    ("kind" -> kind) ~
+                    ("covered" -> snapshot.contains(probeId)) ~
+                    ("function" -> qualifiedName)
+              }
               ("line" -> line) ~ ("branches" -> branchCoverage)
           }
 

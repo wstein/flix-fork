@@ -103,8 +103,8 @@ The coverage system adds instrumentation probes to compiled project definitions:
 
 **Current Semantics and Limits:**
 - Reports exclude bundled libraries, packages, dependencies, and tree-shaken definitions.
-- Line probes cover function bodies and `let` bindings; full expression-level line coverage is not implemented.
-- Branch probes cover `if` then/else entries only. Match, choose, and guard coverage are not implemented.
+- Line probes cover function bodies, `let` bindings, statement expressions, and `if` conditions and bodies; full expression-level line coverage is not implemented.
+- Branch probes cover `if` then/else entries and `match`/restrictable `choose` rule bodies. Guard outcomes are not separately instrumented.
 - Probes are placed before optimization. An optimizer-folded branch can remain in source coverage metadata; this is not a post-optimization bytecode coverage mode.
 
 ### Common Pitfalls

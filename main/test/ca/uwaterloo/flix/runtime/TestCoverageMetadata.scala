@@ -15,7 +15,13 @@
  */
 package ca.uwaterloo.flix.runtime
 
+import ca.uwaterloo.flix.tools.CoverageReporter
+import org.json4s.{DefaultFormats, jvalue2extractable, jvalue2monadic}
+import org.json4s.native.JsonMethods.parse
 import org.scalatest.funsuite.AnyFunSuite
+
+import java.nio.charset.StandardCharsets
+import java.nio.file.Files
 
 /**
   * Unit tests for Coverage probe metadata registration and reporting.
@@ -27,6 +33,8 @@ import org.scalatest.funsuite.AnyFunSuite
   * - ProbeKind ADT works correctly
   */
 class TestCoverageMetadata extends AnyFunSuite {
+
+  private implicit val formats: org.json4s.Formats = DefaultFormats
 
   test("register and retrieve function probe metadata") {
     Coverage.clear()
@@ -83,6 +91,7 @@ class TestCoverageMetadata extends AnyFunSuite {
     assert(ProbeKind.Line.asString == "line")
     assert(ProbeKind.BranchTrue.asString == "branch-true")
     assert(ProbeKind.BranchFalse.asString == "branch-false")
+    assert(ProbeKind.BranchRule.asString == "branch-rule")
   }
 
   test("probe kind deserialization from string") {
@@ -90,6 +99,7 @@ class TestCoverageMetadata extends AnyFunSuite {
     assert(ProbeKind.fromString("line") == Some(ProbeKind.Line))
     assert(ProbeKind.fromString("branch-true") == Some(ProbeKind.BranchTrue))
     assert(ProbeKind.fromString("branch-false") == Some(ProbeKind.BranchFalse))
+    assert(ProbeKind.fromString("branch-rule") == Some(ProbeKind.BranchRule))
     assert(ProbeKind.fromString("unknown") == None)
   }
 
@@ -158,6 +168,30 @@ class TestCoverageMetadata extends AnyFunSuite {
     Coverage.hit(0)
     snapshot = Coverage.snapshot()
     assert(snapshot(0) == 3, "Probe should have 3 hits")
+  }
+
+  test("report preserves same-line rule probes independently") {
+    Coverage.clear()
+    Coverage.registerProbe(0, "Test.flix", 10, ProbeKind.BranchRule, "Test.classify")
+    Coverage.registerProbe(1, "Test.flix", 10, ProbeKind.BranchRule, "Test.classify")
+    Coverage.hit(0)
+
+    val reportPath = Files.createTempFile("coverage-", ".json")
+    try {
+      CoverageReporter.writeJsonReport(reportPath)
+      val report = parse(Files.readString(reportPath, StandardCharsets.UTF_8))
+      val files = (report \ "files").asInstanceOf[org.json4s.JArray].arr
+      val branches = (files.head \ "branches").asInstanceOf[org.json4s.JArray].arr
+      val probes = (branches.head \ "branches").asInstanceOf[org.json4s.JArray].arr
+
+      assert(probes.size == 2, "Both same-line rule probes must be represented")
+      assert(probes.map(p => (p \ "id").extract[Int]) == List(0, 1))
+      assert(probes.map(p => (p \ "covered").extract[Boolean]) == List(true, false))
+      assert(probes.forall(p => (p \ "kind").extract[String] == "branch-rule"))
+      assert(probes.forall(p => (p \ "function").extract[String] == "Test.classify"))
+    } finally {
+      Files.deleteIfExists(reportPath)
+    }
   }
 
 }
