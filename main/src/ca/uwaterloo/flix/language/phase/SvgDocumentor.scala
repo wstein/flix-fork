@@ -62,12 +62,47 @@ object SvgDocumentor {
       Files.createDirectories(dir)
     }
 
-    for ((fileName, content) <- diagrams) {
+    val datalogDiagrams = generateDatalogDiagrams(root)
+    val allDiagrams = diagrams ++ datalogDiagrams
+
+    for ((fileName, content) <- allDiagrams) {
       writeDiagramFile(fileName, content)
     }
 
-    deleteStaleDiagrams(diagrams.keySet)
-    diagrams.keySet
+    deleteStaleDiagrams(allDiagrams.keySet)
+    allDiagrams.keySet
+  }
+
+  def generateDatalogDiagrams(root: TypedAst.Root)(implicit flix: Flix): Map[String, String] = {
+    if (!flix.options.docExtended && flix.options.xdatalogDebug.isEmpty) {
+      return Map.empty
+    }
+    val datalogDir = DiagramDirectory.resolve("datalog")
+    if (!Files.exists(datalogDir)) {
+      Files.createDirectories(datalogDir)
+    }
+
+    val sb = new StringBuilder()
+    sb.append(s"""<!-- ${Documentor.GeneratedMarker} -->\n""")
+    sb.append("""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 200" width="100%" height="100%">""")
+    sb.append("""
+      |<style>
+      |  .edb-node { fill: #e8f5e9; stroke: #2e7d32; stroke-width: 2; rx: 8; ry: 8; }
+      |  .idb-node { fill: #e3f2fd; stroke: #1565c0; stroke-width: 2; rx: 8; ry: 8; }
+      |  .text { font-family: system-ui, sans-serif; font-size: 14px; fill: #1c1e21; text-anchor: middle; dominant-baseline: middle; }
+      |  .edge { stroke: #555; stroke-width: 2; }
+      |</style>
+      |""".stripMargin)
+    sb.append("""<rect x="50" y="40" width="220" height="120" class="edb-node" />""")
+    sb.append("""<text x="160" y="80" class="text">EDB Fact Relation</text>""")
+    sb.append("""<text x="160" y="110" class="text" font-size="12px">(Extensional Database)</text>""")
+    sb.append("""<rect x="330" y="40" width="220" height="120" class="idb-node" />""")
+    sb.append("""<text x="440" y="80" class="text">IDB Derived Rule</text>""")
+    sb.append("""<text x="440" y="110" class="text" font-size="12px">(Intensional Database)</text>""")
+    sb.append("""<path d="M 270 100 L 330 100" class="edge" marker-end="url(#arrow)" />""")
+    sb.append("\n</svg>\n")
+
+    Map("datalog/DatalogSchema.svg" -> sb.toString())
   }
 
   /**
@@ -230,6 +265,9 @@ object SvgDocumentor {
 
   private def writeDiagramFile(fileName: String, content: String)(implicit flix: Flix): Unit = {
     val path = DiagramDirectory.resolve(fileName)
+    if (path.getParent != null && !Files.exists(path.getParent)) {
+      Files.createDirectories(path.getParent)
+    }
     Files.writeString(path, content, StandardCharsets.UTF_8)
   }
 

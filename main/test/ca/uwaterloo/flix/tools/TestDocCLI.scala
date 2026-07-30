@@ -208,4 +208,15 @@ class TestDocCLI extends AnyFunSuite {
       assert(!Files.exists(childSvg), "Stale generated SVG diagram Child.svg should be deleted")
     }
   }
+
+  test("CLI E2E: flix doc --extended emits extended Datalog relation schemas") {
+    withProject { p =>
+      Files.writeString(p.resolve("src/Main.flix"), "pub def f(): Int32 = 42")
+      val (exitCode, stdout, stderr) = runCliSubprocess(Array("doc", "--extended"), p)
+      assert(exitCode == 0, s"Expected exit 0, got $exitCode.\nSTDERR:\n$stderr")
+
+      val datalogSvg = p.resolve("build/doc/diagrams/datalog/DatalogSchema.svg")
+      assert(Files.exists(datalogSvg), "build/doc/diagrams/datalog/DatalogSchema.svg should exist with --extended option")
+    }
+  }
 }
