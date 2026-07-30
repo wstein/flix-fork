@@ -77,6 +77,7 @@ object Main {
       outputJvm = false,
       outputPath = Options.Default.outputPath,
       threads = cmdOpts.threads.getOrElse(Options.Default.threads),
+      docExtended = cmdOpts.docExtended,
       loadClassFiles = Options.Default.loadClassFiles,
       assumeYes = cmdOpts.assumeYes,
       xprintphases = cmdOpts.xprintphases,
@@ -495,6 +496,7 @@ object Main {
     coverageOutput: Option[String] = None,
     coverageLcovOutput: Option[String] = None,
     docFormat: DocFormat = Options.Default.docFormat,
+    docExtended: Boolean = Options.Default.docExtended,
     entryPoint: Option[String] = None,
     installDeps: Boolean = true,
     githubToken: Option[String] = None,
@@ -703,6 +705,9 @@ object Main {
       opt[String]("coverage-lcov-output").action((p, c) => c.copy(coverageLcovOutput = Some(p))).
         valueName("<path>").
         text("path to write the LCOV coverage report (.info format). Defaults to build/coverage.info.")
+
+      opt[Unit]("extended").action((_, c) => c.copy(docExtended = true)).
+        text("emits extended Datalog EDB/IDB relation schemas and rule dependency graphs.")
 
       opt[String]("entrypoint").action((s, c) => c.copy(entryPoint = Some(s))).
         text("specifies the main entry point.")

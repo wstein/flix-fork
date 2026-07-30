@@ -71,7 +71,10 @@ object SvgDocumentor {
       Files.createDirectories(dir)
     }
 
-    for ((fileName, content) <- diagrams) {
+    val datalogDiagrams = generateDatalogDiagrams(root)
+    val allDiagrams = diagrams ++ datalogDiagrams
+
+    for ((fileName, content) <- allDiagrams) {
       writeDiagramFile(fileName, content)
     }
 
