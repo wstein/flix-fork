@@ -399,6 +399,43 @@ object CoverageInstrumentation {
         val (instExp2, pc2) = instrumentExpression(exp2, qualifiedName, pc1, registeredLineProbes)
         instrumentLine(e.copy(exp1 = instExp1, exp2 = instExp2), qualifiedName, pc2, registeredLineProbes)
 
+      case e @ TypedAst.Expr.Tag(_, exps, _, _, _) =>
+        val (instExps, nextProbeId) = instrumentExpressions(exps, qualifiedName, probeId, registeredLineProbes)
+        instrumentLine(e.copy(exps = instExps), qualifiedName, nextProbeId, registeredLineProbes)
+
+      case e @ TypedAst.Expr.RestrictableTag(_, exps, _, _, _) =>
+        val (instExps, nextProbeId) = instrumentExpressions(exps, qualifiedName, probeId, registeredLineProbes)
+        instrumentLine(e.copy(exps = instExps), qualifiedName, nextProbeId, registeredLineProbes)
+
+      case e @ TypedAst.Expr.ArrayNew(exp1, exp2, exp3, _, _, _) =>
+        val (instExp1, pc1) = instrumentExpression(exp1, qualifiedName, probeId, registeredLineProbes)
+        val (instExp2, pc2) = instrumentExpression(exp2, qualifiedName, pc1, registeredLineProbes)
+        val (instExp3, pc3) = instrumentExpression(exp3, qualifiedName, pc2, registeredLineProbes)
+        instrumentLine(e.copy(exp1 = instExp1, exp2 = instExp2, exp3 = instExp3), qualifiedName, pc3, registeredLineProbes)
+
+      case e @ TypedAst.Expr.ArrayLoad(exp1, exp2, _, _, _) =>
+        val (instExp1, pc1) = instrumentExpression(exp1, qualifiedName, probeId, registeredLineProbes)
+        val (instExp2, pc2) = instrumentExpression(exp2, qualifiedName, pc1, registeredLineProbes)
+        instrumentLine(e.copy(exp1 = instExp1, exp2 = instExp2), qualifiedName, pc2, registeredLineProbes)
+
+      case e @ TypedAst.Expr.ArrayStore(exp1, exp2, exp3, _, _) =>
+        val (instExp1, pc1) = instrumentExpression(exp1, qualifiedName, probeId, registeredLineProbes)
+        val (instExp2, pc2) = instrumentExpression(exp2, qualifiedName, pc1, registeredLineProbes)
+        val (instExp3, pc3) = instrumentExpression(exp3, qualifiedName, pc2, registeredLineProbes)
+        instrumentLine(e.copy(exp1 = instExp1, exp2 = instExp2, exp3 = instExp3), qualifiedName, pc3, registeredLineProbes)
+
+      case e @ TypedAst.Expr.ArrayLength(exp0, _, _) =>
+        val (instExp, nextProbeId) = instrumentExpression(exp0, qualifiedName, probeId, registeredLineProbes)
+        instrumentLine(e.copy(exp = instExp), qualifiedName, nextProbeId, registeredLineProbes)
+
+      case e @ TypedAst.Expr.Ascribe(exp0, _, _, _, _, _) =>
+        val (instExp, nextProbeId) = instrumentExpression(exp0, qualifiedName, probeId, registeredLineProbes)
+        instrumentLine(e.copy(exp = instExp), qualifiedName, nextProbeId, registeredLineProbes)
+
+      case e @ TypedAst.Expr.CheckedCast(_, exp0, _, _, _) =>
+        val (instExp, nextProbeId) = instrumentExpression(exp0, qualifiedName, probeId, registeredLineProbes)
+        instrumentLine(e.copy(exp = instExp), qualifiedName, nextProbeId, registeredLineProbes)
+
       // Leave expression forms without explicit execution semantics uninstrumented.
       case _ => (exp, probeId)
     }
