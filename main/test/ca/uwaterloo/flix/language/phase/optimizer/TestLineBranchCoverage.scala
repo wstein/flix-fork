@@ -258,7 +258,7 @@ class TestLineBranchCoverage extends AnyFunSuite {
       "The nested call line probe should be hit when compute executes")
   }
 
-  test("nested tuple expressions are covered") {
+  test("lambda, closure application, tuple, and operator expressions are covered") {
     Coverage.clear()
     val program =
       """
@@ -275,7 +275,10 @@ class TestLineBranchCoverage extends AnyFunSuite {
         |}
         |""".stripMargin
     val expectedLines = Set(
-      program.linesIterator.indexWhere(_.trim == "(") + 1
+      program.linesIterator.indexWhere(_.contains("x -> x + 1")) + 1,
+      program.linesIterator.indexWhere(_.trim == "(") + 1,
+      program.linesIterator.indexWhere(_.contains("f(40)")) + 1,
+      program.linesIterator.indexWhere(_.contains("1 + f(1)")) + 1
     )
     val flix = new Flix().setOptions(Options.DefaultTest.copy(coverage = true))
     flix.addVirtualPath(CompilerConstants.VirtualTestFile, program)

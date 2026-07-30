@@ -143,7 +143,8 @@ object CoverageInstrumentation {
     * PHASE 2.1 - Let-Binding/Statement-Entry Coverage (INCOMPLETE):
     * ===============================================================
     * Instruments function bodies, let-bindings, statement expressions, if-expression
-    * conditions and bodies, direct calls, and tuples with line probes.
+    * conditions and bodies, definition, signature, and closure calls, lambda
+    * construction, and tuples with line probes.
     *
     * NOT YET instrumented: arbitrary function-return expressions, function calls,
     * and other expression forms not represented by a let, statement, or if.
@@ -340,9 +341,26 @@ object CoverageInstrumentation {
       // These expressions execute at their own source location. Instrument the
       // reconstructed expression itself, then recurse so nested expressions on
       // different source lines receive distinct probes.
-      case e @ TypedAst.Expr.ApplyDef(_, exps, _, _, _, _, _, _) =>
+      case e @ TypedAst.Expr.ApplyDef(symUse, exps, _, _, _, _, _, loc) =>
         val (instExps, nextProbeId) = instrumentExpressions(exps, qualifiedName, probeId, registeredLineProbes)
-        instrumentLine(e.copy(exps = instExps), qualifiedName, nextProbeId, registeredLineProbes)
+        val sourceLoc = firstRealLocation(loc, (symUse.loc :: exps.map(_.loc)): _*)
+        instrumentLineAt(e.copy(exps = instExps), sourceLoc, qualifiedName, nextProbeId, registeredLineProbes)
+
+      case e @ TypedAst.Expr.ApplySig(symUse, exps, _, _, _, _, _, _, loc) =>
+        val (instExps, nextProbeId) = instrumentExpressions(exps, qualifiedName, probeId, registeredLineProbes)
+        val sourceLoc = firstRealLocation(loc, (symUse.loc :: exps.map(_.loc)): _*)
+        instrumentLineAt(e.copy(exps = instExps), sourceLoc, qualifiedName, nextProbeId, registeredLineProbes)
+
+      case e @ TypedAst.Expr.ApplyClo(exp1, exp2, _, _, _, loc) =>
+        val (instExp1, pc1) = instrumentExpression(exp1, qualifiedName, probeId, registeredLineProbes)
+        val (instExp2, pc2) = instrumentExpression(exp2, qualifiedName, pc1, registeredLineProbes)
+        val sourceLoc = firstRealLocation(loc, exp1.loc, exp2.loc)
+        instrumentLineAt(e.copy(exp1 = instExp1, exp2 = instExp2), sourceLoc, qualifiedName, pc2, registeredLineProbes)
+
+      case e @ TypedAst.Expr.Lambda(fparam, body, _, loc) =>
+        val (instBody, nextProbeId) = instrumentExpression(body, qualifiedName, probeId, registeredLineProbes)
+        val sourceLoc = if (loc.isReal) loc else fparam.loc
+        instrumentLineAt(e.copy(exp = instBody), sourceLoc, qualifiedName, nextProbeId, registeredLineProbes)
 
       case e @ TypedAst.Expr.Tuple(exps, _, _, _) =>
         val (instExps, nextProbeId) = instrumentExpressions(exps, qualifiedName, probeId, registeredLineProbes)
@@ -377,18 +395,33 @@ object CoverageInstrumentation {
     probeId: Int,
     registeredLineProbes: scala.collection.mutable.Set[(String, String, Int)]
   ): (TypedAst.Expr, Int) = {
-    val key = (qualifiedName, exp.loc.source.name, exp.loc.startLine)
-    if (exp.loc.isReal && registeredLineProbes.add(key)) {
-      Coverage.registerProbe(probeId, exp.loc.source.name, exp.loc.startLine, ProbeKind.Line, qualifiedName)
-      val wrapped = TypedAst.Expr.Stm(List(TypedAst.Expr.CoverageHit(probeId, exp.loc)), exp, exp.tpe, exp.eff, exp.loc)
+    instrumentLineAt(exp, exp.loc, qualifiedName, probeId, registeredLineProbes)
+  }
+
+  /** Registers and inserts one line probe using an explicit real-source location. */
+  private def instrumentLineAt(
+    exp: TypedAst.Expr,
+    loc: SourceLocation,
+    qualifiedName: String,
+    probeId: Int,
+    registeredLineProbes: scala.collection.mutable.Set[(String, String, Int)]
+  ): (TypedAst.Expr, Int) = {
+    val key = (qualifiedName, loc.source.name, loc.startLine)
+    if (loc.isReal && registeredLineProbes.add(key)) {
+      Coverage.registerProbe(probeId, loc.source.name, loc.startLine, ProbeKind.Line, qualifiedName)
+      val wrapped = TypedAst.Expr.Stm(List(TypedAst.Expr.CoverageHit(probeId, loc)), exp, exp.tpe, exp.eff, loc)
       (wrapped, probeId + 1)
     } else {
       (exp, probeId)
     }
   }
 
+  /** Returns the first real location, or the primary location if all candidates are synthetic. */
+  private def firstRealLocation(primary: SourceLocation, alternatives: SourceLocation*): SourceLocation =
+    (primary :: alternatives.toList).find(_.isReal).getOrElse(primary)
+
   /**
-    * Determine if a definition should be instrumented for coverage.
+   * Determine if a definition should be instrumented for coverage.
     *
     * Only instrument user-provided source code (Input.RealFile and Input.VirtualFile).
     * Exclude bundled libraries, packages, and compiler-internal code.
