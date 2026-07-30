@@ -52,16 +52,26 @@ object CoverageInstrumentation {
     val probeMap = scala.collection.mutable.Map[Symbol.DefnSym, Int]()
 
     var probeCounter = 0
+    var instrumentedCount = 0
+    var skippedCount = 0
+
+    // Debug: collect info about all functions
+    val debugInfo = scala.collection.mutable.ArrayBuffer[String]()
+    debugInfo += s"Total definitions: ${defs.size}"
+    debugInfo += ""
 
     // Register a probe for each user-defined function
     for (defn <- defs) {
       val sym = defn.sym
       val loc = sym.loc
+      val name = sym.name
+      val namespace = sym.namespace.mkString(".")
 
-      // Skip compiler-generated and test functions
+      // Check if should instrument
       if (shouldInstrument(defn)) {
         val probeId = probeCounter
         probeCounter += 1
+        instrumentedCount += 1
 
         val sourcePath = loc.source.name
         val lineNumber = loc.startLine
@@ -71,7 +81,24 @@ object CoverageInstrumentation {
 
         // Store probe ID mapping
         probeMap(sym) = probeId
+
+        debugInfo += s"[$probeId] INSTRUMENTED: $name at $sourcePath:$lineNumber (namespace: $namespace)"
+      } else {
+        skippedCount += 1
+        debugInfo += s"[SKIP] $name (namespace: $namespace)"
       }
+    }
+
+    debugInfo += ""
+    debugInfo += s"Instrumented: $instrumentedCount, Skipped: $skippedCount"
+
+    // Write debug info
+    try {
+      val debugFile = java.nio.file.Paths.get("out/coverage_debug.txt")
+      java.nio.file.Files.createDirectories(debugFile.getParent)
+      java.nio.file.Files.write(debugFile, debugInfo.mkString("\n").getBytes)
+    } catch {
+      case _: Exception => // Ignore errors writing debug file
     }
 
     // Store the probe map on the Flix instance
@@ -96,8 +123,10 @@ object CoverageInstrumentation {
       return false
     }
 
-    // Skip compiler-generated functions (those in compiler namespaces or internal ones)
-    if (sym.namespace.exists(p => p.startsWith("ca.uwaterloo.flix") || p.startsWith("flix"))) {
+    // Skip compiler-generated functions (internal builtins, standard library internals)
+    // Check if namespace starts with compiler packages
+    val namespacePath = sym.namespace.mkString(".")
+    if (namespacePath.startsWith("ca.uwaterloo.flix") || namespacePath.startsWith("flix")) {
       return false
     }
 

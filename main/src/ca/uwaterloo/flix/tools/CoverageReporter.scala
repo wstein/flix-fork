@@ -43,6 +43,38 @@ object CoverageReporter {
     val snapshot = Coverage.snapshot()
     val metadata = Coverage.getProbeMetadata
 
+    // Debug: Write all probe data to file
+    try {
+      val debugLines = scala.collection.mutable.ArrayBuffer[String]()
+      debugLines += s"Total probes registered: ${metadata.size}"
+      debugLines += s"Total probes with hits: ${snapshot.size}"
+      debugLines += ""
+      
+      // Show probes with hits
+      debugLines += "Probes with hits:"
+      snapshot.foreach { case (probeId, count) =>
+        metadata.get(probeId) match {
+          case Some((source, line, kind)) =>
+            debugLines += s"  [$probeId] $source:$line ($kind) = $count hits"
+          case None =>
+            debugLines += s"  [$probeId] METADATA NOT FOUND = $count hits"
+        }
+      }
+      
+      // Show test file probes
+      debugLines += ""
+      debugLines += "Test file probes (hit count):"
+      metadata.filter(_._2._1.contains("coverage_test")).foreach { case (probeId, (source, line, kind)) =>
+        val hits = snapshot.getOrElse(probeId, 0L)
+        debugLines += s"  [$probeId] $source:$line ($kind) = $hits hits"
+      }
+      
+      val debugFile = java.nio.file.Paths.get("out/coverage_reporter_debug.txt")
+      java.nio.file.Files.write(debugFile, debugLines.mkString("\n").getBytes)
+    } catch {
+      case _: Exception => // Ignore errors writing debug file
+    }
+
     // Organize coverage by file
     val coverageByFile: Map[String, List[(Int, Int, String)]] = snapshot.toList.flatMap {
       case (probeId, count) =>

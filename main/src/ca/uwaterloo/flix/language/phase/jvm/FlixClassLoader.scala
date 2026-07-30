@@ -25,10 +25,11 @@ import scala.collection.mutable
   *
   * @param classes A map from internal names (strings) to JvmClasses.
   *
-  * We pass the platform class loader as the parent to avoid it delegating to the system classloader
-  * (otherwise compiled Flix code has access to all classes within the compiler)
+  * We use the current thread's context classloader as parent to ensure access to runtime classes
+  * (like Coverage) that are on the application classpath. This is important when running as a JAR
+  * where all dependencies are packaged together.
   */
-class FlixClassLoader(classes: Map[String, JvmClass])(implicit flix: Flix) extends ClassLoader(ClassLoader.getPlatformClassLoader) {
+class FlixClassLoader(classes: Map[String, JvmClass])(implicit flix: Flix) extends ClassLoader(Thread.currentThread().getContextClassLoader) {
 
   /**
     * An internal cache of already loaded classes.
