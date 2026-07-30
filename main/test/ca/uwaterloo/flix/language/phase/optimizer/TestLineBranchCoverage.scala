@@ -639,5 +639,35 @@ class TestLineBranchCoverage extends AnyFunSuite {
     }
   }
 
+  test("match rule guard branch probes recorded") {
+    Coverage.clear()
+    val program =
+      """
+        |def checkGuard(x: Int32): String = match x {
+        |    case n if n > 10 => "large"
+        |    case _ => "small"
+        |}
+        |
+        |def main(): Unit \ IO = println(checkGuard(15))
+        |""".stripMargin
+    val flix = new Flix().setOptions(Options.DefaultTest.copy(coverage = true))
+    flix.addVirtualPath(CompilerConstants.VirtualTestFile, program)
+    val guardLine = program.linesIterator.indexWhere(_.contains("if n > 10")) + 1
+
+    flix.compile().toResult match {
+      case Result.Ok(result) =>
+        result.getMain.fold(fail("No main function"))(_(Array()))
+        val metadata = Coverage.getProbeMetadata
+        val hits = Coverage.snapshot().keySet
+        val guardTrueProbes = metadata.collect { case (id, p) if p.kind == ProbeKind.BranchTrue && p.line == guardLine => id }
+        val guardFalseProbes = metadata.collect { case (id, p) if p.kind == ProbeKind.BranchFalse && p.line == guardLine => id }
+
+        assert(guardTrueProbes.nonEmpty, "Guard line should have BranchTrue probe registered")
+        assert(guardFalseProbes.nonEmpty, "Guard line should have BranchFalse probe registered")
+        assert((guardTrueProbes.toSet intersect hits).nonEmpty, "Successful guard should record BranchTrue hit")
+      case Result.Err(errors) => fail(s"Compilation failed: $errors")
+    }
+  }
+
 }
 
