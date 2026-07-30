@@ -655,7 +655,7 @@ class TestMarkdownDocumentor extends AnyFunSuite {
           val md = page(pages, "index.md")
           assert(!md.contains("main/src/library/List.flix"), "User List.flix was misattributed as stdlib")
           assert(md.contains("List.flix"), "User List.flix should be attributed to its file path")
-        case (_, errors) => fail(CompilationMessage.formatAll(Formatter.NoFormatter, None))
+        case (_, errors) => fail(CompilationMessage.formatAll(errors)(Formatter.NoFormatter, None))
       }
     }
   }
