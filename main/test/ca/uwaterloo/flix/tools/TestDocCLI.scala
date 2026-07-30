@@ -182,4 +182,30 @@ class TestDocCLI extends AnyFunSuite {
       assert(exitCode != 0, "Compilation errors should cause flix doc to exit with non-zero code")
     }
   }
+
+  test("CLI E2E: flix doc generates standalone SVG diagrams and cleans stale SVG files") {
+    withProject { p =>
+      Files.writeString(p.resolve("src/Main.flix"),
+        """|pub trait Parent[a] { pub def p(x: a): Bool }
+           |pub trait Child[a] with Parent[a] { pub def c(x: a): Bool }
+           |""".stripMargin)
+
+      val (exitCode1, _, stderr1) = runCliSubprocess(Array("doc", "--doc-format", "all"), p)
+      assert(exitCode1 == 0, s"Expected exit 0, got $exitCode1.\nSTDERR:\n$stderr1")
+
+      val diagramsDir = p.resolve("build/doc/diagrams")
+      val childSvg = diagramsDir.resolve("Child.svg")
+      assert(Files.exists(childSvg), "build/doc/diagrams/Child.svg should exist")
+
+      // Change code to remove Child and keep Parent
+      Files.writeString(p.resolve("src/Main.flix"),
+        """|pub trait Parent[a] { pub def p(x: a): Bool }
+           |""".stripMargin)
+
+      val (exitCode2, _, stderr2) = runCliSubprocess(Array("doc", "--doc-format", "all"), p)
+      assert(exitCode2 == 0, s"Expected exit 0, got $exitCode2.\nSTDERR:\n$stderr2")
+
+      assert(!Files.exists(childSvg), "Stale generated SVG diagram Child.svg should be deleted")
+    }
+  }
 }

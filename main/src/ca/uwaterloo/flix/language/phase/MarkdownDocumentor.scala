@@ -100,8 +100,10 @@ object MarkdownDocumentor {
     * Writes Markdown documentation for `root`, restricted to `packageModules`, to the output directory.
     */
   def run(root: TypedAst.Root, packageModules: PackageModules)(implicit flix: Flix): Unit = {
+    val diagrams = SvgDocumentor.run(root, packageModules)
     val pages = documentAll(root, packageModules)
     deleteStalePages(pages.keySet)
+    SvgDocumentor.deleteStaleDiagrams(diagrams)
     for ((name, content) <- pages) {
       writeDocFile(name, content)
     }
@@ -267,6 +269,9 @@ object MarkdownDocumentor {
     decl.append(docTypeParams(List(trt.decl.tparam)))
     decl.append(docTraitConstraints(trt.decl.superTraits))
     sb.append(docDeclaration(trt.decl.ann, decl.toString()))
+    if (SvgDocumentor.generateDiagram(trt).nonEmpty) {
+      sb.append(s"![Trait Hierarchy](diagrams/${SvgDocumentor.diagramFileName(trt)})\n\n")
+    }
     sb.append(docBlock(trt.decl.doc))
 
     sb.append(docSection("Associated Types", trt.decl.assocs.sortBy(_.sym.name)) { assoc =>

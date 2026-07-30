@@ -74,10 +74,12 @@ object HtmlDocumentor {
   private val LibraryGitHub: String = "https://github.com/flix/flix/blob/master/main/src/library/"
 
   def run(root: TypedAst.Root, packageModules: PackageModules)(implicit flix: Flix): Unit = {
+    val diagrams = SvgDocumentor.run(root, packageModules)
     val writtenPages = visitMod(Documentor.build(root, packageModules)).toSet
 
     writeAssets()
     deleteStalePages(writtenPages)
+    SvgDocumentor.deleteStaleDiagrams(diagrams)
   }
 
   /**
@@ -342,6 +344,10 @@ object HtmlDocumentor {
     sb.append("</code>")
     docActions(None, trt.decl.loc)
     sb.append("</div>")
+    if (SvgDocumentor.generateDiagram(trt).nonEmpty) {
+      val diagramFileName = SvgDocumentor.diagramFileName(trt)
+      sb.append(s"<div class='diagram'><img src='diagrams/${escUrl(diagramFileName)}' alt='Hierarchy diagram'></div>")
+    }
     docDoc(trt.decl.doc)
     docSubSection("Associated Types", sortedAssocs, docAssoc)
     docCollapsableSubSection("Instances", sortedInstances, docInstance)
