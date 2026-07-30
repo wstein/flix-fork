@@ -119,4 +119,80 @@ object CoverageReporter {
     val jsonString = compact(render(report))
     Files.write(outputPath, jsonString.getBytes(java.nio.charset.StandardCharsets.UTF_8))
   }
+
+  /**
+    * Generate and write an LCOV tracefile report (`.info`).
+    *
+    * @param outputPath the path to write the LCOV report to.
+    */
+  def writeLcovReport(outputPath: Path): Unit = {
+    val parentDir = outputPath.getParent
+    if (parentDir != null && !Files.exists(parentDir)) {
+      Files.createDirectories(parentDir)
+    }
+
+    val (metadata, snapshot) = Coverage.reportSnapshot()
+
+    val coverageByFile = metadata.toList.map {
+      case (probeId, pm) => (pm.source, (probeId, pm.line, pm.kind, pm.qualifiedName))
+    }.groupBy(_._1).map { case (k, v) => k -> v.map(_._2) }
+
+    val sb = new java.lang.StringBuilder()
+
+    coverageByFile.toList.sortBy(_._1).foreach { case (sourcePath, probes) =>
+      sb.append("TN:\n")
+      sb.append(s"SF:$sourcePath\n")
+
+      // Functions
+      val funcProbes = probes.filter(_._3 == ca.uwaterloo.flix.runtime.ProbeKind.Function)
+      val funcHitCount = funcProbes.count { case (id, _, _, _) => snapshot.contains(id) }
+
+      funcProbes.sortBy(_._2).foreach { case (_, line, _, name) =>
+        sb.append(s"FN:$line,$name\n")
+      }
+      funcProbes.sortBy(_._2).foreach { case (id, _, _, name) =>
+        val hits = snapshot.getOrElse(id, 0L)
+        sb.append(s"FNDA:$hits,$name\n")
+      }
+      sb.append(s"FNF:${funcProbes.size}\n")
+      sb.append(s"FNH:$funcHitCount\n")
+
+      // Lines
+      val lineProbesByLine = probes.filter(_._3 == ca.uwaterloo.flix.runtime.ProbeKind.Line).groupBy(_._2)
+      var lineHitCount = 0
+
+      lineProbesByLine.toList.sortBy(_._1).foreach { case (line, lineProbes) =>
+        val hits = lineProbes.map(_._1).map(id => snapshot.getOrElse(id, 0L)).foldLeft(0L)(_ max _)
+        if (hits > 0) lineHitCount += 1
+        sb.append(s"DA:$line,$hits\n")
+      }
+      sb.append(s"LF:${lineProbesByLine.size}\n")
+      sb.append(s"LH:$lineHitCount\n")
+
+      // Branches
+      val branchProbesByLine = probes.filter(_._3.asString.startsWith("branch")).groupBy(_._2)
+      var branchTotalCount = 0
+      var branchHitCount = 0
+
+      branchProbesByLine.toList.sortBy(_._1).foreach { case (line, branchProbes) =>
+        branchProbes.sortBy(_._1).zipWithIndex.foreach { case ((id, _, _, _), idx) =>
+          branchTotalCount += 1
+          val hits = snapshot.get(id)
+          val hitStr = hits match {
+            case Some(h) =>
+              branchHitCount += 1
+              h.toString
+            case None => "-"
+          }
+          sb.append(s"BRDA:$line,0,$idx,$hitStr\n")
+        }
+      }
+      sb.append(s"BRF:$branchTotalCount\n")
+      sb.append(s"BRH:$branchHitCount\n")
+
+      sb.append("end_of_record\n")
+    }
+
+    Files.write(outputPath, sb.toString.getBytes(java.nio.charset.StandardCharsets.UTF_8))
+  }
 }

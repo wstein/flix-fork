@@ -65,6 +65,7 @@ object Main {
       compilerTop = cmdOpts.top,
       coverage = cmdOpts.coverage,
       coverageOutput = cmdOpts.coverageOutput.map(Paths.get(_)).getOrElse(Options.Default.coverageOutput),
+      coverageLcovOutput = cmdOpts.coverageLcovOutput.map(Paths.get(_)).getOrElse(Options.Default.coverageLcovOutput),
       docFormat = cmdOpts.docFormat,
       entryPoint = entryPoint,
       githubToken = githubToken,
@@ -344,17 +345,19 @@ object Main {
               case Validation.Success(compilationResult) =>
                 Tester.run(Nil, compilationResult)(flix) match {
                   case Result.Ok(_) =>
-                    // Write coverage report if enabled
+                    // Write coverage reports if enabled
                     if (options.coverage) {
                       CoverageReporter.writeJsonReport(options.coverageOutput)
-                      println(s"Coverage report written to ${options.coverageOutput}")
+                      CoverageReporter.writeLcovReport(options.coverageLcovOutput)
+                      println(s"Coverage reports written to ${options.coverageOutput} and ${options.coverageLcovOutput}")
                     }
                     System.exit(0)
                   case Result.Err(_) =>
-                    // Write coverage report even if tests failed
+                    // Write coverage reports even if tests failed
                     if (options.coverage) {
                       CoverageReporter.writeJsonReport(options.coverageOutput)
-                      println(s"Coverage report written to ${options.coverageOutput}")
+                      CoverageReporter.writeLcovReport(options.coverageLcovOutput)
+                      println(s"Coverage reports written to ${options.coverageOutput} and ${options.coverageLcovOutput}")
                     }
                     System.exit(1)
                 }
@@ -487,6 +490,7 @@ object Main {
     args: List[String] = Nil,
     coverage: Boolean = false,
     coverageOutput: Option[String] = None,
+    coverageLcovOutput: Option[String] = None,
     docFormat: DocFormat = Options.Default.docFormat,
     entryPoint: Option[String] = None,
     installDeps: Boolean = true,
@@ -692,6 +696,10 @@ object Main {
       opt[String]("coverage-output").action((p, c) => c.copy(coverageOutput = Some(p))).
         valueName("<path>").
         text("path to write the coverage report (JSON format). Defaults to build/coverage.json.")
+
+      opt[String]("coverage-lcov-output").action((p, c) => c.copy(coverageLcovOutput = Some(p))).
+        valueName("<path>").
+        text("path to write the LCOV coverage report (.info format). Defaults to build/coverage.info.")
 
       opt[String]("entrypoint").action((s, c) => c.copy(entryPoint = Some(s))).
         text("specifies the main entry point.")
