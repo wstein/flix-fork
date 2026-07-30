@@ -231,7 +231,16 @@ object SvgDocumentor {
   private def xmlEscape(s: String): String =
     s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;").replace("'", "&apos;")
 
+
+  /**
+    * Returns the qualified names of every documentable item reachable from `mod`.
+    * Used by the LSP server to distinguish "item exists but has no diagram" from "item not found".
+    */
+  def allItemNames(mod: Module): Set[String] =
+    collect(mod).map(_.qualifiedName).toSet
+
   private def collect(mod: Module): List[Item] = {
+
     val sortedSubmodules = mod.submodules.sortBy(_.name)
     val sortedTraits = mod.traits.sortBy(_.name)
     val sortedEffects = mod.effects.sortBy(_.name)

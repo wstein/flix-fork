@@ -172,7 +172,37 @@ object Request {
   case class FoldingRange(requestId: String, uri: String) extends Request
 
   /**
-    * A request to get an SVG diagram string for a symbol.
+    * A request to retrieve a pre-generated SVG diagram string for a named trait or module.
+    *
+    * JSON schema:
+    * {{{{
+    * // Request
+    * { "id": "<string>",
+    *   "request": "lsp/getDiagram",
+    *   "itemName": "<qualified-name>"   // e.g. "Eq", "List", "List.Ord"
+    * }
+    *
+    * // Success (diagram exists)
+    * { "id": "<string>",
+    *   "status": "success",
+    *   "result": "<svg xmlns=…>…</svg>"
+    * }
+    *
+    * // Success (item exists but has no diagram — no supertrait / submodule relationships)
+    * { "id": "<string>",
+    *   "status": "success",
+    *   "message": "'<name>' exists but has no structural diagram …"
+    * }
+    *
+    * // Failure (unknown item)
+    * { "id": "<string>",
+    *   "status": "invalid_request",
+    *   "message": "Unknown item '<name>': no such trait or module …"
+    * }
+    * }}}}
+    *
+    * The SVG is generated lazily on the first request after each compilation and then cached.
+    * Only traits and modules with non-trivial structural relationships produce a diagram.
     */
   case class GetDiagram(requestId: String, itemName: String) extends Request
 
@@ -515,6 +545,12 @@ object Request {
 
   /**
     * Tries to parse the given `json` value as a [[GetDiagram]] request.
+    *
+    * Expected JSON fields:
+    *  - `id` (string): the request identifier echoed in the response.
+    *  - `itemName` (string): the qualified name of the trait or module whose diagram is requested
+    *    (e.g. `"Eq"`, `"List"`, `"List.Ord"`). Must match the qualified name as it appears in
+    *    generated `.svg` file names produced by [[ca.uwaterloo.flix.language.phase.SvgDocumentor]].
     */
   def parseGetDiagram(json: json4s.JValue): Result[Request, String] = {
     for {

@@ -99,6 +99,18 @@ class VSCodeLspServer(port: Int, o: Options) extends WebSocketServer(new InetSoc
   private var currentErrors: List[CompilationMessage] = Nil
 
   /**
+    * Cached diagram manifest, computed once per compilation and reused for all getDiagram requests.
+    * Invalidated (reset to empty) whenever a new compilation produces a fresh root.
+    */
+  private var diagramManifest: SvgDocumentor.DiagramManifest = SvgDocumentor.DiagramManifest(Map.empty)
+
+  /**
+    * Cached set of all documentable item names (traits, modules), used by getDiagram to distinguish
+    * "item exists but has no diagram" from "item not found". Populated together with [[diagramManifest]].
+    */
+  private var cachedKnownNames: Set[String] = Set.empty
+
+  /**
     * Invoked when the server is started.
     */
   override def onStart(): Unit = {
@@ -347,10 +359,23 @@ class VSCodeLspServer(port: Int, o: Options) extends WebSocketServer(new InetSoc
       ("id" -> id) ~ ("status" -> ResponseStatus.Success) ~ ("result" -> JArray(FoldingRangeProvider.getFoldingRanges(uri)(root).map(_.toJSON)))
 
     case Request.GetDiagram(id, itemName) =>
-      val diagrams = SvgDocumentor.generateAll(Documentor.build(root, PackageModules.All))(flix)
-      diagrams.get(s"$itemName.svg") match {
-        case Some(svg: String) => ("id" -> id) ~ ("status" -> ResponseStatus.Success) ~ ("result" -> JString(svg))
-        case _ => ("id" -> id) ~ ("status" -> ResponseStatus.InvalidRequest) ~ ("message" -> s"No diagram found for '$itemName'.")
+      // Populate the caches lazily on first request after each compilation.
+      if (diagramManifest.diagrams.isEmpty && root != TypedAst.empty) {
+        val moduleTree = Documentor.build(root, PackageModules.All)
+        diagramManifest = SvgDocumentor.DiagramManifest(
+          SvgDocumentor.generateAll(moduleTree)(flix)
+        )
+        cachedKnownNames = SvgDocumentor.allItemNames(moduleTree)
+      }
+      diagramManifest.diagrams.get(s"$itemName.svg") match {
+        case Some(svg) =>
+          ("id" -> id) ~ ("status" -> ResponseStatus.Success) ~ ("result" -> JString(svg))
+        case None if cachedKnownNames.contains(itemName) =>
+          ("id" -> id) ~ ("status" -> ResponseStatus.Success) ~
+            ("message" -> s"'$itemName' exists but has no structural diagram (no supertrait or submodule relationships).")
+        case None =>
+          ("id" -> id) ~ ("status" -> ResponseStatus.InvalidRequest) ~
+            ("message" -> s"Unknown item '$itemName': no such trait or module found in the current compilation.")
       }
   }
 
@@ -398,6 +423,9 @@ class VSCodeLspServer(port: Int, o: Options) extends WebSocketServer(new InetSoc
     // Update the root and the errors.
     this.root = root
     this.currentErrors = errors
+    // Invalidate the diagram caches so the next getDiagram request regenerates from the fresh root.
+    this.diagramManifest = SvgDocumentor.DiagramManifest(Map.empty)
+    this.cachedKnownNames = Set.empty
 
     // Compute elapsed time.
     val e = System.nanoTime() - t0
