@@ -77,7 +77,6 @@ object Main {
       outputJvm = false,
       outputPath = Options.Default.outputPath,
       threads = cmdOpts.threads.getOrElse(Options.Default.threads),
-      docExtended = cmdOpts.docExtended,
       loadClassFiles = Options.Default.loadClassFiles,
       assumeYes = cmdOpts.assumeYes,
       xprintphases = cmdOpts.xprintphases,
@@ -496,7 +495,6 @@ object Main {
     coverageOutput: Option[String] = None,
     coverageLcovOutput: Option[String] = None,
     docFormat: DocFormat = Options.Default.docFormat,
-    docExtended: Boolean = Options.Default.docExtended,
     entryPoint: Option[String] = None,
     installDeps: Boolean = true,
     githubToken: Option[String] = None,
@@ -641,8 +639,6 @@ object Main {
       cmd("doc").action((_, c) => c.copy(command = Command.Doc)).text("  generates API documentation.").children(
         opt[DocFormat]("doc-format").action((arg, c) => c.copy(docFormat = arg)).
           text("selects the format that 'doc' emits (html, md, all). Defaults to html."),
-        opt[Unit]("extended").action((_, c) => c.copy(docExtended = true)).
-          text("emits extended Datalog EDB/IDB relation schemas and rule dependency graphs.")
       )
 
       cmd("format").action((_, c) => c.copy(command = Command.Format)).text("  formats Flix source code files.")
