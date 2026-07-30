@@ -240,10 +240,18 @@ object Inliner {
       Expr.Let(freshVarSym, e1, e2, tpe, eff, occur, loc)
 
     case Expr.Let(sym, exp1, exp2, tpe, eff, occur, loc) => (occur, exp1.eff) match {
-      case (Occur.Dead, Type.Pure) =>
+      case (Occur.Dead, Type.Pure) if !mustPreserve(exp1) =>
         // Eliminate dead binder
         sctx.changed.putIfAbsent(sym0, ())
         visitExp(exp2, ctx0)
+
+      case (Occur.Dead, Type.Pure) =>
+        // Binding is dead but has side effects that must be preserved (e.g., CoverageHit).
+        // Rewrite to Stm to preserve effect even though it has no observable value.
+        sctx.changed.putIfAbsent(sym0, ())
+        val e1 = visitExp(exp1, ctx0)
+        val e2 = visitExp(exp2, ctx0)
+        Expr.Stm(List(e1), e2, tpe, eff, loc)
 
       case (Occur.Dead, _) =>
         // Rewrite to Stm to preserve effect
@@ -333,7 +341,7 @@ object Inliner {
       visitExp(exp, ctx0)
 
     case Expr.Stm(exps, exp, tpe, eff, loc) =>
-      val impureExps = exps.filterNot(_.eff == Type.Pure)
+      val impureExps = exps.filter(e => e.eff != Type.Pure || mustPreserve(e))
       if (impureExps.length != exps.length) sctx.changed.putIfAbsent(sym0, ())
       val es = impureExps.map(visitExp(_, ctx0))
       val e = visitExp(exp, ctx0)
@@ -872,6 +880,20 @@ object Inliner {
   /** Returns `true` if `exp` is [[Expr.Lambda]]. */
   private def isLambda(exp: MonoAst.Expr): Boolean = exp match {
     case Expr.Lambda(_, _, _, _) => true
+    case _ => false
+  }
+
+  /**
+    * Returns `true` if the given expression must be preserved by the optimizer
+    * even if its value result is unused. This is used to prevent optimizers from
+    * eliminating expressions that have real runtime effects but are typed as Pure.
+    *
+    * Example: CoverageHit calls Coverage.hit() which is a real side effect, but
+    * the function is typed Pure to avoid changing source-level effects. However,
+    * the optimizer must still preserve these calls as a barrier to elimination.
+    */
+  private def mustPreserve(exp: MonoAst.Expr): Boolean = exp match {
+    case Expr.ApplyAtomic(AtomicOp.CoverageHit(_), _, _, _, _) => true
     case _ => false
   }
 
