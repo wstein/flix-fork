@@ -31,21 +31,17 @@ Use `instrumentExpressions` for ordered expression lists. It allocates IDs in so
 order and reconstructs the original list order. Instrument the parent expression,
 then recurse so nested executable expressions on other lines receive probes.
 
-## Implemented and Candidate forms
+## Supported AST Coverage Matrix
 
-- Implemented: `Tag`, `RestrictableTag`, `StructNew`, `StructGet`, `StructPut`, `VectorLit`, `VectorLoad`, `VectorLength`.
-- Implemented: `ArrayNew`, `ArrayLoad`, `ArrayStore`, `ArrayLength`.
-- Implemented: `Ascribe`, `CheckedCast`, `UncheckedCast`.
-- Implemented: Java Interop (`InvokeConstructor`, `InvokeMethod`, `InvokeStaticMethod`, `GetField`, `PutField`, `GetStaticField`, `PutStaticField`).
-- Implemented: Control flow (`TryCatch`, `Throw`, `Handler`, `RunWith`).
-- Implemented: Concurrency and Lazy (`Spawn`, `Lazy`, `Force`).
-- Next: Logic/query (`Fixpoint*`, `ConstraintSet`, `Constraint`, `Scope`, `ScopeExit`).
-  Confirm runtime lowering and retain real-source filtering.
-- Low value: literals, variables, holes, and type-only nodes normally rely on their
-  containing executable expression.
+The coverage pipeline explicitly categorizes every `TypedAst.Expr` variant. This table is enforced by `TestTypedAstCoverageCompleteness.scala` to prevent documentation-implementation drift.
 
-Inspect the actual constructor in `TypedAst.scala` before implementing a form; this
-guide intentionally does not guess constructor parameters or evaluation semantics.
+| Category | Behaviors | TypedAst.Expr Variants | Test Verification |
+|---|---|---|---|
+| **LineOrBranchInstrumented** | Direct line or branch (`BranchTrue`, `BranchFalse`, `BranchRule`) probe inserted | `Lambda`, `ApplyDef`, `ApplyClo`, `Unary`, `Binary`, `Let`, `IfThenElse`, `Stm`, `Match`, `RestrictableChoose`, `Tuple`, `Array*`, `Struct*`, `Vector*`, `CheckedCast`, `TryCatch`, `Throw`, `Handler`, `Invoke*`, `GetField`, `PutField`, `PutStaticField`, `Spawn`, `Lazy`, `Force` | `TestLineBranchCoverage` |
+| **TraversedChildOnly** | Children recursively traversed without inserting direct probes | `HoleWithExp`, `OpenAs`, `Use`, `ApplyLocalDef`, `ApplyOp`, `ApplySig`, `LocalDef`, `Region`, `Discard`, `ExtMatch`, `Tag`, `RestrictableTag`, `ExtTag`, `Record*`, `Ascribe`, `InstanceOf`, `UncheckedCast`, `Unsafe`, `RunWith`, `InvokeSuper*`, `NewObject`, `*Channel`, `ParYield`, `Fixpoint*` | `TestTypedAstCoverageCompleteness` |
+| **SyntheticOrTerminal** | Terminal, primitive, or compiler-internal node | `Cst`, `Var`, `Hole`, `GetStaticField`, `FixpointConstraintSet`, `CoverageHit`, `Error` | `TestTypedAstCoverageCompleteness` |
+
+## Safe implementation pattern
 
 ## Branch policy
 
@@ -69,6 +65,13 @@ line, as ordered records containing `id`, `kind`, `covered`, and `function`.
 5. Run `./mill flix.compile`, focused coverage tests, and `git diff --check`.
 
 The nested-call regression in `TestLineBranchCoverage` is the reference pattern.
+
+## Execution & Report Timing Semantics
+
+1. **Snapshot Timing**: Coverage reports are finalized post-execution when probe hit counters are stable. `Coverage.reportSnapshot()` reads metadata and atomic counters within a synchronized block, ensuring coherent JSON and LCOV output without mixing session states.
+2. **CLI Failure Policy**:
+   - **Compilation Failure** (`Validation.Failure`): No coverage report is created because code failed to compile and no bytecode was executed.
+   - **Execution Failure** (`Result.Err` during test or run execution): Coverage reports ARE generated (`coverage.json` and `coverage.info`) with exit code `1`, reflecting all probes registered during compilation and hits recorded prior to runtime failure.
 
 ## Known limits
 
