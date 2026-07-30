@@ -79,6 +79,8 @@ object HoverProvider {
          |```
          |
          |${FormatDoc.asMarkDown(defDecl.spec.doc)}
+         |
+         |[📊 View Diagram](command:flix.showDiagram?${sym.name})
          |""".stripMargin
     val contents = MarkupContent(MarkupKind.Markdown, markup)
     val range = Range.from(loc)
@@ -93,6 +95,8 @@ object HoverProvider {
          |```
          |
          |${FormatDoc.asMarkDown(sigDecl.spec.doc)}
+         |
+         |[📊 View Diagram](command:flix.showDiagram?${sym.trt.name})
          |""".stripMargin
     val contents = MarkupContent(MarkupKind.Markdown, markup)
     val range = Range.from(loc)

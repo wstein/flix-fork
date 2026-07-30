@@ -21,6 +21,9 @@ import ca.uwaterloo.flix.language.CompilationMessage
 import ca.uwaterloo.flix.language.ast.TypedAst
 import ca.uwaterloo.flix.language.ast.TypedAst.Root
 import ca.uwaterloo.flix.language.ast.shared.SecurityContext
+import ca.uwaterloo.flix.language.phase.Documentor
+import ca.uwaterloo.flix.language.phase.SvgDocumentor
+import ca.uwaterloo.flix.tools.pkg.PackageModules
 import ca.uwaterloo.flix.language.phase.extra.CodeHinter
 import ca.uwaterloo.flix.util.*
 import ca.uwaterloo.flix.util.Formatter.NoFormatter
@@ -28,6 +31,7 @@ import ca.uwaterloo.flix.util.Result.{Err, Ok}
 import org.java_websocket.WebSocket
 import org.java_websocket.handshake.ClientHandshake
 import org.java_websocket.server.WebSocketServer
+import org.json4s.JsonAST.JString
 import org.json4s.*
 import org.json4s.JsonAST.{JArray, JString, JValue}
 import org.json4s.JsonDSL.*
@@ -188,6 +192,7 @@ class VSCodeLspServer(port: Int, o: Options) extends WebSocketServer(new InetSoc
       case JString("lsp/codeAction") => Request.parseCodeAction(json)
       case JString("lsp/formatting") => Request.parseFormatting(json)
       case JString("lsp/foldingRange") => Request.parseFoldingRange(json)
+      case JString("lsp/getDiagram") => Request.parseGetDiagram(json)
 
       case _ => Err(s"Unsupported request: '$s'.")
     }
@@ -341,6 +346,12 @@ class VSCodeLspServer(port: Int, o: Options) extends WebSocketServer(new InetSoc
     case Request.FoldingRange(id, uri) =>
       ("id" -> id) ~ ("status" -> ResponseStatus.Success) ~ ("result" -> JArray(FoldingRangeProvider.getFoldingRanges(uri)(root).map(_.toJSON)))
 
+    case Request.GetDiagram(id, itemName) =>
+      val diagrams = SvgDocumentor.generateAll(Documentor.build(root, PackageModules.All))
+      diagrams.get(s"$itemName.svg") match {
+        case Some(svg: String) => ("id" -> id) ~ ("status" -> ResponseStatus.Success) ~ ("result" -> JString(svg))
+        case _ => ("id" -> id) ~ ("status" -> ResponseStatus.InvalidRequest) ~ ("message" -> s"No diagram found for '$itemName'.")
+      }
   }
 
   /**

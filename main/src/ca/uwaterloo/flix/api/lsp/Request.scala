@@ -172,6 +172,11 @@ object Request {
   case class FoldingRange(requestId: String, uri: String) extends Request
 
   /**
+    * A request to get an SVG diagram string for a symbol.
+    */
+  case class GetDiagram(requestId: String, itemName: String) extends Request
+
+  /**
     * Tries to parse the given `json` value as a [[AddUri]] request.
     */
   def parseAddUri(json: json4s.JValue): Result[Request, String] = {
@@ -508,4 +513,13 @@ object Request {
     } yield Request.FoldingRange(id, uri)
   }
 
+  /**
+    * Tries to parse the given `json` value as a [[GetDiagram]] request.
+    */
+  def parseGetDiagram(json: json4s.JValue): Result[Request, String] = {
+    for {
+      id <- parseId(json)
+      itemName <- parseString("itemName", json)
+    } yield Request.GetDiagram(id, itemName)
+  }
 }
