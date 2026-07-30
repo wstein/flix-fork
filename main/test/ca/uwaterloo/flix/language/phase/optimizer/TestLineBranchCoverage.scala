@@ -262,6 +262,8 @@ class TestLineBranchCoverage extends AnyFunSuite {
     Coverage.clear()
     val program =
       """
+        |import java.lang.Object
+        |
         |def main(): Unit \ IO = {
         |    let f =
         |        x -> x + 1;
@@ -297,6 +299,38 @@ class TestLineBranchCoverage extends AnyFunSuite {
       }.toSet
       assert(lineProbeIds.nonEmpty, s"Expected a line probe at line $line")
       assert((lineProbeIds intersect hitProbeIds).nonEmpty, s"Expected line $line to be hit")
+    }
+  }
+
+  test("record and array expressions are covered") {
+    Coverage.clear()
+    val program =
+      """
+        |def main(): Unit \ IO = {
+        |    let r = { value = 42 };
+        |    let value = r#value;
+        |    let array = Array#{value} @ Static;
+        |    println(Array.length(array))
+        |}
+        |""".stripMargin
+    val expectedLines = Set(
+      program.linesIterator.indexWhere(_.contains("r#value")) + 1,
+      program.linesIterator.indexWhere(_.contains("Array#{value}")) + 1
+    )
+    val flix = new Flix().setOptions(Options.DefaultTest.copy(coverage = true))
+    flix.addVirtualPath(CompilerConstants.VirtualTestFile, program)
+    val result = flix.compile().toResult match {
+      case Result.Ok(value) => value
+      case Result.Err(errors) => fail(s"Compilation failed: $errors")
+    }
+    result.getMain.fold(fail("No main function"))(_(Array()))
+
+    val metadata = Coverage.getProbeMetadata
+    val hits = Coverage.snapshot().keySet
+    expectedLines.foreach { line =>
+      val ids = metadata.collect { case (id, probe) if probe.kind == ProbeKind.Line && probe.line == line => id }.toSet
+      assert(ids.nonEmpty, s"Expected a line probe at line $line")
+      assert((ids intersect hits).nonEmpty, s"Expected line $line to be hit")
     }
   }
 

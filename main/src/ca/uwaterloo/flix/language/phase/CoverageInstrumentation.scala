@@ -366,6 +366,24 @@ object CoverageInstrumentation {
         val (instExps, nextProbeId) = instrumentExpressions(exps, qualifiedName, probeId, registeredLineProbes)
         instrumentLine(e.copy(exps = instExps), qualifiedName, nextProbeId, registeredLineProbes)
 
+      case e @ TypedAst.Expr.RecordSelect(exp0, _, _, _, _) =>
+        val (instExp, nextProbeId) = instrumentExpression(exp0, qualifiedName, probeId, registeredLineProbes)
+        instrumentLine(e.copy(exp = instExp), qualifiedName, nextProbeId, registeredLineProbes)
+
+      case e @ TypedAst.Expr.RecordExtend(_, exp1, exp2, _, _, _) =>
+        val (instExp1, pc1) = instrumentExpression(exp1, qualifiedName, probeId, registeredLineProbes)
+        val (instExp2, pc2) = instrumentExpression(exp2, qualifiedName, pc1, registeredLineProbes)
+        instrumentLine(e.copy(exp1 = instExp1, exp2 = instExp2), qualifiedName, pc2, registeredLineProbes)
+
+      case e @ TypedAst.Expr.RecordRestrict(_, exp0, _, _, _) =>
+        val (instExp, nextProbeId) = instrumentExpression(exp0, qualifiedName, probeId, registeredLineProbes)
+        instrumentLine(e.copy(exp = instExp), qualifiedName, nextProbeId, registeredLineProbes)
+
+      case e @ TypedAst.Expr.ArrayLit(exps, region, _, _, _) =>
+        val (instExps, pc1) = instrumentExpressions(exps, qualifiedName, probeId, registeredLineProbes)
+        val (instRegion, pc2) = instrumentExpression(region, qualifiedName, pc1, registeredLineProbes)
+        instrumentLine(e.copy(exps = instExps, exp = instRegion), qualifiedName, pc2, registeredLineProbes)
+
       // Leave expression forms without explicit execution semantics uninstrumented.
       case _ => (exp, probeId)
     }
