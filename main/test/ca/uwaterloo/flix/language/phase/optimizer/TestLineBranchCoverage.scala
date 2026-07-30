@@ -673,5 +673,57 @@ class TestLineBranchCoverage extends AnyFunSuite {
     }
   }
 
+  test("java constructor expressions are covered") {
+    Coverage.clear()
+    val program =
+      """
+        |import java.lang.StringBuilder
+        |
+        |def main(): Unit \ IO = {
+        |    let sb = new StringBuilder("hello");
+        |    let _ = sb.append(" world");
+        |    println(sb.toString())
+        |}
+        |""".stripMargin
+    val flix = new Flix().setOptions(Options.DefaultTest.copy(coverage = true))
+    flix.addVirtualPath(CompilerConstants.VirtualTestFile, program)
+    val ctorLine = program.linesIterator.indexWhere(_.contains("new StringBuilder")) + 1
+
+    flix.compile().toResult match {
+      case Result.Ok(result) =>
+        result.getMain.fold(fail("No main function"))(_(Array()))
+        val metadata = Coverage.getProbeMetadata
+        val hits = Coverage.snapshot().keySet
+        val ctorIds = metadata.collect { case (id, probe) if probe.kind == ProbeKind.Line && probe.line == ctorLine => id }.toSet
+        assert(ctorIds.nonEmpty && (ctorIds intersect hits).nonEmpty, "Java constructor line should be registered and hit")
+      case Result.Err(errors) => fail(s"Compilation failed: $errors")
+    }
+  }
+
+  test("vector expressions are covered") {
+    Coverage.clear()
+    val program =
+      """
+        |def main(): Unit \ IO = {
+        |    let v = Vector#{10, 20, 30};
+        |    let len = Vector.length(v);
+        |    println(len)
+        |}
+        |""".stripMargin
+    val flix = new Flix().setOptions(Options.DefaultTest.copy(coverage = true))
+    flix.addVirtualPath(CompilerConstants.VirtualTestFile, program)
+    val vecLine = program.linesIterator.indexWhere(_.contains("Vector#{10, 20, 30}")) + 1
+
+    flix.compile().toResult match {
+      case Result.Ok(result) =>
+        result.getMain.fold(fail("No main function"))(_(Array()))
+        val metadata = Coverage.getProbeMetadata
+        val hits = Coverage.snapshot().keySet
+        val vecIds = metadata.collect { case (id, probe) if probe.kind == ProbeKind.Line && probe.line == vecLine => id }.toSet
+        assert(vecIds.nonEmpty && (vecIds intersect hits).nonEmpty, "Vector literal line should be registered and hit")
+      case Result.Err(errors) => fail(s"Compilation failed: $errors")
+    }
+  }
+
 }
 
