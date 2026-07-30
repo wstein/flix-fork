@@ -16,7 +16,7 @@
 
 package ca.uwaterloo.flix.language.phase
 
-import ca.uwaterloo.flix.api.{Flix, Library, Version}
+import ca.uwaterloo.flix.api.{Flix, Version}
 import ca.uwaterloo.flix.language.ast.shared.*
 import ca.uwaterloo.flix.language.ast.{SourceLocation, Symbol, Type, TypeConstructor, TypedAst}
 import ca.uwaterloo.flix.language.fmt.{DisplayType, FormatType}
@@ -60,22 +60,6 @@ object MarkdownDocumentor {
     * The page that lists every other page.
     */
   private val IndexFile: String = s"${Documentor.RootFileName}.$Extension"
-
-  /**
-    * The directory of the standard library within the `flix/flix` repository.
-    *
-    * Standard library sources reach the compiler as virtual files named after the file alone, so a
-    * page that points a reader at `List.flix` has to say where that file lives.
-    */
-  private val LibraryDirectory: String = "main/src/library/"
-
-  /**
-    * The names of the standard library sources, used to tell them apart from user code.
-    *
-    * Forced lazily: a caller that documents user code only should not pay to load the library.
-    */
-  private lazy val LibraryFileNames: Set[String] =
-    (Library.CoreLibrary ++ Library.StandardLibrary).map { case (name, _) => name }.toSet
 
   /**
     * The separator between entries of an inline, comma-free list such as `## Instances`.
@@ -373,8 +357,6 @@ object MarkdownDocumentor {
     val normalized = source.name.replace('\\', '/')
     source.input match {
       case Input.RealFile(_, _) => s"`$normalized`"
-      case Input.VirtualFile(_, _, _) if LibraryFileNames.contains(normalized) =>
-        s"`$LibraryDirectory$normalized` (flix/flix repo)"
       case _ => s"`$normalized`"
     }
   }

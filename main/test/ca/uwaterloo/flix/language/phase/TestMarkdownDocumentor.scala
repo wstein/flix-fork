@@ -677,6 +677,18 @@ class TestMarkdownDocumentor extends AnyFunSuite {
     }
   }
 
+  test("page.source_attribution.virtual_list.01") {
+    implicit val flix: Flix = new Flix().setOptions(Options.TestWithLibNix)
+    flix.addVirtualPath(Path.of("List.flix"), "pub def userVirtualDef(): Int32 = 42")
+    flix.check() match {
+      case (Some(root), Nil) =>
+        val pages = MarkdownDocumentor.documentAll(root, PackageModules.All)
+        assert(!page(pages, "index.md").contains("main/src/library/List.flix"),
+          "A virtual user file must not be attributed to the Flix repository by its basename")
+      case (_, errors) => fail(CompilationMessage.formatAll(errors)(Formatter.NoFormatter, None))
+    }
+  }
+
   test("page.source_attribution.collision.01") {
     withTempDir { dir =>
       val listFile = dir.resolve("List.flix")
