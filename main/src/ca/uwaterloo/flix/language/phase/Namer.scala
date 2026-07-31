@@ -120,8 +120,10 @@ object Namer {
         // For every declaration in that namespace, for a given name,
         for (decl <- decls) {
           decl match {
-            // We check if it is a module declaration.
-            case Declaration.Mod(_, _, _, sym, _, _, _, loc) =>
+            // We check if it is a *public* module declaration. Non-public modules are exempt:
+            // most of the `.flix` test corpus declares `mod Test.Foo` with no `mod Test`, and
+            // reporting those would be a sweeping change rather than a fix.
+            case Declaration.Mod(_, _, mod, sym, _, _, _, loc) if mod.isPublic =>
               // Check if `sym` has parent.
               sym.parent() match {
                 case None => // No parent, nothing to check.

@@ -775,18 +775,6 @@ class TestNamer extends AnyFunSuite with TestUtils {
     // `A` is never declared, so `A.B` has no parent and `A.B.f` cannot resolve.
     val input =
       """
-        |mod A.B {
-        |    pub def f(): Int32 = 1
-        |}
-        |""".stripMargin
-    val result = check(input, Options.TestWithLibNix)
-    expectError[NameError.OrphanModule](result)
-  }
-
-  test("OrphanModule.02") {
-    // The check is not limited to public modules.
-    val input =
-      """
         |pub mod A.B {
         |    pub def f(): Int32 = 1
         |}
@@ -795,12 +783,12 @@ class TestNamer extends AnyFunSuite with TestUtils {
     expectError[NameError.OrphanModule](result)
   }
 
-  test("OrphanModule.03") {
+  test("OrphanModule.02") {
     // `A.B` is missing, so `A.B.C` is orphaned even though `A` exists.
     val input =
       """
         |mod A { }
-        |mod A.B.C {
+        |pub mod A.B.C {
         |    pub def f(): Int32 = 1
         |}
         |""".stripMargin
@@ -808,23 +796,37 @@ class TestNamer extends AnyFunSuite with TestUtils {
     expectError[NameError.OrphanModule](result)
   }
 
-  test("OrphanModule.04") {
-    // Declaring the parent makes the nested module legal.
+  test("OrphanModule.03") {
+    // The check is deliberately limited to public modules: much of the `.flix` test corpus
+    // declares `mod Test.Foo` with no `mod Test`, so reporting non-public orphans would be a
+    // sweeping change rather than a fix.
     val input =
       """
-        |mod A { }
         |mod A.B {
         |    pub def f(): Int32 = 1
         |}
-        |
-        |def main(): Unit \ IO = println(A.B.f())
         |""".stripMargin
-    val result = check(input, Options.TestWithLibMin)
+    val result = check(input, Options.TestWithLibNix)
     expectSuccess(result)
   }
 
+  test("OrphanModule.04") {
+    // With the parent declared, the module is not an orphan. Asserted with `rejectError` rather
+    // than `expectSuccess` because a public multi-part module must also live in a matching file,
+    // which a virtual test file cannot satisfy.
+    val input =
+      """
+        |mod A { }
+        |pub mod A.B {
+        |    pub def f(): Int32 = 1
+        |}
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibNix)
+    rejectError[NameError.OrphanModule](result)
+  }
+
   test("OrphanModule.05") {
-    // Explicit nesting declares the parent as a side effect.
+    // Explicit nesting declares the parent as a side effect, and its members resolve.
     val input =
       """
         |mod A {
@@ -832,8 +834,10 @@ class TestNamer extends AnyFunSuite with TestUtils {
         |        pub def f(): Int32 = 1
         |    }
         |}
+        |
+        |def main(): Unit \ IO = println(A.B.f())
         |""".stripMargin
-    val result = check(input, Options.TestWithLibNix)
+    val result = check(input, Options.TestWithLibMin)
     expectSuccess(result)
   }
 }
