@@ -15,5 +15,7 @@ public class App {
         System.out.println("size = " + Greeter.sizeOf(xs));
 
         Greeter.announce();
+
+        System.out.println(Greeter.applyTwice(t -> t + "!", "callback"));
     }
 }

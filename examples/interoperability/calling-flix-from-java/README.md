@@ -18,6 +18,7 @@ Hello, Java!
 length = 12
 size = 2
 called from Java
+callback!!
 ```
 
 ## Layout
@@ -43,6 +44,7 @@ public final class Acme.Greeter {
   public static final void announce();
   public static final int sizeOf(java.util.ArrayList);
   public static final java.lang.String greet(java.lang.String);
+  public static final java.lang.String applyTwice(java.util.function.UnaryOperator, java.lang.String);
 }
 ```
 
@@ -70,6 +72,21 @@ Exportable: `Bool`, `Char`, `Int8`, `Int16`, `Int32`, `Int64`, `Float32`,
 `Unit` is exportable in the two places where it can be rendered away: as a
 return type it becomes `void`, and the `Unit` parameter Flix gives a nullary
 function is dropped, so `def announce(): Unit` is `void announce()` in Java.
+
+## Callbacks
+
+A Java functional interface is an ordinary Java type, so Java can pass a lambda
+into an exported function with no special support on either side.
+
+Three names are an exception. Flix resolves `java.util.function.Function`,
+`Consumer` and `Predicate` to its *own* function type rather than to the Java
+interface, so they cannot be written with type arguments — `Function[String,
+String]` is a kind error. Use `UnaryOperator`, `BinaryOperator`, `BiFunction`,
+`Supplier`, one of the primitive-specialised interfaces, or your own
+`@FunctionalInterface`.
+
+A Flix closure cannot travel the other way: a function type is not exportable,
+so an exported function cannot return one.
 
 Not exportable: Flix enums, tuples, records, functions, `Array`, and anything
 polymorphic. Their JVM representation is an implementation detail of the

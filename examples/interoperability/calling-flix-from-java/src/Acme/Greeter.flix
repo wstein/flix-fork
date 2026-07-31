@@ -9,6 +9,7 @@
 // `Acme.Greeter` must live in the file `Acme/Greeter.flix`.
 pub mod Acme.Greeter {
     import java.util.ArrayList
+    import java.util.function.UnaryOperator
 
     @Export
     pub def greet(name: String): String = "Hello, ${name}!"
@@ -25,4 +26,13 @@ pub mod Acme.Greeter {
     // arguments in Java even though Flix gives it a `Unit` parameter.
     @Export
     pub def announce(): Unit \ IO = println("called from Java")
+
+    // Java can pass a lambda in: a functional interface is an ordinary Java
+    // type, so it needs no special support on either side. Note that
+    // `Function`, `Consumer` and `Predicate` cannot be used here -- Flix
+    // resolves those three names to its own function type rather than to the
+    // Java interface -- but `UnaryOperator`, `BiFunction` and `Supplier` work.
+    @Export
+    pub def applyTwice(f: UnaryOperator[String], s: String): String \ IO =
+        f.apply(f.apply(s))
 }
