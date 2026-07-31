@@ -53,7 +53,7 @@ object LambdaLift {
   private def visitDef(def0: SimplifiedAst.Def)(implicit sctx: SharedContext, flix: Flix): LiftedAst.Def = def0 match {
     case SimplifiedAst.Def(ann, mod, sym, fparams, exp, tpe, _, loc) =>
       val fs = fparams.map(visitFormalParam)
-      val e = visitExp(exp)(sym, Map.empty, sctx, flix)
+      val e = visitExp(exp)(sym, Map.empty, new LiftCounter, sctx, flix)
       LiftedAst.Def(ann, mod, sym, Nil, fs, e, tpe, loc)
   }
 
@@ -91,7 +91,7 @@ object LambdaLift {
       LiftedAst.Op(sym, ann, mod, fparams, tpe, purity, loc)
   }
 
-  private def visitExp(e: SimplifiedAst.Expr)(implicit sym0: Symbol.DefnSym, liftedLocalDefs: Map[Symbol.VarSym, Symbol.DefnSym], sctx: SharedContext, flix: Flix): LiftedAst.Expr = e match {
+  private def visitExp(e: SimplifiedAst.Expr)(implicit sym0: Symbol.DefnSym, liftedLocalDefs: Map[Symbol.VarSym, Symbol.DefnSym], counter: LiftCounter, sctx: SharedContext, flix: Flix): LiftedAst.Expr = e match {
     case SimplifiedAst.Expr.Cst(cst, tpe, loc) => LiftedAst.Expr.Cst(cst, tpe, loc)
 
     case SimplifiedAst.Expr.Var(sym, tpe, loc) => LiftedAst.Expr.Var(sym, tpe, loc)
@@ -106,7 +106,7 @@ object LambdaLift {
       val liftedExp = visitExp(exp)
 
       // Generate a fresh symbol for the new lifted definition.
-      val freshSymbol = Symbol.generatedDefnSym(sym0, "closure", arrowTpe, loc)
+      val freshSymbol = Symbol.generatedDefnSym(sym0, "closure", counter.next(), arrowTpe, loc)
 
       // Construct annotations and modifiers for the fresh definition.
       val ann = Annotations.Empty
@@ -195,20 +195,25 @@ object LambdaLift {
       LiftedAst.Expr.Let(sym, e1, e2, tpe, purity, loc)
 
     case SimplifiedAst.Expr.LocalDef(sym, fparams, exp1, exp2, _, _, loc) =>
-      val freshDefnSym = Symbol.generatedDefnSym(sym0, "local-def", exp1.tpe, loc)
+      // The name must be derived from the whole signature, not just the result type. A desugared
+      // construct can produce several local defs at one source position -- `foreach` is one -- and
+      // if they differ only in their parameters they would otherwise be given the same name and
+      // silently overwrite one another when the lifted defs are folded into the root.
+      val signature = SimpleType.Arrow(fparams.map(_.tpe), exp1.tpe)
+      val freshDefnSym = Symbol.generatedDefnSym(sym0, "local-def", counter.next(), signature, loc)
       val updatedLiftedLocalDefs = liftedLocalDefs + (sym -> freshDefnSym)
       // It is **very important** we add the mapping `sym -> freshDefnSym` to liftedLocalDefs
       // before visiting the body since exp1 may contain recursive calls to `sym`
       // so they need to be substituted for `freshDefnSym` in `exp1` which
       // `visitExp` handles for us.
-      val body = visitExp(exp1)(sym0, updatedLiftedLocalDefs, sctx, flix)
+      val body = visitExp(exp1)(sym0, updatedLiftedLocalDefs, counter, sctx, flix)
       val ann = Annotations.Empty
       val mod = Modifiers(Modifier.Synthetic :: Nil)
       val fps = fparams.map(visitFormalParam)
       val defTpe = exp1.tpe
       val liftedDef = LiftedAst.Def(ann, mod, freshDefnSym, List.empty, fps, body, defTpe, loc.asSynthetic)
       sctx.liftedDefs.add(freshDefnSym -> liftedDef)
-      visitExp(exp2)(sym0, updatedLiftedLocalDefs, sctx, flix) // LocalDef node is erased here
+      visitExp(exp2)(sym0, updatedLiftedLocalDefs, counter, sctx, flix) // LocalDef node is erased here
 
     case SimplifiedAst.Expr.Region(sym, exp, tpe, purity, loc) =>
       val e = visitExp(exp)
@@ -242,12 +247,12 @@ object LambdaLift {
 
   }
 
-  private def visitJvmConstructor(constructor: SimplifiedAst.JvmConstructor)(implicit sym0: Symbol.DefnSym, liftedLocalDefs: Map[Symbol.VarSym, Symbol.DefnSym], sctx: SharedContext, flix: Flix): LiftedAst.JvmConstructor = constructor match {
+  private def visitJvmConstructor(constructor: SimplifiedAst.JvmConstructor)(implicit sym0: Symbol.DefnSym, liftedLocalDefs: Map[Symbol.VarSym, Symbol.DefnSym], counter: LiftCounter, sctx: SharedContext, flix: Flix): LiftedAst.JvmConstructor = constructor match {
     case SimplifiedAst.JvmConstructor(exp, retTpe, purity, loc) =>
       LiftedAst.JvmConstructor(visitExp(exp), retTpe, purity, loc)
   }
 
-  private def visitJvmMethod(method: SimplifiedAst.JvmMethod)(implicit sym0: Symbol.DefnSym, liftedLocalDefs: Map[Symbol.VarSym, Symbol.DefnSym], sctx: SharedContext, flix: Flix): LiftedAst.JvmMethod = method match {
+  private def visitJvmMethod(method: SimplifiedAst.JvmMethod)(implicit sym0: Symbol.DefnSym, liftedLocalDefs: Map[Symbol.VarSym, Symbol.DefnSym], counter: LiftCounter, sctx: SharedContext, flix: Flix): LiftedAst.JvmMethod = method match {
     case SimplifiedAst.JvmMethod(ann, ident, fparams0, exp, retTpe, purity, loc) =>
       val fparams = fparams0 map visitFormalParam
       LiftedAst.JvmMethod(ann, ident, fparams, visitExp(exp), retTpe, purity, loc)
@@ -263,6 +268,26 @@ object LambdaLift {
     *
     * We use a concurrent (non-blocking) linked queue to ensure thread-safety.
     */
+  /**
+    * Numbers the definitions lifted out of one enclosing def, in traversal order.
+    *
+    * A generated name is derived from the enclosing def, the kind of lift, the signature and the
+    * source position. None of that is guaranteed to be unique: a desugared construct can produce
+    * several lifts at one source position with the same signature, and two lifts that are given
+    * the same name silently overwrite one another when the lifted defs are folded into the root.
+    * The occurrence number makes the name unique without making it unstable -- the traversal is
+    * deterministic, so the same source yields the same names on every compilation.
+    */
+  private final class LiftCounter {
+    private var n: Int = 0
+
+    def next(): Int = {
+      val i = n
+      n = n + 1
+      i
+    }
+  }
+
   private case class SharedContext(liftedDefs: ConcurrentLinkedQueue[(Symbol.DefnSym, LiftedAst.Def)])
 
   private object SharedContext {

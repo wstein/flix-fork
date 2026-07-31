@@ -110,9 +110,25 @@ object Symbol {
     * name and its canonical monomorphic type.
     */
   def specializedDefnSym(sym: DefnSym, tpe: Type): DefnSym = {
-    val key = List(sym.toString, tpe.toString)
+    val key = sym.toString :: tpe.toString :: qualifiedNamesOf(tpe)
     new DefnSym(None, sym.namespace, s"${sym.text}${Flix.Delimiter}${StableHash.xxh3_64Base58(key)}", sym.loc)
   }
+
+  /**
+    * Returns the fully-qualified name of every declared type occurring in `tpe`.
+    *
+    * `Type.toString` renders an enum, struct or effect by its *unqualified* name, so two types
+    * that differ only in the module a declaration comes from -- `Fixpoint3.Ast.Ram.BoolExp` and
+    * `Fixpoint3.Ast.ExecutableRam.BoolExp`, say -- print identically. A key built from the printed
+    * form alone therefore conflates them, and one specialization ends up serving both.
+    */
+  private def qualifiedNamesOf(tpe: Type): List[String] =
+    tpe.typeConstructors.collect {
+      case TypeConstructor.Enum(s, _) => s.toString
+      case TypeConstructor.Struct(s, _) => s.toString
+      case TypeConstructor.Effect(s, _) => s.toString
+      case TypeConstructor.RestrictableEnum(s, _) => s.toString
+    }
 
   /**
     * Returns a stable symbol for a compiler-generated definition.
@@ -121,11 +137,12 @@ object Symbol {
     * is relative to the owning definition, so it distinguishes generated
     * definitions without making the result depend on an absolute source path.
     */
-  def generatedDefnSym(owner: DefnSym, kind: String, tpe: SimpleType, loc: SourceLocation): DefnSym = {
+  def generatedDefnSym(owner: DefnSym, kind: String, occurrence: Int, tpe: SimpleType, loc: SourceLocation): DefnSym = {
     val key = List(
       "generated-defn",
       kind,
       owner.toString,
+      occurrence.toString,
       tpe.toString,
       loc.startLine.toString,
       loc.startCol.toString,
