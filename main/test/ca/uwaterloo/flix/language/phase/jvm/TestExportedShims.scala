@@ -74,19 +74,21 @@ class TestExportedShims extends AnyFunSuite {
 
   test("an exported def keeps String in its descriptor") {
     val descriptors = descriptorsOf(
-      """mod Mod {
+      """mod Pkg { }
+        |mod Pkg.Mod {
         |    @Export
         |    pub def greet(name: String): String = "Hello, ${name}!"
         |}
         |
-        |def main(): Unit \ IO = println(Mod.greet("world"))
-        |""".stripMargin, "Mod")
+        |def main(): Unit \ IO = println(Pkg.Mod.greet("world"))
+        |""".stripMargin, "Pkg/Mod")
     assert(descriptors.get("greet").contains("(Ljava/lang/String;)Ljava/lang/String;"))
   }
 
   test("an exported def keeps a Java type in its descriptor") {
     val descriptors = descriptorsOf(
-      """mod Mod {
+      """mod Pkg { }
+        |mod Pkg.Mod {
         |    import java.io.File
         |
         |    @Export
@@ -94,13 +96,14 @@ class TestExportedShims extends AnyFunSuite {
         |}
         |
         |def main(): Unit \ IO = println("built")
-        |""".stripMargin, "Mod")
+        |""".stripMargin, "Pkg/Mod")
     assert(descriptors.get("pathOf").contains("(Ljava/io/File;)Ljava/lang/String;"))
   }
 
   test("an exported def erases a generic Java type to its raw class") {
     val descriptors = descriptorsOf(
-      """mod Mod {
+      """mod Pkg { }
+        |mod Pkg.Mod {
         |    import java.util.ArrayList
         |
         |    @Export
@@ -108,56 +111,60 @@ class TestExportedShims extends AnyFunSuite {
         |}
         |
         |def main(): Unit \ IO = println("built")
-        |""".stripMargin, "Mod")
+        |""".stripMargin, "Pkg/Mod")
     assert(descriptors.get("sizeOf").contains("(Ljava/util/ArrayList;)I"))
   }
 
   test("an exported nullary def takes no parameters") {
     // Flix gives a nullary function a single `Unit` parameter; Java should not see it.
     val descriptors = descriptorsOf(
-      """mod Mod {
+      """mod Pkg { }
+        |mod Pkg.Mod {
         |    @Export
         |    pub def answer(): Int32 = 42
         |}
         |
-        |def main(): Unit \ IO = println(Mod.answer())
-        |""".stripMargin, "Mod")
+        |def main(): Unit \ IO = println(Pkg.Mod.answer())
+        |""".stripMargin, "Pkg/Mod")
     assert(descriptors.get("answer").contains("()I"))
   }
 
   test("an exported def returning Unit returns void") {
     val descriptors = descriptorsOf(
-      """mod Mod {
+      """mod Pkg { }
+        |mod Pkg.Mod {
         |    @Export
         |    pub def shout(s: String): Unit \ IO = println(s)
         |}
         |
-        |def main(): Unit \ IO = Mod.shout("hi")
-        |""".stripMargin, "Mod")
+        |def main(): Unit \ IO = Pkg.Mod.shout("hi")
+        |""".stripMargin, "Pkg/Mod")
     assert(descriptors.get("shout").contains("(Ljava/lang/String;)V"))
   }
 
   test("an exported nullary def returning Unit is void of no arguments") {
     val descriptors = descriptorsOf(
-      """mod Mod {
+      """mod Pkg { }
+        |mod Pkg.Mod {
         |    @Export
         |    pub def hello(): Unit \ IO = println("hello")
         |}
         |
-        |def main(): Unit \ IO = Mod.hello()
-        |""".stripMargin, "Mod")
+        |def main(): Unit \ IO = Pkg.Mod.hello()
+        |""".stripMargin, "Pkg/Mod")
     assert(descriptors.get("hello").contains("()V"))
   }
 
   test("an exported def keeps primitives unboxed") {
     val descriptors = descriptorsOf(
-      """mod Mod {
+      """mod Pkg { }
+        |mod Pkg.Mod {
         |    @Export
         |    pub def add(x: Int32, y: Int32): Int32 = x + y
         |}
         |
-        |def main(): Unit \ IO = println(Mod.add(1, 2))
-        |""".stripMargin, "Mod")
+        |def main(): Unit \ IO = println(Pkg.Mod.add(1, 2))
+        |""".stripMargin, "Pkg/Mod")
     assert(descriptors.get("add").contains("(II)I"))
   }
 

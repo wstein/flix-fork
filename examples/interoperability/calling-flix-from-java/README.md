@@ -55,8 +55,9 @@ An exported function must:
 
 - be `pub`;
 - have no type variables (no polymorphism, no trait constraints);
-- live in a module — a function in the root namespace cannot be exported,
-  since Java cannot import from the unnamed package;
+- live in a *nested* module — the class of a def in `A.B` is `B` in package
+  `A`, so a top-level `mod B` would put the facade in the unnamed package,
+  which Java code in a named package cannot import;
 - have a name that is a valid Java identifier (`[a-z][a-zA-Z0-9]*`);
 - have an effect that is primitive or has a default handler.
 

@@ -58,19 +58,21 @@ class TestNamespaceClasses extends AnyFunSuite {
 
   test("a namespace with an exported def emits a class") {
     val result = compile(
-      """mod Beta {
+      """mod Pkg { }
+        |mod Pkg.Beta {
         |    @Export
         |    pub def bar(x: Int32): Int32 = x + 1
         |}
         |
-        |def main(): Unit \ IO = println(Beta.bar(1))
+        |def main(): Unit \ IO = println(Pkg.Beta.bar(1))
         |""".stripMargin)
-    assert(result.classNames.contains("Beta"))
+    assert(result.classNames.contains("Pkg.Beta"))
   }
 
   test("a nested namespace with an exported def emits a package-qualified class") {
     val result = compile(
-      """mod Acme.Gamma {
+      """mod Acme { }
+        |mod Acme.Gamma {
         |    @Export
         |    pub def baz(x: Int32): Int32 = x + 1
         |}

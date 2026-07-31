@@ -406,11 +406,20 @@ object EntryPoints {
     }
   }
 
-  /** Returns an error if `defn` is in the root namespace. */
+  /**
+    * Returns an error if the class holding `defn` would be in the unnamed package.
+    *
+    * The class of a def in module `A.B` is `B` in package `A`, so a def needs at least two
+    * enclosing module names to land in a package Java can name. The root namespace has no class at
+    * all, and a top-level module has one in the unnamed package; neither is reachable from Java
+    * code in a named package.
+    */
   private def checkNonRootNamespace(defn: TypedAst.Def): Option[EntryPointError] = {
-    val inRoot = defn.sym.namespace.isEmpty
-    if (inRoot) Some(EntryPointError.IllegalExportNamespace(defn.sym.loc))
-    else None
+    defn.sym.namespace match {
+      case Nil => Some(EntryPointError.IllegalExportNamespace(defn.sym.loc))
+      case name :: Nil => Some(EntryPointError.IllegalExportUnnamedPackage(name, defn.sym.loc))
+      case _ => None
+    }
   }
 
   /** Returns an error if `defn` is not a public function. */

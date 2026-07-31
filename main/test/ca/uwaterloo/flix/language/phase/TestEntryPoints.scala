@@ -762,7 +762,8 @@ class TestEntryPoints extends AnyFunSuite with TestUtils {
   test("Test.IllegalExportFunction.01") {
     val input =
       """
-        |mod Mod { @Export def id(x: Int32): Int32 = x }
+        |mod Pkg { }
+        |mod Pkg.Mod { @Export def id(x: Int32): Int32 = x }
         |""".stripMargin
     val result = check(input, Options.TestWithLibNix)
     expectError[EntryPointError.NonPublicExport](result)
@@ -780,7 +781,8 @@ class TestEntryPoints extends AnyFunSuite with TestUtils {
   test("Test.IllegalExportFunction.03") {
     val input =
       """
-        |mod Mod { @Export pub def <><(x: Int32, _y: Int32): Int32 = x }
+        |mod Pkg { }
+        |mod Pkg.Mod { @Export pub def <><(x: Int32, _y: Int32): Int32 = x }
         |""".stripMargin
     val result = check(input, Options.TestWithLibNix)
     expectError[EntryPointError.IllegalExportName](result)
@@ -791,7 +793,8 @@ class TestEntryPoints extends AnyFunSuite with TestUtils {
       """
         |eff Print
         |def println(x: t): t \ Print = ???()
-        |mod Mod { @Export pub def id(x: Int32): Int32 \ Print = println(x) }
+        |mod Pkg { }
+        |mod Pkg.Mod { @Export pub def id(x: Int32): Int32 \ Print = println(x) }
         |""".stripMargin
     val result = check(input, Options.TestWithLibNix)
     expectError[EntryPointError.IllegalEntryPointEffect](result)
@@ -804,7 +807,8 @@ class TestEntryPoints extends AnyFunSuite with TestUtils {
         |  case Some(t)
         |  case None
         |}
-        |mod Mod { @Export pub def id(x: Int32): Option[Int32] = Some(x) }
+        |mod Pkg { }
+        |mod Pkg.Mod { @Export pub def id(x: Int32): Option[Int32] = Some(x) }
         |""".stripMargin
     val result = check(input, Options.TestWithLibNix)
     expectError[EntryPointError.IllegalExportType](result)
@@ -817,7 +821,8 @@ class TestEntryPoints extends AnyFunSuite with TestUtils {
         |  case Some(t)
         |  case None
         |}
-        |mod Mod { @Export pub def id(x: Int32, _y: Option[Int32]): Int32 = x }
+        |mod Pkg { }
+        |mod Pkg.Mod { @Export pub def id(x: Int32, _y: Option[Int32]): Int32 = x }
         |""".stripMargin
     val result = check(input, Options.TestWithLibNix)
     expectError[EntryPointError.IllegalExportType](result)
@@ -826,7 +831,8 @@ class TestEntryPoints extends AnyFunSuite with TestUtils {
   test("Test.IllegalExportFunction.07") {
     val input =
       """
-        |mod Mod { @Export pub def id[t](x: t): t = x }
+        |mod Pkg { }
+        |mod Pkg.Mod { @Export pub def id[t](x: t): t = x }
         |""".stripMargin
     val result = check(input, Options.TestWithLibNix)
     expectError[EntryPointError.IllegalEntryPointTypeVariables](result)
@@ -838,7 +844,8 @@ class TestEntryPoints extends AnyFunSuite with TestUtils {
         |struct S[t, r] {
         |    v: t
         |}
-        |mod Mod { @Export pub def id(x: Int32): S[Int32, r] = ??? }
+        |mod Pkg { }
+        |mod Pkg.Mod { @Export pub def id(x: Int32): S[Int32, r] = ??? }
         |""".stripMargin
     val result = check(input, Options.TestWithLibNix)
     expectError[EntryPointError.IllegalEntryPointTypeVariables](result)
@@ -850,16 +857,29 @@ class TestEntryPoints extends AnyFunSuite with TestUtils {
         |struct S[t, r] {
         |    v: t
         |}
-        |mod Mod { @Export pub def id(x: Int32, _y: S[Int32, r]): Int32 = x }
+        |mod Pkg { }
+        |mod Pkg.Mod { @Export pub def id(x: Int32, _y: S[Int32, r]): Int32 = x }
         |""".stripMargin
     val result = check(input, Options.TestWithLibNix)
     expectError[EntryPointError.IllegalEntryPointTypeVariables](result)
   }
 
+  test("Test.IllegalExportFunction.11") {
+    // A top-level module has no enclosing module, so its class would be in the unnamed package,
+    // which Java code in a named package cannot import.
+    val input =
+      """
+        |mod Mod { @Export pub def id(x: Int32): Int32 = x }
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibNix)
+    expectError[EntryPointError.IllegalExportUnnamedPackage](result)
+  }
+
   test("Test.ExportFunction.String.01") {
     val input =
       """
-        |mod Mod { @Export pub def id(x: String): String = x }
+        |mod Pkg { }
+        |mod Pkg.Mod { @Export pub def id(x: String): String = x }
         |""".stripMargin
     val result = check(input, Options.TestWithLibNix)
     expectSuccess(result)
@@ -868,7 +888,8 @@ class TestEntryPoints extends AnyFunSuite with TestUtils {
   test("Test.ExportFunction.BigInt.01") {
     val input =
       """
-        |mod Mod { @Export pub def id(x: BigInt): BigInt = x }
+        |mod Pkg { }
+        |mod Pkg.Mod { @Export pub def id(x: BigInt): BigInt = x }
         |""".stripMargin
     val result = check(input, Options.TestWithLibNix)
     expectSuccess(result)
@@ -877,7 +898,8 @@ class TestEntryPoints extends AnyFunSuite with TestUtils {
   test("Test.ExportFunction.BigDecimal.01") {
     val input =
       """
-        |mod Mod { @Export pub def id(x: BigDecimal): BigDecimal = x }
+        |mod Pkg { }
+        |mod Pkg.Mod { @Export pub def id(x: BigDecimal): BigDecimal = x }
         |""".stripMargin
     val result = check(input, Options.TestWithLibNix)
     expectSuccess(result)
@@ -886,7 +908,8 @@ class TestEntryPoints extends AnyFunSuite with TestUtils {
   test("Test.ExportFunction.Regex.01") {
     val input =
       """
-        |mod Mod { @Export pub def id(x: Regex): Regex = x }
+        |mod Pkg { }
+        |mod Pkg.Mod { @Export pub def id(x: Regex): Regex = x }
         |""".stripMargin
     val result = check(input, Options.TestWithLibNix)
     expectSuccess(result)
@@ -895,7 +918,8 @@ class TestEntryPoints extends AnyFunSuite with TestUtils {
   test("Test.ExportFunction.Native.01") {
     val input =
       """
-        |mod Mod {
+        |mod Pkg { }
+        |mod Pkg.Mod {
         |    import java.io.File
         |    @Export pub def id(x: File): File = x
         |}
@@ -907,7 +931,8 @@ class TestEntryPoints extends AnyFunSuite with TestUtils {
   test("Test.ExportFunction.Nullary.01") {
     val input =
       """
-        |mod Mod { @Export pub def answer(): Int32 = 42 }
+        |mod Pkg { }
+        |mod Pkg.Mod { @Export pub def answer(): Int32 = 42 }
         |""".stripMargin
     val result = check(input, Options.TestWithLibNix)
     expectSuccess(result)
@@ -916,7 +941,8 @@ class TestEntryPoints extends AnyFunSuite with TestUtils {
   test("Test.ExportFunction.UnitReturn.01") {
     val input =
       """
-        |mod Mod { @Export pub def ignore(_x: Int32): Unit = () }
+        |mod Pkg { }
+        |mod Pkg.Mod { @Export pub def ignore(_x: Int32): Unit = () }
         |""".stripMargin
     val result = check(input, Options.TestWithLibNix)
     expectSuccess(result)
@@ -927,7 +953,8 @@ class TestEntryPoints extends AnyFunSuite with TestUtils {
     // function. In any other parameter position it has no Java form.
     val input =
       """
-        |mod Mod { @Export pub def id(_x: Unit, y: Int32): Int32 = y }
+        |mod Pkg { }
+        |mod Pkg.Mod { @Export pub def id(_x: Unit, y: Int32): Int32 = y }
         |""".stripMargin
     val result = check(input, Options.TestWithLibNix)
     expectError[EntryPointError.IllegalExportType](result)
@@ -936,7 +963,8 @@ class TestEntryPoints extends AnyFunSuite with TestUtils {
   test("Test.ExportFunction.GenericNative.01") {
     val input =
       """
-        |mod Mod {
+        |mod Pkg { }
+        |mod Pkg.Mod {
         |    import java.util.ArrayList
         |    @Export pub def id(x: ArrayList[String]): ArrayList[String] = x
         |}

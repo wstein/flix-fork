@@ -152,9 +152,50 @@ object EntryPointError {
          |named after the module. Functions in the root namespace have no module name,
          |so there is no class to contain the exported method.
          |
-         |To fix this, move the function into a module:
+         |To fix this, move the function into a nested module:
          |
-         |  mod MyModule {
+         |  // File MyPackage.flix
+         |  mod MyPackage { }
+         |
+         |  // File MyPackage/MyModule.flix
+         |  mod MyPackage.MyModule {
+         |      @Export
+         |      pub def myFunction(): Int32 = ...
+         |  }
+         |""".stripMargin
+    }
+  }
+
+  /**
+    * An error raised to indicate that an exported function is in a top-level module, so the class
+    * holding it would be in the unnamed package.
+    *
+    * @param name the name of the top-level module.
+    * @param loc  the location where the error occurred.
+    */
+  case class IllegalExportUnnamedPackage(name: String, loc: SourceLocation) extends EntryPointError {
+    def code: ErrorCode = ErrorCode.E1301
+
+    def summary: String = s"Exported function in top-level module '$name'."
+
+    def message(fmt: Formatter)(implicit root: Option[TypedAst.Root]): String = {
+      import fmt.*
+      s""">> Exported function must be in a nested module.
+         |
+         |${highlight(loc, s"'$name' is a top-level module", fmt)}
+         |
+         |${underline("Explanation:")} An exported function generates a Java method in a class
+         |named after its module, in a package named after the enclosing modules. A top-level
+         |module has no enclosing module, so its class lands in the unnamed package, which Java
+         |code in a named package cannot import.
+         |
+         |To fix this, nest the module inside another one:
+         |
+         |  // File MyPackage.flix
+         |  mod MyPackage { }
+         |
+         |  // File MyPackage/$name.flix
+         |  mod MyPackage.$name {
          |      @Export
          |      pub def myFunction(): Int32 = ...
          |  }
