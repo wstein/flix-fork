@@ -27,12 +27,14 @@ import ca.uwaterloo.flix.language.ast.shared.Source
   * @param sources   the sources of the program.
   * @param totalTime the total compilation time, excluding class writing/loading.
   * @param codeSize   the number of bytes the compiler generated.
+  * @param classNames the binary names of every class the compiler generated.
   */
 class CompilationResult(main: Option[Array[String] => Unit],
                         tests: Map[Symbol.DefnSym, TestFn],
                         sources: Map[Source, SourceLocation],
                         val totalTime: Long,
-                        val codeSize: Int
+                        val codeSize: Int,
+                        val classNames: Set[String]
                        ) {
 
   /** Optionally returns the main function. */

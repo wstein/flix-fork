@@ -1,0 +1,90 @@
+/*
+ * Copyright 2026 Werner Stein
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package ca.uwaterloo.flix.language.phase.jvm
+
+import ca.uwaterloo.flix.api.{CompilerConstants, Flix}
+import ca.uwaterloo.flix.language.ast.shared.SecurityContext
+import ca.uwaterloo.flix.runtime.CompilationResult
+import ca.uwaterloo.flix.util.{Options, Result}
+import org.scalatest.funsuite.AnyFunSuite
+
+/**
+  * Tests which namespace classes reach the emitted jar.
+  *
+  * A namespace class holds nothing but the shim methods of the namespace's entry points, and Flix
+  * code never refers to it. An empty one is therefore dead weight, and worse: it is named after the
+  * namespace, so `mod String` in the standard library used to emit a `String` class in the unnamed
+  * package. Any Java source file compiled against such a jar resolves `String` to that class rather
+  * than to `java.lang.String`, which silently turns `main(String[])` into `main([LString;)V` and
+  * makes the program unlaunchable.
+  */
+class TestNamespaceClasses extends AnyFunSuite {
+
+  private implicit val sctx: SecurityContext = SecurityContext.Unrestricted
+
+  /** Compiles `input` and returns the result, failing the test if it does not compile. */
+  private def compile(input: String): CompilationResult = {
+    val flix = new Flix().setOptions(Options.DefaultTest)
+    flix.addVirtualPath(CompilerConstants.VirtualTestFile, input)
+    flix.compile().toResult match {
+      case Result.Ok(result) => result
+      case Result.Err(errors) => fail(s"the test program must compile, but got: $errors")
+    }
+  }
+
+  test("a namespace without entry points emits no class") {
+    val result = compile(
+      """mod Alpha {
+        |    pub def foo(): Int32 = 1
+        |}
+        |
+        |def main(): Unit \ IO = println(Alpha.foo())
+        |""".stripMargin)
+    assert(!result.classNames.contains("Alpha"))
+  }
+
+  test("a namespace with an exported def emits a class") {
+    val result = compile(
+      """mod Beta {
+        |    @Export
+        |    pub def bar(x: Int32): Int32 = x + 1
+        |}
+        |
+        |def main(): Unit \ IO = println(Beta.bar(1))
+        |""".stripMargin)
+    assert(result.classNames.contains("Beta"))
+  }
+
+  test("a nested namespace with an exported def emits a package-qualified class") {
+    val result = compile(
+      """mod Acme.Gamma {
+        |    @Export
+        |    pub def baz(x: Int32): Int32 = x + 1
+        |}
+        |
+        |def main(): Unit \ IO = println("hello")
+        |""".stripMargin)
+    assert(result.classNames.contains("Acme.Gamma"))
+  }
+
+  test("standard library namespaces do not shadow java.lang classes") {
+    val result = compile("""def main(): Unit \ IO = println("hello")""")
+    for (shadowed <- List("String", "Object", "Integer", "Character", "Boolean", "Iterable")) {
+      assert(!result.classNames.contains(shadowed), s"'$shadowed' shadows java.lang.$shadowed for Java callers")
+    }
+  }
+
+}

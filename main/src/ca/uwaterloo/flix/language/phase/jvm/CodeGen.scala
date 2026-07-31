@@ -49,11 +49,16 @@ object CodeGen {
       main => JvmClass(BackendObjType.Main.jvmName, BackendObjType.Main.genByteCode(main.sym))
     ).toList
 
-    val namespaceClasses = JvmOps.namespacesOf(root).map(
+    // A namespace class exists only to hold the shim methods of entry points. We skip the empty
+    // ones: they are unreachable from Flix code, and since they are named after the namespace they
+    // would otherwise shadow Java classes of the same name (e.g. `mod String` shadows
+    // `java.lang.String` for any Java caller compiled against the resulting jar).
+    val namespaceClasses = JvmOps.namespacesOf(root).flatMap(
       ns => {
         val nsClass = BackendObjType.Namespace(ns.ns)
         val entrypointDefs = ns.defs.values.toList.filter(defn => root.entryPoints.contains(defn.sym))
-        JvmClass(nsClass.jvmName, nsClass.genByteCode(entrypointDefs))
+        if (entrypointDefs.isEmpty) None
+        else Some(JvmClass(nsClass.jvmName, nsClass.genByteCode(entrypointDefs)))
       }).toList
 
     // Generate function classes.
