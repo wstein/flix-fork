@@ -13,5 +13,7 @@ public class App {
         xs.add("a");
         xs.add("b");
         System.out.println("size = " + Greeter.sizeOf(xs));
+
+        Greeter.announce();
     }
 }
