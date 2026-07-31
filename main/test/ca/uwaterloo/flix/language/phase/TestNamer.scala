@@ -770,4 +770,70 @@ class TestNamer extends AnyFunSuite with TestUtils {
     val result = check(input, Options.TestWithLibNix)
     expectError[NameError.IllegalSealedTrait](result)
   }
+
+  test("OrphanModule.01") {
+    // `A` is never declared, so `A.B` has no parent and `A.B.f` cannot resolve.
+    val input =
+      """
+        |mod A.B {
+        |    pub def f(): Int32 = 1
+        |}
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibNix)
+    expectError[NameError.OrphanModule](result)
+  }
+
+  test("OrphanModule.02") {
+    // The check is not limited to public modules.
+    val input =
+      """
+        |pub mod A.B {
+        |    pub def f(): Int32 = 1
+        |}
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibNix)
+    expectError[NameError.OrphanModule](result)
+  }
+
+  test("OrphanModule.03") {
+    // `A.B` is missing, so `A.B.C` is orphaned even though `A` exists.
+    val input =
+      """
+        |mod A { }
+        |mod A.B.C {
+        |    pub def f(): Int32 = 1
+        |}
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibNix)
+    expectError[NameError.OrphanModule](result)
+  }
+
+  test("OrphanModule.04") {
+    // Declaring the parent makes the nested module legal.
+    val input =
+      """
+        |mod A { }
+        |mod A.B {
+        |    pub def f(): Int32 = 1
+        |}
+        |
+        |def main(): Unit \ IO = println(A.B.f())
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibMin)
+    expectSuccess(result)
+  }
+
+  test("OrphanModule.05") {
+    // Explicit nesting declares the parent as a side effect.
+    val input =
+      """
+        |mod A {
+        |    mod B {
+        |        pub def f(): Int32 = 1
+        |    }
+        |}
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibNix)
+    expectSuccess(result)
+  }
 }
