@@ -43,8 +43,17 @@ object LambdaLift {
     val effects = ParOps.parMapValues(root.effects)(visitEffect)
 
     // Add lifted defs from the shared context to the existing defs.
+    //
+    // A lifted definition must have a name of its own. If two of them share one, or one shadows a
+    // definition already in the root, this fold would quietly keep the last and drop the rest --
+    // and a call to the dropped definition then reaches one of a different shape. That surfaces
+    // much later, as a type verifier error about an unrelated expression, so fail here instead.
     val newDefs = sctx.liftedDefs.asScala.foldLeft(defs) {
-      case (macc, (sym, defn)) => macc + (sym -> defn)
+      case (macc, (sym, defn)) => macc.get(sym) match {
+        case None => macc + (sym -> defn)
+        case Some(existing) =>
+          throw InternalCompilerException(s"Duplicate lifted definition '$sym', already defined at ${existing.loc.format}.", defn.loc)
+      }
     }
 
     LiftedAst.Root(newDefs, enums, structs, effects, root.mainEntryPoint, root.entryPoints, root.sources)
