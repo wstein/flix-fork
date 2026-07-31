@@ -179,9 +179,14 @@ object EntryPointError {
          |
          |${highlight(loc, "type not exportable", fmt)}
          |
-         |${underline("Explanation:")} Exported functions can only use primitive Java types:
+         |${underline("Explanation:")} Exported functions can only use types that have an exact
+         |Java representation:
          |
-         |  Bool, Char, Int8, Int16, Int32, Int64, Float32, Float64, or java.lang.Object
+         |  Bool, Char, Int8, Int16, Int32, Int64, Float32, Float64,
+         |  String, BigInt, BigDecimal, Regex, or any Java type.
+         |
+         |Flix types such as enums, tuples, records, and functions are not exportable, because
+         |their representation is an implementation detail of the compiler.
          |""".stripMargin
     }
   }

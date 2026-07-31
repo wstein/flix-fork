@@ -855,4 +855,64 @@ class TestEntryPoints extends AnyFunSuite with TestUtils {
     val result = check(input, Options.TestWithLibNix)
     expectError[EntryPointError.IllegalEntryPointTypeVariables](result)
   }
+
+  test("Test.ExportFunction.String.01") {
+    val input =
+      """
+        |mod Mod { @Export pub def id(x: String): String = x }
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibNix)
+    expectSuccess(result)
+  }
+
+  test("Test.ExportFunction.BigInt.01") {
+    val input =
+      """
+        |mod Mod { @Export pub def id(x: BigInt): BigInt = x }
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibNix)
+    expectSuccess(result)
+  }
+
+  test("Test.ExportFunction.BigDecimal.01") {
+    val input =
+      """
+        |mod Mod { @Export pub def id(x: BigDecimal): BigDecimal = x }
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibNix)
+    expectSuccess(result)
+  }
+
+  test("Test.ExportFunction.Regex.01") {
+    val input =
+      """
+        |mod Mod { @Export pub def id(x: Regex): Regex = x }
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibNix)
+    expectSuccess(result)
+  }
+
+  test("Test.ExportFunction.Native.01") {
+    val input =
+      """
+        |mod Mod {
+        |    import java.io.File
+        |    @Export pub def id(x: File): File = x
+        |}
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibNix)
+    expectSuccess(result)
+  }
+
+  test("Test.ExportFunction.GenericNative.01") {
+    val input =
+      """
+        |mod Mod {
+        |    import java.util.ArrayList
+        |    @Export pub def id(x: ArrayList[String]): ArrayList[String] = x
+        |}
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibNix)
+    expectSuccess(result)
+  }
 }

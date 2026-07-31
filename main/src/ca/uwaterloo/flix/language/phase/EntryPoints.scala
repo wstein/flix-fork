@@ -446,6 +446,13 @@ object EntryPoints {
   /**
     * Returns `true` if `tpe` is a valid Java type that can be exported.
     *
+    * A type is exportable if the backend gives it an exact and stable JVM representation: the
+    * primitive types, the Flix types that are themselves Java types (e.g. `String` is
+    * `java.lang.String`), and any Java type. Types whose representation is an implementation
+    * detail — enums, tuples, records, closures — are not exportable, because a Java caller would
+    * then depend on generated, erased class names such as `Tag$Obj` that the backend is free to
+    * change.
+    *
     *   - `isExportableType(Int32) = true`
     *   - `isExportableType(Bool) = true`
     *   - `isExportableType(String) = true`
@@ -454,7 +461,6 @@ object EntryPoints {
     */
   @tailrec
   private def isExportableType(tpe: Type): Result[Boolean, ErrorOrMalformed.type] = {
-    // TODO: Currently, because of eager erasure, we only allow primitive types and Object.
     tpe match {
       case Type.Cst(TypeConstructor.Bool, _) => Result.Ok(true)
       case Type.Cst(TypeConstructor.Char, _) => Result.Ok(true)
@@ -464,9 +470,16 @@ object EntryPoints {
       case Type.Cst(TypeConstructor.Int16, _) => Result.Ok(true)
       case Type.Cst(TypeConstructor.Int32, _) => Result.Ok(true)
       case Type.Cst(TypeConstructor.Int64, _) => Result.Ok(true)
-      case Type.Cst(TypeConstructor.Native(clazz), _) if clazz == classOf[java.lang.Object] => Result.Ok(true)
+      case Type.Cst(TypeConstructor.Str, _) => Result.Ok(true)
+      case Type.Cst(TypeConstructor.BigInt, _) => Result.Ok(true)
+      case Type.Cst(TypeConstructor.BigDecimal, _) => Result.Ok(true)
+      case Type.Cst(TypeConstructor.Regex, _) => Result.Ok(true)
+      case Type.Cst(TypeConstructor.Native(_), _) => Result.Ok(true)
       case Type.Cst(_, _) => Result.Ok(false)
-      case Type.Apply(_, _, _) => Result.Ok(false)
+      // A type application is exportable exactly when its head is: a generic Java type such as
+      // `ArrayList[String]` is erased to the raw class, whereas `List[Int32]` is headed by a Flix
+      // enum and stays unexportable.
+      case Type.Apply(t, _, _) => isExportableType(t)
       case Type.Alias(_, _, t, _) => isExportableType(t)
       case Type.Var(_, _) => Result.Err(ErrorOrMalformed)
       case Type.AssocType(_, _, _, _) => Result.Err(ErrorOrMalformed)

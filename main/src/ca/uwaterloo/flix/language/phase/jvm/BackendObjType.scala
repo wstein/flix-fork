@@ -17,7 +17,7 @@
 package ca.uwaterloo.flix.language.phase.jvm
 
 import ca.uwaterloo.flix.api.Flix
-import ca.uwaterloo.flix.language.ast.{JvmAst, SourceLocation, Symbol}
+import ca.uwaterloo.flix.language.ast.{JvmAst, SimpleType, SourceLocation, Symbol}
 import ca.uwaterloo.flix.language.phase.jvm.BackendObjType.mkClassName
 import ca.uwaterloo.flix.language.phase.jvm.BytecodeInstructions.*
 import ca.uwaterloo.flix.language.phase.jvm.BytecodeInstructions.Branch.*
@@ -1411,13 +1411,13 @@ object BackendObjType {
 
   case class Namespace(ns: List[String]) extends BackendObjType {
 
-    def genByteCode(defs: List[JvmAst.Def])(implicit flix: Flix): Array[Byte] = {
+    def genByteCode(defs: List[JvmAst.Def])(implicit root: JvmAst.Root, flix: Flix): Array[Byte] = {
       val cm = ClassMaker.mkClass(this.jvmName, IsFinal)
 
       cm.mkConstructor(Constructor, IsPublic, nullarySuperConstructor(ClassConstants.Object.Constructor)(_))
 
       for (defn <- defs) {
-        cm.mkStaticMethod(ShimMethod(defn), IsPublic, IsFinal, shimIns(defn)(_))
+        cm.mkStaticMethod(ShimMethod(defn), IsPublic, IsFinal, shimIns(defn)(root, _))
       }
 
       cm.closeClassMaker()
@@ -1425,30 +1425,46 @@ object BackendObjType {
 
     def Constructor: ConstructorMethod = ConstructorMethod(this.jvmName, Nil)
 
-    def ShimMethod(defn: JvmAst.Def): StaticMethod = {
-      val erasedArgs = defn.fparams.map(_.tpe).map(BackendType.toErasedBackendType)
-      val erasedResult = BackendType.toErasedBackendType(defn.unboxedType.tpe)
+    /**
+      * The signature a shim method is given.
+      *
+      * An exported def is part of the program's Java-facing API, so its signature uses exact
+      * types: `String` stays `java.lang.String` rather than collapsing to `Object`. The types
+      * that survive this are restricted by `EntryPoints.isExportableType`, so the descriptor
+      * only ever mentions classes that Java code can name.
+      *
+      * Every other shim (currently only `@Test`) is internal and stays erased.
+      */
+    def ShimMethod(defn: JvmAst.Def)(implicit root: JvmAst.Root): StaticMethod = {
+      val args = defn.fparams.map(fp => shimType(defn, fp.tpe))
+      val result = shimType(defn, defn.unboxedType.tpe)
       // Exported names are checked in Safety, so no mangling is needed.
       val name = if (defn.ann.isExport) defn.sym.name else "m_" + JvmName.mangle(defn.sym.name)
-      StaticMethod(this.jvmName, name, MethodDescriptor(erasedArgs, erasedResult))
+      StaticMethod(this.jvmName, name, MethodDescriptor(args, result))
     }
 
-    private def shimIns(defn: JvmAst.Def)(implicit mv: MethodVisitor): Unit = {
+    /** Returns the type `tpe` has in the shim method of `defn`. */
+    private def shimType(defn: JvmAst.Def, tpe: SimpleType)(implicit root: JvmAst.Root): BackendType =
+      if (defn.ann.isExport) BackendType.toBackendType(tpe) else BackendType.toErasedBackendType(tpe)
+
+    private def shimIns(defn: JvmAst.Def)(implicit root: JvmAst.Root, mv: MethodVisitor): Unit = {
       val defnT = Defn(defn.sym)
-      val paramTypes = defn.fparams.map(fp => BackendType.toErasedBackendType(fp.tpe))
+      val paramTypes = defn.fparams.map(fp => shimType(defn, fp.tpe))
       withNames(0, paramTypes) {
         case (_, args) =>
-          val erasedResult = BackendType.toErasedBackendType(defn.unboxedType.tpe)
+          val resultType = shimType(defn, defn.unboxedType.tpe)
           NEW(defnT.jvmName)
           DUP()
           INVOKESPECIAL(ConstructorMethod(defnT.jvmName, Nil))
-          for ((arg, index) <- args.zipWithIndex) {
+          for (((arg, fparam), index) <- args.zip(defn.fparams).zipWithIndex) {
             DUP()
             arg.load()
-            PUTFIELD(InstanceField(defnT.jvmName, s"arg$index", arg.tpe))
+            // The argument fields of the function class are always erased, even when the shim
+            // takes an exact type. Widening a reference to `Object` needs no cast.
+            PUTFIELD(InstanceField(defnT.jvmName, s"arg$index", BackendType.toErasedBackendType(fparam.tpe)))
           }
-          Result.unwindSuspensionFreeThunkToType(erasedResult, s"in shim method of ${defn.sym}", defn.loc)
-          xReturn(erasedResult)
+          Result.unwindSuspensionFreeThunkToType(resultType, s"in shim method of ${defn.sym}", defn.loc)
+          xReturn(resultType)
       }
     }
   }
