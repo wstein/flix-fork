@@ -930,7 +930,7 @@ object GenExpression {
 
         // Evaluate the receiver object.
         compileExpr(receiver)
-        val anonClassInternalName = sym.name.replace('.', '/')
+        val anonClassInternalName = JvmName(JvmName.DevFlixGen, sym.name).toInternalName
         mv.visitTypeInsn(CHECKCAST, anonClassInternalName)
 
         // Evaluate and cast each argument.

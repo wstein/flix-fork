@@ -159,7 +159,7 @@ mod Test.Exp.Jvm.Generic.NewObject {
     @Test
     def testSerializableStillWorks01(): Unit \ {Assert, IO} =
         let a = new Serializable { };
-        assertTrue(a.toString().startsWith("Anon"))
+        assertTrue(a.toString().startsWith("dev.flix.gen.Anon"))
 
     @Test
     def testComparatorWithTreeMapOrdering01(): Unit \ {Assert, IO} =

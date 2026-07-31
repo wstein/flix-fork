@@ -46,7 +46,7 @@ mod Test.Exp.Jvm.NewObject {
 
     @Test
     def testImplementInterface01(): Unit \ Assert + IO =
-        assertTrue(implementSerializable().toString().startsWith("Anon"))
+        assertTrue(implementSerializable().toString().startsWith("dev.flix.gen.Anon"))
 
     @Test
     def testImplementInterface02(): Unit \ Assert + IO =

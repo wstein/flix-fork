@@ -123,7 +123,7 @@ mod Test.Exp.Jvm.NewObject.Super {
             def concreteMethod(_this: TestClassWithDefaultConstructor, _y: String): String \ IO =
                 super.toString()
         };
-        assertTrue(anon.concreteMethod("ignored").startsWith("Anon"))
+        assertTrue(anon.concreteMethod("ignored").startsWith("dev.flix.gen.Anon"))
 
     // Test 12: call super.hashCode() from within a toString override (cross-method)
     @Test
