@@ -1437,26 +1437,53 @@ object BackendObjType {
       * Every other shim (currently only `@Test`) is internal and stays erased.
       */
     def ShimMethod(defn: JvmAst.Def)(implicit root: JvmAst.Root): StaticMethod = {
-      val args = defn.fparams.map(fp => shimType(defn, fp.tpe))
-      val result = shimType(defn, defn.unboxedType.tpe)
       // Exported names are checked in Safety, so no mangling is needed.
       val name = if (defn.ann.isExport) defn.sym.name else "m_" + JvmName.mangle(defn.sym.name)
-      StaticMethod(this.jvmName, name, MethodDescriptor(args, result))
+      StaticMethod(this.jvmName, name, MethodDescriptor(shimParamTypes(defn), shimResultType(defn)))
     }
 
     /** Returns the type `tpe` has in the shim method of `defn`. */
     private def shimType(defn: JvmAst.Def, tpe: SimpleType)(implicit root: JvmAst.Root): BackendType =
       if (defn.ann.isExport) BackendType.toBackendType(tpe) else BackendType.toErasedBackendType(tpe)
 
+    /**
+      * The parameters of the shim method of `defn`.
+      *
+      * Flix gives a nullary function a single `Unit` parameter. An exported one is presented to
+      * Java as taking no parameters at all; [[shimIns]] supplies the unit value itself.
+      */
+    private def shimParamTypes(defn: JvmAst.Def)(implicit root: JvmAst.Root): List[BackendType] =
+      if (dropsUnitParam(defn)) Nil
+      else defn.fparams.map(fp => shimType(defn, fp.tpe))
+
+    /** The result of the shim method of `defn`. An exported def returning `Unit` returns `void`. */
+    private def shimResultType(defn: JvmAst.Def)(implicit root: JvmAst.Root): VoidableType =
+      if (returnsVoid(defn)) VoidableType.Void
+      else shimType(defn, defn.unboxedType.tpe)
+
+    /** Returns `true` if the shim method of `defn` hides the `Unit` parameter of a nullary function. */
+    private def dropsUnitParam(defn: JvmAst.Def): Boolean = defn.ann.isExport && (defn.fparams match {
+      case List(fp) => fp.tpe == SimpleType.Unit
+      case _ => false
+    })
+
+    /** Returns `true` if the shim method of `defn` is declared `void`. */
+    private def returnsVoid(defn: JvmAst.Def): Boolean =
+      defn.ann.isExport && defn.unboxedType.tpe == SimpleType.Unit
+
     private def shimIns(defn: JvmAst.Def)(implicit root: JvmAst.Root, mv: MethodVisitor): Unit = {
       val defnT = Defn(defn.sym)
-      val paramTypes = defn.fparams.map(fp => shimType(defn, fp.tpe))
-      withNames(0, paramTypes) {
+      withNames(0, shimParamTypes(defn)) {
         case (_, args) =>
-          val resultType = shimType(defn, defn.unboxedType.tpe)
           NEW(defnT.jvmName)
           DUP()
           INVOKESPECIAL(ConstructorMethod(defnT.jvmName, Nil))
+          if (dropsUnitParam(defn)) {
+            // The parameter is not in the signature, so the unit value comes from its singleton.
+            DUP()
+            GETSTATIC(Unit.SingletonField)
+            PUTFIELD(InstanceField(defnT.jvmName, "arg0", BackendType.Object))
+          }
           for (((arg, fparam), index) <- args.zip(defn.fparams).zipWithIndex) {
             DUP()
             arg.load()
@@ -1464,8 +1491,16 @@ object BackendObjType {
             // takes an exact type. Widening a reference to `Object` needs no cast.
             PUTFIELD(InstanceField(defnT.jvmName, s"arg$index", BackendType.toErasedBackendType(fparam.tpe)))
           }
-          Result.unwindSuspensionFreeThunkToType(resultType, s"in shim method of ${defn.sym}", defn.loc)
-          xReturn(resultType)
+          val hint = s"in shim method of ${defn.sym}"
+          if (returnsVoid(defn)) {
+            Result.unwindSuspensionFreeThunk(hint, defn.loc)
+            POP()
+            RETURN()
+          } else {
+            val resultType = shimType(defn, defn.unboxedType.tpe)
+            Result.unwindSuspensionFreeThunkToType(resultType, hint, defn.loc)
+            xReturn(resultType)
+          }
       }
     }
   }

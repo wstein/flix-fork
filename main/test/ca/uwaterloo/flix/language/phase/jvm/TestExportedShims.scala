@@ -112,6 +112,43 @@ class TestExportedShims extends AnyFunSuite {
     assert(descriptors.get("sizeOf").contains("(Ljava/util/ArrayList;)I"))
   }
 
+  test("an exported nullary def takes no parameters") {
+    // Flix gives a nullary function a single `Unit` parameter; Java should not see it.
+    val descriptors = descriptorsOf(
+      """mod Mod {
+        |    @Export
+        |    pub def answer(): Int32 = 42
+        |}
+        |
+        |def main(): Unit \ IO = println(Mod.answer())
+        |""".stripMargin, "Mod")
+    assert(descriptors.get("answer").contains("()I"))
+  }
+
+  test("an exported def returning Unit returns void") {
+    val descriptors = descriptorsOf(
+      """mod Mod {
+        |    @Export
+        |    pub def shout(s: String): Unit \ IO = println(s)
+        |}
+        |
+        |def main(): Unit \ IO = Mod.shout("hi")
+        |""".stripMargin, "Mod")
+    assert(descriptors.get("shout").contains("(Ljava/lang/String;)V"))
+  }
+
+  test("an exported nullary def returning Unit is void of no arguments") {
+    val descriptors = descriptorsOf(
+      """mod Mod {
+        |    @Export
+        |    pub def hello(): Unit \ IO = println("hello")
+        |}
+        |
+        |def main(): Unit \ IO = Mod.hello()
+        |""".stripMargin, "Mod")
+    assert(descriptors.get("hello").contains("()V"))
+  }
+
   test("an exported def keeps primitives unboxed") {
     val descriptors = descriptorsOf(
       """mod Mod {

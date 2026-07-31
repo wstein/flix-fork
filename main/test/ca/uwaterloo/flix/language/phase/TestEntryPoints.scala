@@ -904,6 +904,35 @@ class TestEntryPoints extends AnyFunSuite with TestUtils {
     expectSuccess(result)
   }
 
+  test("Test.ExportFunction.Nullary.01") {
+    val input =
+      """
+        |mod Mod { @Export pub def answer(): Int32 = 42 }
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibNix)
+    expectSuccess(result)
+  }
+
+  test("Test.ExportFunction.UnitReturn.01") {
+    val input =
+      """
+        |mod Mod { @Export pub def ignore(_x: Int32): Unit = () }
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibNix)
+    expectSuccess(result)
+  }
+
+  test("Test.IllegalExportFunction.10") {
+    // `Unit` is only exportable as the return type or as the lone parameter of a nullary
+    // function. In any other parameter position it has no Java form.
+    val input =
+      """
+        |mod Mod { @Export pub def id(_x: Unit, y: Int32): Int32 = y }
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibNix)
+    expectError[EntryPointError.IllegalExportType](result)
+  }
+
   test("Test.ExportFunction.GenericNative.01") {
     val input =
       """

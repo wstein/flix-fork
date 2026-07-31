@@ -429,7 +429,16 @@ object EntryPoints {
 
   /** Returns an error for each type in `defn` that is not valid in Java. */
   private def checkJavaTypes(defn: TypedAst.Def)(implicit flix: Flix): List[EntryPointError] = {
-    val types = defn.spec.retTpe :: defn.spec.fparams.map(_.tpe)
+    // `Unit` has no Java type of its own, but it is exportable in the two positions where the
+    // shim method can render it away: a `Unit` return type becomes `void`, and the lone `Unit`
+    // parameter that Flix gives a nullary function is dropped. A `Unit` anywhere else -- say the
+    // first of two parameters -- has no sensible Java form and stays an error.
+    val paramTypes = defn.spec.fparams.map(_.tpe) match {
+      case List(tpe) if isUnitType(tpe) == Result.Ok(true) => Nil
+      case tpes => tpes
+    }
+    val retTpe = defn.spec.retTpe
+    val types = if (isUnitType(retTpe) == Result.Ok(true)) paramTypes else retTpe :: paramTypes
     types.flatMap(tpe => {
       isExportableType(tpe) match {
         case Result.Ok(true) =>
