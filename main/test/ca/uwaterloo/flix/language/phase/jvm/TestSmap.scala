@@ -36,7 +36,7 @@ class TestSmap extends AnyFunSuite {
   private def mkLoc(src: Source, line: Int): SourceLocation =
     SourceLocation.point(isReal = true, src, SourcePosition.mkFromOneIndexed(line, 1))
 
-  private val className: JvmName = JvmName(Nil, "Def$example")
+  private val className: JvmName = JvmName(JvmName.packageOfNamespace(Nil), "Def$example")
 
   test("register: the primary source keeps the identity mapping") {
     val primary = mkSource("Main.flix", 20)

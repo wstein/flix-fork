@@ -60,7 +60,7 @@ class TestLocalVariableTable extends AnyFunSuite {
         case Result.Ok(_) => ()
         case Result.Err(errors) => fail(s"the test program must compile, but got: $errors")
       }
-      readEntries(out.resolve("class").resolve(s"${JvmName.mkClassName("Def", "compute")}.class"))
+      readEntries(out.resolve("class").resolve(JvmName(JvmName.packageOfNamespace(Nil), JvmName.mkClassName("Def", "compute")).toPath))
     } finally {
       deleteRecursively(out)
     }

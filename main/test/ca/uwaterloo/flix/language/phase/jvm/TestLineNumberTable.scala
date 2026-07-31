@@ -140,7 +140,13 @@ class TestLineNumberTable extends AnyFunSuite {
     Files.deleteIfExists(path)
   }
 
-  private def defClass(name: String): String = JvmName.mkClassName("Def", name)
+  /**
+    * The path, relative to the class output directory, of the function class of the root-namespace
+    * def `name`. Root-namespace classes live in [[JvmName.DevFlixGen]] rather than in the unnamed
+    * package.
+    */
+  private def defClass(name: String): String =
+    (JvmName.packageOfNamespace(Nil) :+ JvmName.mkClassName("Def", name)).mkString("/")
 
   test("without --Xdebug a method reports only its declaration line") {
     assertResult(List(7))(compile(xdebug = false, defClass("main"), JvmName.StaticApply).lines)
