@@ -87,4 +87,35 @@ class TestNamespaceClasses extends AnyFunSuite {
     }
   }
 
+  test("Main is the only class in the unnamed package") {
+    // Exercises the shapes the backend synthesises classes for: tuples, closures, records, enums,
+    // lazy values, effects, and a def in the root namespace.
+    val result = compile(
+      """eff Ask {
+        |    def ask(): Int32
+        |}
+        |
+        |enum Colour {
+        |    case Red
+        |    case Custom(Int32, String)
+        |}
+        |
+        |def rootLevel(f: Int32 -> Int32): Int32 = f(1)
+        |
+        |def main(): Unit \ IO =
+        |    let pair = (1, "two");
+        |    let record = { x = 1, y = 2 };
+        |    let thunk = lazy (1 + 1);
+        |    let colour = Colour.Custom(3, "four");
+        |    let asked = run { Ask.ask() } with handler Ask { def ask(k) = k(42) };
+        |    println((rootLevel(x -> x + 1), pair, record#x, force thunk, asked));
+        |    match colour {
+        |        case Colour.Red => println("red")
+        |        case Colour.Custom(n, s) => println("${n} ${s}")
+        |    }
+        |""".stripMargin)
+    val unnamed = result.classNames.filterNot(_.contains('.'))
+    assert(unnamed == Set("Main"), s"expected only Main in the unnamed package, but found: ${unnamed.toList.sorted.mkString(", ")}")
+  }
+
 }

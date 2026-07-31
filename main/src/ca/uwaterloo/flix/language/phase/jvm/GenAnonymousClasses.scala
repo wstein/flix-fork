@@ -23,7 +23,7 @@ import ca.uwaterloo.flix.language.phase.jvm.BytecodeInstructions.*
 import ca.uwaterloo.flix.language.phase.jvm.ClassMaker.Final.{IsFinal, NotFinal}
 import ca.uwaterloo.flix.language.phase.jvm.ClassMaker.Visibility.IsPublic
 import ca.uwaterloo.flix.language.phase.jvm.ClassMaker.Volatility.NotVolatile
-import ca.uwaterloo.flix.language.phase.jvm.JvmName.{MethodDescriptor, RootPackage}
+import ca.uwaterloo.flix.language.phase.jvm.JvmName.{DevFlixGen, MethodDescriptor}
 import ca.uwaterloo.flix.util.{InternalCompilerException, JvmUtils}
 import org.objectweb.asm.{MethodVisitor, Opcodes}
 
@@ -33,7 +33,7 @@ object GenAnonymousClasses {
   /** Returns the generated classes of `objs`. */
   def gen(objs: List[AnonClass])(implicit root: Root, flix: Flix): List[JvmClass] = {
     for (obj <- objs) yield {
-      val className = JvmName(RootPackage, obj.name)
+      val className = JvmName(DevFlixGen, obj.name)
       JvmClass(className, genByteCode(className, obj))
     }
   }

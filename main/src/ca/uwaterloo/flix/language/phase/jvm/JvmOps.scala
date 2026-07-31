@@ -74,7 +74,7 @@ object JvmOps {
     val name = JvmName.mkClassName(s"Clo", sym.name)
 
     // The JVM package is the namespace of the symbol.
-    val pkg = sym.namespace
+    val pkg = JvmName.packageOfNamespace(sym.namespace)
 
     // The result type.
     JvmName(pkg, name)
@@ -89,7 +89,7 @@ object JvmOps {
     * List.Crash  =>  List.Eff$Crash
     */
   def getEffectDefinitionClassName(sym: Symbol.EffSym): JvmName = {
-    val pkg = sym.namespace
+    val pkg = JvmName.packageOfNamespace(sym.namespace)
     val name = JvmName.mkClassName("Eff", sym.name)
     JvmName(pkg, name)
   }

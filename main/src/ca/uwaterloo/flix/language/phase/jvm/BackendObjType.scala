@@ -26,7 +26,7 @@ import ca.uwaterloo.flix.language.phase.jvm.ClassMaker.Final.{IsFinal, NotFinal}
 import ca.uwaterloo.flix.language.phase.jvm.ClassMaker.Visibility.{IsPrivate, IsPublic}
 import ca.uwaterloo.flix.language.phase.jvm.ClassMaker.Volatility.{IsVolatile, NotVolatile}
 import ca.uwaterloo.flix.language.phase.jvm.JvmName.MethodDescriptor.mkDescriptor
-import ca.uwaterloo.flix.language.phase.jvm.JvmName.{DevFlixRuntime, MethodDescriptor, RootPackage}
+import ca.uwaterloo.flix.language.phase.jvm.JvmName.{DevFlixGen, DevFlixRuntime, MethodDescriptor, RootPackage}
 import ca.uwaterloo.flix.util.InternalCompilerException
 import org.objectweb.asm.{Label, MethodVisitor, Opcodes}
 
@@ -39,20 +39,20 @@ sealed trait BackendObjType {
     */
   val jvmName: JvmName = this match {
     case BackendObjType.Unit => JvmName(DevFlixRuntime, mkClassName("Unit"))
-    case BackendObjType.Lazy(tpe) => JvmName(RootPackage, mkClassName("Lazy", tpe))
-    case BackendObjType.Tuple(elms) => JvmName(RootPackage, mkClassName("Tuple", elms))
-    case BackendObjType.Struct(elms) => JvmName(RootPackage, mkClassName("Struct", elms))
-    case BackendObjType.NullaryTag(enumName, sym, _) => JvmName(RootPackage, JvmName.mkClassName(enumName, sym))
-    case BackendObjType.Tagged => JvmName(RootPackage, mkClassName("Tagged"))
-    case BackendObjType.Tag(tpes) => JvmName(RootPackage, mkClassName("Tag", tpes))
-    case BackendObjType.ExtTagged => JvmName(RootPackage, mkClassName("ExtTagged"))
-    case BackendObjType.ExtTag(tpes) => JvmName(RootPackage, mkClassName("ExtTag", tpes))
-    case BackendObjType.AbstractArrow(args, result) => JvmName(RootPackage, mkClassName(s"Clo${args.length}", args :+ result))
-    case BackendObjType.Arrow(args, result) => JvmName(RootPackage, mkClassName(s"Fn${args.length}", args :+ result))
-    case BackendObjType.Defn(sym) => JvmName(sym.namespace, JvmName.mkClassName("Def", sym.name))
-    case BackendObjType.RecordEmpty => JvmName(RootPackage, mkClassName(s"RecordEmpty"))
-    case BackendObjType.RecordExtend(value) => JvmName(RootPackage, mkClassName("RecordExtend", value))
-    case BackendObjType.Record => JvmName(RootPackage, mkClassName("Record"))
+    case BackendObjType.Lazy(tpe) => JvmName(DevFlixGen, mkClassName("Lazy", tpe))
+    case BackendObjType.Tuple(elms) => JvmName(DevFlixGen, mkClassName("Tuple", elms))
+    case BackendObjType.Struct(elms) => JvmName(DevFlixGen, mkClassName("Struct", elms))
+    case BackendObjType.NullaryTag(enumName, sym, _) => JvmName(DevFlixGen, JvmName.mkClassName(enumName, sym))
+    case BackendObjType.Tagged => JvmName(DevFlixGen, mkClassName("Tagged"))
+    case BackendObjType.Tag(tpes) => JvmName(DevFlixGen, mkClassName("Tag", tpes))
+    case BackendObjType.ExtTagged => JvmName(DevFlixGen, mkClassName("ExtTagged"))
+    case BackendObjType.ExtTag(tpes) => JvmName(DevFlixGen, mkClassName("ExtTag", tpes))
+    case BackendObjType.AbstractArrow(args, result) => JvmName(DevFlixGen, mkClassName(s"Clo${args.length}", args :+ result))
+    case BackendObjType.Arrow(args, result) => JvmName(DevFlixGen, mkClassName(s"Fn${args.length}", args :+ result))
+    case BackendObjType.Defn(sym) => JvmName(JvmName.packageOfNamespace(sym.namespace), JvmName.mkClassName("Def", sym.name))
+    case BackendObjType.RecordEmpty => JvmName(DevFlixGen, mkClassName(s"RecordEmpty"))
+    case BackendObjType.RecordExtend(value) => JvmName(DevFlixGen, mkClassName("RecordExtend", value))
+    case BackendObjType.Record => JvmName(DevFlixGen, mkClassName("Record"))
     case BackendObjType.ReifiedSourceLocation => JvmName(DevFlixRuntime, mkClassName("ReifiedSourceLocation"))
     case BackendObjType.Global => JvmName(DevFlixRuntime, "Global") // "Global" is fixed in source code, so should not be mangled and $ suffixed
     case BackendObjType.HoleError => JvmName(DevFlixRuntime, mkClassName("HoleError"))
@@ -62,7 +62,8 @@ sealed trait BackendObjType {
     case BackendObjType.Region => JvmName(DevFlixRuntime, mkClassName("Region"))
     case BackendObjType.UncaughtExceptionHandler => JvmName(DevFlixRuntime, mkClassName("UncaughtExceptionHandler"))
     case BackendObjType.Main => JvmName(RootPackage, "Main")
-    case BackendObjType.Namespace(ns) => JvmName(ns.dropRight(1), ns.lastOption.getOrElse(s"Root${Flix.Delimiter}"))
+    case BackendObjType.Namespace(Nil) => JvmName(DevFlixGen, s"Root${Flix.Delimiter}")
+    case BackendObjType.Namespace(ns) => JvmName(ns.dropRight(1), ns.last)
     // Java classes
     case BackendObjType.Native(className) => className
     // Effects Runtime

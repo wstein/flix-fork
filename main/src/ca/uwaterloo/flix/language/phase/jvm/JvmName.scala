@@ -239,6 +239,28 @@ object JvmName {
   val DevFlixRuntime: List[String] = List("dev", "flix", "runtime")
   val CaUwFlixRuntime: List[String] = List("ca", "uwaterloo", "flix", "runtime")
 
+  /**
+    * The package of the classes the backend synthesises to represent the shapes of a program:
+    * tuples, tags, closures, records, and so on.
+    *
+    * These used to live in the unnamed package, where they were free to collide with whatever the
+    * user -- or another Flix library on the same classpath -- happened to name a class. Java code
+    * also cannot import from the unnamed package at all, so a Flix closure handed to a Java caller
+    * had an untypeable type.
+    */
+  val DevFlixGen: List[String] = List("dev", "flix", "gen")
+
+  /**
+    * Returns the JVM package that holds the classes of the symbols in namespace `ns`.
+    *
+    * A namespace maps to the package of the same name, except the root namespace, which maps to
+    * [[DevFlixGen]] rather than to the unnamed package. Note that this concerns the root namespace
+    * only: a top-level `mod Demo` still compiles to `Demo` in the unnamed package, since `Demo` is
+    * a name the programmer chose.
+    */
+  def packageOfNamespace(ns: List[String]): List[String] =
+    if (ns.isEmpty) DevFlixGen else ns
+
   val FlixError: JvmName = JvmName(DevFlixRuntime, mkClassName("FlixError"))
   val Coverage: JvmName = JvmName(CaUwFlixRuntime, "Coverage")
 
