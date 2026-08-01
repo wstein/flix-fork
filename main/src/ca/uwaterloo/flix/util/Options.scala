@@ -43,6 +43,7 @@ object Options {
     xnodeprecated = false,
     xsummary = false,
     xsubeffecting = Set.empty,
+    xdatalogDebug = Set.empty,
     XPerfN = None,
     XPerfFrontend = false,
     XPerfPar = false,
@@ -88,6 +89,7 @@ object Options {
   * @param threads        selects the number of threads to use.
   * @param loadClassFiles loads the generated class files into the JVM.
   * @param assumeYes      run non-interactively and assume answer to all prompts is yes.
+  * @param xdatalogDebug  selects which parts of the Datalog solver to trace.
   * @param xdebug         retains let-bindings so a debugger can observe them.
   */
 case class Options(lib: LibLevel,
@@ -108,6 +110,7 @@ case class Options(lib: LibLevel,
                    xnodeprecated: Boolean,
                    xsummary: Boolean,
                    xsubeffecting: Set[Subeffecting],
+                   xdatalogDebug: Set[DatalogDebug],
                    XPerfFrontend: Boolean,
                    XPerfPar: Boolean,
                    XPerfN: Option[Int],
@@ -152,6 +155,31 @@ object LibLevel {
     * Include the full standard library.
     */
   case object All extends LibLevel
+
+}
+
+/**
+  * An option that selects which parts of the Datalog solver emit a trace.
+  *
+  * The Datalog subset of Flix is not compiled to code: rules are lowered into values that the
+  * `Fixpoint` solver interprets, so a debugger cannot step through them. Tracing the solver is
+  * therefore the only way to observe what a set of rules does.
+  */
+sealed trait DatalogDebug
+
+object DatalogDebug {
+
+  /** Trace the Datalog program, as the solver sees it after lowering. */
+  case object Rules extends DatalogDebug
+
+  /** Trace the input facts and the minimal model. */
+  case object Facts extends DatalogDebug
+
+  /** Trace the relation algebra machine, including index selection. Intended for solver developers. */
+  case object Ram extends DatalogDebug
+
+  /** All of the above. */
+  val All: Set[DatalogDebug] = Set(Rules, Facts, Ram)
 
 }
 

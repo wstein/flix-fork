@@ -19,22 +19,42 @@
 pub mod Fixpoint3.Options {
 
     ///
-    /// Prints the Datalog program before the fixpoint computation.
+    /// Prints the Datalog program, as the solver sees it, before the fixpoint computation.
     ///
-    pub def enableDebugging(): Bool = false
+    /// The compiler rewrites this function when `--Xdatalog-debug=rules` is passed. Because the
+    /// result is a constant, the optimizer removes the guarded tracing code entirely when the
+    /// flag is absent, so tracing costs nothing unless it is asked for.
+    ///
+    pub def enableDebugRules(): Bool = false
 
     ///
-    /// Prints the input and output facts when debugging is enabled.
+    /// Prints the input facts and the minimal model of the fixpoint computation.
     ///
-    pub def enableDebugPrintFacts(): Bool = false
+    /// The compiler rewrites this function when `--Xdatalog-debug=facts` is passed. See
+    /// `enableDebugRules` for why the default must stay a constant.
+    ///
+    pub def enableDebugFacts(): Bool = false
 
     ///
-    /// Prints the debug output to the file given by `debugFileName`.
+    /// Prints the relation algebra machine program after each compilation phase, together with
+    /// the selected indexes. This traces how the solver executes the rules rather than what the
+    /// rules mean, and is intended for solver developers.
     ///
-    pub def enableDebugToFile(): Bool = true
+    /// The compiler rewrites this function when `--Xdatalog-debug=ram` is passed. See
+    /// `enableDebugRules` for why the default must stay a constant.
+    ///
+    pub def enableDebugRam(): Bool = false
 
     ///
-    /// Returns the name of the debug file.
+    /// Prints the trace to the file given by `debugFileName` instead of to standard out.
+    ///
+    /// Off by default, so that a trace requested on the command line is reported where the caller
+    /// is looking rather than written to a file they did not ask for.
+    ///
+    pub def enableDebugToFile(): Bool = false
+
+    ///
+    /// Returns the name of the file the trace is written to.
     ///
     pub def debugFileName(): String = "fixpoint_debug.txt"
 

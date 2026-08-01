@@ -50,7 +50,7 @@ pub mod Fixpoint3.Debugging {
     /// Note: Returns `d` to ensure it is not erased.
     ///
     pub def notifyPreSolve(d: Datalog): Datalog = unsafe IO {
-        if (Options.enableDebugging())
+        if (Options.enableDebugRules())
             region rc {
                 let strings = MutList.empty(rc);
                 let psh = s -> MutList.push(s, strings);
@@ -74,7 +74,7 @@ pub mod Fixpoint3.Debugging {
     /// Note: Returns `d` to ensure it is not erased.
     ///
     pub def notifyPostSolve(d: Datalog): Datalog = unsafe IO {
-        if (Options.enableDebugging() and Options.enableDebugPrintFacts())
+        if (Options.enableDebugFacts())
             region rc {
                 let strings = MutList.empty(rc);
                 let psh = s -> MutList.push(s, strings);
@@ -99,7 +99,7 @@ pub mod Fixpoint3.Debugging {
     ///
     pub def notifyPreLowering(phase: String, program: Ram.RamProgram): Ram.RamProgram = match program {
         case Ram.RamProgram.Program(stmt, _, _, _, _) => unsafe IO {
-            if (Options.enableDebugging())
+            if (Options.enableDebugRam())
                 region rc {
                     let strings = MutList.empty(rc);
                     let psh = s -> MutList.push(s, strings);
@@ -127,7 +127,7 @@ pub mod Fixpoint3.Debugging {
         input: (ExecutableRam.RamProgram[r], BoxingType.Boxing[r])
     ): (ExecutableRam.RamProgram[r], BoxingType.Boxing[r]) = match fst(input) {
         case ExecutableRam.RamProgram.Program(stmt, _, _, (index, indexPos), _, _) => unsafe IO {
-            if (Options.enableDebugging())
+            if (Options.enableDebugRam())
                 region rc {
                     let strings = MutList.empty(rc);
                     let psh = s -> MutList.push(s, strings);

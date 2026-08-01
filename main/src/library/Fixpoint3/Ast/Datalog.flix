@@ -93,7 +93,7 @@ pub mod Fixpoint3.Ast.Datalog {
     instance ToString[Datalog] {
         pub def toString(cs: Datalog): String = match cs {
             case Datalog.Datalog(facts, rules) => region rc {
-                if (not Fixpoint3.Options.enableDebugPrintFacts()) {
+                if (not Fixpoint3.Options.enableDebugFacts()) {
                     "Printing facts disabled ${String.lineSeparator()}"
                         + Vector.iterator(rc, rules) |> Iterator.join(String.lineSeparator())
                 } else {
@@ -103,7 +103,7 @@ pub mod Fixpoint3.Ast.Datalog {
             }
             case Datalog.Model(db) => region rc {
                 use Fixpoint3.Ast.Ram.toDenotation;
-                if (not Fixpoint3.Options.enableDebugPrintFacts()) {
+                if (not Fixpoint3.Options.enableDebugFacts()) {
                     "Printing facts disabled."
                 } else {
                     unsafe IO {

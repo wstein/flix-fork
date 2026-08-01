@@ -299,7 +299,7 @@ pub mod Fixpoint3.Phase.Compiler {
                             }
                         )
                         |> RamStmt.Insert;
-                    if (Fixpoint3.Options.enableDebugging()) {
+                    if (Fixpoint3.Options.enableDebugRam()) {
                         let comment = RamStmt.Comment(ToString.toString(rule));
                         MutList.push(comment, stmts);
                         MutList.push(insert, stmts)
@@ -394,7 +394,7 @@ pub mod Fixpoint3.Phase.Compiler {
                 |> Vector.filter(i -> i != -1);
 
             let count = Counter.get(functionalCounter);
-            if (Fixpoint3.Options.enableDebugging()) {
+            if (Fixpoint3.Options.enableDebugRam()) {
                 let comment = RamStmt.Comment(ToString.toString(rule));
                 MutList.push(comment, stmts);
                 Vector.forEach(i -> { Counter.set(count, functionalCounter); compileSomething(i) }, positiveIDBAtoms)

@@ -78,6 +78,7 @@ object Main {
       xnodeprecated = cmdOpts.xnodeprecated,
       xsummary = cmdOpts.xsummary,
       xsubeffecting = cmdOpts.xsubeffecting,
+      xdatalogDebug = cmdOpts.xdatalogDebug,
       XPerfFrontend = cmdOpts.XPerfFrontend,
       XPerfPar = cmdOpts.XPerfPar,
       XPerfN = cmdOpts.XPerfN,
@@ -488,6 +489,7 @@ object Main {
     xprintphases: Boolean = false,
     xsummary: Boolean = false,
     xsubeffecting: Set[Subeffecting] = Set.empty,
+    xdatalogDebug: Set[DatalogDebug] = Set.empty,
     XPerfN: Option[Int] = None,
     XPerfFrontend: Boolean = false,
     XPerfPar: Boolean = false,
@@ -566,6 +568,13 @@ object Main {
       case "min" => LibLevel.Min
       case "all" => LibLevel.All
       case arg => throw new IllegalArgumentException(s"'$arg' is not a valid library level. Valid options are 'all', 'min', and 'nix'.")
+    }
+
+    implicit val readDatalogDebug: scopt.Read[DatalogDebug] = scopt.Read.reads {
+      case "rules" => DatalogDebug.Rules
+      case "facts" => DatalogDebug.Facts
+      case "ram" => DatalogDebug.Ram
+      case arg => throw new IllegalArgumentException(s"'$arg' is not a valid Datalog debug option. Valid options are comma-separated combinations of 'rules', 'facts', and 'ram'.")
     }
 
     implicit val readSubEffectLevel: scopt.Read[Subeffecting] = scopt.Read.reads {
@@ -701,6 +710,10 @@ object Main {
       // Xbenchmark-throughput
       opt[Unit]("Xbenchmark-throughput").action((_, c) => c.copy(xbenchmarkThroughput = true)).
         text("[experimental] benchmarks the performance of the entire compiler.")
+
+      // Xdatalog-debug
+      opt[Seq[DatalogDebug]]("Xdatalog-debug").action((choices, c) => c.copy(xdatalogDebug = choices.toSet)).
+        text("[experimental] traces the Datalog solver (rules, facts, ram).")
 
       // Xdebug
       opt[Unit]("Xdebug").action((_, c) => c.copy(xdebug = true)).

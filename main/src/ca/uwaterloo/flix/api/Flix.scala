@@ -647,10 +647,12 @@ class Flix {
     // Initialize fork-join thread pool.
     initForkJoinPool()
 
-    var treeShaker1Ast = TreeShaker1.run(typedAst)
-    // Note: Do not null typedAst. It is used later.
+    // Enable the Datalog solver's tracing hooks before the optimizer folds their switches away.
+    val tracedAst = DatalogDebugging.run(typedAst)
 
-    var monomorpherAst = Specialization.run(typedAst)
+    var treeShaker1Ast = TreeShaker1.run(tracedAst)
+
+    var monomorpherAst = Specialization.run(treeShaker1Ast)
     treeShaker1Ast = null // Explicitly null-out such that the memory becomes eligible for GC.
 
     var lambdaDropAst = LambdaDrop.run(monomorpherAst)
