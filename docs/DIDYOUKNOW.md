@@ -60,6 +60,10 @@ Did you know that:
 - Flix supports first-class Datalog constraints, i.e. Datalog program fragments
   are values that can be passed to and returned from functions, etc.
 
+- Flix can explain a Datalog result. `psolve` retains provenance and `pquery`
+  reports which facts derived a given fact, as ordinary values you can pattern
+  match on.
+
 - Flix supports compile-time checked stratified negation.
 
 - Flix supports partial application, i.e. a function can be called with fewer
@@ -200,6 +204,10 @@ Did you know that:
   to step. The flag retains those bindings and records a line per statement and a
   name per variable, which costs about 4.6% more bytecode and nothing at all when
   the flag is absent.
+
+- Datalog rules are not compiled to code -- they become values interpreted by
+  the solver -- so a debugger cannot step through them. `--Xdatalog-debug`
+  traces the solver instead. See `docs/DATALOG-DEBUGGING.md`.
 
 ## Other
 
