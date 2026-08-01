@@ -1,0 +1,34 @@
+# Dependabot configuration.
+#
+# GitHub Actions are the only ecosystem covered here, because they are the only
+# one in this repository that Dependabot supports.
+#
+# The compiler's own dependencies are declared in `build.mill`, and Dependabot
+# has no Mill support: the `mvn"..."` coordinates there are invisible to it, for
+# security updates as well as version updates. Adding a `maven` entry would not
+# help -- there is no pom.xml for it to read. Keeping those current needs a
+# different tool; Scala Steward understands Mill.
+version: 2
+
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+
+    # The workflows pin every action by commit SHA, so a moved tag cannot change
+    # what CI runs. Dependabot rewrites both the SHA and the version comment
+    # after it, which is what keeps the pins readable.
+    #
+    # One pull request for all actions, rather than one per action.
+    groups:
+      actions:
+        patterns:
+          - "*"
+
+    open-pull-requests-limit: 5
+
+    # Match the repository's commit message convention.
+    commit-message:
+      prefix: "chore"
