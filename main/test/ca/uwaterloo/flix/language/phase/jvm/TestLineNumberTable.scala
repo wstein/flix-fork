@@ -86,6 +86,32 @@ class TestLineNumberTable extends AnyFunSuite {
     found.toList
   }
 
+  /**
+    * Returns the output (synthetic) line numbers listed in the class's JSR-45 SMAP at `path`,
+    * or the empty set if the class carries no `SourceDebugExtension`.
+    *
+    * `ClassVisitor.visitSource`'s `debug` parameter is exactly the `SourceDebugExtension`
+    * attribute content, so no custom attribute parsing is needed to read it back.
+    */
+  private def readSmapOutputLines(path: Path): Set[Int] = {
+    assert(Files.exists(path), s"expected a generated class at $path")
+    var smap: Option[String] = None
+    new ClassReader(Files.readAllBytes(path)).accept(new ClassVisitor(Opcodes.ASM9) {
+      override def visitSource(source: String, debug: String): Unit = smap = Option(debug)
+    }, 0)
+    // Each `*L` entry has the form `<inputLine>#<fileId>,<lineCount>:<outputLine>`.
+    val LineEntry = """.*:(\d+)""".r
+    smap match {
+      case None => Set.empty
+      case Some(text) =>
+        text.linesIterator
+          .dropWhile(_ != "*L").drop(1)
+          .takeWhile(_ != "*E")
+          .collect { case LineEntry(outputLine) => outputLine.toInt }
+          .toSet
+    }
+  }
+
   private def deleteRecursively(path: Path): Unit = {
     if (Files.isDirectory(path)) Files.list(path).forEach(deleteRecursively)
     Files.deleteIfExists(path)
@@ -105,14 +131,31 @@ class TestLineNumberTable extends AnyFunSuite {
     assertResult(lines)(lines.distinct)
   }
 
-  test("no line outside the compiled file is reported") {
-    // An inlined callee's location belongs to another file. Recording it would send a debugger
-    // to that line of *this* file, which may not exist.
-    for (method <- List(JvmName.StaticApply)) {
-      for (name <- List("Def$main", "Def$compute")) {
-        val lines = linesOf(xdebug = true, name, method)
-        assert(lines.forall(l => l >= 1 && l <= ProgramLines), s"$name reported $lines, file has $ProgramLines lines")
+  test("a line outside the compiled file is backed by a JSR-45 mapping") {
+    // A location belonging to another file (e.g. an inlined stdlib call) is assigned a
+    // synthetic line above the program's own, rather than being misattributed to a line of
+    // *this* file that may not exist. The class's SMAP is what lets a debugger resolve that
+    // synthetic line back to the real (file, line) it came from.
+    val out = Files.createTempDirectory("flix-lnt-test")
+    try {
+      val opts = Options.DefaultTest.copy(xdebug = true, outputJvm = true, outputPath = out)
+      val flix = new Flix().setOptions(opts)
+      flix.addVirtualPath(CompilerConstants.VirtualTestFile, Program)
+      flix.compile().toResult match {
+        case Result.Ok(_) => ()
+        case Result.Err(errors) => fail(s"the test program must compile, but got: $errors")
       }
+      for (name <- List("Def$main", "Def$compute")) {
+        val path = out.resolve("class").resolve(s"$name.class")
+        val lines = readLines(path, JvmName.StaticApply)
+        val foreign = lines.filter(_ > ProgramLines)
+        if (foreign.nonEmpty) {
+          val synthetic = readSmapOutputLines(path)
+          assert(foreign.forall(synthetic.contains), s"$name reported $foreign beyond $ProgramLines lines, but its SMAP only maps $synthetic")
+        }
+      }
+    } finally {
+      deleteRecursively(out)
     }
   }
 
