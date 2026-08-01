@@ -16,38 +16,29 @@
 package ca.uwaterloo.flix.language.phase.jvm
 
 import ca.uwaterloo.flix.language.ast.SourceLocation
-import ca.uwaterloo.flix.language.ast.shared.Source
 import org.objectweb.asm.{Label, MethodVisitor}
 
 /**
-  * Records the `LineNumberTable` of one method.
+  * Records the `LineNumberTable` of one method, dropping a line that repeats the one already
+  * in effect.
   *
-  * Two kinds of entry are dropped.
+  * Expressions nest, so several of them frequently begin at the same source line and at the same
+  * bytecode offset -- a `Stm` whose first element is a `Let` whose bound expression is an
+  * `ApplyDef` reports the same line three times over. Recording each one is harmless but
+  * wasteful, and it makes the table hard to read when checking what a debugger will do.
   *
-  * A location belonging to another file is dropped because a class carries a single `SourceFile`
-  * attribute, so every line it records is read as a line of `owner`. Recording line 50 of an
-  * inlined standard library function would send a debugger to line 50 of the user's file, which
-  * may hold unrelated code or may not exist at all. Code inlined from elsewhere instead stays
-  * under the line already in effect, which is the call site it was inlined into.
-  *
-  * A location repeating the line already in effect is dropped because expressions nest, so several
-  * frequently begin on the same line and at the same offset. Since an entry maps every offset from
-  * its own up to the next entry, a suppressed entry would have mapped its offsets to the line they
-  * already map to, so the table describes exactly the same mapping.
-  *
-  * @param owner the source of the class this method belongs to.
+  * @param smap resolves each location to the synthetic line `smap` assigns it, so that code
+  *             inlined from another file still maps back to its true (file, line) pair rather
+  *             than being misattributed to this method's own file.
   */
-class LineNumbers(owner: Source) {
+class LineNumbers(smap: Smap) {
 
   /** The line most recently recorded, or `-1` before anything has been. */
   private var current: Int = -1
 
-  /** Records `loc` at the current position, unless it is foreign or already in effect. */
+  /** Records `loc` at the current position, unless it repeats the line already in effect. */
   def emit(loc: SourceLocation)(implicit mv: MethodVisitor): Unit = {
-    if (loc.source != owner) {
-      return
-    }
-    val line = loc.startLine
+    val line = smap.register(loc)
     if (line == current) {
       return
     }

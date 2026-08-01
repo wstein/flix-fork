@@ -97,13 +97,16 @@ object GenFunAndClosureClasses {
     val functionInterface = JvmOps.getErasedFunctionInterfaceType(defn.arrowType).jvmName
     visitor.visit(CompilerConstants.JvmTargetVersion, ACC_PUBLIC + ACC_FINAL, className.toInternalName, null,
       functionInterface.toInternalName, null)
-    visitor.visitSource(defn.loc.source.name, null)
+    implicit val smap: Smap = new Smap(defn.loc.source)
 
     compileConstructor(functionInterface, visitor)
 
     // Methods
     compileStaticInvokeMethod(visitor, className, defn)
     compileStaticApplyMethod(visitor, className, defn)
+
+    // Emitted last: the mapping is only complete once every method body has been generated.
+    visitor.visitSource(defn.loc.source.name, smap.build(className).orNull)
 
     visitor.visitEnd()
     visitor.toByteArray
@@ -158,7 +161,7 @@ object GenFunAndClosureClasses {
     val frameInterface = BackendObjType.Frame
     visitor.visit(CompilerConstants.JvmTargetVersion, ACC_PUBLIC + ACC_FINAL, className.toInternalName, null,
       functionInterface.toInternalName, Array(frameInterface.jvmName.toInternalName))
-    visitor.visitSource(defn.loc.source.name, null)
+    implicit val smap: Smap = new Smap(defn.loc.source)
 
     // Fields — lparams use erased types (like fparams) so setPc can store without casting
     for ((x, i) <- defn.lparams.zipWithIndex) {
@@ -172,6 +175,9 @@ object GenFunAndClosureClasses {
     compileInvokeMethod(visitor, className)
     compileFrameMethod(visitor, className, defn)
     compileCopyMethod(visitor, className, defn)
+
+    // Emitted last: the mapping is only complete once every method body has been generated.
+    visitor.visitSource(defn.loc.source.name, smap.build(className).orNull)
 
     visitor.visitEnd()
     visitor.toByteArray
@@ -240,7 +246,7 @@ object GenFunAndClosureClasses {
     val frameInterface = BackendObjType.Frame
     visitor.visit(CompilerConstants.JvmTargetVersion, ACC_PUBLIC + ACC_FINAL, className.toInternalName, null,
       functionInterface.toInternalName, Array(frameInterface.jvmName.toInternalName))
-    visitor.visitSource(defn.loc.source.name, null)
+    implicit val smap: Smap = new Smap(defn.loc.source)
 
     // Fields
     val closureArgTypes = defn.cparams.map(_.tpe)
@@ -262,6 +268,9 @@ object GenFunAndClosureClasses {
     compileCopyMethod(visitor, className, defn)
     compileGetUniqueThreadClosureMethod(visitor, className, defn)
 
+    // Emitted last: the mapping is only complete once every method body has been generated.
+    visitor.visitSource(defn.loc.source.name, smap.build(className).orNull)
+
     visitor.visitEnd()
     visitor.toByteArray
   }
@@ -281,13 +290,13 @@ object GenFunAndClosureClasses {
   private def staticApplyMethod(className: JvmName, defn: Def)(implicit root: Root): StaticMethod =
     StaticMethod(className, JvmName.StaticApply, MethodDescriptor(defn.fparams.map(fp => BackendType.toBackendType(fp.tpe)), BackendObjType.Result.toTpe))
 
-  private def compileStaticApplyMethod(visitor: ClassWriter, className: JvmName, defn: Def)(implicit root: Root, flix: Flix): Unit = {
+  private def compileStaticApplyMethod(visitor: ClassWriter, className: JvmName, defn: Def)(implicit root: Root, flix: Flix, smap: Smap): Unit = {
     // Method header
     val method = staticApplyMethod(className, defn)
     val modifiers = ACC_PUBLIC + ACC_FINAL + ACC_STATIC
     implicit val m: MethodVisitor = visitor.visitMethod(modifiers, method.name, method.d.toDescriptor, null, null)
     m.visitCode()
-    implicit val lines: LineNumbers = new LineNumbers(defn.loc.source)
+    implicit val lines: LineNumbers = new LineNumbers(smap)
     BytecodeInstructions.addLoc(defn.loc)
 
     // used for self-recursive tail calls
@@ -373,7 +382,7 @@ object GenFunAndClosureClasses {
 
   private def compileFrameMethod(visitor: ClassWriter,
                                  className: JvmName,
-                                 defn: Def)(implicit root: Root, flix: Flix): Unit = {
+                                 defn: Def)(implicit root: Root, flix: Flix, smap: Smap): Unit = {
     // Method header
     val applyMethod = BackendObjType.Frame.ApplyMethod
     implicit val m: MethodVisitor = visitor.visitMethod(ACC_PUBLIC + ACC_FINAL, applyMethod.name, applyMethod.d.toDescriptor, null, null)
@@ -388,7 +397,7 @@ object GenFunAndClosureClasses {
     }
 
     m.visitCode()
-    implicit val lines: LineNumbers = new LineNumbers(defn.loc.source)
+    implicit val lines: LineNumbers = new LineNumbers(smap)
     BytecodeInstructions.addLoc(defn.loc)
     loadParamsOf(lparams)
 
