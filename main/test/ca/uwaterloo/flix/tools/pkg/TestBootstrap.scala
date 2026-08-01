@@ -37,6 +37,23 @@ class TestBootstrap extends AnyFunSuite {
     b.build(PkgTestUtils.mkFlix)
   }
 
+  test("build removes stale class files from an earlier build") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out)
+    val b = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
+    b.build(PkgTestUtils.mkFlix)
+
+    // Generated class names can change between compiler versions. A regular rebuild must not
+    // leave the old name on the classpath.
+    val stale = p.resolve("build").resolve("class").resolve("Stale.class")
+    Files.write(stale, Array[Byte](0xCA.toByte, 0xFE.toByte, 0xBA.toByte, 0xBE.toByte))
+    assert(Files.exists(stale))
+
+    b.build(PkgTestUtils.mkFlix)
+
+    assert(!Files.exists(stale), "stale class file survived the rebuild")
+  }
+
   test("build-jar") {
     val p = Files.createTempDirectory(ProjectPrefix)
     Bootstrap.init(p)(System.out)

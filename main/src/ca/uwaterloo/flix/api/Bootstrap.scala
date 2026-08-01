@@ -443,7 +443,9 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
     * Builds (compiles) the source files for the project.
     */
   def build(flix: Flix, build: Build = Build.Development): Result[CompilationResult, BootstrapError] = {
-    // We disable incremental compilation to ensure a clean compile.
+    // We disable incremental compilation and clear prior class files to ensure a clean build.
+    // This matters when a compiler update changes a generated class name or package: writing the
+    // new classes alone would leave the old ones on the classpath.
     val newOptions = flix.options.copy(build = build, incremental = false, outputJvm = true, outputPath = Bootstrap.getBuildDirectory(projectPath))
     flix.setOptions(newOptions)
 
@@ -451,7 +453,7 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
     flix.clearCaches()
 
     Steps.updateStaleSources(flix)
-    Steps.compile(flix)
+    Steps.cleanClassDirectory().flatMap(_ => Steps.compile(flix))
   }
 
   /**
