@@ -110,10 +110,10 @@ pub mod Fixpoint3.Ast.Datalog {
                         let builder = StringBuilder.empty(rc);
                         foreach ((relSym, innerMap) <- db) {
                             foreach ((tuple, lat) <- innerMap) {
-                                let tupleString = tuple |> Vector.map(Debug.stringify) |> Vector.join(", ");
+                                let tupleString = tuple |> Vector.map(ToString.toString) |> Vector.join(", ");
                                 match toDenotation(relSym) {
                                     case Relational             => StringBuilder.append("${relSym}(${tupleString}).${String.lineSeparator()}", builder)
-                                    case Latticenal(_, _, _, _) => StringBuilder.append("${relSym}(${tupleString}; ${Debug.stringify(lat)}).${String.lineSeparator()}", builder)
+                                    case Latticenal(_, _, _, _) => StringBuilder.append("${relSym}(${tupleString}; ${lat}).${String.lineSeparator()}", builder)
                                 }
                             }
                         };
@@ -297,7 +297,7 @@ pub mod Fixpoint3.Ast.Datalog {
     instance ToString[HeadTerm] {
         pub def toString(term: HeadTerm): String = match term {
             case HeadTerm.Var(varSym)                 => "${varSym}"
-            case HeadTerm.Lit(v)                      => Debug.stringify(v)
+            case HeadTerm.Lit(v)                      => ToString.toString(v)
             case HeadTerm.App1(_, v)                  => "<clo>(${v})"
             case HeadTerm.App2(_, v1, v2)             => "<clo>(${v1}, ${v2})"
             case HeadTerm.App3(_, v1, v2, v3)         => "<clo>(${v1}, ${v2}, ${v3})"
@@ -320,7 +320,7 @@ pub mod Fixpoint3.Ast.Datalog {
         pub def toString(term: BodyTerm): String = match term {
             case BodyTerm.Wild        => "_"
             case BodyTerm.Var(varSym) => ToString.toString(varSym)
-            case BodyTerm.Lit(v)      => Debug.stringify(v)
+            case BodyTerm.Lit(v)      => ToString.toString(v)
         }
     }
 
