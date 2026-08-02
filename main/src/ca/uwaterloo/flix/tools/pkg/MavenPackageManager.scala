@@ -24,6 +24,7 @@ import ca.uwaterloo.flix.util.Result.{Err, Ok}
 import java.io.PrintStream
 import coursier.{Dependency as CoursierDependency, Fetch, Resolve}
 import coursier.cache.{Cache, FileCache}
+import coursier.maven.MavenRepository
 import coursier.util.Task
 
 import java.nio.file.{Files, Path, Paths}
@@ -32,6 +33,15 @@ object MavenPackageManager {
 
   val DirName = "cache"
   private val scalaVersion = "2.13"
+
+  // Coursier's default repositories are Maven Central and ~/.ivy2/local —
+  // it does not check the local Maven repository (~/.m2/repository) that
+  // `mvn install`/`gradle publishToMavenLocal` write to, unlike Maven or
+  // Gradle themselves. Adding it lets a project depend on a locally-built
+  // artifact (e.g. a patched fork of a library) by version alone, the same
+  // way `mvn install` + a matching <version> works for a plain Maven build.
+  private val localMavenRepository: MavenRepository =
+    MavenRepository(Paths.get(System.getProperty("user.home"), ".m2", "repository").toUri.toString)
 
   /**
     * Installs all MavenDependencies for a Manifest including transitive
@@ -51,10 +61,10 @@ object MavenPackageManager {
       val l = try {
         val cache: Cache[Task] = FileCache().withLocation(cacheString)
 
-        val res = deps.foldLeft(Resolve())((res, dep) => res.addDependencies(dep))
+        val res = deps.foldLeft(Resolve().addRepositories(localMavenRepository))((res, dep) => res.addDependencies(dep))
         val resolution = res.withCache(cache).run()
 
-        val fetch = resolution.dependencies.foldLeft(Fetch())(
+        val fetch = resolution.dependencies.foldLeft(Fetch().addRepositories(localMavenRepository))(
           (f, dep) => {
             out.println(s"  Adding `${formatter.blue(dep.module.toString)}' (${formatter.cyan(s"v${dep.version}")}).")
             f.addDependencies(dep)

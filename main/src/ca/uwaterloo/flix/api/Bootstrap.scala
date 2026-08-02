@@ -490,7 +490,7 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
       contents = (zip: ZipOutputStream) => {
         Steps.addClassFilesFromDirToZip(Bootstrap.getClassDirectory(projectPath), zip)
         Steps.addResourcesFromDirToZip(Bootstrap.getResourcesDirectory(projectPath), zip)
-        Steps.addJarsFromDirToZip(libDir, zip)
+        Steps.addJarsFromDirToZip(libDir, zip, extraJars = mavenPackagePaths ::: jarPackagePaths)
       }
       _ <- Steps.createJar(jarFile, contents)
     } yield {
@@ -1020,16 +1020,22 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
       *
       * Duplicate entry paths across jars are de-duplicated (first jar wins) so that the build
       * does not abort with a `ZipException: duplicate entry`.
+      *
+      * `extraJars` is scanned *before* `dir` (so it wins any entry-name collision) and is meant
+      * for dependency jars that were resolved live (their paths are already known -- see
+      * [[installMavenDependencies]]/[[installJarDependencies]]) but never physically copied into
+      * `dir`: a package manager only caches what it actually downloaded over the network, and a
+      * dependency resolved from a local (e.g. `file:`-scheme) repository has nothing to download
+      * in the first place, so relying on `dir`'s contents alone silently omits it from the fat
+      * jar -- producing one that compiles fine (Flix's own compiler doesn't need the Java
+      * classes to exist, only their names) but throws `NoClassDefFoundError` the moment it runs.
       */
-    def addJarsFromDirToZip(dir: Path, zip: ZipOutputStream): Unit = {
-      // First, we get all jar files inside the lib folder.
-      // If the lib folder doesn't exist, we suppose there is simply no dependency and trigger no error.
-      if (!Files.exists(dir)) {
-        return
-      }
+    def addJarsFromDirToZip(dir: Path, zip: ZipOutputStream, extraJars: List[Path] = Nil): Unit = {
       val servicesPrefix = "META-INF/services/"
       val metaInfPrefix = "META-INF/"
-      val jarDependencies = FileOps.getFilesWithExtIn(dir, EXT_JAR, Int.MaxValue)
+      // If `dir` doesn't exist, we suppose there is simply no on-disk dependency cache and
+      // trigger no error -- `extraJars` (if any) is still processed below.
+      val jarDependencies = extraJars ::: (if (Files.exists(dir)) FileOps.getFilesWithExtIn(dir, EXT_JAR, Int.MaxValue) else Nil)
 
       // Tracks entry names already written to `zip` so that an entry present in more than one
       // dependency jar is written only once (first jar wins) instead of throwing.
