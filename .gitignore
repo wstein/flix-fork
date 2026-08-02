@@ -1,5 +1,6 @@
 /api/
 /out/
+/build/
 /local.properties
 /*.iml
 /flix.jar
@@ -28,3 +29,14 @@ crash_report_*.txt
 # local development files
 **/personal/**
 /.env
+build/
+artifact/
+.*-cache/
+# Flix package-manager dependency cache, only ever created inside example projects
+examples/**/lib/
+packages/**/lib/
+packages/**/build/
+packages/**/artifact/
+# langcensus commit cache (kept outside build/, which build-jar wipes)
+examples/apps/langcensus/report.md
+.GITHUB_TOKEN
