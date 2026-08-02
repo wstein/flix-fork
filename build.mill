@@ -3,10 +3,26 @@ package build
 import mill.*
 import mill.scalalib.*
 import mill.scalalib.Assembly.*
+import mill.javalib.publish.*
 
-object flix extends ScalaModule {
+object flix extends ScalaModule, PublishModule {
 
   def scalaVersion = "2.13.18"
+
+  // Set by CI from the pushed tag (e.g. v0.68.1 -> 0.68.1). Defaults to a
+  // clearly-unpublishable placeholder so a local `publishLocal` without the
+  // env var still produces something, but a real publish command with no
+  // version set fails loudly rather than silently reusing a stale one.
+  def publishVersion = Task.Input { Task.env.getOrElse("PUBLISH_VERSION", "0.0.0-SNAPSHOT") }
+
+  def pomSettings = PomSettings(
+    description = "A fork of the Flix programming language compiler.",
+    organization = "io.github.wstein",
+    url = "https://github.com/wstein/flix-fork",
+    licenses = Seq(License.`Apache-2.0`),
+    versionControl = VersionControl.github("wstein", "flix-fork"),
+    developers = Seq(Developer("wstein", "Werner Stein", "https://github.com/wstein"))
+  )
 
   // moduleDir resolves to <root>/flix/ (module name appended).
   // Our sources live at <root>/main/src, so navigate up one level.
@@ -96,10 +112,38 @@ object flix extends ScalaModule {
   // Include .flix, .json, .zip, ClassList.txt from main/ in the JAR.
   // Gradle does: from('main') { include '**/*.flix' ... }
   // We add main/ as an extra resource root so these files land in the assembly.
-  override def resources = Task.Sources(
+  //
+  // Named as its own def rather than inlined: Mill's Task macro names an
+  // anonymous Task.Sources(...) after its enclosing def via sourcecode.Name,
+  // so inlining it directly inside `resources` caches it under the key
+  // "resources" too -- the same key as the outer task -- which manifests as
+  // a circular "flix.resources depends on flix.resources" dependency.
+  def extraResources = Task.Sources(
     root / "main" / "src" / "resources",
     root / "main"
   )
+
+  // Also append the generated version resource consumed by Version.scala.
+  override def resources = Task {
+    extraResources() ++ Seq(versionResource())
+  }
+
+  // Re-evaluated on every build (it shells out to git, which Mill cannot
+  // hash like a tracked source file). `--match "v*"` ignores the unrelated
+  // `vendor-*` tags used elsewhere in this repo. Falls back to "unknown" in
+  // a shallow clone or a checkout with no reachable tag, rather than failing
+  // the build over a value that only affects a version string.
+  def gitDescribe: T[String] = Task.Input {
+    val result = os.proc("git", "describe", "--tags", "--long", "--dirty", "--match", "v*")
+      .call(cwd = root, check = false, stderr = os.Pipe)
+    if (result.exitCode == 0) result.out.trim() else "unknown"
+  }
+
+  /** Writes [[gitDescribe]] to a resource file so [[ca.uwaterloo.flix.api.Version]] can read it at runtime. */
+  def versionResource: T[PathRef] = Task {
+    os.write(Task.dest / "version.txt", gitDescribe())
+    PathRef(Task.dest)
+  }
 
   // ── Test Module ─────────────────────────────────────────
   object test extends ScalaTests with TestModule.ScalaTest {

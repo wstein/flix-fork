@@ -1,0 +1,43 @@
+name: Publish to GitHub Packages
+
+on:
+  push:
+    tags: [ 'v*' ]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out tag
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Install JDK
+        uses: actions/setup-java@d7793b545071e98d581d3bf084a51c3213318a07 # v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+      - name: Cache Mill and Coursier
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: ${{ runner.os }}-mill-${{ hashFiles('build.mill', '.mill-version') }}
+          restore-keys: |
+            ${{ runner.os }}-mill-
+      - name: Publish
+        env:
+          # Strips the leading 'v' from the pushed tag, e.g. v0.68.1 -> 0.68.1.
+          PUBLISH_VERSION: ${{ github.ref_name }}
+        run: |
+          export PUBLISH_VERSION="${PUBLISH_VERSION#v}"
+          ./mill mill.javalib.MavenPublishModule/ \
+            --publishArtifacts flix.publishArtifacts \
+            --releaseUri "https://maven.pkg.github.com/${{ github.repository }}" \
+            --snapshotUri "https://maven.pkg.github.com/${{ github.repository }}" \
+            --username "${{ github.actor }}" \
+            --password "${{ secrets.GITHUB_TOKEN }}"
