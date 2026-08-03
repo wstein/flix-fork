@@ -106,7 +106,14 @@ object flix extends ScalaModule, PublishModule {
     // aircompressor: Java zstd/lz4 implementation, optional for coursier.
     Rule.ExcludePattern("io/airlift/compress/.*"),
     // xbean-reflect: dependency injection helper for Plexus.
-    Rule.ExcludePattern("org/apache/xbean/.*")
+    Rule.ExcludePattern("org/apache/xbean/.*"),
+
+    // ── Benchmark build artifacts ────────────────────────────
+    // main/src/resources/benchmark/build/ is gitignored, untracked local
+    // output from running benchmarks -- whatever a given developer happens
+    // to have run locally. Left in, it would make the assembled jar
+    // non-reproducible across machines.
+    Rule.ExcludePattern("benchmark/build/.*")
   ) ++ super.assemblyRules
 
   // Include .flix, .json, .zip, ClassList.txt from main/ in the JAR.
