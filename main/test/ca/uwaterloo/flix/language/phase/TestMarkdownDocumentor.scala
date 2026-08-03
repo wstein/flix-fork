@@ -785,4 +785,30 @@ class TestMarkdownDocumentor extends AnyFunSuite {
     assert(!page(pages, "Derived.md").contains("diagrams/Derived.svg"),
       "In-memory pages must not link to an SVG that was not materialized by Documentor.run")
   }
+
+  test("header.source.03") {
+    // Bundled and user sources must be named differently, and both must be findable.
+    //
+    // The standard library reaches the compiler as virtual files named after the file alone, so a
+    // page that printed `Bool.flix` unqualified would send a reader looking for a path that exists
+    // in no repository. A user's own file is named exactly as it was given. Every other test here
+    // runs with the library off, so this distinction is only visible with it on.
+    val pages = document(
+      """
+        |mod Api {
+        |    pub def one(): Int32 = 1
+        |}
+        |""".stripMargin, options = Options.TestWithLibMin)
+
+    assert(page(pages, "Bool.md").contains(
+      "> Source: every definition lives in `main/src/library/Bool.flix` (flix/flix repo)"),
+      "a bundled library page must locate its file in the flix/flix repository")
+
+    assert(page(pages, "Api.md").contains(
+      s"> Source: every definition lives in `${CompilerConstants.VirtualTestFile}`"),
+      "a user page must name the file exactly as it was given")
+
+    assert(!page(pages, "Api.md").contains("main/src/library/"),
+      "a user page must not be labelled as coming from the standard library")
+  }
 }
