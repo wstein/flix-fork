@@ -52,6 +52,21 @@ class TestLineNumberTable extends AnyFunSuite {
       |    println(q)
       |""".stripMargin
 
+  /**
+    * A single-expression function and its caller -- the shape the inliner folds away.
+    *
+    * Kept separate from [[Program]] so that its line numbers can be asserted directly without
+    * every other assertion in this suite shifting.
+    */
+  private val InlineProgram: String =
+    """import java.lang.Math
+      |
+      |pub def tiny(): Int32 \ IO = Math.max(10, 20)
+      |
+      |def main(): Unit \ IO =
+      |    println(tiny())
+      |""".stripMargin
+
   /** A compiled method: the lines it records, in bytecode order, and its class's SMAP. */
   private case class Method(lines: List[Int], smap: Option[Smap])
 
@@ -65,13 +80,13 @@ class TestLineNumberTable extends AnyFunSuite {
       }
   }
 
-  /** Compiles [[Program]] with `xdebug` as given and returns `method` of `className`. */
-  private def compile(xdebug: Boolean, className: String, method: String): Method = {
+  /** Compiles `program` with `xdebug` as given and returns `method` of `className`. */
+  private def compile(xdebug: Boolean, className: String, method: String, program: String = Program): Method = {
     val out = Files.createTempDirectory("flix-lnt-test")
     try {
       val opts = Options.DefaultTest.copy(xdebug = xdebug, outputJvm = true, outputPath = out)
       val flix = new Flix().setOptions(opts)
-      flix.addVirtualPath(CompilerConstants.VirtualTestFile, Program)
+      flix.addVirtualPath(CompilerConstants.VirtualTestFile, program)
       flix.compile().toResult match {
         case Result.Ok(_) => ()
         case Result.Err(errors) => fail(s"the test program must compile, but got: $errors")
@@ -182,20 +197,25 @@ class TestLineNumberTable extends AnyFunSuite {
     assert(m.lines.forall(l => l >= 1 && l <= Program.linesIterator.size))
   }
 
-  test("an inlined statement is remapped to its true file, never misattributed or dropped") {
-    // compute's final expression is an inlined primitive from another file. Its line is recorded
-    // as a synthetic line the SMAP resolves back to that file, rather than being dropped (which
-    // would leave a debugger on the wrong statement) or kept as-is (which would point at a line
-    // of compute's own file that need not exist).
-    val m = compile(xdebug = true, defClass("compute"), JvmName.StaticApply)
-    val smap = m.smap.getOrElse(fail("compute inlines a foreign primitive, so it must carry a SMAP"))
+  test("a single-expression function keeps a class and a line of its own under --Xdebug") {
+    // The case that motivated disabling the optimizer under --Xdebug. Inlined, `tiny` gets no
+    // class at all, and its line does not survive at the call site either -- the inlined body
+    // begins at the call site's own bytecode offset, and only one entry per offset reaches the
+    // class file. The line then exists nowhere in the program and no breakpoint can ever bind to
+    // it, which is the fate of every single-expression helper.
+    //
+    // Asserting the class's own line table is what proves the class exists: `compile` fails if
+    // there is no class file to read.
+    assertResult(List(3))(compile(xdebug = true, defClass("tiny"), JvmName.StaticApply, InlineProgram).lines)
+  }
 
-    for (line <- m.lines) {
-      val (file, resolved) = smap.resolve(line).getOrElse(fail(s"line $line does not resolve through the SMAP"))
-      assert(resolved >= 1, s"line $line resolved to $file:$resolved")
+  test("without --Xdebug that same function is inlined away entirely") {
+    // The other side of the trade, stated so that switching it back off is a visible decision
+    // rather than a silent regression: optimization is unchanged for everything anyone ships.
+    val thrown = intercept[Exception] {
+      compile(xdebug = false, defClass("tiny"), JvmName.StaticApply, InlineProgram)
     }
-    assert(m.lines.exists(l => smap.resolve(l).exists { case (file, _) => file != "Main.flix" }),
-      s"expected at least one line remapped to a foreign file, got ${m.lines}")
+    assert(thrown.getMessage.contains("tiny"), s"expected no class for the inlined tiny, got: ${thrown.getMessage}")
   }
 
 }
