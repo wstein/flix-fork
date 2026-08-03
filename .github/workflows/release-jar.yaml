@@ -1,0 +1,137 @@
+name: Release JAR
+
+# Distribution channel for this fork: one runnable fat JAR attached to a GitHub
+# Release per `v*` tag. No registry, no authentication to download.
+#
+# Replaces the former GitHub Packages Maven pipeline. A Maven coordinate only
+# earns its keep when something resolves it as a dependency; what this fork is
+# actually used for is `java -jar`, so it ships a jar.
+
+on:
+  push:
+    tags: [ 'v*' ]
+  workflow_dispatch:
+
+permissions:
+  # Creating a release and uploading its asset both write repository contents.
+  contents: write
+
+# Never let two releases race, and never cancel one part-way: a cancelled run can
+# leave a release created but its asset missing.
+concurrency:
+  group: release-jar
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out tag
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          # `gitDescribe` in build.mill shells out to `git describe`, which needs tag
+          # history. A shallow clone silently stamps the jar "unknown" instead.
+          fetch-depth: 0
+
+      - name: Install JDK
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Cache Mill and Coursier
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: ${{ runner.os }}-mill-${{ hashFiles('build.mill', '.mill-version') }}
+          restore-keys: |
+            ${{ runner.os }}-mill-
+
+      - name: Derive the asset name from the tag
+        id: version
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF_TYPE}" != "tag" ]; then
+            echo "Refusing to release: must run from a tag, got ${GITHUB_REF_TYPE} ${GITHUB_REF_NAME}" >&2
+            exit 1
+          fi
+          VERSION="${GITHUB_REF_NAME#v}"
+          {
+            echo "version=${VERSION}"
+            echo "asset=flix-${VERSION}.jar"
+          } >> "$GITHUB_OUTPUT"
+          echo "Releasing ${GITHUB_REF_NAME} as flix-${VERSION}.jar"
+
+      - name: Build the fat JAR
+        run: ./mill flix.assembly
+
+      - name: Name and smoke-test the artifact
+        env:
+          ASSET: ${{ steps.version.outputs.asset }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          cp out/flix/assembly.dest/out.jar "${ASSET}"
+          # The artifact is runnable, so the cheapest honest check is to run it. This
+          # also catches a version.txt that disagrees with the tag, which is what a
+          # shallow checkout or a mismatched glob produces -- a jar whose --version
+          # contradicts the release it is attached to.
+          REPORTED="$(java -jar "${ASSET}" --version)"
+          echo "${REPORTED}"
+          case "${REPORTED}" in
+            *"${VERSION}"*)
+              echo "OK: reported version contains ${VERSION}" ;;
+            *)
+              echo "FATAL: jar reports '${REPORTED}', which does not contain ${VERSION}." >&2
+              exit 1 ;;
+          esac
+          ls -l "${ASSET}"
+
+      - name: Write the release notes
+        env:
+          ASSET: ${{ steps.version.outputs.asset }}
+        run: |
+          set -euo pipefail
+          cat > release-notes.md <<EOF
+          Unofficial, experimental build of [wstein/flix-fork](https://github.com/wstein/flix-fork).
+
+          **Not affiliated with, endorsed by, or supported by the Flix project.** For the
+          official Flix compiler see [flix.dev](https://flix.dev) and
+          [flix/flix](https://github.com/flix/flix) -- prefer that unless you specifically
+          want this fork.
+
+          \`\`\`
+          java -jar ${ASSET}
+          \`\`\`
+          EOF
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ASSET: ${{ steps.version.outputs.asset }}
+        run: |
+          set -euo pipefail
+          # --verify-tag refuses to invent a tag if the ref somehow is not one.
+          # Creation fails outright if a release already exists for this tag, which is
+          # the wanted behaviour: re-releasing the same version silently is worse.
+          gh release create "${GITHUB_REF_NAME}" "${ASSET}" \
+            --title "${GITHUB_REF_NAME}" \
+            --notes-file release-notes.md \
+            --verify-tag
+
+      - name: Verify the asset is attached under the expected name
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ASSET: ${{ steps.version.outputs.asset }}
+        run: |
+          set -euo pipefail
+          # GitHub rewrites some characters in asset filenames. The tag carries a '+',
+          # so confirm what actually landed rather than assuming the name survived.
+          ATTACHED="$(gh release view "${GITHUB_REF_NAME}" --json assets --jq '.assets[].name')"
+          echo "Attached: ${ATTACHED}"
+          if [ "${ATTACHED}" != "${ASSET}" ]; then
+            echo "NOTE: asset stored as '${ATTACHED}', not '${ASSET}' -- download links must use the stored name." >&2
+          fi
