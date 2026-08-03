@@ -237,4 +237,22 @@ class TestMain extends AnyFunSuite {
     assert(opts.xsummary)
   }
 
+  test("doc --doc-format is an option of doc, not a global flag") {
+    // `--doc-format` shapes what `doc` emits and means nothing to any other command. Declaring it
+    // globally would have it parse anywhere and silently do nothing, which is how an option comes
+    // to exist without being wired to anything.
+    assert(Main.parseCmdOpts(Array("doc", "--doc-format", "md")).isDefined)
+    assert(Main.parseCmdOpts(Array("build", "--doc-format", "md")).isEmpty)
+    assert(Main.parseCmdOpts(Array("--doc-format", "md")).isEmpty)
+    assert(Main.parseCmdOpts(Array("--doc-format", "md", "doc")).isEmpty)
+  }
+
+  test("an unrecognised doc option is rejected, not ignored") {
+    // The `--datalog` diagram option was removed because nothing consumed it. These assertions are
+    // what make the rest of this suite mean anything: if the parser accepted unknown flags, a test
+    // that an option parses would not distinguish a wired option from a typo.
+    assert(Main.parseCmdOpts(Array("doc", "--datalog")).isEmpty)
+    assert(Main.parseCmdOpts(Array("doc", "--extended")).isEmpty)
+    assert(Main.parseCmdOpts(Array("doc", "--doc-format")).isEmpty)
+  }
 }
