@@ -125,6 +125,26 @@ If the numbers are not stable, increase the sample count to `--n 100` or `--n 25
 
 Drop `--frontend` if the change affects the backend, so the benchmark covers the full pipeline.
 
+## Releasing
+
+Pushing a `v*` tag runs `.github/workflows/release-jar.yaml`, which builds
+`flix.assembly` and attaches it to a GitHub Release as `flix-<version>.jar`.
+
+Before the release is created the workflow runs the jar and checks its self-reported
+version against the tag. That version is derived at build time by `gitDescribe` in
+`build.mill` and written to a `version.txt` resource, which `Version.scala` parses
+(covered by `TestVersion`). Two details there are load-bearing:
+
+- The describe glob is `v[0-9]*`, not `v*`. A bare `v*` also matches this repository's
+  unrelated `vendor-*` tags, which parse as neither release form and would silently
+  degrade the reported version to `0.0.0`.
+- The checkout uses `fetch-depth: 0`. Without tag history `git describe` finds nothing
+  and the build stamps itself `unknown`.
+
+This fork publishes no Maven artifacts. `build.mill` still mixes in `PublishModule`, so
+`./mill flix.publishLocal` remains available for local experiments, but no workflow
+publishes to a registry.
+
 ## Commit Messages
 
 Commit messages must start with a lowercase prefix followed by a colon and space:

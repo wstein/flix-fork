@@ -28,52 +28,22 @@ additional documentation tooling. Expect these to be unstable and to change with
 notice. For the stable, official compiler, use [flix/flix](https://github.com/flix/flix)
 directly.
 
-### Maven package (experimental)
+### Download (experimental)
 
-Tagged builds (`v<version>+fork.wstein.<date>.<n>`) are published to the
-[GitHub Packages Maven registry](https://github.com/wstein/flix-fork/packages) for this
-repository, group `io.github.wstein`, artifact `flix_2.13`. These are experimental,
-unversioned-in-the-usual-sense snapshots of this fork — not official Flix releases, and
-not covered by any stability or compatibility guarantee.
+Every `v*` tag publishes one runnable fat JAR as a
+[GitHub Release](https://github.com/wstein/flix-fork/releases) asset, named
+`flix-<version>.jar`. Nothing needs to be configured and no account is needed to
+download it:
 
-GitHub Packages requires authentication even to *read* public Maven packages. Create a classic token, at
-[github.com/settings/tokens](https://github.com/settings/tokens) with the `read:packages`
-scope — then add the registry with that token, e.g. in `~/.m2/settings.xml`:
-
-```xml
-<servers>
-  <server>
-    <id>github-wstein-flix-fork</id>
-    <username>YOUR_GITHUB_USERNAME</username>
-    <password>YOUR_GITHUB_TOKEN</password>
-  </server>
-</servers>
+```bash
+java -jar flix-0.75.1+fork.wstein.260802.2.jar --version
 ```
 
-That only supplies credentials — your project's `pom.xml` also needs a matching
-`<repository>` entry, since GitHub Packages isn't on Maven Central and won't be searched
-by default:
+These are experimental builds of a fork — not official Flix releases, and not covered by
+any stability or compatibility guarantee.
 
-```xml
-<repositories>
-  <repository>
-    <id>github-wstein-flix-fork</id>
-    <url>https://maven.pkg.github.com/wstein/flix-fork</url>
-  </repository>
-</repositories>
-
-<dependency>
-  <groupId>io.github.wstein</groupId>
-  <artifactId>flix_2.13</artifactId>
-  <version>0.75.1+fork.wstein.260802.1</version>
-</dependency>
-```
-
-The `<repository>` and `<server>` `<id>` values must match — that's how Maven applies the
-credentials to that repository. GitHub's own package page mis-splits the dependency
-coordinates into `groupId=io.github.wstein.flix_2` / `artifactId=13` in its
-auto-generated snippet — it doesn't expect a dot in the artifact name (`flix_2.13` is the
-standard Scala binary-version suffix); use the coordinates above instead.
+This fork is deliberately not published to any Maven registry. It is a compiler you run,
+not a library you depend on, so a jar is the whole story.
 
 ## Example
 
