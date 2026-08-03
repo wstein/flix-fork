@@ -70,7 +70,7 @@ object Version {
   /**
     * Represents the current version of Flix.
     *
-    * Derived at build time from `git describe --tags --long --dirty --match "v*"`, written to the
+    * Derived at build time from `git describe --tags --long --dirty --match "v[0-9]*"`, written to the
     * `version.txt` resource by the `versionResource` task in `build.mill`. An exact tag (e.g.
     * `v0.75.1+fork.wstein.260802.1`, zero commits past it, clean tree) reports the tag's own fork
     * qualifier verbatim; anything else appends how far the build is from that tag, e.g.

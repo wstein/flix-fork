@@ -88,6 +88,14 @@ class TestVersion extends AnyFunSuite {
     assert(v == Version(0, 0, 0, Some("not-a-describe-output")))
   }
 
+  test("parseDescribe.unparseable.vendorTag") {
+    // Pins why build.mill anchors its describe glob to `v[0-9]*`: a bare `v*` also
+    // matches this repository's `vendor-*` tags, and such a tag reaching this point
+    // degrades the reported version to 0.0.0 rather than failing loudly.
+    val v = Version.parseDescribe(Some("vendor-2026.07.24.1-0-ge401b4b6"))
+    assert(v == Version(0, 0, 0, Some("vendor-2026.07.24.1-0-ge401b4b6")))
+  }
+
   test("parseDescribe.missingResource") {
     // No `version.txt` on the classpath at all, i.e. a hand-assembled classpath.
     val v = Version.parseDescribe(None)

@@ -135,13 +135,14 @@ object flix extends ScalaModule, PublishModule {
     extraResources() ++ Seq(versionResource())
   }
 
-  // Re-evaluated on every build (it shells out to git, which Mill cannot
-  // hash like a tracked source file). `--match "v*"` ignores the unrelated
-  // `vendor-*` tags used elsewhere in this repo. Falls back to "unknown" in
-  // a shallow clone or a checkout with no reachable tag, rather than failing
-  // the build over a value that only affects a version string.
+  // Re-evaluated on every build (it shells out to git, which Mill cannot hash like a
+  // tracked source file). The glob is anchored to a digit deliberately: a bare `v*`
+  // also matches this repository's unrelated `vendor-*` tags, which parse as neither
+  // release form and would silently degrade the reported version to 0.0.0. Falls back
+  // to "unknown" in a shallow clone or a checkout with no reachable release tag,
+  // rather than failing the build over a value that only affects a version string.
   def gitDescribe: T[String] = Task.Input {
-    val result = os.proc("git", "describe", "--tags", "--long", "--dirty", "--match", "v*")
+    val result = os.proc("git", "describe", "--tags", "--long", "--dirty", "--match", "v[0-9]*")
       .call(cwd = root, check = false, stderr = os.Pipe)
     if (result.exitCode == 0) result.out.trim() else "unknown"
   }
