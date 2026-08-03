@@ -330,6 +330,21 @@ object BytecodeInstructions {
     lines.emit(loc)
   }
 
+  /**
+    * Records `loc` as the enclosing method's declaration line.
+    *
+    * Distinct from [[addLoc]] because a declaration describes no instruction of its own: it is
+    * written only if the body does not begin at the same offset. See [[LineNumbers.emitHeader]].
+    */
+  def addHeaderLoc(loc: SourceLocation)(implicit mv: MethodVisitor, lines: LineNumbers): Unit = {
+    lines.emitHeader(loc)
+  }
+
+  /** Closes `lines`, writing a declaration entry no statement displaced. */
+  def endLines()(implicit mv: MethodVisitor, lines: LineNumbers): Unit = {
+    lines.finish()
+  }
+
   def branch(c: Condition)(cases: Branch => Unit)(implicit mv: MethodVisitor): Unit = {
     val jumpLabel = new Label()
     val skipLabel = new Label()

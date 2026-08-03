@@ -47,6 +47,21 @@ import org.objectweb.asm.{Label, MethodVisitor}
   * The first entry wins, which is the call site. That is the line the programmer wrote and the one
   * they set a breakpoint on; the inlined body is reachable by stepping into it.
   *
+  * One entry must *not* win that way, and it is the reason [[emitHeader]] exists rather than every
+  * caller using [[emit]]. A method opens by recording its own declaration line, before a single
+  * instruction has been written -- so that entry sits at offset 0, and the body's first statement,
+  * which also begins at offset 0, lost to it under the rule above. The effect was that the first
+  * statement of *every* function was missing from the table and could never take a breakpoint,
+  * while the declaration line above it and every later statement could. Measured with
+  * `ReferenceType.locationsOfLine` against a live VM, which is the only authority on what a
+  * debugger can bind to.
+  *
+  * A declaration entry is therefore provisional: it is written only once it is known that the body
+  * did not claim its offset. That keeps the call-site rule intact for every other collision -- the
+  * inlining case is between two body expressions and never involves the declaration -- while
+  * letting the statement the programmer actually clicks on take the offset it shares with a header
+  * that describes no code of its own.
+  *
   * @param smap resolves each location to the synthetic line `smap` assigns it, so that code
   *             inlined from another file still maps back to its true (file, line) pair rather
   *             than being misattributed to this method's own file.
@@ -59,6 +74,31 @@ class LineNumbers(smap: Smap) {
   /** The bytecode offset the most recent entry was recorded at, or `-1` before any. */
   private var currentOffset: Int = -1
 
+  /** A declaration entry recorded but not yet written -- see [[emitHeader]]. */
+  private var pending: Option[(Int, Label, Int)] = None
+
+  /**
+    * Records the enclosing method's declaration line, to be written only if the body leaves it a
+    * bytecode offset of its own.
+    *
+    * The label is placed now, because that is what fixes the offset the entry would describe, but
+    * the entry itself waits: the very next thing written is the body, and if its first statement
+    * begins at this same offset then only one of the two can exist. The statement wins, because it
+    * is the one a debugger is asked to stop on. A declaration line describes no instruction the
+    * body does not already describe.
+    *
+    * When the body does move first -- it loads parameters, say -- the offsets differ, both entries
+    * are real, and the declaration is written by the first [[emit]]. When the body records nothing
+    * at all, as without `--Xdebug`, [[finish]] writes it and the method reports its declaration
+    * line exactly as before.
+    */
+  def emitHeader(loc: SourceLocation)(implicit mv: MethodVisitor): Unit = {
+    val line = smap.register(loc)
+    val label = new Label()
+    mv.visitLabel(label)
+    pending = Some((line, label, offsetOf(label)))
+  }
+
   /**
     * Records `loc` at the current position, unless an entry is already in effect there.
     *
@@ -68,15 +108,47 @@ class LineNumbers(smap: Smap) {
     */
   def emit(loc: SourceLocation)(implicit mv: MethodVisitor): Unit = {
     val line = smap.register(loc)
-    if (line == current) {
-      return
-    }
     val label = new Label()
     mv.visitLabel(label)
     val offset = offsetOf(label)
+    resolvePending(Some(offset))
+    if (line == current) {
+      return
+    }
     if (offset >= 0 && offset == currentOffset) {
       return
     }
+    write(line, label, offset)
+  }
+
+  /**
+    * Writes a declaration entry that no statement displaced.
+    *
+    * Called once the method's body is complete. Without it a method whose body records no line at
+    * all -- every method when `--Xdebug` is off -- would carry no `LineNumberTable` entry
+    * whatsoever, where before it carried its declaration line.
+    */
+  def finish()(implicit mv: MethodVisitor): Unit = resolvePending(None)
+
+  /**
+    * Settles the provisional declaration entry against the offset the body is about to occupy, or
+    * against `None` when there is no body entry left to come.
+    *
+    * Dropped only on an exact, *known* offset match. An unresolved offset (`-1`) is not evidence of
+    * a collision, so the entry is kept -- the same "emit rather than guess" trade [[offsetOf]]
+    * makes.
+    */
+  private def resolvePending(bodyOffset: Option[Int])(implicit mv: MethodVisitor): Unit = {
+    pending.foreach { case (line, label, offset) =>
+      pending = None
+      val displaced = offset >= 0 && bodyOffset.exists(_ == offset)
+      if (!displaced) {
+        write(line, label, offset)
+      }
+    }
+  }
+
+  private def write(line: Int, label: Label, offset: Int)(implicit mv: MethodVisitor): Unit = {
     current = line
     currentOffset = offset
     mv.visitLineNumber(line, label)

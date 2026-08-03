@@ -153,8 +153,21 @@ class TestLineNumberTable extends AnyFunSuite {
   }
 
   test("with --Xdebug every emitted statement of main is reported, in order") {
-    // The declaration on line 7, then one stop per emitted statement on lines 9 to 11.
-    assertResult(List(7, 9, 10, 11))(compile(xdebug = true, defClass("main"), JvmName.StaticApply).lines)
+    // One stop per emitted statement, lines 8 to 11. The declaration on line 7 is absent because
+    // the body begins at the same bytecode offset and the statement takes it -- see the next test.
+    assertResult(List(8, 9, 10, 11))(compile(xdebug = true, defClass("main"), JvmName.StaticApply).lines)
+  }
+
+  test("the first statement of a function is reported, not swallowed by the declaration") {
+    // A method opens by recording its declaration line, before any instruction is written, so that
+    // entry sits at bytecode offset 0 -- and so does the body's first statement. Only one entry per
+    // offset survives into the class file, and when the declaration won, the first statement of
+    // *every* function was missing from the table: `locationsOfLine` returned nothing for it and no
+    // breakpoint could ever bind, while the line above and every line below it worked.
+    //
+    // Line 8, `let p = compute(3, 4)`, is that first statement.
+    val lines = compile(xdebug = true, defClass("main"), JvmName.StaticApply).lines
+    assert(lines.contains(8), s"the first statement of main must be reachable, got $lines")
   }
 
   test("with --Xdebug the reported lines never repeat consecutively") {

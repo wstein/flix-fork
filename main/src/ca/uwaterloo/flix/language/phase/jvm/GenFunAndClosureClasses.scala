@@ -297,7 +297,7 @@ object GenFunAndClosureClasses {
     implicit val m: MethodVisitor = visitor.visitMethod(modifiers, method.name, method.d.toDescriptor, null, null)
     m.visitCode()
     implicit val lines: LineNumbers = new LineNumbers(smap)
-    BytecodeInstructions.addLoc(defn.loc)
+    BytecodeInstructions.addHeaderLoc(defn.loc)
 
     // used for self-recursive tail calls
     val enterLabel = new Label()
@@ -314,6 +314,8 @@ object GenFunAndClosureClasses {
     // The parameters are live for the whole method, starting before the entry label so that
     // they remain nameable across a self-recursive tail call.
     nameParams(m, defn.fparams, enterLabel, localOffset)
+
+    BytecodeInstructions.endLines()
 
     m.visitMaxs(999, 999)
     m.visitEnd()
@@ -398,7 +400,7 @@ object GenFunAndClosureClasses {
 
     m.visitCode()
     implicit val lines: LineNumbers = new LineNumbers(smap)
-    BytecodeInstructions.addLoc(defn.loc)
+    BytecodeInstructions.addHeaderLoc(defn.loc)
 
     loadParamsOf(lparams)
 
@@ -472,6 +474,8 @@ object GenFunAndClosureClasses {
     }
 
     BytecodeInstructions.xReturn(BackendObjType.Result.toTpe)
+
+    BytecodeInstructions.endLines()
 
     m.visitMaxs(999, 999)
     m.visitEnd()
