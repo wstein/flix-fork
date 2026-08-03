@@ -49,7 +49,7 @@ object Version {
     * qualifier if it doesn't match either expected format -- a fresh clone with no reachable `v*`
     * tag reports `unknown` here rather than failing the build.
     */
-  private def parseDescribe(describe: Option[String]): Version = describe match {
+  private[api] def parseDescribe(describe: Option[String]): Version = describe match {
     case Some(QualifiedDescribePattern(major, minor, revision, fork, "0", _, null)) =>
       // Exactly on the tag with a clean tree: the tag's own fork qualifier is the whole story.
       Version(major.toInt, minor.toInt, revision.toInt, Some(fork))
