@@ -9,8 +9,18 @@ name: Release JAR
 
 on:
   push:
-    tags: [ 'v*' ]
+    # `v*` is a glob, not a prefix on release tags. This history already carries
+    # `v.0.8.1` and `v.0.9.0`, which match it and are not releases -- the same
+    # reason `gitDescribe` in build.mill matches on `v[0-9]*`. Both must agree, or
+    # a tag that triggers a release describes as a different version than the one
+    # it claims to be.
+    tags: [ 'v[0-9]*' ]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to build and publish, e.g. v0.60.0'
+        required: true
+        type: string
 
 permissions:
   # Creating a release and uploading its asset both write repository contents.
@@ -30,6 +40,8 @@ jobs:
       - name: Check out tag
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
+          # A manual run has no tag ref of its own, so it checks out the requested one.
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
           # `gitDescribe` in build.mill shells out to `git describe`, which needs tag
           # history. A shallow clone silently stamps the jar "unknown" instead.
           fetch-depth: 0
@@ -52,18 +64,34 @@ jobs:
 
       - name: Derive the asset name from the tag
         id: version
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
-          if [ "${GITHUB_REF_TYPE}" != "tag" ]; then
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            TAG="${INPUT_TAG}"
+          elif [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            TAG="${GITHUB_REF_NAME}"
+          else
             echo "Refusing to release: must run from a tag, got ${GITHUB_REF_TYPE} ${GITHUB_REF_NAME}" >&2
             exit 1
           fi
-          VERSION="${GITHUB_REF_NAME#v}"
+          # The push trigger filters to `v[0-9]*`, but a manual run is not filtered at
+          # all -- the input is whatever was typed. Apply the same rule here so both
+          # entry points agree on what a release tag is.
+          case "${TAG}" in
+            v[0-9]*) ;;
+            *)
+              echo "Refusing to release '${TAG}': not a release tag, expected v followed by a digit." >&2
+              exit 1 ;;
+          esac
+          VERSION="${TAG#v}"
           {
+            echo "tag=${TAG}"
             echo "version=${VERSION}"
             echo "asset=flix-${VERSION}.jar"
           } >> "$GITHUB_OUTPUT"
-          echo "Releasing ${GITHUB_REF_NAME} as flix-${VERSION}.jar"
+          echo "Releasing ${TAG} as flix-${VERSION}.jar"
 
       - name: Build the fat JAR
         run: ./mill flix.assembly
@@ -112,13 +140,14 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ASSET: ${{ steps.version.outputs.asset }}
+          TAG: ${{ steps.version.outputs.tag }}
         run: |
           set -euo pipefail
           # --verify-tag refuses to invent a tag if the ref somehow is not one.
           # Creation fails outright if a release already exists for this tag, which is
           # the wanted behaviour: re-releasing the same version silently is worse.
-          gh release create "${GITHUB_REF_NAME}" "${ASSET}" \
-            --title "${GITHUB_REF_NAME}" \
+          gh release create "${TAG}" "${ASSET}" \
+            --title "${TAG}" \
             --notes-file release-notes.md \
             --verify-tag
 
@@ -126,11 +155,12 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ASSET: ${{ steps.version.outputs.asset }}
+          TAG: ${{ steps.version.outputs.tag }}
         run: |
           set -euo pipefail
           # GitHub rewrites some characters in asset filenames. The tag carries a '+',
           # so confirm what actually landed rather than assuming the name survived.
-          ATTACHED="$(gh release view "${GITHUB_REF_NAME}" --json assets --jq '.assets[].name')"
+          ATTACHED="$(gh release view "${TAG}" --json assets --jq '.assets[].name')"
           echo "Attached: ${ATTACHED}"
           if [ "${ATTACHED}" != "${ASSET}" ]; then
             echo "NOTE: asset stored as '${ATTACHED}', not '${ASSET}' -- download links must use the stored name." >&2

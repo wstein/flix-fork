@@ -135,9 +135,15 @@ version against the tag. That version is derived at build time by `gitDescribe` 
 `build.mill` and written to a `version.txt` resource, which `Version.scala` parses
 (covered by `TestVersion`). Two details there are load-bearing:
 
-- The describe glob is `v[0-9]*`, not `v*`. A bare `v*` also matches this repository's
-  unrelated `vendor-*` tags, which parse as neither release form and would silently
-  degrade the reported version to `0.0.0`.
+- The describe glob is `v[0-9]*`, not `v*`. A bare `v*` is a glob, not a prefix on
+  release tags: it also matches `v.0.8.1` and `v.0.9.0`, which this history carries and
+  which parse as neither release form, silently degrading the reported version. On the
+  commit tagged `v.0.9.0`, `--match 'v*'` describes as `v.0.9.0-0-g8d678a860` where
+  `--match 'v[0-9]*'` correctly reaches past it to `v0.8.0-29-g8d678a860`.
+- `release-jar.yaml` filters its push trigger on the same `v[0-9]*`, and re-checks it in
+  the workflow because `workflow_dispatch` takes an arbitrary tag and is not filtered.
+  The two must agree: a tag that can trigger a release but cannot be described produces a
+  jar whose `--version` contradicts the release it is attached to.
 - The checkout uses `fetch-depth: 0`. Without tag history `git describe` finds nothing
   and the build stamps itself `unknown`.
 
