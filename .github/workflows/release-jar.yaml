@@ -96,6 +96,27 @@ jobs:
       - name: Build the fat JAR
         run: ./mill flix.assembly
 
+      - name: Check what the JAR bundles
+        run: |
+          set -euo pipefail
+          JAR=out/flix/assembly.dest/out.jar
+          # `main/src/resources/benchmark/build/` is gitignored local output -- whatever
+          # this machine last ran. Bundling it would make the jar differ between
+          # builders, so `assemblyRules` excludes it. Assert the exclusion held.
+          if unzip -l "${JAR}" | grep -qE ' benchmark/build/'; then
+            echo "FATAL: the jar bundles benchmark build output, so it is not reproducible:" >&2
+            unzip -l "${JAR}" | grep -E ' benchmark/build/' >&2
+            exit 1
+          fi
+          # And the other direction: the exclusion must not have taken the tracked
+          # benchmark artifact with it. Without this the check passes just as well when
+          # nothing under benchmark/ is bundled at all.
+          if ! unzip -l "${JAR}" | grep -qE ' benchmark/artifact/benchmark\.jar$'; then
+            echo "FATAL: benchmark/artifact/benchmark.jar is missing -- the exclusion is too broad." >&2
+            exit 1
+          fi
+          echo "OK: benchmark build output excluded, tracked artifact retained"
+
       - name: Name and smoke-test the artifact
         env:
           ASSET: ${{ steps.version.outputs.asset }}
