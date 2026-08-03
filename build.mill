@@ -3,26 +3,10 @@ package build
 import mill.*
 import mill.scalalib.*
 import mill.scalalib.Assembly.*
-import mill.javalib.publish.*
 
-object flix extends ScalaModule, PublishModule {
+object flix extends ScalaModule {
 
   def scalaVersion = "2.13.18"
-
-  // Set by CI from the pushed tag (e.g. v0.68.1 -> 0.68.1). Defaults to a
-  // clearly-unpublishable placeholder so a local `publishLocal` without the
-  // env var still produces something, but a real publish command with no
-  // version set fails loudly rather than silently reusing a stale one.
-  def publishVersion = Task.Input { Task.env.getOrElse("PUBLISH_VERSION", "0.0.0-SNAPSHOT") }
-
-  def pomSettings = PomSettings(
-    description = "A fork of the Flix programming language compiler.",
-    organization = "io.github.wstein",
-    url = "https://github.com/wstein/flix-fork",
-    licenses = Seq(License.`Apache-2.0`),
-    versionControl = VersionControl.github("wstein", "flix-fork"),
-    developers = Seq(Developer("wstein", "Werner Stein", "https://github.com/wstein"))
-  )
 
   // moduleDir resolves to <root>/flix/ (module name appended).
   // Our sources live at <root>/main/src, so navigate up one level.
@@ -116,9 +100,9 @@ object flix extends ScalaModule, PublishModule {
     Rule.ExcludePattern("benchmark/build/.*")
   ) ++ super.assemblyRules
 
-  // Include .flix, .json, .zip, ClassList.txt from main/ in the JAR.
-  // Gradle does: from('main') { include '**/*.flix' ... }
-  // We add main/ as an extra resource root so these files land in the assembly.
+  // Include .flix, .json, .zip, and ClassList.txt from main/ in the JAR: main/ is an
+  // extra resource root so those files land in the assembly, matching what the
+  // pre-Mill Gradle build shipped.
   //
   // Named as its own def rather than inlined: Mill's Task macro names an
   // anonymous Task.Sources(...) after its enclosing def via sourcecode.Name,
@@ -154,7 +138,7 @@ object flix extends ScalaModule, PublishModule {
   }
 
   // ── Test Module ─────────────────────────────────────────
-  object test extends ScalaTests with TestModule.ScalaTest {
+  object test extends ScalaTests, TestModule.ScalaTest {
     def sources = Task.Sources(flix.root / "main" / "test")
 
     def mvnDeps = Seq(
@@ -171,40 +155,32 @@ object flix extends ScalaModule, PublishModule {
 
   // ── Custom Tasks ────────────────────────────────────────
 
+  /** Runs a single ScalaTest suite in a forked JVM against the test module's classpath. */
+  private def runSuite(suite: String, classpath: Seq[PathRef], env: Map[String, String]) =
+    os.proc("java", "-Xmx3g",
+      "-cp", classpath.map(_.path).mkString(java.io.File.pathSeparator),
+      "org.scalatest.tools.Runner",
+      "-s", suite, "-o"
+    ).call(stdout = os.Inherit, stderr = os.Inherit, stdin = os.Inherit, cwd = root, env = env)
+
   /** Run: ./mill flix.testFuzzerSuite */
   def testFuzzerSuite = Task {
-    os.proc("java", "-Xmx3g",
-      "-cp", test.runClasspath().map(_.path).mkString(java.io.File.pathSeparator),
-      "org.scalatest.tools.Runner",
-      "-s", "flix.fuzzers.FuzzerSuite", "-o"
-    ).call(stdout = os.Inherit, stderr = os.Inherit, stdin = os.Inherit, cwd = root, env = Task.env)
+    runSuite("flix.fuzzers.FuzzerSuite", test.runClasspath(), Task.env)
   }
 
   /** Run: ./mill flix.testExamples */
   def testExamples = Task {
-    os.proc("java", "-Xmx3g",
-      "-cp", test.runClasspath().map(_.path).mkString(java.io.File.pathSeparator),
-      "org.scalatest.tools.Runner",
-      "-s", "ca.uwaterloo.flix.ExampleSuite", "-o"
-    ).call(stdout = os.Inherit, stderr = os.Inherit, stdin = os.Inherit, cwd = root, env = Task.env)
+    runSuite("ca.uwaterloo.flix.ExampleSuite", test.runClasspath(), Task.env)
   }
 
   /** Run: ./mill flix.testIDECompletion */
   def testIDECompletion = Task {
-    os.proc("java", "-Xmx3g",
-      "-cp", test.runClasspath().map(_.path).mkString(java.io.File.pathSeparator),
-      "org.scalatest.tools.Runner",
-      "-s", "ca.uwaterloo.flix.api.lsp.TestCompletionProvider", "-o"
-    ).call(stdout = os.Inherit, stderr = os.Inherit, stdin = os.Inherit, cwd = root, env = Task.env)
+    runSuite("ca.uwaterloo.flix.api.lsp.TestCompletionProvider", test.runClasspath(), Task.env)
   }
 
   /** Run: ./mill flix.testPackageManager */
   def testPackageManager = Task {
-    os.proc("java", "-Xmx3g",
-      "-cp", test.runClasspath().map(_.path).mkString(java.io.File.pathSeparator),
-      "org.scalatest.tools.Runner",
-      "-s", "ca.uwaterloo.flix.tools.pkg.PackageManagerSuite", "-o"
-    ).call(stdout = os.Inherit, stderr = os.Inherit, stdin = os.Inherit, cwd = root, env = Task.env)
+    runSuite("ca.uwaterloo.flix.tools.pkg.PackageManagerSuite", test.runClasspath(), Task.env)
   }
 
   /** Run: ./mill flix.vscode */

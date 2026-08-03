@@ -141,9 +141,10 @@ version against the tag. That version is derived at build time by `gitDescribe` 
 - The checkout uses `fetch-depth: 0`. Without tag history `git describe` finds nothing
   and the build stamps itself `unknown`.
 
-This fork publishes no Maven artifacts. `build.mill` still mixes in `PublishModule`, so
-`./mill flix.publishLocal` remains available for local experiments, but no workflow
-publishes to a registry.
+This fork publishes no Maven artifacts at all, and `build.mill` deliberately does not mix
+in `PublishModule`: there is no POM, no coordinate, and nothing to keep in sync with a
+registry. Adding one back means adding the module, `pomSettings`, and `publishVersion`
+together — a bare `PublishModule` will not compile without the latter two.
 
 ## Commit Messages
 
