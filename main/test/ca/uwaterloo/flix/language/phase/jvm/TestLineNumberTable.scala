@@ -67,6 +67,23 @@ class TestLineNumberTable extends AnyFunSuite {
       |    println(tiny())
       |""".stripMargin
 
+  /**
+    * Two functions whose bodies emit no statement of their own: a constant and a unit literal.
+    *
+    * `@DontInline` keeps them as methods to inspect rather than folding them into the caller.
+    */
+  private val NoBodyLineProgram: String =
+    """@DontInline
+      |pub def constantBody(): Int32 = 42
+      |
+      |@DontInline
+      |pub def unitBody(): Unit = ()
+      |
+      |def main(): Unit \ IO =
+      |    println(constantBody());
+      |    unitBody()
+      |""".stripMargin
+
   /** A compiled method: the lines it records, in bytecode order, and its class's SMAP. */
   private case class Method(lines: List[Int], smap: Option[Smap])
 
@@ -218,4 +235,23 @@ class TestLineNumberTable extends AnyFunSuite {
     assert(thrown.getMessage.contains("tiny"), s"expected no class for the inlined tiny, got: ${thrown.getMessage}")
   }
 
+  test("a body that records no line still reports its declaration line") {
+    // A constant and a unit literal contribute no statement of their own, so the declaration is the
+    // only line either method can report. Both hold under `--Xdebug`, where every other method in
+    // this suite reports body lines as well.
+    //
+    // This does *not* cover `LineNumbers.finish()`, despite looking like it should. `finish()` is
+    // documented as the reason a body that records nothing still reports its declaration, but
+    // disabling it leaves these assertions -- and every other one here -- passing. It does run and
+    // write for these very lines, yet nothing it writes reaches the class file: reading all four
+    // methods of the generated class shows entries only in `staticApply`, and those survive its
+    // removal. Whatever shape `finish()` is load-bearing for is not one this suite produces, so
+    // there is nothing here to assert about it.
+    for (xdebug <- List(false, true)) {
+      assertResult(List(2), s"constantBody, xdebug=$xdebug")(
+        compile(xdebug, defClass("constantBody"), JvmName.StaticApply, NoBodyLineProgram).lines)
+      assertResult(List(5), s"unitBody, xdebug=$xdebug")(
+        compile(xdebug, defClass("unitBody"), JvmName.StaticApply, NoBodyLineProgram).lines)
+    }
+  }
 }
