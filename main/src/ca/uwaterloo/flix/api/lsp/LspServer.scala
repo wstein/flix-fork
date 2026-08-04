@@ -61,6 +61,52 @@ object LspServer {
     */
   private val TriggerChars = List("#", ".", "/", "?")
 
+  /**
+    * The capabilities this server advertises.
+    *
+    * Advertising is not documentation: a client must not send a request whose capability is absent,
+    * so a handler that is implemented but unannounced is dead code. `inlayHint` was exactly that --
+    * fully implemented in [[FlixTextDocumentService.inlayHint]], and never reachable from any
+    * standards-compliant client because this method did not name it. It went unnoticed because the
+    * VS Code extension speaks Flix's own protocol, which negotiates no capabilities at all.
+    *
+    * `private[lsp]` rather than private so [[TestServerCapabilities]] can hold the two halves
+    * against each other.
+    */
+  private[lsp] def mkServerCapabilities(): ServerCapabilities = {
+    val serverCapabilities = new ServerCapabilities
+    serverCapabilities.setHoverProvider(true)
+    serverCapabilities.setDocumentHighlightProvider(true)
+    serverCapabilities.setSemanticTokensProvider(
+      new SemanticTokensWithRegistrationOptions(
+        new SemanticTokensLegend(
+          SemanticTokenType.getWholeList.asJava,
+          SemanticTokenModifier.getWholeList.asJava
+        ),
+        true
+      )
+    )
+    serverCapabilities.setSignatureHelpProvider(new SignatureHelpOptions(List("(", ",").asJava))
+    serverCapabilities.setCodeActionProvider(true)
+    serverCapabilities.setCodeLensProvider(new CodeLensOptions(true))
+    serverCapabilities.setCompletionProvider(new CompletionOptions(true, TriggerChars.asJava))
+    serverCapabilities.setReferencesProvider(true)
+    serverCapabilities.setDefinitionProvider(true)
+    serverCapabilities.setImplementationProvider(true)
+    serverCapabilities.setRenameProvider(new RenameOptions(false))
+    serverCapabilities.setDocumentSymbolProvider(true)
+    serverCapabilities.setWorkspaceSymbolProvider(true)
+    serverCapabilities.setTextDocumentSync(TextDocumentSyncKind.Full)// TODO: make it incremental
+    serverCapabilities.setDocumentFormattingProvider(true)
+    serverCapabilities.setFoldingRangeProvider(true)
+    // `true` rather than InlayHintRegistrationOptions: the options exist to carry
+    // `resolveProvider`, and there is no `resolveInlayHint` here to advertise. A hint arrives
+    // complete or not at all.
+    serverCapabilities.setInlayHintProvider(true)
+
+    serverCapabilities
+  }
+
   private class FlixLanguageServer(o: Options) extends LanguageServer with LanguageClientAware {
     /**
       * The Flix instance (the same instance is used for incremental compilation).
@@ -195,35 +241,6 @@ object LspServer {
         }
     }
 
-    private def mkServerCapabilities(): ServerCapabilities = {
-      val serverCapabilities = new ServerCapabilities
-      serverCapabilities.setHoverProvider(true)
-      serverCapabilities.setDocumentHighlightProvider(true)
-      serverCapabilities.setSemanticTokensProvider(
-        new SemanticTokensWithRegistrationOptions(
-          new SemanticTokensLegend(
-            SemanticTokenType.getWholeList.asJava,
-            SemanticTokenModifier.getWholeList.asJava
-          ),
-          true
-        )
-      )
-      serverCapabilities.setSignatureHelpProvider(new SignatureHelpOptions(List("(", ",").asJava))
-      serverCapabilities.setCodeActionProvider(true)
-      serverCapabilities.setCodeLensProvider(new CodeLensOptions(true))
-      serverCapabilities.setCompletionProvider(new CompletionOptions(true, TriggerChars.asJava))
-      serverCapabilities.setReferencesProvider(true)
-      serverCapabilities.setDefinitionProvider(true)
-      serverCapabilities.setImplementationProvider(true)
-      serverCapabilities.setRenameProvider(new RenameOptions(false))
-      serverCapabilities.setDocumentSymbolProvider(true)
-      serverCapabilities.setWorkspaceSymbolProvider(true)
-      serverCapabilities.setTextDocumentSync(TextDocumentSyncKind.Full)// TODO: make it incremental
-      serverCapabilities.setDocumentFormattingProvider(true)
-      serverCapabilities.setFoldingRangeProvider(true)
-
-      serverCapabilities
-    }
 
     override def shutdown(): CompletableFuture[AnyRef] = {
       System.err.println("shutdown")
