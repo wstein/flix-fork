@@ -65,34 +65,23 @@ object JvmOps {
   /**
     * Returns the closure class `Clo$Name` for the given closure.
     *
-    * String.charAt     =>    String/Clo$charAt
-    * List.length       =>    List/Clo$length
-    * List.map          =>    List/Clo$map
+    * String.charAt     =>    dev/flix/gen/String$Clo$charAt
+    * List.map          =>    dev/flix/gen/List$Clo$map
+    * Acme.Api.run      =>    Acme/Api$Clo$run
     */
-  def getClosureClassName(sym: Symbol.DefnSym): JvmName = {
-    // The JVM name is of the form Clo$sym.name
-    val name = JvmName.mkClassName(s"Clo", sym.name)
-
-    // The JVM package is the namespace of the symbol.
-    val pkg = JvmName.packageOfNamespace(sym.namespace)
-
-    // The result type.
-    JvmName(pkg, name)
-  }
+  def getClosureClassName(sym: Symbol.DefnSym): JvmName =
+    JvmName.mkNamespacedClassName(sym.namespace, "Clo", sym.name)
 
   /**
     * Returns the effect definition class for the given symbol.
     *
     * For example:
     *
-    * Print       =>  Eff$Print
-    * List.Crash  =>  List.Eff$Crash
+    * Print       =>  dev/flix/gen/Eff$Print
+    * List.Crash  =>  dev/flix/gen/List$Eff$Crash
     */
-  def getEffectDefinitionClassName(sym: Symbol.EffSym): JvmName = {
-    val pkg = JvmName.packageOfNamespace(sym.namespace)
-    val name = JvmName.mkClassName("Eff", sym.name)
-    JvmName(pkg, name)
-  }
+  def getEffectDefinitionClassName(sym: Symbol.EffSym): JvmName =
+    JvmName.mkNamespacedClassName(sym.namespace, "Eff", sym.name)
 
   /**
     * Returns the op name of the given symbol.

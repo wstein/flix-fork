@@ -251,15 +251,44 @@ object JvmName {
   val DevFlixGen: List[String] = List("dev", "flix", "gen")
 
   /**
-    * Returns the JVM package that holds the classes of the symbols in namespace `ns`.
+    * Returns the JVM package that holds the generated classes of the symbols in namespace `ns`.
     *
-    * A namespace maps to the package of the same name, except the root namespace, which maps to
-    * [[DevFlixGen]] rather than to the unnamed package. Note that this concerns the root namespace
-    * only: a top-level `mod Demo` still compiles to `Demo` in the unnamed package, since `Demo` is
-    * a name the programmer chose.
+    * A generated class sits *beside* the namespace class rather than beneath it, so the defs of
+    * `mod Acme.Api` are `Acme.Api$Def$…` in the package `Acme`. A namespace with no parent package
+    * has nowhere to sit beside, so its classes go to [[DevFlixGen]]: `mod List` yields
+    * `dev.flix.gen.List$Def$…` rather than putting `List$Def$…` in the unnamed package.
+    *
+    * The namespace must not become a package of its own, because its own class already carries
+    * that name -- `mod Acme.Api` compiles to the class `Acme.Api`. Letting the same name denote
+    * both is legal for the JVM and tolerated by Java, but Scala rejects the whole classpath
+    * ("package Acme contains object and package with same name: Api") and Kotlin resolves the
+    * package and never sees the class, reporting every exported function as unresolved. Since a
+    * namespace with an exported def necessarily has both, exports were unreachable from those two
+    * languages.
+    *
+    * This is what the other JVM languages do: Scala emits `acme.Api$`, Kotlin `acme.ApiKt`, Groovy
+    * `acme.Api$_use_closure1`, and Clojure names the namespace `acme.api` classes `acme.api$get_it`
+    * -- all siblings in the parent package, never a package named after a class.
     */
   def packageOfNamespace(ns: List[String]): List[String] =
-    if (ns.isEmpty) DevFlixGen else ns
+    if (ns.lengthIs <= 1) DevFlixGen else ns.dropRight(1)
+
+  /**
+    * Returns the prefix that ties a generated class to the namespace it belongs to.
+    *
+    * Empty for the root namespace, whose classes are already alone in [[DevFlixGen]].
+    */
+  def classPrefixOfNamespace(ns: List[String]): String =
+    ns.lastOption.map(name => mangle(name) + Flix.Delimiter).getOrElse("")
+
+  /**
+    * Returns the name of a backend class generated for a symbol named `name` in namespace `ns`.
+    *
+    * For example `Def` and `map` in `List` give `dev.flix.gen.List$Def$map`, and in `Acme.Api`
+    * they give `Acme.Api$Def$map`.
+    */
+  def mkNamespacedClassName(ns: List[String], prefix: String, name: String): JvmName =
+    JvmName(packageOfNamespace(ns), classPrefixOfNamespace(ns) + mkClassName(prefix, name))
 
   val FlixError: JvmName = JvmName(DevFlixRuntime, mkClassName("FlixError"))
   val Coverage: JvmName = JvmName(CaUwFlixRuntime, "Coverage")

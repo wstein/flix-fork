@@ -49,7 +49,7 @@ sealed trait BackendObjType {
     case BackendObjType.ExtTag(tpes) => JvmName(DevFlixGen, mkClassName("ExtTag", tpes))
     case BackendObjType.AbstractArrow(args, result) => JvmName(DevFlixGen, mkClassName(s"Clo${args.length}", args :+ result))
     case BackendObjType.Arrow(args, result) => JvmName(DevFlixGen, mkClassName(s"Fn${args.length}", args :+ result))
-    case BackendObjType.Defn(sym) => JvmName(JvmName.packageOfNamespace(sym.namespace), JvmName.mkClassName("Def", sym.name))
+    case BackendObjType.Defn(sym) => JvmName.mkNamespacedClassName(sym.namespace, "Def", sym.name)
     case BackendObjType.RecordEmpty => JvmName(DevFlixGen, mkClassName(s"RecordEmpty"))
     case BackendObjType.RecordExtend(value) => JvmName(DevFlixGen, mkClassName("RecordExtend", value))
     case BackendObjType.Record => JvmName(DevFlixGen, mkClassName("Record"))
