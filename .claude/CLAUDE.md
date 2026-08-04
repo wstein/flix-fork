@@ -64,12 +64,21 @@ wrong:
 `ca.uwaterloo.flix.tools.fmt`. The CLI subcommand, the REPL `:format`, the LSP
 `FormattingProvider`, and the file I/O in `FormatterLsp` are all in place.
 `flix format` reproduces its input exactly — a verified round trip, not a
-reformat. `flix format --canonical` additionally normalises **horizontal
-spacing**: it decides between no space and one space from the kinds of the two
-tokens either side of a gap. It changes nothing vertical. Indentation, blank
-lines, where a construct breaks, and runs of two or more spaces (which are column
-alignment) are all left as they were. Describe the command in those terms rather
-than as a general-purpose formatter.
+reformat. `flix format --canonical` normalises **horizontal spacing** (no space
+versus one, decided from the kinds of the two tokens either side of a gap) and
+lays out **`match`** vertically: one arm per line, indented one unit, with `=>`
+aligned per group. Everything else vertical — pipelines, Datalog clause bodies,
+general indentation — is still preserved, not decided. Describe the command in
+those terms rather than as a general-purpose formatter.
+
+Vertical decisions cannot be made from a pair of adjacent tokens, so they come
+from `LayoutPlan`, which walks the tree and emits one directive per gap; the
+printer applies a directive where there is one and falls back to the separator
+policy everywhere else. Two invariants there are easy to break: a `Break`
+preserves however many blank lines the gap already had (collapsing one regroups
+the alignment groups, which are *defined* by blank lines, and formatting stops
+being idempotent), and quarantine outranks the plan so nothing is arranged around
+code the parser could not read.
 
 Neither mode requires the program to compile. A declaration whose subtree
 contains a parse error is reproduced verbatim and the rest of the file is

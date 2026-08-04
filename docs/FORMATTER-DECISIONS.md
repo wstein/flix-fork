@@ -493,6 +493,50 @@ before the weeder in the first place. Intercepting early buys tolerance of
 unclosed brace or a half-typed name: those are parse errors, and under a
 whole-file bailout the formatter declines exactly when it is most needed.
 
+## D20 — `match` is laid out vertically, and `=>` alignment is produced
+
+**Status: Proposed.**
+
+Two vertical rules are implemented, and only two, because these are the two the
+evidence settles outright.
+
+**Every `match` breaks.** One arm per line, indented one unit from the line the
+`match` keyword sits on, closing brace back at that indentation. The corpus holds
+1,868 `match` expressions and **not one** written inline, at any arity including a
+single arm. The rule needs no threshold and contradicts nothing.
+
+**`=>` alignment is computed rather than copied.** `docs/STYLE.md` requires it and
+2,047 arms already comply, but preserving an author's padding (D17) left two files
+differing only in alignment formatting differently. The padding is now derived: a
+group is a run of arms with no blank line between them, and every arm in a group
+pads to the widest prefix in it.
+
+An arm more than 24 columns wider than the narrowest in its group opts out, takes a
+single space, and does not widen the target — otherwise one long pattern pushes
+every other `=>` across the screen. The threshold is a judgement, not a
+measurement, and is the weakest part of this entry. An arm carrying a comment
+before its `=>` is left alone, since its width is not a property of the code.
+
+**Blank lines survive a break.** A break says two tokens are on different lines,
+not how many. This is load-bearing rather than cosmetic: the alignment groups are
+*defined* by blank lines, so collapsing one would regroup the arms on the next
+pass and formatting would not be idempotent. The corpus caught exactly that —
+`IDE.flix` aligned one way on the first pass and another on the second.
+
+**Indentation is measured from the `match` keyword's existing line, not computed.**
+The code around a `match` has no layout rule yet and so keeps whatever indentation
+it had; indenting arms against a computed base would place them relative to a line
+nothing ever moved. This is a knowing compromise on canonicality and it ends when
+the enclosing constructs gain rules.
+
+**Not implemented, and why.** Pipelines, Datalog clause bodies, and general
+indentation are still preserved rather than decided. The pipeline threshold splits
+the corpus — 40% of two-stage pipelines are broken and 60% are not, so either
+choice reformats hundreds of sites against their authors — and the Datalog
+thresholds have never been measured at all; the design document proposes them "by
+analogy, not measurement". Deciding those needs the diff review of §8.5, not more
+code.
+
 ## Validation against real codebases
 
 `flix format --canonical` was run over nine third-party Flix repositories, in
@@ -513,6 +557,13 @@ anchor moved.
 | w0rxbend/compression-flix | 26 | 24 | 2 | 18 | 0 | 0 | 0 |
 | w0rxbend/scalachess-flix | 59 | 2 | 57 | 2 | 0 | 0 | 0 |
 | **total** | **556** | **305** | **251** | **211** | **0** | **0** | **0** |
+
+The table above measures the horizontal spacing rules. The suite was re-run after
+the `match` layout of D20 landed, over the same sample: still zero fidelity, zero
+idempotence and zero anchor failures, with the number of files changed rising in
+the repositories that use `match` heavily — 40 of 97 in `flix_game_engine` and 22
+of 39 in `frogger`, against 62 and 36 for spacing alone. Vertical layout touches
+fewer files than spacing does, and rearranges more in each.
 
 Two honest qualifications. The two largest repositories were sampled evenly
 rather than exhaustively, because each file costs two full compiles. And 251
