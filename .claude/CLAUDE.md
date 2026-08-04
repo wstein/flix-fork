@@ -163,6 +163,16 @@ to get wrong from reading the pretty-printing literature instead of the code:
   `elseSet#{ }`. Add a spacing rule only with a case that proves it does not
   re-lex.
 
+**After changing a layout rule, run `./mill flix.formatterDiffReport`.** It ranks
+the corpus by how much of each file canonical formatting rewrites, and it is the
+only instrument that sees a rule firing where it should not. Every layout defect
+found in this subsystem so far passed the automated properties — they establish
+that formatting destroys nothing, and are all satisfied by output that is
+consistently, reproducibly wrong. Read the top few entries: a file rewritten
+almost entirely usually means a broken rule rather than a badly formatted file.
+The baseline is 221 of 403 files changed, 23,894 lines; a large jump means
+something new is firing too widely.
+
 The formatter test suites live in `main/test/ca/uwaterloo/flix/tools/fmt/` and
 share their corpus — the standard library plus `examples` — through
 `TestFormatterCommon`. They are the slowest part of the run — roughly six of the

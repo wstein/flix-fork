@@ -183,6 +183,19 @@ object flix extends ScalaModule {
     runSuite("ca.uwaterloo.flix.tools.pkg.PackageManagerSuite", test.runClasspath(), Task.env)
   }
 
+  /**
+   * Run: ./mill flix.formatterDiffReport
+   *
+   * Reports what `flix format --canonical` would do to the corpus, ranked by how
+   * much of each file it rewrites. Run it after changing a layout rule: the
+   * formatter's automated properties show that formatting destroys nothing and
+   * are all satisfied by output that is consistently wrong, so this ranking is
+   * the only instrument that sees a rule firing where it should not.
+   */
+  def formatterDiffReport = Task {
+    runSuite("ca.uwaterloo.flix.tools.fmt.FormatterDiffReport", test.runClasspath(), Task.env)
+  }
+
   /** Run: ./mill flix.vscode */
   def vscode() = Task.Command {
     val envFile = root / ".env"
