@@ -197,6 +197,29 @@ object TestFormatterCommon {
   }
 
   /**
+    * Substitutes `src` for `path` in `flix` and returns its syntax tree, whether or
+    * not the program compiles.
+    *
+    * [[reparseAt]] fails the test when a sample does not compile, which is right
+    * for the corpus properties and useless for partial formatting, where the input
+    * failing to parse is the case under test. The parser produces a tree
+    * containing `ErrorTree` nodes for a malformed program, and that tree is what
+    * the formatter is expected to cope with.
+    */
+  def parseTolerantly(flix: Flix, path: String, src: String): Option[SyntaxTree.Tree] = {
+    implicit val sctx: SecurityContext = SecurityContext.Unrestricted
+    val vpath = Paths.get(path)
+    flix.addVirtualPath(vpath, src)
+    try {
+      flix.check() // errors are expected here and are deliberately ignored
+      findTreeAt(flix.getParsedAst, path)
+    } finally {
+      flix.remVirtualPath(vpath)
+      ()
+    }
+  }
+
+  /**
     * Finds the syntaxTree for the given URI in the root if it exists.
     *
     * @param root the syntax tree root to search
@@ -287,4 +310,8 @@ trait TestFormatterCommon extends AnyFunSuite {
   /** Reports the first line at which two strings diverge, with context. */
   protected def firstDivergence(a: String, b: String): String =
     TestFormatterCommon.firstDivergence(a, b)
+
+  /** Parses `src` at `path`, returning its tree whether or not the program compiles. */
+  protected def parseTolerantly(flix: Flix, path: String, src: String): Option[SyntaxTree.Tree] =
+    TestFormatterCommon.parseTolerantly(flix, path, src)
 }

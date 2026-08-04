@@ -93,6 +93,7 @@ object PrettyPrinter {
     if (printable.isEmpty) return ""
 
     val data = printable.head.token.src.data
+    val quarantined = TokenStream.quarantined(tree)
     val sb = new StringBuilder
 
     // The text before the first token and after the last lies outside every
@@ -100,10 +101,14 @@ object PrettyPrinter {
     sb.append(separators.between(None, printable.headOption, whitespace(data, 0, printable.head.token.startIndex)))
 
     var previous: Option[TokenStream.PrintableToken] = None
-    for (current <- printable) {
+    for ((current, i) <- printable.zipWithIndex) {
       previous.foreach { prev =>
         val gap = whitespace(data, prev.token.endIndex, current.token.startIndex)
-        sb.append(separators.between(Some(prev), Some(current), gap))
+        // A gap touching a declaration that failed to parse is reproduced rather
+        // than chosen. Doing it here rather than in the policy means every policy
+        // inherits it, and a new layout rule cannot forget to.
+        val broken = quarantined.lift(i - 1).contains(true) || quarantined.lift(i).contains(true)
+        sb.append(if (broken) gap else separators.between(Some(prev), Some(current), gap))
       }
       sb.append(current.text)
       previous = Some(current)

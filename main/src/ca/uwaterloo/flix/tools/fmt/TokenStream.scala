@@ -16,6 +16,7 @@
 package ca.uwaterloo.flix.tools.fmt
 
 import ca.uwaterloo.flix.language.ast.{SyntaxTree, Token, TokenKind}
+import ca.uwaterloo.flix.language.ast.SyntaxTree.TreeKind
 import ca.uwaterloo.flix.util.InternalCompilerException
 
 /**
@@ -138,6 +139,65 @@ object TokenStream {
       PrintableToken(token, prefix + token.text)
     }
   }
+
+  /**
+    * For each token of `tree`, in the order [[tokens]] returns them, whether it
+    * belongs to a region the formatter must not lay out.
+    *
+    * A region is quarantined when it is a declaration whose subtree contains a
+    * parse error. The formatter reproduces those tokens' spacing exactly and
+    * formats every other declaration in the file normally, so a developer
+    * mid-edit gets formatting on everything except the thing under their cursor.
+    *
+    * The granularity is the declaration because that is the unit the formatter
+    * already treats as independent: editing one declaration must not change how
+    * another is laid out. If that holds, a broken declaration can be passed
+    * through untouched while its siblings are formatted, and idempotence follows
+    * for free — each declaration is either formatted and stable, or untouched and
+    * trivially stable.
+    *
+    * A parse error outside any declaration quarantines only the error node
+    * itself, since there is no enclosing declaration to fall back to.
+    *
+    * Note what this deliberately does not do: it takes declaration boundaries
+    * from the parser rather than guessing them from indentation or by scanning
+    * for a keyword at column zero. A boundary guessed wrongly would produce
+    * exactly the destructive, unpredictable rewrite that quarantining exists to
+    * prevent.
+    */
+  def quarantined(tree: SyntaxTree.Tree): Vector[Boolean] = {
+    val acc = Vector.newBuilder[Boolean]
+    mark(tree, inherited = false, acc)
+    acc.result()
+  }
+
+  /** Marks every token under `node`, quarantining declarations that contain a parse error. */
+  private def mark(
+    node: SyntaxTree.Tree,
+    inherited: Boolean,
+    acc: scala.collection.mutable.Builder[Boolean, Vector[Boolean]]
+  ): Unit = {
+    val broken = inherited || isErrorTree(node.kind) ||
+      (node.kind.isInstanceOf[TreeKind.Decl] && containsError(node))
+    node.children.foreach {
+      case child: SyntaxTree.Tree => mark(child, broken, acc)
+      case _: Token => acc += broken
+      case other => throw InternalCompilerException(s"Unexpected syntax tree child: $other", node.loc)
+    }
+  }
+
+  /** Returns `true` if `kind` is the parser's error node. */
+  private def isErrorTree(kind: TreeKind): Boolean = kind match {
+    case TreeKind.ErrorTree(_) => true
+    case _ => false
+  }
+
+  /** Returns `true` if `node` or any node beneath it is a parse error. */
+  private def containsError(node: SyntaxTree.Tree): Boolean =
+    isErrorTree(node.kind) || node.children.exists {
+      case child: SyntaxTree.Tree => containsError(child)
+      case _ => false
+    }
 
   /**
     * The exact source text spanned by `tree`, from the start of its first token

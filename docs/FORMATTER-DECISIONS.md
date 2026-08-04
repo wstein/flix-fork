@@ -445,6 +445,54 @@ evidence, so gaps adjacent to a brace are reproduced. Brace spacing needs the
 enclosing construct, which makes it a job for a real layout rule rather than for
 this policy.
 
+## D19 — A file that does not parse is formatted around the part that does not
+
+**Status: Settled.** Supersedes the CLI gate deferred in D4.
+
+`flix format` no longer requires the program to compile. A developer mid-edit has
+a broken program most of the time, so a formatter available only on correct code
+is unavailable exactly when it is being used.
+
+The parser produces a tree containing `ErrorTree` nodes for a malformed file.
+Every declaration whose subtree contains one is reproduced verbatim; the rest are
+formatted. The declaration is the unit because the formatter already treats
+declarations as independent (D7), and idempotence follows for free: each
+declaration is either formatted and stable, or untouched and trivially stable.
+
+The quarantine is applied by the printer rather than by a layout policy, so every
+policy inherits it and a future layout rule cannot forget to.
+
+**What this does and does not buy, precisely.** Declaration boundaries come from
+the parser, never from a heuristic — no scanning for a keyword at column zero, no
+cutting at the error's line. That is the whole safety argument, and it has a
+visible cost: when the parser cannot resynchronise, it absorbs the *following*
+declarations into the broken one, and those are quarantined too. Given
+
+    def healthy(x:Int32):Int32=x      <- formatted
+    def broken(s:String) = match s {  <- quarantined, unclosed brace
+    def alsoHealthy(a:Int32):Int32=a  <- quarantined: the parser never saw it
+
+only the first is formatted. In practice this means everything above the edit is
+formatted and everything below it may not be, which is the right way round for
+someone typing. Widening it means improving parser recovery, not guessing in the
+formatter.
+
+**Only parse errors quarantine.** A program that parses but fails to type check
+is formatted in full: the tree is well-formed and the formatter does not consult
+types (nor may it, since layout must not depend on inference).
+
+**`flix format` exits 0 on a file with syntax errors** and prints nothing about
+them. It is not a checker, and a formatter that failed the build on malformed
+input would be useless in an editor's format-on-save. `flix check` reports
+errors.
+
+**Rejected:** the whole-file bailout — emit the entire input unchanged if any
+`ErrorTree` appears anywhere. It contradicts the reason the formatter stops
+before the weeder in the first place. Intercepting early buys tolerance of
+*weeding* errors, and buys nothing for the actual mid-edit case, which is an
+unclosed brace or a half-typed name: those are parse errors, and under a
+whole-file bailout the formatter declines exactly when it is most needed.
+
 ## Validation against real codebases
 
 `flix format --canonical` was run over nine third-party Flix repositories, in

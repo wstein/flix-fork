@@ -324,13 +324,17 @@ object Main {
             }
           } else {
             val flix = mkFlixWithFiles(cmdOpts.files, options)
-            val (optRoot, errors) = flix.check()
-            if (errors.isEmpty) {
-              val syntaxTree = flix.getParsedAst
-              LspFormatter.formatFiles(syntaxTree, cmdOpts.files.map(_.toPath).toList, separators)(flix)
-              System.exit(0)
-            }
-            else exitWithErrors(flix, errors, optRoot)
+            // Formatting deliberately does not require the program to compile. A
+            // developer mid-edit has a broken program most of the time, and a
+            // formatter available only on correct code is unavailable exactly when
+            // it is being used. The parser produces a tree for a malformed file,
+            // the declarations that failed to parse are reproduced verbatim, and
+            // the rest are formatted. Reporting the errors is `flix check`'s job,
+            // so this neither prints them nor fails on them.
+            val _ = flix.check()
+            val syntaxTree = flix.getParsedAst
+            LspFormatter.formatFiles(syntaxTree, cmdOpts.files.map(_.toPath).toList, separators)(flix)
+            System.exit(0)
           }
 
 

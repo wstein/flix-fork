@@ -1042,11 +1042,14 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
     */
   def format(flix: Flix, separators: PrettyPrinter.Separators): Result[Unit, BootstrapError] = {
     Steps.updateStaleSources(flix)
-    Steps.check(flix).map {
-      case _ =>
-        val syntaxTree = flix.getParsedAst
-        LspFormatter.formatFiles(syntaxTree, sourcePaths, separators)(flix)
-    }
+    // Formatting does not require the project to compile: declarations that failed
+    // to parse are reproduced verbatim and the rest are formatted, so a project
+    // with one broken file still gets formatted everywhere else. Reporting the
+    // errors belongs to `flix check`, not here.
+    val _ = flix.check()
+    val syntaxTree = flix.getParsedAst
+    LspFormatter.formatFiles(syntaxTree, sourcePaths, separators)(flix)
+    Result.Ok(())
   }
 
   /**

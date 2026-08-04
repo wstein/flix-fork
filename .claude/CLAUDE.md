@@ -71,6 +71,17 @@ lines, where a construct breaks, and runs of two or more spaces (which are colum
 alignment) are all left as they were. Describe the command in those terms rather
 than as a general-purpose formatter.
 
+Neither mode requires the program to compile. A declaration whose subtree
+contains a parse error is reproduced verbatim and the rest of the file is
+formatted, so a file being edited still formats above the breakage.
+`TokenStream.quarantined` computes that per token and `PrettyPrinter` applies it,
+so every layout policy inherits it. Boundaries come from the parser, never from a
+heuristic — which means that when the parser cannot resynchronise it absorbs the
+*following* declarations into the broken one and those go untouched too. Only
+parse errors quarantine; a program that merely fails to type check is formatted
+in full, and `flix format` exits 0 either way because reporting errors is
+`flix check`'s job.
+
 The printer emits every token of the tree in order and decides **only the
 whitespace between them**. That restriction is the architecture, and it is worth
 preserving: no token can be lost, duplicated, or reordered, so declaration order,
