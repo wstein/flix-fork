@@ -120,7 +120,17 @@ object LspServer {
     /** Returns the SVG for a trait or module, given its name. */
     val ShowDiagram: String = "flix.showDiagram"
 
-    val All: List[String] = List(ShowDiagram)
+    /**
+      * Recompiles with phase printing on and returns the directory the ASTs were written to.
+      *
+      * [[provider.ShowAstProvider]] has always existed, reachable only through `lsp/showAst` on the
+      * VS Code protocol, which negotiates no capabilities and which no other client speaks. Naming
+      * it here is what makes it reachable from any of them -- the same gap `flix.showDiagram` was
+      * in.
+      */
+    val ShowAst: String = "flix.showAst"
+
+    val All: List[String] = List(ShowDiagram, ShowAst)
   }
 
   private class FlixLanguageServer(o: Options) extends LanguageServer with LanguageClientAware {
@@ -553,6 +563,12 @@ object LspServer {
             case r@DiagramProvider.Result.Unknown(_) =>
               CompletableFuture.failedFuture(invalidParams(DiagramProvider.messageFor(r)))
           }
+        case Commands.ShowAst =>
+          // A path rather than the ASTs themselves: this writes one file per compiler phase, which
+          // is far more than a response should carry, and every client can open a directory.
+          val path = ShowAstProvider.showAst()(flixLanguageServer.flix)
+          CompletableFuture.completedFuture(path.toAbsolutePath.toString)
+
         case other =>
           CompletableFuture.failedFuture(invalidParams(s"Unknown command '$other'."))
       }

@@ -62,6 +62,18 @@ class TestServerCapabilities extends AnyFunSuite {
     )
   }
 
+  test("showAst is a command, not only a VS Code protocol request") {
+    // ShowAstProvider was implemented and reachable only through `lsp/showAst` on Flix's own
+    // protocol, which negotiates no capabilities and which no other client speaks. A client may not
+    // send a command that is not named here, so without this the feature exists and cannot be used.
+    val provider = Option(capabilities.getExecuteCommandProvider)
+      .getOrElse(fail("no executeCommandProvider; no client may run flix.showAst"))
+    assert(
+      provider.getCommands.contains("flix.showAst"),
+      s"expected flix.showAst among ${provider.getCommands}",
+    )
+  }
+
   test("the capabilities that already worked are still advertised") {
     // Guards the lift of mkServerCapabilities out of FlixLanguageServer: it must keep describing
     // the same server. These are the ones with observable editor behaviour.
