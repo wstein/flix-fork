@@ -199,7 +199,7 @@ class TestTokenStream extends TestFormatterCommon {
     for (sample <- samples) {
       // Reparsing runs a full compile, so both properties are asserted from one
       // parse rather than walking the corpus twice.
-      val tree = sample.reparse(sample.content).tree
+      val tree = sample.original.tree
       val printed = TokenStream.printableTokens(tree).map(_.text).mkString
       assert(dense(printed) == dense(sample.content),
         s"Tokens do not account for every character of ${sample.path}")

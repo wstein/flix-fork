@@ -15,8 +15,6 @@
  */
 package ca.uwaterloo.flix.tools.fmt
 
-import org.scalatest.Ignore
-
 /**
   * Stability tests for the Flix code formatter.
   *
@@ -25,7 +23,6 @@ import org.scalatest.Ignore
   * The standard library and the `examples` programs are maintained in a
   * canonical formatted form. Formatting them must reproduce the same output.
   */
-@Ignore
 class TestFormatterStability extends TestFormatterCommon {
 
   /**
@@ -35,7 +32,7 @@ class TestFormatterStability extends TestFormatterCommon {
     */
   private def checkStability(samples: List[Sample]): Unit = {
     for (sample <- samples) {
-      val formatted = PrettyPrinter.format(sample.reparse(sample.content).tree)
+      val formatted = PrettyPrinter.format(sample.original.tree)
       val isFixedPoint = formatted == sample.content
       assert(isFixedPoint,
         s"Standard library is not preserved by the formatter (f(p(l)) != l) " +

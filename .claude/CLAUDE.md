@@ -63,10 +63,19 @@ wrong:
 `flix format` parses `.flix` sources and rewrites them through
 `ca.uwaterloo.flix.tools.fmt`. The CLI subcommand, the REPL `:format`, the LSP
 `FormattingProvider`, and the file I/O in `FormatterLsp` are all in place.
-**No layout rule is implemented**: `PrettyPrinter` is a stub returning the empty
-string, and `FormatterLsp.treeToTextEdits` returns no edits, so the command
-parses its input and changes nothing. Say that plainly rather than describing
-`flix format` as reformatting anything.
+**No layout rule is implemented yet**: `PrettyPrinter` reproduces its input
+exactly, so the command is a verified round trip rather than a formatter. Say
+that plainly rather than describing `flix format` as reformatting anything.
+
+The printer emits every token of the tree in order and decides **only the
+whitespace between them**. That restriction is the architecture, and it is worth
+preserving: no token can be lost, duplicated, or reordered, so declaration order,
+`use` order and record labels are untouched because no operation exists that
+could touch them — and a comment always keeps the same neighbouring tokens, so
+formatting can change which *line* a comment sits on but never which declaration
+it belongs to. A layout rule is a `PrettyPrinter.Separators` policy choosing a
+gap, added against a baseline that already round-trips. A construct with no rule
+costs fidelity nothing.
 
 Three facts about the substrate decide most design questions, and each is easy
 to get wrong from reading the pretty-printing literature instead of the code:
@@ -96,10 +105,12 @@ to get wrong from reading the pretty-printing literature instead of the code:
 
 The formatter test suites live in `main/test/ca/uwaterloo/flix/tools/fmt/` and
 share their corpus — the standard library plus `examples` — through
-`TestFormatterCommon`. They are `@Ignore`d because the stub fails them — the
-empty string is not a faithful rendering of anything — so the `@Ignore`
-annotations come off with the printer, not before. Know one weakness before
-trusting them once they run: the
+`TestFormatterCommon`. The fixtures are held by that file's companion *object*
+rather than by the trait, and each `Sample` memoises the parse of its own
+content: every fixture compiles the standard library and every property starts
+from the unmodified sample, so building them per suite and reparsing per property
+cost more than all the properties together. Keep new suites on the shared
+fixtures. Know one weakness before trusting them: the
 non-destructiveness check compares case-class names and collection lengths and
 matches everything else with a wildcard, so it would accept output in which
 every identifier had been renamed. It constrains the *shape* of the weeded AST

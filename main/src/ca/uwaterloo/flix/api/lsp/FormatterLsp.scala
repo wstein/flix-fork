@@ -17,11 +17,10 @@ package ca.uwaterloo.flix.api.lsp
 
 import ca.uwaterloo.flix.api.Flix
 import ca.uwaterloo.flix.language.ast.SyntaxTree
-import ca.uwaterloo.flix.tools.fmt.PrettyPrinter
+import ca.uwaterloo.flix.tools.fmt.{PrettyPrinter, TokenStream}
 import ca.uwaterloo.flix.util.Result
 
 import java.nio.file.{Files, InvalidPathException, Path, Paths}
-import scala.annotation.unused
 
 /**
   * The FormatterLsp object provides functionality to format Flix source files using the [[PrettyPrinter]].
@@ -54,8 +53,30 @@ object FormatterLsp {
   def format(root: SyntaxTree.Root, uri: String): List[TextEdit] =
     findTreeBasedOnUri(root, uri).map(treeToTextEdits).getOrElse(Nil)
 
-  // TODO: Call the actual formatter here as soon as it is merged.
-  private def treeToTextEdits(@unused tree: SyntaxTree.Tree): List[TextEdit] = Nil
+  /**
+    * Formats `tree` and returns the edit that replaces its whole document.
+    *
+    * A single whole-document edit rather than a minimal diff: the printer decides
+    * the whitespace between every pair of tokens, so the edited region is the
+    * document in any case, and a client applying one edit cannot interleave it
+    * with another badly.
+    */
+  private def treeToTextEdits(tree: SyntaxTree.Tree): List[TextEdit] = {
+    val formatted = PrettyPrinter.format(tree)
+    documentRange(tree).map(range => TextEdit(range, formatted)).toList
+  }
+
+  /**
+    * The range covering the whole source `tree` was parsed from.
+    *
+    * Derived from the source rather than from the tree's own span, which starts at
+    * the first token and so excludes any leading blank lines or trailing newline.
+    */
+  private def documentRange(tree: SyntaxTree.Tree): Option[Range] =
+    TokenStream.tokens(tree).headOption.map { token =>
+      val lines = token.src.data.mkString.split("\n", -1)
+      Range(Position(1, 1), Position(lines.length, lines.last.length + 1))
+    }
 
   /**
     * Applies the given text edits to the file at the specified path.

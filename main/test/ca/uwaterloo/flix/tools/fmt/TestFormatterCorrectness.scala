@@ -15,8 +15,6 @@
  */
 package ca.uwaterloo.flix.tools.fmt
 
-import org.scalatest.Ignore
-
 /**
   * Correctness tests for the Flix code formatter.
   *
@@ -30,7 +28,6 @@ import org.scalatest.Ignore
   *
   * Each property is run on both corpora: the standard library and the `examples`.
   */
-@Ignore
 class TestFormatterCorrectness extends TestFormatterCommon {
 
   /**
@@ -40,8 +37,7 @@ class TestFormatterCorrectness extends TestFormatterCommon {
     */
   private def checkCanFormat(samples: List[Sample]): Unit = {
     for (sample <- samples) {
-      val tree = sample.reparse(sample.content).tree
-      val formatted = PrettyPrinter.format(tree)
+      val formatted = PrettyPrinter.format(sample.original.tree)
       assert(formatted.nonEmpty, s"Formatter produced empty output for ${sample.path}")
     }
   }
@@ -54,8 +50,7 @@ class TestFormatterCorrectness extends TestFormatterCommon {
     */
   private def checkIdempotency(samples: List[Sample]): Unit = {
     for (sample <- samples) {
-      val tree1 = sample.reparse(sample.content).tree
-      val once = PrettyPrinter.format(tree1)
+      val once = PrettyPrinter.format(sample.original.tree)
       val tree2 = sample.reparse(once).tree
       val twice = PrettyPrinter.format(tree2)
       assert(once == twice,
@@ -72,7 +67,7 @@ class TestFormatterCorrectness extends TestFormatterCommon {
     */
   private def checkNonDestructive(samples: List[Sample]): Unit = {
     for (sample <- samples) {
-      val before = sample.reparse(sample.content)
+      val before = sample.original
       val formatted = PrettyPrinter.format(before.tree)
       val after = sample.reparse(formatted)
       assert(sameShape(before.weeded, after.weeded),

@@ -281,6 +281,73 @@ across a project to no purpose and defeating incremental builds.
 
 ---
 
+## D16 — Whitespace around `->` and `.` is preserved exactly, because it is semantic
+
+**Status: Settled.**
+
+Whitespace is not always insignificant in Flix, and the two places it is not are
+both places a spacing rule would naturally touch.
+
+**`->`.** The lexer produces `ArrowThinRTight` for `a->b` and
+`ArrowThinRWhitespace` for `a ->b`, `a-> b`, and `a -> b`. The tight form is
+struct field access; the spaced form is the function arrow. Inserting a space
+around `->` therefore does not restyle an expression, it re-lexes it into a
+different construct.
+
+**`.`.** A `.` followed by whitespace is `DotWhiteSpace`, a distinct token that
+terminates a Datalog constraint, kept separate so it does not clash with
+qualified names. A `.` *preceded* by whitespace is not a token at all — the lexer
+reports `FreeDot`. So `Shape.    Rectangle` is an error rather than an unusual
+layout.
+
+The formatter therefore reproduces the original gap adjacent to these tokens and
+never normalises it. "No spaces around `.` and `->`" as a *style* rule would give
+the right answer for the wrong reason and would be actively wrong wherever the
+corpus writes `x -> x + 1`.
+
+This is a constraint on any layout rule, not a rule itself, and it is the
+strongest single argument for the architecture in D15: a printer that rewrites
+gaps only where it has a reason to has somewhere safe to stand. One that lays out
+every construct from scratch must get this right everywhere at once.
+
+## D15 — The printer decides inter-token whitespace and nothing else
+
+**Status: Settled.**
+
+`PrettyPrinter` emits every token of the tree in order and chooses only the gap
+between each adjacent pair. Layout rules are `Separators` policies choosing gaps;
+the baseline policy chooses the gap the source already had, which reproduces the
+input exactly.
+
+This turns three properties from rules that could regress into facts that cannot:
+
+- **Nothing is reordered, lost, or duplicated** (D3), because no operation in the
+  printer can do any of those things.
+- **A comment keeps its neighbours** (D5, D9), because comments are tokens. The
+  printer can change which line a comment sits on; it cannot change which
+  declaration it belongs to. That is the failure that is otherwise silent, and it
+  is now unreachable rather than merely tested for.
+- **Every construct is printable from the first commit**, because a construct
+  with no rule yet keeps its original gaps. Coverage grows without correctness
+  ever being in doubt.
+
+It also removes the reason the deferral in D9 was uncomfortable. Comment
+attachment stays unresolved, but it can no longer be got *wrong* — the worst
+available outcome is a comment left on an unhelpful line, not one silently moved
+into a different declaration.
+
+**Rejected:** building a `Doc` tree for the whole program and rendering it. It is
+the conventional design and the merged algebra supports it, but it makes fidelity
+a property of rule *coverage*: any construct without a rule has no rendering, so
+the printer cannot be correct until it is complete. Emitting a verbatim region
+inside a `Doc` does not rescue this, because `Line` and `HardLine` re-indent to
+the prevailing nesting level and would silently re-indent the verbatim text —
+which is exactly how a licence header (D10) gets rewritten. Gap decisions compose
+with untouched regions; `Doc` nesting does not.
+
+The `Doc` algebra remains the right tool for the layout rules themselves, where a
+construct is rendered wholly under one policy.
+
 ## D14 — Tokens are printed through `printableTokens`, never from `Token.text`
 
 **Status: Settled.**

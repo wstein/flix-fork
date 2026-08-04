@@ -48,7 +48,7 @@ import java.nio.file.{Files, Path, Paths}
   * This trait provides [[ExampleSamples]], [[StdlibSamples]] and the
   * parsing ([[reparseAt]]) shared by both tests.
   */
-trait TestFormatterCommon extends AnyFunSuite {
+object TestFormatterCommon {
 
   /**
     * The result of reparsing a source both the [[SyntaxTree.Tree]] and the
@@ -57,7 +57,7 @@ trait TestFormatterCommon extends AnyFunSuite {
     * A single reparse yields both, so `Sample.reparse` can be one function
     * regardless of whether a test needs the syntax tree or the weeded unit.
     */
-  protected case class Parsed(tree: SyntaxTree.Tree, weeded: WeededAst.CompilationUnit)
+  case class Parsed(tree: SyntaxTree.Tree, weeded: WeededAst.CompilationUnit)
 
   /**
     * A sample program for testing
@@ -68,18 +68,29 @@ trait TestFormatterCommon extends AnyFunSuite {
     *                after substituting the source for the samples path in the Flix instance and running `check`.
     *                The function is responsible for restoring the Flix instance to its original state after parsing.
     */
-  protected case class Sample(
+  case class Sample(
     path: String,
     content: String,
     reparse: String => Parsed
-  )
+  ) {
+
+    /**
+      * The parse of this sample's own content.
+      *
+      * Every property starts from the unmodified sample, and reparsing runs a full
+      * compile, so without memoising this the corpus is compiled once per property
+      * per suite rather than once. Only the parses of *formatted* output differ
+      * between properties and those are not cached.
+      */
+    lazy val original: Parsed = reparse(content)
+  }
 
   /** All stdlib files */
   private val StdlibFiles: List[(String, String)] =
     Library.CoreLibrary ++ Library.StandardLibrary
 
   /** Flix instance used to compile example programs. The standard library is loaded by default. */
-  protected val exampleFlix: Flix = {
+  val exampleFlix: Flix = {
     val flix = new Flix().setOptions(Options.Default)
     flix.check()
     flix
@@ -103,7 +114,7 @@ trait TestFormatterCommon extends AnyFunSuite {
     * are excluded: they refer to declarations in sibling files and do not compile
     * alone. `datalog/train-schedule.flix` is excluded separately.
     */
-  protected val ExampleSamples: List[Sample] =
+  val ExampleSamples: List[Sample] =
     findFlixFiles(
       Paths.get("examples"),
       exclude = Set("datalog/train-schedule.flix")
@@ -115,7 +126,7 @@ trait TestFormatterCommon extends AnyFunSuite {
   /**
     * Every `.flix` file in the standard library, used as a corpus for all properties.
     */
-  protected val StdlibSamples: List[Sample] =
+  val StdlibSamples: List[Sample] =
     StdlibFiles.map { case (p, content) =>
       Sample(p, content, src => reparseAt(stdlibFlix, p, src, restoreTo = Some(content)))
     }
@@ -154,7 +165,7 @@ trait TestFormatterCommon extends AnyFunSuite {
     *
     * Fails the test if `src` does not compile cleanly.
     */
-  protected def reparseAt(
+  def reparseAt(
     flix: Flix,
     path: String,
     src: String,
@@ -167,12 +178,12 @@ trait TestFormatterCommon extends AnyFunSuite {
       val (optRoot, errors) = flix.check()
       if (errors.nonEmpty) {
         val msg = CompilationMessage.formatAll(errors)(NoFormatter, optRoot)
-        fail(s"Failed to compile $path:\n$msg")
+        throw new AssertionError(s"Failed to compile $path:\n$msg")
       }
       val tree = findTreeAt(flix.getParsedAst, path)
-        .getOrElse(fail(s"No syntax tree found for $path"))
+        .getOrElse(throw new AssertionError(s"No syntax tree found for $path"))
       val weeded = findWeededUnit(flix.getWeededAst, path)
-        .getOrElse(fail(s"No weeded unit found for $path"))
+        .getOrElse(throw new AssertionError(s"No weeded unit found for $path"))
       Parsed(tree, weeded)
     } finally {
       restoreTo match {
@@ -213,7 +224,7 @@ trait TestFormatterCommon extends AnyFunSuite {
     * Finds the first line where two strings diverge and reports surrounding context.
     * This helps debugging idempotency and stability failures by showing the first point the outputs differ.
     */
-  protected def firstDivergence(a: String, b: String): String = {
+  def firstDivergence(a: String, b: String): String = {
     val linesA = a.linesIterator.toArray
     val linesB = b.linesIterator.toArray
     val minLen = math.min(linesA.length, linesB.length)
@@ -241,4 +252,39 @@ trait TestFormatterCommon extends AnyFunSuite {
       "No divergence found (strings are equal)"
     }
   }
+}
+
+/**
+  * Gives a formatter suite access to the shared fixtures in [[TestFormatterCommon]].
+  *
+  * The fixtures are held by the companion object rather than by this trait so that
+  * they are built once for the whole run. Each one compiles the standard library,
+  * so rebuilding them per suite cost more than every property they support.
+  */
+trait TestFormatterCommon extends AnyFunSuite {
+
+  protected type Parsed = TestFormatterCommon.Parsed
+
+  protected type Sample = TestFormatterCommon.Sample
+
+  /** Flix instance used to compile example programs. */
+  protected val exampleFlix: Flix = TestFormatterCommon.exampleFlix
+
+  /** Every standalone `.flix` file under `examples/`. */
+  protected val ExampleSamples: List[Sample] = TestFormatterCommon.ExampleSamples
+
+  /** Every `.flix` file in the standard library. */
+  protected val StdlibSamples: List[Sample] = TestFormatterCommon.StdlibSamples
+
+  /** Substitutes `src` for `path` in `flix`, runs `check`, and returns the parse. */
+  protected def reparseAt(
+    flix: Flix,
+    path: String,
+    src: String,
+    restoreTo: Option[String]
+  ): Parsed = TestFormatterCommon.reparseAt(flix, path, src, restoreTo)
+
+  /** Reports the first line at which two strings diverge, with context. */
+  protected def firstDivergence(a: String, b: String): String =
+    TestFormatterCommon.firstDivergence(a, b)
 }
