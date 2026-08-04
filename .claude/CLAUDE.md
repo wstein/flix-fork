@@ -65,10 +65,19 @@ wrong:
 `FormattingProvider`, and the file I/O in `FormatterLsp` are all in place.
 `flix format` reproduces its input exactly — a verified round trip, not a
 reformat. `flix format --canonical` reformats: horizontal spacing, indentation,
-`match` layout with produced `=>` alignment, struct-field alignment, pipeline
-breaking, and one Datalog constraint per line. It is opt-in, and choosing it is
-the consent to reformat, so it does not preserve padding "in case it was
-deliberate" — only spacing that is *semantic* survives untouched.
+`match` layout with produced `=>` alignment, struct-field and record-type-alias
+alignment, pipeline breaking, and one Datalog constraint per line. It is opt-in,
+and choosing it is the consent to reformat, so it does not preserve padding "in
+case it was deliberate" — only spacing that is *semantic* survives untouched.
+
+**It does not decide where an ordinary expression breaks.** If the author wrapped
+a call across three lines it stays wrapped; the formatter fixes the indentation
+of those lines but not the decision to have them. That is roughly 5,000 sites in
+the corpus and it makes this a **`gofmt`-class formatter, not a `dart format`
+one** — a real position on the spectrum, and the one to describe it by. Don't
+call the output "one layout per syntax tree" without that qualification. The
+reasoning, and why closing the gap is neither required nor currently checkable,
+is D23 in `docs/FORMATTER-DECISIONS.md`.
 
 Vertical decisions cannot be made from a pair of adjacent tokens, so they come
 from `LayoutPlan`, which walks the tree and emits one directive per gap; the

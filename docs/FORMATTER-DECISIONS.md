@@ -1,8 +1,12 @@
 # Formatter Decision Log
 
-Decisions taken while building `flix format` into a working canonical formatter,
-each with the evidence behind it and the alternative that was rejected. A
-decision recorded here is not a preference; it is a claim that can be checked,
+Decisions taken while building `flix format` into a working formatter, each with
+the evidence behind it and the alternative that was rejected. "Canonical"
+throughout means one layout per syntax tree *for what the formatter decides*;
+where an ordinary expression breaks is still the author's, which puts the tool in
+`gofmt`'s class rather than `dart format`'s (D23).
+
+A decision recorded here is not a preference; it is a claim that can be checked,
 and several entries below exist because an earlier claim was checked and failed.
 
 Status values are **Settled** (evidence is decisive and in the repository),
@@ -174,14 +178,19 @@ others.
 
 ---
 
-## D8 — Canonicality is the point, and it breaks a merged test
+## D8 — How far canonicality goes, and the merged test it breaks
 
-**Status: Proposed.**
+**Status: Proposed.** Scope narrowed by D23.
 
-The formatter imposes one layout per syntax tree: two files that parse to the
-same tree format identically, regardless of how they were written. Without this
-the tool is a normaliser, and normalisers leave exactly the churn a canonical
-formatter exists to remove.
+The formatter imposes one layout per syntax tree **for everything it decides**:
+spacing, indentation, alignment, `match`, pipelines, Datalog. Two files that
+differ in any of those format identically.
+
+It does **not** decide where an ordinary expression breaks — see D23. That is
+about 5,000 sites in the corpus, and it puts this tool in `gofmt`'s class rather
+than `dart format`'s. Read the rest of this entry with that scope in mind: where
+it says the formatter imposes one layout per tree, it means one layout per tree
+*modulo the author's break placement*.
 
 The consequence has to be stated rather than discovered later.
 `TestFormatterStability` asserts that the corpus is a fixed point of the
@@ -402,13 +411,14 @@ gaps only where it has a reason to has somewhere safe to stand. One that lays ou
 every construct from scratch must get this right everywhere at once.
 
 
-## D17 — The canonical policy decides no-space-versus-one-space, and nothing else
+## D17 — The separator policy decides no-space-versus-one-space, and nothing else
 
 **Status: Proposed.**
 
-`flix format --canonical` chooses the gap between two adjacent tokens from the
-kinds of those tokens alone, which is what makes it canonical: two files
-differing only in spacing format identically. Its scope is deliberately narrow.
+The separator policy chooses the gap between two adjacent tokens from the kinds
+of those tokens alone, so two files differing only in spacing format identically.
+Vertical layout is decided separately (D20, D21); where an ordinary expression
+breaks is not decided at all (D23). Its scope is deliberately narrow.
 
 - **Gaps that span a line are left alone.** Indentation, blank lines, and where a
   construct breaks are vertical decisions. They need the enclosing syntax rather
@@ -623,6 +633,62 @@ re-learning: the automated properties prove a formatter *destroys* nothing, and
 say nothing at all about whether the result is any good. Reading a diff is not a
 final acceptance step to be done once; it is the only instrument that sees this
 entire class of defect.
+
+## D23 — Where an ordinary expression breaks is the author's; this is a gofmt, not a dart format
+
+**Status: Settled**, as a description of what exists. The rule itself stays open.
+
+The formatter decides the whitespace *around* a line break — how far the line is
+indented, whether it is a continuation — but for an ordinary expression it does
+not decide *whether* to break. If the author wrapped a call across three lines,
+it stays across three lines; if they wrote it flat, it stays flat.
+
+**Scale.** Roughly 5,000 sites across the 403-file corpus. 44 files have none,
+103 have more than twenty, and the worst are `Fs/FileSystem.flix` (536),
+`Array.flix` (324) and `List.flix` (264). The count is approximate: separating an
+expression wrap from a statement start is itself imprecise, for the same reason
+D21 records — a declaration's node begins at its doc comment, so its `def` token
+does not look like the start of anything.
+
+**This makes the tool `gofmt`-class.** The design document's own related-work
+section says so of Go: *"gofmt preserves author line breaks in composite literals
+and argument lists, so two Go files with identical ASTs format differently. The
+canonical exemplars are `dart format` and `elm-format`."* By that taxonomy this
+is a gofmt. That is a defensible place to be, and it is not what the earlier
+entries here claimed.
+
+**Why not close it.**
+
+- *Join everything onto one line, breaking only where a construct rule says.*
+  Total, decidable, needs no width — and unreadable. Signature widths already run
+  to 330 columns (D.3) under a compactness pressure expressions do not have.
+- *Break on width.* The corpus says width is a bad predictor for Flix: break rate
+  climbs smoothly from 2.5% under 60 columns to 37% past 120, **with no knee**,
+  while arity has one. A width rule would disagree with the corpus at every
+  threshold it could pick.
+- *And the gates cannot check it.* Five defects this session passed fidelity,
+  idempotence and comment-anchor checks while producing wrong output. A change
+  rewriting 5,000 break decisions has no automated instrument that can validate
+  it; only diff review sees this class, and it does not scale to 5,000.
+
+**Why it costs little.** An author's break is *stable*: it does not move unless
+someone edits that expression, so it produces no recurring diff churn. The churn a
+formatter exists to remove — drifting indentation, inconsistent spacing,
+hand-maintained alignment — is removed.
+
+**Nothing requires closing it.** `docs/STYLE.md` legislates indentation, `=>`
+alignment, doc comments and instance ordering, and says nothing about where
+expressions wrap. By D0 that silence means the question is unsettled and any rule
+we add is a proposal rather than compliance.
+
+**The route forward is per-construct**, where the corpus has a knee: `if`/`else`
+leads 662 wrapped lines and is fixed-arity rather than an open expression, so it
+is tractable without width. Each such rule is one change with its own diff review.
+The open-ended tail stays with the author.
+
+**Dissent, recorded rather than resolved.** A formatter that blesses two layouts
+for one tree will drift, and each construct rule added makes the remaining tail
+look more arbitrary rather than less. Expect this to be reopened.
 
 ## Validation against real codebases
 
