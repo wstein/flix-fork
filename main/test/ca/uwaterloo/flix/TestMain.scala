@@ -27,6 +27,20 @@ class TestMain extends AnyFunSuite {
     assert(opts.command == Main.Command.Init)
   }
 
+  test("init --refresh") {
+    val args = Array("init", "--refresh")
+    val opts = Main.parseCmdOpts(args).get
+    assert(opts.command == Main.Command.Init)
+    assert(opts.refresh)
+  }
+
+  test("init without --refresh") {
+    // Refreshing overwrites a file. Plain init writes only what is absent, and stays that way.
+    val args = Array("init")
+    val opts = Main.parseCmdOpts(args).get
+    assert(!opts.refresh)
+  }
+
   test("build") {
     val args = Array("build")
     val opts = Main.parseCmdOpts(args).get
@@ -245,6 +259,15 @@ class TestMain extends AnyFunSuite {
     assert(Main.parseCmdOpts(Array("build", "--doc-format", "md")).isEmpty)
     assert(Main.parseCmdOpts(Array("--doc-format", "md")).isEmpty)
     assert(Main.parseCmdOpts(Array("--doc-format", "md", "doc")).isEmpty)
+  }
+
+  test("init --refresh is an option of init, not a global flag") {
+    // `--refresh` rewrites the generated agent guide and means nothing to any other command.
+    // Declared globally it would parse anywhere and silently do nothing.
+    assert(Main.parseCmdOpts(Array("init", "--refresh")).isDefined)
+    assert(Main.parseCmdOpts(Array("build", "--refresh")).isEmpty)
+    assert(Main.parseCmdOpts(Array("--refresh")).isEmpty)
+    assert(Main.parseCmdOpts(Array("--refresh", "init")).isEmpty)
   }
 
   test("an unrecognised doc option is rejected, not ignored") {

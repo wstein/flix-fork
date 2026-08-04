@@ -70,6 +70,8 @@ object Bootstrap {
     val manifestFile = getManifestFile(p)
     val gitignoreFile = getGitIgnoreFile(p)
     val editorConfigFile = getEditorConfigFile(p)
+    val agentsFile = getAgentsFile(p)
+    val claudeMdFile = getClaudeMdFile(p)
     val licenseFile = getLicenseFile(p)
     val readmeFile = getReadmeFile(p)
     val mainSourceFile = getMainSourceFile(p)
@@ -153,6 +155,14 @@ object Bootstrap {
         |""".stripMargin
     }
 
+    FileOps.newFileIfAbsent(agentsFile) {
+      mkAgentGuide()
+    }
+
+    FileOps.newFileIfAbsent(claudeMdFile) {
+      ClaudeMd
+    }
+
     FileOps.newFileIfAbsent(licenseFile) {
       """Enter license information here.
         |""".stripMargin
@@ -223,6 +233,113 @@ object Bootstrap {
     Result.Ok(())
   }
 
+  /**
+    * Rewrites the generated agent guide at the given path `p` for the running compiler.
+    *
+    * The guide names the version it was generated for, so it goes stale as soon as the project
+    * moves to another Flix release. Only a guide that still carries [[AGENT_GUIDE_MARKER]] is
+    * rewritten: deleting that line hands the file to the project, exactly as a Markdown
+    * documentation page without its marker is left alone by `doc`.
+    */
+  def refreshAgentGuide(p: Path)(implicit out: PrintStream): Result[Unit, BootstrapError] = {
+    if (!Files.isDirectory(p) || !Files.isReadable(p) || !Files.isWritable(p)) {
+      return Result.Err(BootstrapError.FileError(s"The directory: '$p' is not accessible. Aborting."))
+    }
+
+    val agentsFile = getAgentsFile(p)
+
+    if (!Files.exists(agentsFile)) {
+      FileOps.writeString(agentsFile, mkAgentGuide())
+      out.println(s"Created '$AGENTS_MD' for Flix ${Version.CurrentVersion}.")
+    } else if (!Files.readString(agentsFile).contains(AGENT_GUIDE_MARKER)) {
+      out.println(s"Left '$AGENTS_MD' alone: it no longer carries the generated marker.")
+    } else {
+      FileOps.writeString(agentsFile, mkAgentGuide())
+      out.println(s"Refreshed '$AGENTS_MD' for Flix ${Version.CurrentVersion}.")
+    }
+
+    // The guide reaches Claude Code only through the import in CLAUDE.md, and a missing import
+    // fails silently: the guide is simply never loaded.
+    val claudeMdFile = getClaudeMdFile(p)
+    if (Files.exists(claudeMdFile) && !Files.readString(claudeMdFile).contains(s"@$AGENTS_MD")) {
+      out.println(s"Note: '$CLAUDE_MD' does not import '$AGENTS_MD'; add a line reading '@$AGENTS_MD' to load the guide.")
+    }
+
+    Result.Ok(())
+  }
+
+  /**
+    * Returns the generated agent guide, stamped with the version of the compiler that wrote it.
+    *
+    * Four rules bind what may go in here; see the scaffolding section of `.claude/CLAUDE.md`. The
+    * one that is easiest to break by accident: every line must be true of the shipped binary, so
+    * `flix format` stays out until it does something.
+    */
+  private def mkAgentGuide(): String = {
+    val marker = s"$AGENT_GUIDE_MARKER generated for Flix ${Version.CurrentVersion}. " +
+      s"Rewritten by 'flix init --refresh'; delete this line to keep your own edits. -->"
+    s"$marker\n$AgentGuideBody"
+  }
+
+  /**
+    * The body of the generated agent guide.
+    *
+    * Kept out of [[mkAgentGuide]] because an interpolated string processes escape sequences, and
+    * the guide has to show effect syntax as it is written in Flix.
+    */
+  private val AgentGuideBody: String =
+    """
+      |# Working on this project
+      |
+      |A Flix project. The Flix version it targets is pinned in `flix.toml`.
+      |
+      |## Commands
+      |
+      |- `flix check` — type-check without generating code; the fast feedback loop
+      |- `flix test` — run every `@Test` function under `test/`
+      |- `flix run` — run `main`
+      |- `flix build` — compile to `build/class`
+      |- `flix doc` — write API documentation for the standard library and this project to `build/doc/`
+      |
+      |## Layout
+      |
+      |- `src/` — sources; `src/Main.flix` holds `main`
+      |- `test/` — `@Test` functions
+      |- `flix.toml` — package metadata, the Flix version, and dependencies
+      |- `build/`, `artifact/`, `lib/` — generated; do not edit and do not commit
+      |
+      |## Writing Flix
+      |
+      |Your training data is probably older than this compiler. Read
+      |https://doc.flix.dev/for-llms.html before writing Flix: it lists what changed. For the
+      |standard library use https://api.flix.dev, or run `flix doc` and read `build/doc/`, which
+      |matches this project's compiler exactly.
+      |
+      |The mistakes that show up most often:
+      |
+      |- `def main(): Unit \ IO = ...` — arguments come from `Env.getArgs()`, not from parameters
+      |- effects are written with `\`, not `&`
+      |- effect operations are called like ordinary functions; there is no `do` keyword
+      |- handlers are `run { ... } with handler E { ... }`; chain them rather than nesting `run`
+      |- annotations are uppercase: `@Test`, `@Lazy`, `@Parallel`, `@MustUse`
+      |- Java types need a top-level `import`, and all Java interop carries `IO`
+      |
+      |Prefer effects and handlers to callbacks or hand-written CPS, and standard library effects
+      |to Java interop.
+      |""".stripMargin
+
+  /**
+    * The generated `CLAUDE.md`.
+    *
+    * Claude Code reads `CLAUDE.md` and not `AGENTS.md`, so the guide is written once and imported
+    * here. This file is never rewritten, because anything a project adds below the import is its
+    * own.
+    */
+  private val ClaudeMd: String =
+    """<!-- Imports the generated agent guide. Add Claude-specific instructions below it. -->
+      |@AGENTS.md
+      |""".stripMargin
+
   /** The class file extension. Does not contain leading '.' */
   private val EXT_CLASS: String = "class"
 
@@ -243,6 +360,21 @@ object Bootstrap {
 
   /** The readme file name. */
   private val README: String = "README.md"
+
+  /** The agent guide file name. */
+  private val AGENTS_MD: String = "AGENTS.md"
+
+  /** The file name Claude Code reads. */
+  private val CLAUDE_MD: String = "CLAUDE.md"
+
+  /**
+    * The opening of the marker comment on a generated agent guide.
+    *
+    * A block-level HTML comment, so it is stripped before the guide is given to a model and costs
+    * no context. Changing this text orphans every guide written by an earlier version: they lose
+    * the marker and `--refresh` will decline to touch them.
+    */
+  private val AGENT_GUIDE_MARKER: String = "<!-- flix-init:"
 
   /** The build-and-test GitHub Actions workflow file name. */
   private val BUILD_AND_TEST_WORKFLOW: String = "build-and-test.yaml"
@@ -364,6 +496,16 @@ object Bootstrap {
     * Returns the path to the .editorconfig file relative to the given path `p`.
     */
   private def getEditorConfigFile(p: Path): Path = p.resolve("./.editorconfig").normalize()
+
+  /**
+    * Returns the path to the AGENTS.md file relative to the given path `p`.
+    */
+  private def getAgentsFile(p: Path): Path = p.resolve(s"./$AGENTS_MD").normalize()
+
+  /**
+    * Returns the path to the CLAUDE.md file relative to the given path `p`.
+    */
+  private def getClaudeMdFile(p: Path): Path = p.resolve(s"./$CLAUDE_MD").normalize()
 
   /**
     * Returns the path to the jar file based on the given path `p`.

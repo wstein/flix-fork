@@ -12,10 +12,36 @@ The project uses [Mill](https://mill-build.org/) as its build tool.
 
 `flix init` (`Bootstrap.init`) writes a new project into an existing directory:
 `src/`, `test/`, `.github/workflows/build-and-test.yaml`, `flix.toml`,
-`.gitignore`, `.editorconfig`, `LICENSE.md`, and `README.md`. Every file is
-written through `FileOps.newFileIfAbsent`, so running `init` in a directory that
-already has one of them leaves that file untouched — new template files must
-keep that property, since users edit what `init` gives them.
+`.gitignore`, `.editorconfig`, `AGENTS.md`, `CLAUDE.md`, `LICENSE.md`, and
+`README.md`. Every file is written through `FileOps.newFileIfAbsent`, so running
+`init` in a directory that already has one of them leaves that file untouched —
+new template files must keep that property, since users edit what `init` gives
+them.
+
+`flix init --refresh` (`Bootstrap.refreshAgentGuide`) is the one thing that
+overwrites, and it overwrites exactly one file. `AGENTS.md` names the compiler
+version that generated it, so it goes stale the moment a project upgrades;
+`--refresh` rewrites it for the running compiler. It rewrites only a guide that
+still opens with the `<!-- flix-init:` marker — deleting that line hands the
+file to the project, the same contract `MarkdownDocumentor` uses for pages it
+did not write. `CLAUDE.md` is never rewritten: it is a two-line `@AGENTS.md`
+import (Claude Code reads `CLAUDE.md`, not `AGENTS.md`) and anything a project
+adds below the import is its own. A `CLAUDE.md` without that import loads
+nothing and reports nothing, so `--refresh` says so.
+
+Four rules bind what may go in the generated guide, and a change that breaks one
+is a bug even though nothing fails to compile:
+
+1. **Under ~50 lines.** It is loaded in full into every agent session, and the
+   user's own content goes on top of it.
+2. **Nothing that can rot in place.** No version numbers in prose, no standard
+   library API names, no syntax that has ever changed. `flix.toml` is the pin
+   and `doc.flix.dev` is the source; the guide links rather than copies.
+3. **Only what the shipped binary does.** `flix format` stays out of the command
+   list while `FormatterLsp` produces no edits — a guide that names a command
+   which silently does nothing is worse than one that omits it.
+4. **Never fetch-and-execute.** The guide may tell an agent what to read. It may
+   not tell it to run what it downloads.
 
 The generated `.editorconfig` is a compatibility floor, not a style guide: it
 carries only settings an editor can apply without parsing Flix (charset, line

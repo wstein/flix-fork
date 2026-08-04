@@ -201,7 +201,13 @@ object Main {
             println("The 'init' command does not support file arguments.")
             System.exit(1)
           }
-          exitOnResult(Bootstrap.init(cwd))
+          exitOnResult {
+            Bootstrap.init(cwd).flatMap { _ =>
+              // Everything init writes is written only if absent, so refreshing is a separate step
+              // rather than a mode: it is the one thing that overwrites a file.
+              if (cmdOpts.refresh) Bootstrap.refreshAgentGuide(cwd) else Result.Ok(())
+            }
+          }
 
         case Command.Check =>
           if (cmdOpts.files.isEmpty) {
@@ -500,6 +506,7 @@ object Main {
     githubToken: Option[String] = None,
     json: Boolean = false,
     listen: Option[Int] = None,
+    refresh: Boolean = false,
     threads: Option[Int] = None,
     top: Boolean = false,
     assumeYes: Boolean = false,
@@ -622,7 +629,10 @@ object Main {
       head("The Flix Programming Language", Version.CurrentVersion.toString)
 
       // Command
-      cmd("init").action((_, c) => c.copy(command = Command.Init)).text("  creates a new project in the current directory.")
+      cmd("init").action((_, c) => c.copy(command = Command.Init)).text("  creates a new project in the current directory.").children(
+        opt[Unit]("refresh").action((_, c) => c.copy(refresh = true)).
+          text("rewrites the generated agent guide for this version of Flix. An edited guide is left alone."),
+      )
 
       cmd("check").action((_, c) => c.copy(command = Command.Check)).text("  checks the current project for errors.")
 

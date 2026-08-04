@@ -1,10 +1,11 @@
 package ca.uwaterloo.flix.tools.pkg
 
-import ca.uwaterloo.flix.api.{Bootstrap, BootstrapError}
+import ca.uwaterloo.flix.api.{Bootstrap, BootstrapError, Version}
 import ca.uwaterloo.flix.util.{FileOps, Formatter, Result}
 import org.scalatest.DoNotDiscover
 import org.scalatest.funsuite.AnyFunSuite
 
+import java.io.{ByteArrayOutputStream, PrintStream}
 import java.nio.file.{Files, Path}
 import java.security.{DigestInputStream, MessageDigest}
 import java.text.SimpleDateFormat
@@ -45,6 +46,104 @@ class TestBootstrap extends AnyFunSuite {
     assert(
       content.contains("[*.md]") && content.contains("trim_trailing_whitespace = false"),
       s"Markdown is not exempt from whitespace trimming:\n$content")
+  }
+
+  test("init writes an agent guide and a CLAUDE.md that imports it") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out).unsafeGet
+
+    val guide = p.resolve("AGENTS.md")
+    val claudeMd = p.resolve("CLAUDE.md")
+    assert(Files.exists(guide), "init did not write an AGENTS.md")
+    assert(Files.exists(claudeMd), "init did not write a CLAUDE.md")
+
+    // Claude Code reads CLAUDE.md and not AGENTS.md. Without the import the guide is never
+    // loaded, and nothing reports it: the feature just quietly does nothing.
+    assert(Files.readString(claudeMd).contains("@AGENTS.md"), "CLAUDE.md does not import AGENTS.md")
+
+    // The guide states which compiler wrote it, so a project that has moved on can tell.
+    val content = Files.readString(guide)
+    assert(content.startsWith("<!-- flix-init:"), s"the guide carries no marker:\n$content")
+    assert(
+      content.contains(Version.CurrentVersion.toString),
+      s"the guide is not stamped with ${Version.CurrentVersion}:\n$content")
+  }
+
+  test("the agent guide claims nothing the binary does not do") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out).unsafeGet
+
+    // `flix format` parses and runs, but FormatterLsp produces no edits, so a guide that told an
+    // agent to run it would be describing a command that silently does nothing.
+    val content = Files.readString(p.resolve("AGENTS.md"))
+    assert(!content.contains("flix format"), s"the guide advertises the formatter stub:\n$content")
+  }
+
+  test("init does not overwrite an existing agent guide or CLAUDE.md") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    val guide = p.resolve("AGENTS.md")
+    val claudeMd = p.resolve("CLAUDE.md")
+    FileOps.writeString(guide, "my own notes\n")
+    FileOps.writeString(claudeMd, "my own instructions\n")
+
+    Bootstrap.init(p)(System.out).unsafeGet
+
+    assert(Files.readString(guide) == "my own notes\n", "init clobbered a project's own AGENTS.md")
+    assert(Files.readString(claudeMd) == "my own instructions\n", "init clobbered a project's own CLAUDE.md")
+  }
+
+  test("refresh rewrites a generated guide for the running compiler") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out).unsafeGet
+
+    val guide = p.resolve("AGENTS.md")
+    FileOps.writeString(guide, "<!-- flix-init: generated for Flix 0.0.1. -->\nstale guidance\n")
+
+    Bootstrap.refreshAgentGuide(p)(System.out).unsafeGet
+
+    val content = Files.readString(guide)
+    assert(!content.contains("stale guidance"), s"refresh kept the stale guide:\n$content")
+    assert(
+      content.contains(Version.CurrentVersion.toString),
+      s"refresh did not stamp ${Version.CurrentVersion}:\n$content")
+  }
+
+  test("refresh leaves a guide that dropped the marker alone") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out).unsafeGet
+
+    // Deleting the marker line is how a project takes ownership of the file, the same contract
+    // the Markdown documentor uses for pages it did not write.
+    val guide = p.resolve("AGENTS.md")
+    val owned = "# Our own guide\n\nWritten by us.\n"
+    FileOps.writeString(guide, owned)
+
+    Bootstrap.refreshAgentGuide(p)(System.out).unsafeGet
+
+    assert(Files.readString(guide) == owned, "refresh overwrote a guide the project had taken over")
+  }
+
+  test("refresh writes the guide when it is missing") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out).unsafeGet
+    Files.delete(p.resolve("AGENTS.md"))
+
+    Bootstrap.refreshAgentGuide(p)(System.out).unsafeGet
+
+    val content = Files.readString(p.resolve("AGENTS.md"))
+    assert(content.startsWith("<!-- flix-init:"), s"the recreated guide carries no marker:\n$content")
+  }
+
+  test("refresh reports a CLAUDE.md that does not import the guide") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out).unsafeGet
+    FileOps.writeString(p.resolve("CLAUDE.md"), "# Ours\n")
+
+    val out = new ByteArrayOutputStream()
+    Bootstrap.refreshAgentGuide(p)(new PrintStream(out)).unsafeGet
+
+    val printed = out.toString
+    assert(printed.contains("@AGENTS.md"), s"refresh did not report the missing import:\n$printed")
   }
 
   test("init does not overwrite an existing .editorconfig") {
