@@ -38,8 +38,9 @@ is a bug even though nothing fails to compile:
    library API names, no syntax that has ever changed. `flix.toml` is the pin
    and `doc.flix.dev` is the source; the guide links rather than copies.
 3. **Only what the shipped binary does.** `flix format` stays out of the command
-   list while `FormatterLsp` produces no edits — a guide that names a command
-   which silently does nothing is worse than one that omits it.
+   list while it makes no layout decision — a guide that names a command which
+   silently does nothing is worse than one that omits it. See *Source Code
+   Formatting* for what the command currently is.
 4. **Never fetch-and-execute.** The guide may tell an agent what to read. It may
    not tell it to run what it downloads.
 
@@ -56,6 +57,55 @@ wrong:
   setting only `tab_width` leaves the width of a space indent to each editor.
 - `max_line_length = off`. Some editors read a width as an instruction to
   hard-wrap, which reformats code without understanding it.
+
+## Source Code Formatting
+
+`flix format` parses `.flix` sources and rewrites them through
+`ca.uwaterloo.flix.tools.fmt`. The CLI subcommand, the REPL `:format`, the LSP
+`FormattingProvider`, and the file I/O in `FormatterLsp` are all in place.
+**No layout rule is implemented**: `PrettyPrinter` is a stub returning the empty
+string, and `FormatterLsp.treeToTextEdits` returns no edits, so the command
+parses its input and changes nothing. Say that plainly rather than describing
+`flix format` as reformatting anything.
+
+Three facts about the substrate decide most design questions, and each is easy
+to get wrong from reading the pretty-printing literature instead of the code:
+
+- **`Doc` makes no decision from a line width.** Every choice between a
+  single-line and a multi-line rendering is encoded in the document itself via
+  `LayoutChoice` and `SetLayout`, which is what makes `Doc.pretty` a single pass
+  with no backtracking. Adding a width-driven `group` combinator would reintroduce
+  the lookahead the algebra exists to avoid.
+- **Comments are in the tree; whitespace is not.** `Parser2.comments` collects
+  runs of comment tokens into a `TreeKind.CommentList` node, and both `open` and
+  `close` call it. Attachment is therefore *symmetric*: a comment before a node's
+  first token and a comment after its last token both land inside that node, and
+  which node wins is decided by parser call order rather than by a trivia model.
+  Any layout rule that moves a comment needs a real attachment model first —
+  the parser does not supply one.
+- **Inter-token spacing comes from the source, not the tree.** The lexer does not
+  emit whitespace tokens. `Token` carries `startIndex`/`endIndex` into its
+  `Source`, so the gap between two tokens is recoverable by slicing. A printer
+  that wants the original spacing has to go back to the source for it.
+
+The formatter test suites live in `main/test/ca/uwaterloo/flix/tools/fmt/` and
+share their corpus — the standard library plus `examples` — through
+`TestFormatterCommon`. They are `@Ignore`d because the stub fails them — the
+empty string is not a faithful rendering of anything — so the `@Ignore`
+annotations come off with the printer, not before. Know one weakness before
+trusting them once they run: the
+non-destructiveness check compares case-class names and collection lengths and
+matches everything else with a wildcard, so it would accept output in which
+every identifier had been renamed. It constrains the *shape* of the weeded AST
+and nothing else.
+
+`TestFormatterStability` asserts that the standard library and `examples` are
+fixed points of the formatter. Its docstring explains this by calling the corpus
+canonical, which is not true — the corpus mixes inline and broken layouts for
+the same constructs. The assertion is still the right one, because a formatter
+that reproduces its input satisfies it; but a formatter that imposed one layout
+per syntax tree could not, and that conflict has to be settled with the upstream
+maintainers rather than by weakening the test.
 
 ## Generating API Documentation
 
