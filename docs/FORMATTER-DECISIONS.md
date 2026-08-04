@@ -705,6 +705,49 @@ The open-ended tail stays with the author.
 for one tree will drift, and each construct rule added makes the remaining tail
 look more arbitrary rather than less. Expect this to be reopened.
 
+## D24 — `if`/`else` and `let` do not get break rules; the evidence refused
+
+**Status: Settled** as a refusal. Reopen only with a measurement, not an argument.
+
+D23 proposed extending per-construct break rules "where the corpus has a knee",
+and named `if`/`else` as the obvious next candidate: 662 wrapped lines, and a
+fixed-arity construct rather than an open-ended expression. It was rated highly
+on that reasoning. The reasoning was wrong.
+
+**`if`/`else` has no knee.** 1,357 occurrences in the corpus: **444 inline
+(32.7%), 913 broken (67.3%)**. That is the same shape as the two-stage pipeline
+split, and it is not rescued by the arity argument — fixed arity would tell us how
+to lay out the branches, but the open question is whether to break *at all*, and
+about that the corpus is divided. A blanket "always break" reformats 444 sites
+against their authors; "always inline" reformats 913. Either is a coin toss
+dressed as a rule.
+
+The pipeline rule survived a similar split only because there was a genuine knee
+underneath it: single-stage pipelines are broken 0 times in 493, so
+"one inline, two or more broken" matches the corpus at ~85% overall. No analogous
+discriminator was found for `if`/`else`.
+
+**`let` was not measured, despite appearances.** The obvious probe reports 98.9%
+of `let` bindings as broken, which is an artifact rather than a finding:
+`Expr.LetMatch` spans the binding *and the whole remainder of its block*, so
+asking whether the node spans lines asks whether the block does, which is nearly
+always true. A real measurement has to isolate the bound expression. Until
+someone does that, there is no evidence here either way, and 98.9% should not be
+quoted as though there were.
+
+**What this costs.** D23's route forward — close the gap construct by construct —
+is narrower than it looked. `match`, pipelines, Datalog and the alignment rules
+had decisive evidence; the next candidates do not. The remaining ~5,000
+author-decided breaks are mostly in constructs where the corpus itself is of two
+minds, which is a reason to doubt any rule would be an improvement rather than a
+reason to work harder at finding one.
+
+**Rejected:** implementing the rule anyway on the grounds that a canonical
+formatter must decide everything. That argument would have justified the width
+rule too, and D1 rejects it on the same evidence: a threshold that disagrees with
+the corpus roughly half the time is not canonicality, it is a preference imposed
+at scale.
+
 ## Validation against real codebases
 
 `flix format --canonical` was run over nine third-party Flix repositories, in
