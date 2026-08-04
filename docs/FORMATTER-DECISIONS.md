@@ -95,7 +95,7 @@ malformed input the formatter preserves the order and lets the compiler report.
 
 **Status: Settled** for the mechanism, **Deferred** for the CLI gate.
 
-Any subtree the printer has no rule for is reproduced from the source verbatim.
+Any gap the printer has no rule for keeps the whitespace the source had (D15).
 This makes the printer total from the first rule onward, and it makes every
 layout rule a *delta* against a known-faithful baseline rather than a step into
 open water.
@@ -149,10 +149,13 @@ algebra's `fill`. It does not need a new combinator.
 **Rejected:** stripping alignment, as Prettier would. It is simpler to implement
 and it contradicts the style guide in writing.
 
-Alignment groups are bounded so that one pathological pattern cannot push every
-`=>` off the right margin: a blank line ends a group, and an arm whose pattern is
-far longer than its neighbours' opts out and takes a single space. This is the
-`gofmt` model for struct field alignment.
+Alignment is currently **preserved rather than produced** (D17): the formatter
+keeps the padding an author wrote and does not compute it. Producing it needs the
+whole group — every arm of the match — which is the next layout rule to write.
+When it is written, groups should be bounded so one pathological pattern cannot
+push every `=>` off the right margin: a blank line ends a group, and an arm whose
+pattern is far longer than its neighbours' opts out and takes a single space.
+That is the `gofmt` model for struct field alignment.
 
 ---
 
@@ -281,47 +284,75 @@ across a project to no purpose and defeating incremental builds.
 
 ---
 
-## D18 — A minus sign keeps the spacing it had, and braces are not touched
+## D14 — Tokens are printed through `printableTokens`, never from `Token.text`
 
 **Status: Settled.**
 
-**Minus.** `-9223372036854775808i64` is `Int64`'s least value and is representable
-only as a negative literal; `- 9223372036854775808i64` is out of range and does
-not compile. Nothing tells that apart from ordinary subtraction in a pair of
-adjacent tokens, so the source's spacing is kept whenever a minus precedes a
-numeric literal: `-1` stays `-1`, `x - 1` stays `x - 1`, and the policy gives up
-normalising `x-1`. Correctness outranks the tidier output.
+The syntax tree is full-fidelity in the sense that matters — every non-whitespace
+character of the source can be recovered from it — but not in the sense a printer
+would naively assume. `Lexer.acceptEscapedName` resets the token start past the
+`$` of an escaped name, with the comment *"Don't include the $ sign in the
+name"*, so in `def $run(...)` and `x.$and(y)` the `$` belongs to **no token**.
 
-**Braces.** `{` and `}` open blocks, records, record types, Datalog values, and
-handler bodies, and the corpus spaces them differently in each. A rule that
-cannot tell those apart would reformat every brace in the language on no
-evidence, so gaps adjacent to a brace are reproduced. Brace spacing needs the
-enclosing construct, which makes it a job for a real layout rule rather than for
-this policy.
+A printer that concatenated `Token.text` would emit `def run(...)`, renaming a
+definition to a keyword and either changing the program's meaning or breaking it
+outright. Nothing in the AST-shape check would catch it, because the weeder
+strips the `$` too.
 
-## D17 — The canonical policy decides no-space-versus-one-space, and nothing else
+`TokenStream.printableTokens` attributes any non-whitespace character between two
+tokens to the token that follows, which restores the `$` and generalises to any
+future character the lexer chooses to exclude. The corpus test asserts the
+resulting property directly: the printable texts account for every non-whitespace
+character of every file.
 
-**Status: Proposed.**
+This was found by measurement, not by reading the lexer — the corpus check failed
+on `BigInt.flix` and one interoperability example, and the lexer explained why.
+It is the third time in this work that a claim about the implementation was
+settled by running something rather than by reasoning about it.
 
-`flix format --canonical` chooses the gap between two adjacent tokens from the
-kinds of those tokens alone, which is what makes it canonical: two files
-differing only in spacing format identically. Its scope is deliberately narrow.
+**Rejected:** changing the lexer to include the `$` in the token. The exclusion is
+deliberate — the resolved name really is `run`, not `$run` — and a formatter is
+the wrong reason to change what a name means.
 
-- **Gaps that span a line are left alone.** Indentation, blank lines, and where a
-  construct breaks are vertical decisions. They need the enclosing syntax rather
-  than two adjacent tokens, and none of them is settled.
-- **Runs of two or more spaces are left alone.** They are column alignment, which
-  `docs/STYLE.md` requires for match arms (D6) and which the corpus uses for
-  struct fields and record type aliases. Collapsing them would reformat thousands
-  of sites against a written rule. This is a knowing compromise on canonicality —
-  two files differing only in alignment still format differently — and it stands
-  until alignment is *produced* rather than preserved, which needs the whole
-  group.
 
-So the policy normalises `def add(x:Int32,y:Int32):Int32=x+y` into
-`def add(x: Int32, y: Int32): Int32 = x + y` and leaves everything structural
-where it was. That is a smaller claim than "canonical formatter", and it is the
-part that can be made true and kept true today.
+## D15 — The printer decides inter-token whitespace and nothing else
+
+**Status: Settled.**
+
+`PrettyPrinter` emits every token of the tree in order and chooses only the gap
+between each adjacent pair. Layout rules are `Separators` policies choosing gaps;
+the baseline policy chooses the gap the source already had, which reproduces the
+input exactly.
+
+This turns three properties from rules that could regress into facts that cannot:
+
+- **Nothing is reordered, lost, or duplicated** (D3), because no operation in the
+  printer can do any of those things.
+- **A comment keeps its neighbours** (D5, D9), because comments are tokens. The
+  printer can change which line a comment sits on; it cannot change which
+  declaration it belongs to. That is the failure that is otherwise silent, and it
+  is now unreachable rather than merely tested for.
+- **Every construct is printable from the first commit**, because a construct
+  with no rule yet keeps its original gaps. Coverage grows without correctness
+  ever being in doubt.
+
+It also removes the reason the deferral in D9 was uncomfortable. Comment
+attachment stays unresolved, but it can no longer be got *wrong* — the worst
+available outcome is a comment left on an unhelpful line, not one silently moved
+into a different declaration.
+
+**Rejected:** building a `Doc` tree for the whole program and rendering it. It is
+the conventional design and the merged algebra supports it, but it makes fidelity
+a property of rule *coverage*: any construct without a rule has no rendering, so
+the printer cannot be correct until it is complete. Emitting a verbatim region
+inside a `Doc` does not rescue this, because `Line` and `HardLine` re-indent to
+the prevailing nesting level and would silently re-indent the verbatim text —
+which is exactly how a licence header (D10) gets rewritten. Gap decisions compose
+with untouched regions; `Doc` nesting does not.
+
+The `Doc` algebra remains the right tool for the layout rules themselves, where a
+construct is rendered wholly under one policy.
+
 
 ## D16 — Whitespace around `->`, `.`, `@` and backticks is preserved, because it is semantic
 
@@ -370,73 +401,49 @@ strongest single argument for the architecture in D15: a printer that rewrites
 gaps only where it has a reason to has somewhere safe to stand. One that lays out
 every construct from scratch must get this right everywhere at once.
 
-## D15 — The printer decides inter-token whitespace and nothing else
+
+## D17 — The canonical policy decides no-space-versus-one-space, and nothing else
+
+**Status: Proposed.**
+
+`flix format --canonical` chooses the gap between two adjacent tokens from the
+kinds of those tokens alone, which is what makes it canonical: two files
+differing only in spacing format identically. Its scope is deliberately narrow.
+
+- **Gaps that span a line are left alone.** Indentation, blank lines, and where a
+  construct breaks are vertical decisions. They need the enclosing syntax rather
+  than two adjacent tokens, and none of them is settled.
+- **Runs of two or more spaces are left alone.** They are column alignment, which
+  `docs/STYLE.md` requires for match arms (D6) and which the corpus uses for
+  struct fields and record type aliases. Collapsing them would reformat thousands
+  of sites against a written rule. This is a knowing compromise on canonicality —
+  two files differing only in alignment still format differently — and it stands
+  until alignment is *produced* rather than preserved, which needs the whole
+  group.
+
+So the policy normalises `def add(x:Int32,y:Int32):Int32=x+y` into
+`def add(x: Int32, y: Int32): Int32 = x + y` and leaves everything structural
+where it was. That is a smaller claim than "canonical formatter", and it is the
+part that can be made true and kept true today.
+
+
+## D18 — A minus sign keeps the spacing it had, and braces are not touched
 
 **Status: Settled.**
 
-`PrettyPrinter` emits every token of the tree in order and chooses only the gap
-between each adjacent pair. Layout rules are `Separators` policies choosing gaps;
-the baseline policy chooses the gap the source already had, which reproduces the
-input exactly.
+**Minus.** `-9223372036854775808i64` is `Int64`'s least value and is representable
+only as a negative literal; `- 9223372036854775808i64` is out of range and does
+not compile. Nothing tells that apart from ordinary subtraction in a pair of
+adjacent tokens, so the source's spacing is kept whenever a minus precedes a
+numeric literal: `-1` stays `-1`, `x - 1` stays `x - 1`, and the policy gives up
+normalising `x-1`. Correctness outranks the tidier output.
 
-This turns three properties from rules that could regress into facts that cannot:
-
-- **Nothing is reordered, lost, or duplicated** (D3), because no operation in the
-  printer can do any of those things.
-- **A comment keeps its neighbours** (D5, D9), because comments are tokens. The
-  printer can change which line a comment sits on; it cannot change which
-  declaration it belongs to. That is the failure that is otherwise silent, and it
-  is now unreachable rather than merely tested for.
-- **Every construct is printable from the first commit**, because a construct
-  with no rule yet keeps its original gaps. Coverage grows without correctness
-  ever being in doubt.
-
-It also removes the reason the deferral in D9 was uncomfortable. Comment
-attachment stays unresolved, but it can no longer be got *wrong* — the worst
-available outcome is a comment left on an unhelpful line, not one silently moved
-into a different declaration.
-
-**Rejected:** building a `Doc` tree for the whole program and rendering it. It is
-the conventional design and the merged algebra supports it, but it makes fidelity
-a property of rule *coverage*: any construct without a rule has no rendering, so
-the printer cannot be correct until it is complete. Emitting a verbatim region
-inside a `Doc` does not rescue this, because `Line` and `HardLine` re-indent to
-the prevailing nesting level and would silently re-indent the verbatim text —
-which is exactly how a licence header (D10) gets rewritten. Gap decisions compose
-with untouched regions; `Doc` nesting does not.
-
-The `Doc` algebra remains the right tool for the layout rules themselves, where a
-construct is rendered wholly under one policy.
-
-## D14 — Tokens are printed through `printableTokens`, never from `Token.text`
-
-**Status: Settled.**
-
-The syntax tree is full-fidelity in the sense that matters — every non-whitespace
-character of the source can be recovered from it — but not in the sense a printer
-would naively assume. `Lexer.acceptEscapedName` resets the token start past the
-`$` of an escaped name, with the comment *"Don't include the $ sign in the
-name"*, so in `def $run(...)` and `x.$and(y)` the `$` belongs to **no token**.
-
-A printer that concatenated `Token.text` would emit `def run(...)`, renaming a
-definition to a keyword and either changing the program's meaning or breaking it
-outright. Nothing in the AST-shape check would catch it, because the weeder
-strips the `$` too.
-
-`TokenStream.printableTokens` attributes any non-whitespace character between two
-tokens to the token that follows, which restores the `$` and generalises to any
-future character the lexer chooses to exclude. The corpus test asserts the
-resulting property directly: the printable texts account for every non-whitespace
-character of every file.
-
-This was found by measurement, not by reading the lexer — the corpus check failed
-on `BigInt.flix` and one interoperability example, and the lexer explained why.
-It is the third time in this work that a claim about the implementation was
-settled by running something rather than by reasoning about it.
-
-**Rejected:** changing the lexer to include the `$` in the token. The exclusion is
-deliberate — the resolved name really is `run`, not `$run` — and a formatter is
-the wrong reason to change what a name means.
+**Braces.** `{` and `}` open blocks, records, record types, Datalog values, and
+handler bodies, and the corpus spaces them differently in each. A rule that
+cannot tell those apart would reformat every brace in the language on no
+evidence, so gaps adjacent to a brace are reproduced. Brace spacing needs the
+enclosing construct, which makes it a job for a real layout rule rather than for
+this policy.
 
 ## Validation against real codebases
 

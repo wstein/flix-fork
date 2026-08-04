@@ -118,7 +118,12 @@ to get wrong from reading the pretty-printing literature instead of the code:
 
 The formatter test suites live in `main/test/ca/uwaterloo/flix/tools/fmt/` and
 share their corpus — the standard library plus `examples` — through
-`TestFormatterCommon`. The fixtures are held by that file's companion *object*
+`TestFormatterCommon`. They are the slowest part of the run — roughly six of the
+full suite's sixteen minutes — because each property parses the corpus and each
+parse is a full compile. Keep that in mind before adding another corpus-wide
+property; prefer asserting it inside a pass that already exists.
+
+The fixtures are held by that file's companion *object*
 rather than by the trait, and each `Sample` memoises the parse of its own
 content: every fixture compiles the standard library and every property starts
 from the unmodified sample, so building them per suite and reparsing per property
@@ -201,7 +206,7 @@ This catches standard library compilation errors early.
 
 **Step 3:** Once both pass, run the test suite:
 
-- `./mill flix.test.testForked "-oC"` — Run all tests (preferred; `-oC` suppresses passing test output, should take at most 10 minutes)
+- `./mill flix.test.testForked "-oC"` — Run all tests (preferred; `-oC` suppresses passing test output, should take at most 20 minutes)
 - `./mill flix.test` — Run all tests (verbose)
 - `./mill flix.test.testOnly <pattern>` — Run specific test suites by fully qualified class name
 
