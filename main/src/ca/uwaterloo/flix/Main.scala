@@ -17,6 +17,7 @@
 package ca.uwaterloo.flix
 
 import ca.uwaterloo.flix.api.lsp.{LspServer, VSCodeLspServer, FormatterLsp as LspFormatter}
+import ca.uwaterloo.flix.tools.fmt.{Canonical, PrettyPrinter}
 import ca.uwaterloo.flix.api.{Bootstrap, BootstrapError, Flix, Version}
 import ca.uwaterloo.flix.language.CompilationMessage
 import ca.uwaterloo.flix.language.ast.shared.SecurityContext
@@ -305,6 +306,10 @@ object Main {
           }
 
         case Command.Format =>
+          // The canonical policy chooses spacing from the tokens alone; the default
+          // reproduces the spacing the source had.
+          val separators =
+            if (cmdOpts.canonical) Canonical else PrettyPrinter.Separators.Verbatim
           // With no file arguments the whole project is formatted through Bootstrap;
           // otherwise only the named files are. The two are alternatives: without the
           // `else`, the project branch falls through into the file branch with an empty
@@ -314,7 +319,7 @@ object Main {
               Bootstrap.bootstrap(cwd, options.githubToken).flatMap { bootstrap =>
                 val flix = new Flix().setFormatter(formatter)
                 flix.setOptions(options)
-                bootstrap.format(flix)
+                bootstrap.format(flix, separators)
               }
             }
           } else {
@@ -322,7 +327,7 @@ object Main {
             val (optRoot, errors) = flix.check()
             if (errors.isEmpty) {
               val syntaxTree = flix.getParsedAst
-              LspFormatter.formatFiles(syntaxTree, cmdOpts.files.map(_.toPath).toList)(flix)
+              LspFormatter.formatFiles(syntaxTree, cmdOpts.files.map(_.toPath).toList, separators)(flix)
               System.exit(0)
             }
             else exitWithErrors(flix, errors, optRoot)
@@ -505,6 +510,7 @@ object Main {
     coverage: Boolean = false,
     coverageOutput: Option[String] = None,
     coverageLcovOutput: Option[String] = None,
+    canonical: Boolean = false,
     docFormat: DocFormat = Options.Default.docFormat,
     entryPoint: Option[String] = None,
     installDeps: Boolean = true,
@@ -657,6 +663,10 @@ object Main {
       )
 
       cmd("format").action((_, c) => c.copy(command = Command.Format)).text("  formats Flix source code files.")
+        .children(
+          opt[Unit]("canonical").action((_, c) => c.copy(canonical = true)).
+            text("  imposes one spacing per syntax tree, instead of preserving the source's own.")
+        )
 
       cmd("run").action((_, c) => c.copy(command = Command.Run)).text("  runs main for the current project.")
 

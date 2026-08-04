@@ -63,9 +63,13 @@ wrong:
 `flix format` parses `.flix` sources and rewrites them through
 `ca.uwaterloo.flix.tools.fmt`. The CLI subcommand, the REPL `:format`, the LSP
 `FormattingProvider`, and the file I/O in `FormatterLsp` are all in place.
-**No layout rule is implemented yet**: `PrettyPrinter` reproduces its input
-exactly, so the command is a verified round trip rather than a formatter. Say
-that plainly rather than describing `flix format` as reformatting anything.
+`flix format` reproduces its input exactly — a verified round trip, not a
+reformat. `flix format --canonical` additionally normalises **horizontal
+spacing**: it decides between no space and one space from the kinds of the two
+tokens either side of a gap. It changes nothing vertical. Indentation, blank
+lines, where a construct breaks, and runs of two or more spaces (which are column
+alignment) are all left as they were. Describe the command in those terms rather
+than as a general-purpose formatter.
 
 The printer emits every token of the tree in order and decides **only the
 whitespace between them**. That restriction is the architecture, and it is worth
@@ -102,6 +106,15 @@ to get wrong from reading the pretty-printing literature instead of the code:
   renames a definition to a keyword. Print through
   `TokenStream.printableTokens`, which attributes such characters to the token
   that follows them, rather than reading `Token.text` directly.
+- **Whitespace is sometimes semantic.** `a->b` is struct field access while
+  `a -> b` is the function arrow; a `.` with trailing space is the Datalog clause
+  terminator and one with leading space is a lexer error; and `@` followed
+  immediately by a name char is a single `Annotation` token rather than `At` plus
+  a name. Normalising any of these re-lexes the program instead of restyling it,
+  so `Canonical` reproduces the original gap next to them. Tightness is also not
+  symmetric — treating collection heads as tight turned `else Set#{ }` into
+  `elseSet#{ }`. Add a spacing rule only with a case that proves it does not
+  re-lex.
 
 The formatter test suites live in `main/test/ca/uwaterloo/flix/tools/fmt/` and
 share their corpus — the standard library plus `examples` — through

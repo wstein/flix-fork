@@ -281,12 +281,55 @@ across a project to no purpose and defeating incremental builds.
 
 ---
 
-## D16 — Whitespace around `->` and `.` is preserved exactly, because it is semantic
+## D18 — A minus sign keeps the spacing it had, and braces are not touched
 
 **Status: Settled.**
 
-Whitespace is not always insignificant in Flix, and the two places it is not are
-both places a spacing rule would naturally touch.
+**Minus.** `-9223372036854775808i64` is `Int64`'s least value and is representable
+only as a negative literal; `- 9223372036854775808i64` is out of range and does
+not compile. Nothing tells that apart from ordinary subtraction in a pair of
+adjacent tokens, so the source's spacing is kept whenever a minus precedes a
+numeric literal: `-1` stays `-1`, `x - 1` stays `x - 1`, and the policy gives up
+normalising `x-1`. Correctness outranks the tidier output.
+
+**Braces.** `{` and `}` open blocks, records, record types, Datalog values, and
+handler bodies, and the corpus spaces them differently in each. A rule that
+cannot tell those apart would reformat every brace in the language on no
+evidence, so gaps adjacent to a brace are reproduced. Brace spacing needs the
+enclosing construct, which makes it a job for a real layout rule rather than for
+this policy.
+
+## D17 — The canonical policy decides no-space-versus-one-space, and nothing else
+
+**Status: Proposed.**
+
+`flix format --canonical` chooses the gap between two adjacent tokens from the
+kinds of those tokens alone, which is what makes it canonical: two files
+differing only in spacing format identically. Its scope is deliberately narrow.
+
+- **Gaps that span a line are left alone.** Indentation, blank lines, and where a
+  construct breaks are vertical decisions. They need the enclosing syntax rather
+  than two adjacent tokens, and none of them is settled.
+- **Runs of two or more spaces are left alone.** They are column alignment, which
+  `docs/STYLE.md` requires for match arms (D6) and which the corpus uses for
+  struct fields and record type aliases. Collapsing them would reformat thousands
+  of sites against a written rule. This is a knowing compromise on canonicality —
+  two files differing only in alignment still format differently — and it stands
+  until alignment is *produced* rather than preserved, which needs the whole
+  group.
+
+So the policy normalises `def add(x:Int32,y:Int32):Int32=x+y` into
+`def add(x: Int32, y: Int32): Int32 = x + y` and leaves everything structural
+where it was. That is a smaller claim than "canonical formatter", and it is the
+part that can be made true and kept true today.
+
+## D16 — Whitespace around `->`, `.`, `@` and backticks is preserved, because it is semantic
+
+**Status: Settled.**
+
+Whitespace is not always insignificant in Flix. Four places where it is not are
+all places a spacing rule would naturally touch, and three of the four were found
+by running the formatter over real codebases rather than by reading the lexer.
 
 **`->`.** The lexer produces `ArrowThinRTight` for `a->b` and
 `ArrowThinRWhitespace` for `a ->b`, `a-> b`, and `a -> b`. The tight form is
@@ -300,10 +343,27 @@ qualified names. A `.` *preceded* by whitespace is not a token at all — the le
 reports `FreeDot`. So `Shape.    Rectangle` is an error rather than an unusual
 layout.
 
+**`@`.** An `@` followed immediately by a name character lexes as a single
+`Annotation` token; with a space it is `At` followed by a name. So closing up
+`new Stack @ rc { ... }` into `new Stack @rc { ... }` turns two tokens into one.
+This was found by measurement: the region syntax in `SoftRaster.flix` came out
+unstable, formatting to one thing on the first pass and another on the second,
+because the first pass changed how the second pass lexed it.
+
+**Backticks.** Infix application `x `Int32.mod` 2` is spaced outside the ticks
+and tight inside, so the correct gap depends on whether a tick opens or closes —
+which cannot be told from one adjacent pair of tokens.
+
 The formatter therefore reproduces the original gap adjacent to these tokens and
 never normalises it. "No spaces around `.` and `->`" as a *style* rule would give
 the right answer for the wrong reason and would be actively wrong wherever the
 corpus writes `x -> x + 1`.
+
+A related mistake, also caught by measurement rather than review: tightness must
+not be assumed symmetric. Treating the collection-literal heads as tight turned
+`else Set#{ }` into `elseSet#{ }` — welding a keyword onto a name — and would
+have turned `= #{` into `=#{`, which lexes as an operator. Only record selection
+(`p1#x`) is tight on both sides.
 
 This is a constraint on any layout rule, not a rule itself, and it is the
 strongest single argument for the architecture in D15: a printer that rewrites
@@ -377,6 +437,56 @@ settled by running something rather than by reasoning about it.
 **Rejected:** changing the lexer to include the `$` in the token. The exclusion is
 deliberate — the resolved name really is `run`, not `$run` — and a formatter is
 the wrong reason to change what a name means.
+
+## Validation against real codebases
+
+`flix format --canonical` was run over nine third-party Flix repositories, in
+addition to the standard library and `examples`. Three properties were checked
+per file: that the output contains the same non-whitespace characters as the
+input, that formatting the output again changes nothing, and that no comment's
+anchor moved.
+
+| Repository | sampled | formatted | skipped | changed | fidelity | idempotence | anchors |
+|---|---|---|---|---|---|---|---|
+| ababup1192/flix_game_engine | 120 | 97 | 23 | 62 | 0 | 0 | 0 |
+| ababup1192/yarn_spinner_plugin | 120 | 64 | 56 | 49 | 0 | 0 | 0 |
+| ababup1192/frogger | 45 | 39 | 6 | 36 | 0 | 0 | 0 |
+| ababup1192/kaidan | 37 | 35 | 2 | 14 | 0 | 0 | 0 |
+| ababup1192/dodge_the_creeps_flix | 23 | 17 | 6 | 15 | 0 | 0 | 0 |
+| stephentetley/flix-time | 59 | 16 | 43 | 8 | 0 | 0 | 0 |
+| stephentetley/sheetio | 67 | 11 | 56 | 7 | 0 | 0 | 0 |
+| w0rxbend/compression-flix | 26 | 24 | 2 | 18 | 0 | 0 | 0 |
+| w0rxbend/scalachess-flix | 59 | 2 | 57 | 2 | 0 | 0 | 0 |
+| **total** | **556** | **305** | **251** | **211** | **0** | **0** | **0** |
+
+Two honest qualifications. The two largest repositories were sampled evenly
+rather than exhaustively, because each file costs two full compiles. And 251
+files were **skipped**: they produced no syntax tree under this compiler, since
+these projects target other Flix versions and the surface syntax has changed
+repeatedly. The zero-failure result covers the 305 that did parse. The skip rate
+is itself a finding — it is what the `flix format` requirement of a clean
+`check()` (D4) costs on real third-party code.
+
+Four defects were found this way and are fixed, each recorded above: the `@`
+spacing that re-lexed a region annotation and made formatting unstable (D16),
+the asymmetric tightness that welded `else Set#{ }` into `elseSet#{ }` (D16), the
+alignment collapse that would have reformatted every aligned match arm against
+`docs/STYLE.md` (D17), and the minus sign detached from its literal (D18). All
+four were invisible to reasoning about the grammar and obvious within minutes of
+running the tool over code nobody here wrote.
+
+**The fourth one also showed that these three properties are not enough.**
+Detaching the minus from `-9223372036854775808i64` preserves every non-whitespace
+character, is perfectly idempotent, and moves no comment — so it passed all three
+external gates cleanly while producing a program that does not compile. What
+caught it was the corpus test that *reparses* the output and requires a clean
+compile. A formatter's output being well-formed is a property in its own right,
+and it is not implied by the output containing the right characters.
+
+`flix format` accepts canonical output unchanged, as P6 requires — though that
+holds trivially today, since the default policy reproduces its input. The check
+is in the suite so that it starts meaning something the day the default stops
+being the identity.
 
 ## Open questions
 

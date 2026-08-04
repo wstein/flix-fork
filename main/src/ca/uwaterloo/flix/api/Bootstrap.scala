@@ -25,6 +25,7 @@ import ca.uwaterloo.flix.language.phase.Documentor
 import ca.uwaterloo.flix.runtime.CompilationResult
 import ca.uwaterloo.flix.runtime.shell.FileWatcher
 import ca.uwaterloo.flix.tools.Tester
+import ca.uwaterloo.flix.tools.fmt.PrettyPrinter
 import ca.uwaterloo.flix.tools.pkg.github.GitHub
 import ca.uwaterloo.flix.tools.pkg.{FlixPackageManager, JarPackageManager, Manifest, ManifestParser, MavenPackageManager, PackageModules, ReleaseError}
 import ca.uwaterloo.flix.util.Result.{Err, Ok}
@@ -1039,12 +1040,12 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
   /**
     * Formats all source files in the project.
     */
-  def format(flix: Flix): Result[Unit, BootstrapError] = {
+  def format(flix: Flix, separators: PrettyPrinter.Separators): Result[Unit, BootstrapError] = {
     Steps.updateStaleSources(flix)
     Steps.check(flix).map {
       case _ =>
         val syntaxTree = flix.getParsedAst
-        LspFormatter.formatFiles(syntaxTree, sourcePaths)(flix)
+        LspFormatter.formatFiles(syntaxTree, sourcePaths, separators)(flix)
     }
   }
 

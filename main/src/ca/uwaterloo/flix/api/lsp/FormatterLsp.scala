@@ -33,11 +33,16 @@ object FormatterLsp {
     *
     * @param root        the syntax tree root
     * @param sourcePaths the list of source file paths
+    * @param separators  the layout policy deciding the gap between tokens
     */
-  def formatFiles(root: SyntaxTree.Root, sourcePaths: List[Path])(implicit flix: Flix): Unit = {
+  def formatFiles(
+    root: SyntaxTree.Root,
+    sourcePaths: List[Path],
+    separators: PrettyPrinter.Separators
+  )(implicit flix: Flix): Unit = {
     sourcePaths.foreach { path =>
       findTreeBasedOnUri(root, path.toString).foreach { tree =>
-        val _ = applyTextEditsToFile(path, treeToTextEdits(tree))
+        val _ = applyTextEditsToFile(path, treeToTextEdits(tree, separators))
       }
     }
   }
@@ -50,8 +55,12 @@ object FormatterLsp {
     * @param uri  the file URI
     * @return a list containing a single document text edit
     */
-  def format(root: SyntaxTree.Root, uri: String): List[TextEdit] =
-    findTreeBasedOnUri(root, uri).map(treeToTextEdits).getOrElse(Nil)
+  def format(
+    root: SyntaxTree.Root,
+    uri: String,
+    separators: PrettyPrinter.Separators = PrettyPrinter.Separators.Verbatim
+  ): List[TextEdit] =
+    findTreeBasedOnUri(root, uri).map(treeToTextEdits(_, separators)).getOrElse(Nil)
 
   /**
     * Formats `tree` and returns the edit that replaces its whole document.
@@ -61,8 +70,11 @@ object FormatterLsp {
     * document in any case, and a client applying one edit cannot interleave it
     * with another badly.
     */
-  private def treeToTextEdits(tree: SyntaxTree.Tree): List[TextEdit] = {
-    val formatted = PrettyPrinter.format(tree)
+  private def treeToTextEdits(
+    tree: SyntaxTree.Tree,
+    separators: PrettyPrinter.Separators
+  ): List[TextEdit] = {
+    val formatted = PrettyPrinter.format(tree, separators)
     documentRange(tree).map(range => TextEdit(range, formatted)).toList
   }
 

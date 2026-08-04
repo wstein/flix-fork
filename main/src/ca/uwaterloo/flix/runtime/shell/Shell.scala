@@ -16,6 +16,7 @@
 
 package ca.uwaterloo.flix.runtime.shell
 
+import ca.uwaterloo.flix.tools.fmt.PrettyPrinter
 import ca.uwaterloo.flix.api.{Bootstrap, BootstrapError, CompilerConstants, Flix, Version}
 import ca.uwaterloo.flix.language.CompilationMessage
 import ca.uwaterloo.flix.language.ast.{Symbol, TypedAst}
@@ -187,7 +188,7 @@ class Shell(bootstrap: Bootstrap, options: Options) {
       case Command.Release => execBootstrap(bootstrap.release(flix).toValidation)
       case Command.Check => execBootstrap(bootstrap.check(flix).toValidation)
       case Command.Doc => execBootstrap(bootstrap.doc(flix).toValidation)
-      case Command.Format => execBootstrap(bootstrap.format(flix).toValidation)
+      case Command.Format => execBootstrap(bootstrap.format(flix, PrettyPrinter.Separators.Verbatim).toValidation)
       case Command.Test => execBootstrap(bootstrap.test(flix).toValidation)
       case Command.Outdated => execBootstrap(bootstrap.outdated(flix).toValidation)
       case Command.Unknown(s) => execUnknown(s)
