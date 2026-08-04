@@ -51,6 +51,35 @@ public final class Acme.Greeter {
 Plain static methods with the declared types — no wrapper objects, no casts,
 no runtime initialisation step.
 
+The classes the backend generates for the module sit *beside* that facade rather
+than beneath it — `Acme.Greeter$Def$greet`, not `Acme.Greeter.Def$greet`. A
+namespace class is named after its namespace, so a package of the same name
+would make `Acme.Greeter` denote both a class and a package. Java tolerates
+that, but Scala rejects the classpath outright and Kotlin resolves the package
+and never sees the class. This is the convention the other JVM languages follow:
+Scala emits `acme.Api$`, Kotlin `acme.ApiKt`, Groovy `acme.Api$_use_closure1`,
+and Clojure compiles the namespace `acme.api` to `acme.api$get_it`.
+
+## Other JVM languages
+
+Nothing here is Java-specific — an exported function is an ordinary static
+method. The example is verified against Java, Scala 3, Kotlin, Groovy, Clojure
+and JRuby.
+
+Scala and Kotlin see the erased signature, so a generic return type arrives raw:
+`Optional` rather than `Optional<String>`. Scala needs an ascription to recover
+it and Kotlin treats it as a platform type. Each language converts with its own
+standard bridge, so Flix needs no per-language support:
+
+```scala
+import scala.jdk.OptionConverters.*
+Acme.Greeter.find("a").toScala        // scala.Option
+```
+
+```ruby
+java_import "Acme.Greeter"            # JRuby lowercases a bare Java::Acme
+```
+
 ## Rules for `@Export`
 
 An exported function must:
