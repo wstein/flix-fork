@@ -130,7 +130,12 @@ to get wrong from reading the pretty-printing literature instead of the code:
   single-line and a multi-line rendering is encoded in the document itself via
   `LayoutChoice` and `SetLayout`, which is what makes `Doc.pretty` a single pass
   with no backtracking. Adding a width-driven `group` combinator would reintroduce
-  the lookahead the algebra exists to avoid.
+  the lookahead the algebra exists to avoid. Note the scope: this binds `Doc`, the
+  renderer. `LayoutPlan` decides breaks from the tree, outside `Doc`, and *could*
+  consult a width. It does not, because the corpus says width predicts Flix
+  authors' breaks poorly — a smooth gradient with no knee, where arity has a step.
+  That is an evidential reason, not an architectural one; do not cite the algebra
+  to close the question.
 - **Comments are in the tree; whitespace is not.** `Parser2.comments` collects
   runs of comment tokens into a `TreeKind.CommentList` node, and both `open` and
   `close` call it. Attachment is therefore *symmetric*: a comment before a node's

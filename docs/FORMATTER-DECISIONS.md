@@ -41,24 +41,39 @@ authority made two rules wrong that the style guide and corpus both get right.
 
 ---
 
-## D1 — Layout decisions come from tree shape, never from a line width
+## D1 — Layout decisions come from tree shape, not from a line width
 
-**Status: Settled** (inherited from the merged `Doc` algebra).
+**Status: Settled**, but on narrower grounds than this entry first claimed.
 
-`Doc` encodes each single-line/multi-line choice explicitly via `LayoutChoice`
-and `SetLayout`, which is what makes `Doc.pretty` a single pass with no
-backtracking. There is no width parameter to consult.
+**What the inherited constraint actually binds.** `Doc` encodes each
+single-line/multi-line choice explicitly via `LayoutChoice` and `SetLayout`, which
+is what makes `Doc.pretty` a single pass with no backtracking, and there is no
+width parameter to consult. That is a constraint on the **rendering algebra**, and
+P6 binds us to it.
+
+It does **not** bind `LayoutPlan`. The plan decides breaks by walking the tree,
+outside `Doc` entirely, and nothing stops it measuring a rendered width and
+emitting a break from it. This entry previously read as though width were
+unavailable to us. It is available; we decline it.
+
+**Why we decline it — this is the load-bearing part.** Across the corpus, authors'
+break decisions track arity, not width. Pipelines break 0% of the time at one
+stage and 40%/71%/80% at two/three/four — a step. The same population sorted by
+flat width climbs smoothly from 2.5% under 60 columns to 37% past 120: **a
+gradient with no knee**. Every width threshold one could pick disagrees with the
+corpus about roughly as much as any other, whereas arity has a place to cut.
+
+So the argument against width is empirical rather than architectural, and it is
+weaker than an architectural one would be: it holds for the constructs measured
+and says nothing about constructs nobody has measured.
 
 **Rejected:** a Wadler/Leijen `group` combinator selecting flat-or-broken against
-the remaining width. Adding it would reintroduce the lookahead the algebra was
-built to avoid, and it would make every layout decision depend on a constant
-nobody has justified.
+the remaining width *inside `Doc`*. That would reintroduce the lookahead the
+algebra exists to avoid and would break P6.
 
-Supporting evidence, independent of the algebra: across the corpus, authors'
-break decisions track arity, not width. Pipelines break 0% of the time at one
-stage and 40%/71%/80% at two/three/four, while the same population sorted by
-flat width climbs gradually from 2.5% under 60 columns to 37% past 120 — a
-gradient with no knee. Width was buying less than it appeared to.
+**Not rejected, merely unused:** width as a tiebreaker inside `LayoutPlan` for a
+construct where arity says nothing. If that is ever proposed, it should be argued
+on evidence for that construct, not waved away by citing this entry.
 
 ---
 
