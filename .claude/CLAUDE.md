@@ -107,6 +107,20 @@ that reproduces its input satisfies it; but a formatter that imposed one layout
 per syntax tree could not, and that conflict has to be settled with the upstream
 maintainers rather than by weakening the test.
 
+Two invariants hold in the write path (`FormatterLsp`, covered by
+`TestFormatterLsp`): a file is decoded and re-encoded through the **same**
+charset, and a file whose formatted output equals its current content is not
+written at all. The second is why a run that changes nothing leaves every
+timestamp in the project alone. `computeLineOffsets` splits on `"\n"`, which is
+correct for CRLF as well — the `"\r"` stays inside the preceding line's length,
+so the offsets still land on the first character after the break.
+
+Decisions taken while building the formatter, with their evidence and the
+alternatives rejected, are recorded in `docs/FORMATTER-DECISIONS.md`. Style rules
+the formatter enforces belong in `docs/STYLE.md`, which invites exactly that:
+*"If a PR discovers a new style principle, feel free to add it to this file as
+part of the same PR."*
+
 ## Generating API Documentation
 
 `./mill flix.run doc <file.flix>` writes API documentation for the standard

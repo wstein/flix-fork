@@ -305,6 +305,10 @@ object Main {
           }
 
         case Command.Format =>
+          // With no file arguments the whole project is formatted through Bootstrap;
+          // otherwise only the named files are. The two are alternatives: without the
+          // `else`, the project branch falls through into the file branch with an empty
+          // file list, and is stopped only by `exitOnResult` never returning.
           if (cmdOpts.files.isEmpty) {
             exitOnResult {
               Bootstrap.bootstrap(cwd, options.githubToken).flatMap { bootstrap =>
@@ -313,15 +317,16 @@ object Main {
                 bootstrap.format(flix)
               }
             }
+          } else {
+            val flix = mkFlixWithFiles(cmdOpts.files, options)
+            val (optRoot, errors) = flix.check()
+            if (errors.isEmpty) {
+              val syntaxTree = flix.getParsedAst
+              LspFormatter.formatFiles(syntaxTree, cmdOpts.files.map(_.toPath).toList)(flix)
+              System.exit(0)
+            }
+            else exitWithErrors(flix, errors, optRoot)
           }
-          val flix = mkFlixWithFiles(cmdOpts.files, options)
-          val (optRoot, errors) = flix.check()
-          if (errors.isEmpty) {
-            val syntaxTree = flix.getParsedAst
-            LspFormatter.formatFiles(syntaxTree, cmdOpts.files.map(_.toPath).toList)(flix)
-            System.exit(0)
-          }
-          else exitWithErrors(flix, errors, optRoot)
 
 
         case Command.Run =>

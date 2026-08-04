@@ -20,8 +20,7 @@ import ca.uwaterloo.flix.language.ast.SyntaxTree
 import ca.uwaterloo.flix.tools.fmt.PrettyPrinter
 import ca.uwaterloo.flix.util.Result
 
-import java.nio.charset.StandardCharsets
-import java.nio.file.{Files, Path}
+import java.nio.file.{Files, InvalidPathException, Path, Paths}
 import scala.annotation.unused
 
 /**
@@ -39,7 +38,7 @@ object FormatterLsp {
   def formatFiles(root: SyntaxTree.Root, sourcePaths: List[Path])(implicit flix: Flix): Unit = {
     sourcePaths.foreach { path =>
       findTreeBasedOnUri(root, path.toString).foreach { tree =>
-        applyTextEditsToFile(path, treeToTextEdits(tree))
+        val _ = applyTextEditsToFile(path, treeToTextEdits(tree))
       }
     }
   }
@@ -61,17 +60,29 @@ object FormatterLsp {
   /**
     * Applies the given text edits to the file at the specified path.
     *
+    * The file is decoded and re-encoded with the same charset, so that formatting
+    * a file never transcodes it as a side effect. A file whose edited content
+    * equals its current content is left alone rather than rewritten with identical
+    * bytes, which keeps a run that changes nothing from touching every timestamp
+    * in the project.
+    *
     * @param path  the file path
     * @param edits the list of text edits to apply
+    * @return true if the file was rewritten, false if it was already up to date
     */
-  private def applyTextEditsToFile(path: Path, edits: List[TextEdit])(implicit flix: Flix): Unit = {
+  private[lsp] def applyTextEditsToFile(path: Path, edits: List[TextEdit])(implicit flix: Flix): Boolean = {
     isValidPath(path) match {
       case Result.Err(e: Throwable) => throw e
       case Result.Ok(()) =>
-        val bytes = Files.readAllBytes(path)
-        val src = new String(bytes, flix.defaultCharset)
+        val charset = flix.defaultCharset
+        val src = new String(Files.readAllBytes(path), charset)
         val updated = applyTextEditsToString(src, edits)
-        Files.write(path, updated.getBytes(StandardCharsets.UTF_8))
+        if (updated == src) {
+          false
+        } else {
+          Files.write(path, updated.getBytes(charset))
+          true
+        }
     }
   }
 
@@ -83,7 +94,7 @@ object FormatterLsp {
     * @param edits the list of text edits to apply
     * @return the updated source string after applying the edits
     */
-  private def applyTextEditsToString(src: String, edits: List[TextEdit]): String = {
+  private[lsp] def applyTextEditsToString(src: String, edits: List[TextEdit]): String = {
     val sortedEdits = edits.sortBy(e => (e.range.start.line, e.range.start.character)).reverse
     val sb = new StringBuilder(src)
     val lineOffsets = computeLineOffsets(src)
@@ -110,7 +121,7 @@ object FormatterLsp {
     * @param src the source string
     * @return an array of line starting offsets
     */
-  private def computeLineOffsets(src: String): Array[Int] = {
+  private[lsp] def computeLineOffsets(src: String): Array[Int] = {
     val lines = src.split("\n", -1)
     val offsets = new Array[Int](lines.length + 1)
     var currentOffset = 0
@@ -122,21 +133,34 @@ object FormatterLsp {
     offsets
   }
 
-   /**
+  /**
     * Finds the syntax tree corresponding to the given URI.
+    *
+    * Sources are keyed by the path text they were added under, which need not be
+    * spelled the way the caller spells it: `./src/Main.flix` and `src/Main.flix`
+    * name the same file. Both sides are normalised before comparison, since a
+    * mismatch here is silent — the file is simply skipped and no diagnostic says why.
     *
     * @param root the syntax tree root
     * @param uri  the file path of the syntax tree
     * @return an option containing the syntax tree if found
     */
-  private def findTreeBasedOnUri(root: SyntaxTree.Root, uri: String): Option[SyntaxTree.Tree] = {
-    // TODO: This is a temporary solution. We need a better way to map URIs to syntax trees.
-    root.units.find {
-      case (path, _) => path.toString == uri
-    }.map {
-      case (_, tree) => tree
+  private[lsp] def findTreeBasedOnUri(root: SyntaxTree.Root, uri: String): Option[SyntaxTree.Tree] = {
+    val target = normalizePathText(uri)
+    root.units.collectFirst {
+      case (source, tree) if normalizePathText(source.toString) == target => tree
     }
   }
+
+  /**
+    * Normalises path text for comparison, removing redundant `.` and `..` segments.
+    *
+    * Falls back to the original text for names that are not valid paths, since a
+    * source may be a virtual file whose name is not a path at all.
+    */
+  private[lsp] def normalizePathText(text: String): String =
+    try Paths.get(text).normalize().toString
+    catch { case _: InvalidPathException => text }
 
   /**
     * Validate that the given path can exist, is a regular file and is readable.
