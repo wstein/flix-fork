@@ -23,6 +23,41 @@ class TestBootstrap extends AnyFunSuite {
     Bootstrap.init(p)(System.out)
   }
 
+  test("init writes an .editorconfig that agrees with Flix layout") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out).unsafeGet
+
+    val editorConfig = p.resolve(".editorconfig")
+    assert(Files.exists(editorConfig), "init did not write an .editorconfig")
+
+    val content = Files.readString(editorConfig)
+
+    // `indent_size` is load-bearing: `tab_width` alone leaves the width of a space indent
+    // to each editor's own default, which is the divergence this file exists to prevent.
+    assert(content.contains("indent_size = 4"), s"missing indent size:\n$content")
+    assert(content.contains("indent_style = space"), s"missing indent style:\n$content")
+    assert(content.contains("[*.flix]"), s"missing section for Flix sources:\n$content")
+
+    // A hard wrap is a reformat applied by an editor that cannot see the syntax tree.
+    assert(content.contains("max_line_length = off"), s"line length is not disabled:\n$content")
+
+    // Two trailing spaces are a hard line break in Markdown.
+    assert(
+      content.contains("[*.md]") && content.contains("trim_trailing_whitespace = false"),
+      s"Markdown is not exempt from whitespace trimming:\n$content")
+  }
+
+  test("init does not overwrite an existing .editorconfig") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    val editorConfig = p.resolve(".editorconfig")
+    val existing = "root = true\n"
+    FileOps.writeString(editorConfig, existing)
+
+    Bootstrap.init(p)(System.out).unsafeGet
+
+    assert(Files.readString(editorConfig) == existing, "init clobbered a project's own .editorconfig")
+  }
+
   test("check") {
     val p = Files.createTempDirectory(ProjectPrefix)
     Bootstrap.init(p)(System.out)

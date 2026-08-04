@@ -69,6 +69,7 @@ object Bootstrap {
 
     val manifestFile = getManifestFile(p)
     val gitignoreFile = getGitIgnoreFile(p)
+    val editorConfigFile = getEditorConfigFile(p)
     val licenseFile = getLicenseFile(p)
     val readmeFile = getReadmeFile(p)
     val mainSourceFile = getMainSourceFile(p)
@@ -101,6 +102,55 @@ object Bootstrap {
          |$libDirectoryRaw
          |crash_report_*.txt
          |""".stripMargin
+    }
+
+    FileOps.newFileIfAbsent(editorConfigFile) {
+      """# EditorConfig for Flix projects — https://editorconfig.org
+        |#
+        |# A compatibility floor, not a style guide. It keeps an editor that knows nothing
+        |# about Flix from fighting the layout of a Flix source file: open a formatted
+        |# file, type in it, save it, and it is still formatted.
+        |#
+        |# Rules that require parsing Flix — spacing, wrapping, alignment — are left to
+        |# `flix format`, which is the authority on them.
+        |
+        |root = true
+        |
+        |[*]
+        |charset = utf-8
+        |end_of_line = lf
+        |indent_style = space
+        |indent_size = 4
+        |insert_final_newline = true
+        |trim_trailing_whitespace = true
+        |
+        |[*.flix]
+        |# `indent_size` is the load-bearing key here. Per the EditorConfig specification
+        |# `tab_width` defaults to `indent_size`, but the implication does not run the
+        |# other way: setting only `tab_width` leaves the width of a space indent to each
+        |# editor's own default.
+        |indent_size = 4
+        |tab_width = 4
+        |
+        |# `max_line_length` is off on purpose. Some editors read it as an instruction to
+        |# hard-wrap, which reformats code without understanding its syntax.
+        |max_line_length = off
+        |
+        |# IntelliJ-family IDEs default to a continuation indent of 8, which fights the
+        |# four-space indent on every wrapped signature. `ij_` keys are ignored by every
+        |# other editor, so this line costs nothing elsewhere.
+        |ij_continuation_indent_size = 4
+        |
+        |[*.{yaml,yml,json}]
+        |indent_size = 2
+        |
+        |[*.md]
+        |indent_size = 2
+        |
+        |# Trailing whitespace is significant in Markdown: two trailing spaces are a hard
+        |# line break. Trimming it silently changes the rendered output.
+        |trim_trailing_whitespace = false
+        |""".stripMargin
     }
 
     FileOps.newFileIfAbsent(licenseFile) {
@@ -309,6 +359,11 @@ object Bootstrap {
     * Returns the path to the .gitignore file relative to the given path `p`.
     */
   private def getGitIgnoreFile(p: Path): Path = p.resolve("./.gitignore").normalize()
+
+  /**
+    * Returns the path to the .editorconfig file relative to the given path `p`.
+    */
+  private def getEditorConfigFile(p: Path): Path = p.resolve("./.editorconfig").normalize()
 
   /**
     * Returns the path to the jar file based on the given path `p`.

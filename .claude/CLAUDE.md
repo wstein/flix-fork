@@ -8,6 +8,29 @@ The project uses [Mill](https://mill-build.org/) as its build tool.
 - `./mill flix.run <file.flix>` — Run a Flix source file through the compiler (should take at most 3 minutes)
 - `./mill flix.assembly` — Build a fat JAR at `out/flix/assembly.dest/out.jar`
 
+## Project Scaffolding
+
+`flix init` (`Bootstrap.init`) writes a new project into an existing directory:
+`src/`, `test/`, `.github/workflows/build-and-test.yaml`, `flix.toml`,
+`.gitignore`, `.editorconfig`, `LICENSE.md`, and `README.md`. Every file is
+written through `FileOps.newFileIfAbsent`, so running `init` in a directory that
+already has one of them leaves that file untouched — new template files must
+keep that property, since users edit what `init` gives them.
+
+The generated `.editorconfig` is a compatibility floor, not a style guide: it
+carries only settings an editor can apply without parsing Flix (charset, line
+endings, indent unit, final newline, whitespace trimming). Anything that needs
+the syntax tree — spacing, wrapping, alignment — belongs to `flix format`.
+Adding such a rule here would create a second, weaker authority that the
+formatter then has to fight. Two settings are load-bearing and easy to get
+wrong:
+
+- `indent_size` on `*.flix`, not just `tab_width`. Per the EditorConfig
+  specification `tab_width` defaults to `indent_size`, not the reverse, so
+  setting only `tab_width` leaves the width of a space indent to each editor.
+- `max_line_length = off`. Some editors read a width as an instruction to
+  hard-wrap, which reformats code without understanding it.
+
 ## Generating API Documentation
 
 `./mill flix.run doc <file.flix>` writes API documentation for the standard
