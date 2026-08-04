@@ -401,8 +401,12 @@ object ParseError {
     def code: ErrorCode = ErrorCode.E6629
 
     def summary: String = {
+      // `display`, not the token itself: `toString` on a TokenKind is its Scala name, so this read
+      // "before ParenL" where the terminal read "before '('". The summary is what an LSP client
+      // shows -- Diagnostic.from carries it verbatim -- so that name was the whole message an
+      // editor had, for every parse error it ever reported.
       val expectedStr = s"Expected ${expected.display(Formatter.NoFormatter)}"
-      val actualStr = actual.map(a => s" before $a").getOrElse("")
+      val actualStr = actual.map(a => s" before ${a.display}").getOrElse("")
       s"$expectedStr$actualStr."
     }
 
