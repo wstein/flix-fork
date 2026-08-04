@@ -30,6 +30,11 @@ import org.scalatest.funsuite.AnyFunSuite
   * package. Any Java source file compiled against such a jar resolves `String` to that class rather
   * than to `java.lang.String`, which silently turns `main(String[])` into `main([LString;)V` and
   * makes the program unlaunchable.
+  *
+  * Being named after the namespace also means the class competes with the package of that name,
+  * which is why the backend generates `Acme.Api$Def$…` beside the class rather than
+  * `Acme.Api.Def$…` beneath it. The rule these tests pin is that a name the programmer chose
+  * denotes a class or a package, never both.
   */
 class TestNamespaceClasses extends AnyFunSuite {
 
@@ -87,6 +92,34 @@ class TestNamespaceClasses extends AnyFunSuite {
     for (shadowed <- List("String", "Object", "Integer", "Character", "Boolean", "Iterable")) {
       assert(!result.classNames.contains(shadowed), s"'$shadowed' shadows java.lang.$shadowed for Java callers")
     }
+  }
+
+  test("no class shares its name with a package") {
+    // A namespace class is named after its namespace, so leaving the namespace's defs in the
+    // package of the same name made `Acme.Api` denote both a class and a package. The JVM permits
+    // that and Java tolerates it, but Scala rejects the classpath ("package Acme contains object
+    // and package with same name: Api") and Kotlin resolves the package and never sees the class,
+    // reporting every exported function as unresolved. A namespace with an exported def always has
+    // both, so this made exports unreachable from those two languages.
+    //
+    // The check is on the shape of the names rather than on any particular one, because the rule
+    // it protects is a property of the whole jar: nothing the programmer named may be both.
+    val result = compile(
+      """mod Acme { }
+        |mod Acme.Api {
+        |    @Export
+        |    pub def get(x: Int32): Int32 = x + 1
+        |}
+        |
+        |def main(): Unit \ IO = println(Acme.Api.get(1))
+        |""".stripMargin)
+
+    val packages = result.classNames.flatMap { name =>
+      val segments = name.split('.').toList
+      segments.inits.filter(prefix => prefix.nonEmpty && prefix != segments).map(_.mkString("."))
+    }
+    val clashes = result.classNames.filter(packages.contains)
+    assert(clashes.isEmpty, s"these names denote both a class and a package: ${clashes.toList.sorted.mkString(", ")}")
   }
 
   test("Main is the only class in the unnamed package") {
