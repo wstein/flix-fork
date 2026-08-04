@@ -48,6 +48,9 @@ import ca.uwaterloo.flix.tools.fmt.TokenStream.PrintableToken
   */
 object Canonical extends PrettyPrinter.Separators {
 
+  /** The canonical mode lays code out vertically as well as horizontally. */
+  override def usesLayoutPlan: Boolean = true
+
   override def between(
     left: Option[PrintableToken],
     right: Option[PrintableToken],
@@ -59,7 +62,6 @@ object Canonical extends PrettyPrinter.Separators {
       if (isSpacingSensitive(lk) || isSpacingSensitive(rk)) original
       else if (signsLiteral(lk, rk)) original
       else if (original.contains('\n')) original
-      else if (isAlignment(original)) original
       else if (spaced(lk, rk)) " "
       else ""
 
@@ -101,25 +103,6 @@ object Canonical extends PrettyPrinter.Separators {
     case TokenKind.LiteralBigDecimal => true
     case _ => false
   }
-
-  /**
-    * Returns `true` if `gap` is column alignment rather than separation.
-    *
-    * The policy decides between no space and one space. A run of two or more
-    * spaces on one line is padding someone put there to line a column up, and
-    * `docs/STYLE.md` requires one such alignment outright — *"Pattern matches
-    * should align `=>`"* — while struct fields and record type aliases are
-    * aligned throughout the corpus. Collapsing those runs would reformat
-    * thousands of sites against the maintainers' written style guide.
-    *
-    * Preserving them is a knowing compromise on canonicality: two files that
-    * differ only in alignment still format differently. Producing alignment
-    * rather than preserving it needs the whole group — every arm of a match, every
-    * field of a struct — which a policy looking at one pair of tokens cannot see.
-    * That is the next layout rule to write, and until it exists, preserving beats
-    * destroying.
-    */
-  private def isAlignment(gap: String): Boolean = gap.length > 1
 
   /**
     * Returns `true` if the spacing next to `kind` changes how the program lexes

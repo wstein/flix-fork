@@ -529,13 +529,61 @@ it had; indenting arms against a computed base would place them relative to a li
 nothing ever moved. This is a knowing compromise on canonicality and it ends when
 the enclosing constructs gain rules.
 
-**Not implemented, and why.** Pipelines, Datalog clause bodies, and general
-indentation are still preserved rather than decided. The pipeline threshold splits
-the corpus — 40% of two-stage pipelines are broken and 60% are not, so either
-choice reformats hundreds of sites against their authors — and the Datalog
-thresholds have never been measured at all; the design document proposes them "by
-analogy, not measurement". Deciding those needs the diff review of §8.5, not more
-code.
+D21 extends this to indentation, pipelines, Datalog, and struct fields.
+
+## D21 — `--canonical` reformats: indentation, pipelines, Datalog, and no preserved padding
+
+**Status: Proposed.** Supersedes the conservatism of D17.
+
+`--canonical` is opt-in, and choosing it is the consent to reformat. Preserving
+whatever the author typed "in case it was deliberate" made the flag do nearly
+nothing, so the hedges are gone wherever they were caution rather than semantics.
+
+**Indentation is computed for every line**, four spaces per enclosing construct.
+It is measured *relative to the line the enclosing construct starts on*, not from
+raw tree depth: in `def f(): Int32 = match o {` the arms are nested inside both
+the definition and the match, but only one line has been opened, so they indent
+once. Counting ancestors would double-indent and drift further with every
+construct that fits on a line.
+
+**Pipelines break at two or more stages**, the operator leading each continuation
+line. One stage is a function call wearing pipeline syntax and the corpus never
+breaks one (493 occurrences, none broken). Beyond that the corpus genuinely
+splits — 40% broken at two stages, 71% at three — so a canonical rule has to
+pick, and breaking at two is the smaller error and the better reading of why the
+language puts the subject last.
+
+**Datalog constraints take one line each**, closing brace on its own line, with
+clause bodies left on the head's line. The design document proposes breaking a
+body of two or more atoms; its own worked example, taken from the principles
+paper, writes exactly that inline, and the corpus agrees. The threshold was
+offered "by analogy, not measurement" and the measurement contradicts it.
+
+**Struct fields align their types**, by the same machinery as match arms, and
+**runs of two or more spaces are no longer preserved**. D17 kept them because
+alignment could not yet be produced; now that match arms and struct fields both
+produce it, keeping the rest was only protecting sloppiness —
+`def    f( ):Int32     =    42` is not a table.
+
+Two defects here were invisible to every property test and were caught only by
+reading a diff of a real library file, which is worth recording as a lesson:
+
+- A declaration's doc comment is folded into its node, so the node starts before
+  its own header. Indenting everything after the node's start pushed each
+  construct's header in by a level, and since it happened at every nesting depth
+  the whole file drifted right — 612 changed lines on `Option.flix`.
+- `Parser2.close` folds a *trailing* comment into the preceding declaration, so a
+  comment introducing the next declaration was indented as part of the previous
+  one's body.
+
+Both produce output that is wrong, and perfectly consistent and idempotent while
+being wrong. Fidelity, idempotence and comment-anchor checks all passed
+throughout. After the fixes, `Option.flix` changes by 12 lines, every one of them
+alignment the file did not previously have.
+
+**Still preserved:** blank lines (they carry paragraph structure and define the
+alignment groups), spacing that is semantic (D16, D18), and everything inside a
+declaration that failed to parse (D19).
 
 ## Validation against real codebases
 

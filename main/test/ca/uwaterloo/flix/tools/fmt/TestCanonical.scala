@@ -108,7 +108,7 @@ class TestCanonical extends TestFormatterCommon {
     assert(canonical(src) == src)
   }
 
-  test("canonical: indentation and blank lines are left alone") {
+  test("canonical: indentation is normalised and blank lines are kept") {
     val src =
       """def f(): Int32 =
         |        let x = 1;
@@ -117,7 +117,33 @@ class TestCanonical extends TestFormatterCommon {
         |
         |def g(): Int32 = 2
         |""".stripMargin
-    assert(canonical(src) == src)
+    val expected =
+      """def f(): Int32 =
+        |    let x = 1;
+        |    x
+        |
+        |
+        |def g(): Int32 = 2
+        |""".stripMargin
+    assert(canonical(src) == expected)
+  }
+
+  test("canonical: under-indented code is indented") {
+    val src =
+      """mod M {
+        |pub def f(): Int32 =
+        |let x = 1;
+        |x
+        |}
+        |""".stripMargin
+    val expected =
+      """mod M {
+        |    pub def f(): Int32 =
+        |        let x = 1;
+        |        x
+        |}
+        |""".stripMargin
+    assert(canonical(src) == expected)
   }
 
   test("canonical: comments keep their text and position") {

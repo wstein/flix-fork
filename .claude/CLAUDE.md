@@ -64,21 +64,34 @@ wrong:
 `ca.uwaterloo.flix.tools.fmt`. The CLI subcommand, the REPL `:format`, the LSP
 `FormattingProvider`, and the file I/O in `FormatterLsp` are all in place.
 `flix format` reproduces its input exactly — a verified round trip, not a
-reformat. `flix format --canonical` normalises **horizontal spacing** (no space
-versus one, decided from the kinds of the two tokens either side of a gap) and
-lays out **`match`** vertically: one arm per line, indented one unit, with `=>`
-aligned per group. Everything else vertical — pipelines, Datalog clause bodies,
-general indentation — is still preserved, not decided. Describe the command in
-those terms rather than as a general-purpose formatter.
+reformat. `flix format --canonical` reformats: horizontal spacing, indentation,
+`match` layout with produced `=>` alignment, struct-field alignment, pipeline
+breaking, and one Datalog constraint per line. It is opt-in, and choosing it is
+the consent to reformat, so it does not preserve padding "in case it was
+deliberate" — only spacing that is *semantic* survives untouched.
 
 Vertical decisions cannot be made from a pair of adjacent tokens, so they come
 from `LayoutPlan`, which walks the tree and emits one directive per gap; the
 printer applies a directive where there is one and falls back to the separator
-policy everywhere else. Two invariants there are easy to break: a `Break`
-preserves however many blank lines the gap already had (collapsing one regroups
-the alignment groups, which are *defined* by blank lines, and formatting stops
-being idempotent), and quarantine outranks the plan so nothing is arranged around
-code the parser could not read.
+policy everywhere else. A policy opts in via `usesLayoutPlan`, so vertical layout
+is a claim a policy has to make rather than something inferred.
+
+Four invariants there are easy to break, and three of them produce output that is
+wrong while staying perfectly consistent and idempotent — so the property tests
+cannot see them and only reading a diff can:
+
+- A `Break` keeps however many blank lines the gap already had. Alignment groups
+  are *defined* by blank lines, so collapsing one regroups the arms on the next
+  pass and formatting stops being idempotent.
+- A construct indents its **body**, not its own header. A node starts earlier than
+  it looks — the parser folds a declaration's doc comment and modifiers into it —
+  so indenting everything after `node.start` pushes each header in by a level, at
+  every nesting depth, and the whole file drifts right.
+- `Parser2.close` folds a *trailing* comment into the preceding declaration, so a
+  comment introducing the next declaration must be trimmed from that declaration's
+  indent span or it is indented as part of the previous body.
+- Quarantine outranks the plan, so nothing is arranged around code the parser
+  could not read.
 
 Neither mode requires the program to compile. A declaration whose subtree
 contains a parse error is reproduced verbatim and the rest of the file is

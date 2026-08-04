@@ -182,6 +182,49 @@ class TestMatchLayout extends TestFormatterCommon {
     assert(out.contains("        case None =>\n"), s"the broken one is untouched:\n$out")
   }
 
+  test("pipeline: a single stage stays on one line") {
+    // 493 single-stage pipelines in the corpus, not one broken: it is a function
+    // call wearing pipeline syntax.
+    val src = "def f(l: List[Int32]): List[Int32] = l |> List.reverse\n"
+    assert(canonical(src) == src)
+  }
+
+  test("pipeline: two or more stages break, with the operator leading") {
+    val src =
+      "def f(l: List[Int32]): Int32 = l |> List.map(x -> x * x) |> List.length\n"
+    val expected =
+      """def f(l: List[Int32]): Int32 = l
+        |    |> List.map(x -> x * x)
+        |    |> List.length
+        |""".stripMargin
+    assert(canonical(src) == expected)
+  }
+
+  test("datalog: constraints take one line each and the brace closes on its own") {
+    val src =
+      "def r(): #{ Path(Int32, Int32), Edge(Int32, Int32) } = " +
+        "#{ Path(x, y) :- Edge(x, y). Path(x, z) :- Path(x, y), Edge(y, z). }\n"
+    val expected =
+      """def r(): #{ Path(Int32, Int32), Edge(Int32, Int32) } = #{
+        |    Path(x, y) :- Edge(x, y).
+        |    Path(x, z) :- Path(x, y), Edge(y, z).
+        |}
+        |""".stripMargin
+    assert(canonical(src) == expected)
+  }
+
+  test("datalog: a clause body stays on the head's line") {
+    // The design document proposes breaking a body of two or more atoms, but its
+    // own worked example — from the principles paper — writes exactly that inline.
+    val src =
+      """def r(): #{ Path(Int32, Int32), Edge(Int32, Int32) } = #{
+        |    Path(x, z) :- Path(x, y), Edge(y, z).
+        |    Path(x, y) :- Edge(x, y).
+        |}
+        |""".stripMargin
+    assert(canonical(src) == src)
+  }
+
   test("match: the default policy still reproduces its input exactly") {
     // Vertical layout belongs to the canonical mode. `flix format` must remain a
     // round trip, or every file in the corpus would be rewritten by the mode that

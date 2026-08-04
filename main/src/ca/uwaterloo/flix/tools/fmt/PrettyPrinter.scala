@@ -55,6 +55,16 @@ object PrettyPrinter {
       right: Option[TokenStream.PrintableToken],
       original: String
     ): String
+
+    /**
+      * Whether this policy also wants the vertical layout of [[LayoutPlan]].
+      *
+      * Off by default, and deliberately a property of the policy rather than
+      * inferred from which policy it is: breaking and indenting lines is a much
+      * larger claim than choosing the space between two tokens, and a policy
+      * should have to ask for it.
+      */
+    def usesLayoutPlan: Boolean = false
   }
 
   object Separators {
@@ -98,8 +108,7 @@ object PrettyPrinter {
     // computed over the tree and consulted per gap. Only policies that impose a
     // layout want them: reproducing the input must reproduce it exactly.
     val planned =
-      if (separators eq Separators.Verbatim) Vector.empty
-      else LayoutPlan.plan(tree, separators)
+      if (separators.usesLayoutPlan) LayoutPlan.plan(tree, separators) else Vector.empty
     val sb = new StringBuilder
 
     // The text before the first token and after the last lies outside every

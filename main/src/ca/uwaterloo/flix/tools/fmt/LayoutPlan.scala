@@ -33,13 +33,14 @@ import ca.uwaterloo.flix.language.ast.{SyntaxTree, Token, TokenKind}
   * separator policy everywhere else, so this stays additive: a construct with no
   * rule keeps behaving exactly as it did.
   *
-  * Only `match` is covered. That is not where the work stopped for lack of time
-  * but where the evidence stops being decisive: the corpus contains 1,868 `match`
-  * expressions and **not one** written inline, so "always break" needs no
-  * threshold and contradicts nothing. The pipeline threshold, by contrast, splits
-  * the corpus — 40% of two-stage pipelines are broken and 60% are not — and the
-  * Datalog thresholds have never been measured at all. Guessing those would
-  * reformat thousands of sites on a coin toss.
+  * What is decided here: indentation of every line, `match` layout and `=>`
+  * alignment, struct-field alignment, pipeline breaking, and one Datalog
+  * constraint per line.
+  *
+  * Indentation is the rule with the widest blast radius and the one most easily
+  * got subtly wrong; see [[indent]] and [[bodyBegins]] for the two mistakes that
+  * a corpus diff caught and that the property tests could not, since both produce
+  * output that is wrong but perfectly consistent and idempotent.
   */
 object LayoutPlan {
 
@@ -75,9 +76,164 @@ object LayoutPlan {
     ranges.forEach { (node, range) =>
       if (node.kind == TreeKind.Expr.Match) {
         planMatch(node, range, ranges, tokens, plan, policy)
+      } else if (node.kind == TreeKind.Decl.Struct) {
+        alignStructFields(node, ranges, tokens, plan, policy)
+      } else if (node.kind == TreeKind.Expr.FixpointConstraintSet) {
+        planConstraintSet(node, range, ranges, tokens, plan)
+      } else if (node.kind == TreeKind.Expr.Binary) {
+        planPipeline(node, range, ranges, tokens, plan)
       }
     }
+    indent(tokens, ranges, plan)
     plan.toVector
+  }
+
+  /**
+    * Re-indents every line, one unit per enclosing construct that the line is
+    * nested inside.
+    *
+    * Indentation is *relative to the line the enclosing construct starts on*,
+    * never to raw tree depth. The two differ whenever constructs share a line: in
+    * `def f(): Int32 = match o {` the arms are nested inside both the definition
+    * and the match, but only one line has been opened, so they are indented once.
+    * Counting ancestors would indent them twice and drift further with every
+    * construct that fits on one line.
+    *
+    * So each line's indentation is its innermost enclosing construct's line
+    * indentation plus one unit. Tokens are visited in order and the indentation
+    * computed for each line is remembered, so by the time a line is reached the
+    * line it hangs off has already been decided. A closing delimiter is the
+    * exception: it returns to the indentation of the construct it closes rather
+    * than being indented past it.
+    */
+  private def indent(
+    tokens: Vector[TokenStream.PrintableToken],
+    ranges: java.util.IdentityHashMap[SyntaxTree.Tree, (Int, Int)],
+    plan: Array[Gap]
+  ): Unit = {
+    val openers = indentingAncestors(tokens, ranges)
+    val lineIndent = Array.fill(tokens.length)(0)
+
+    for (i <- tokens.indices) {
+      val startsLine = i > 0 && (plan(i) match {
+        case Gap.Break(_) => true
+        case _ => breaksLine(tokens, i)
+      })
+      if (i == 0) {
+        lineIndent(i) = 0
+      } else if (!startsLine) {
+        lineIndent(i) = lineIndent(i - 1)
+      } else {
+        // A closing delimiter ends the construct it belongs to, so it returns to
+        // the indentation of the line that construct opened on. Everything else is
+        // one unit inside its innermost enclosing construct.
+        val innermost = openers(i).headOption
+        lineIndent(i) =
+          if (isClosingDelimiter(tokens(i).token.kind)) innermost.map(lineIndent).getOrElse(0)
+          else innermost.map(a => lineIndent(a) + IndentUnit).getOrElse(0)
+        plan(i) = Gap.Break(lineIndent(i))
+      }
+    }
+  }
+
+  /**
+    * For each token, the start indices of the constructs enclosing it, innermost
+    * first.
+    *
+    * A construct counts when it can hold a line of its own: any declaration, and
+    * any node that opens a bracket. A node is not counted for the token that opens
+    * it, since that token sits on the enclosing line rather than inside.
+    */
+  private def indentingAncestors(
+    tokens: Vector[TokenStream.PrintableToken],
+    ranges: java.util.IdentityHashMap[SyntaxTree.Tree, (Int, Int)]
+  ): Array[List[Int]] = {
+    val size = tokens.length
+    val result = Array.fill(size)(List.empty[Int])
+    val spans = scala.collection.mutable.ListBuffer.empty[(Int, Int, Int)]
+    ranges.forEach { (node, range) =>
+      val (start, end) = range
+      bodyBegins(node, start).foreach { opensAt =>
+        // Trailing comments are not part of the construct for layout purposes.
+        // `Parser2.close` folds a comment that follows a declaration into it, so a
+        // comment introducing the *next* declaration ends up as the previous one's
+        // last token and would be indented as if it were inside its body.
+        var stop = end
+        while (stop > start && tokens(stop - 1).token.kind.isComment) stop -= 1
+        if (stop - start > 1) spans += ((start, opensAt, stop))
+      }
+    }
+    // Innermost first: a construct whose body opens later is nested more deeply.
+    val ordered = spans.toList.sortBy { case (_, opensAt, end) => (-opensAt, end) }
+    for (i <- 0 until size) {
+      result(i) = ordered.collect { case (start, opensAt, end) if opensAt < i && i < end => start }
+    }
+    result
+  }
+
+  /**
+    * The index after which `node` indents, if it indents at all.
+    *
+    * A construct indents its *body*, not its own header, and the two are easy to
+    * confuse because a node starts earlier than it looks: the parser folds a
+    * declaration's doc comment and modifiers into it, so `node.start` is the first
+    * `///` line rather than the `def`. Indenting everything after `node.start`
+    * therefore pushes the construct's own header in by one level, and since that
+    * happens at every level of nesting the whole file drifts right — which is
+    * exactly what a corpus file showed.
+    *
+    * The body begins at the construct's opening bracket, or for a declaration with
+    * no bracketed body, at the `=` introducing it. Returns `None` for nodes that
+    * hold no lines of their own.
+    */
+  private def bodyBegins(node: SyntaxTree.Tree, start: Int): Option[Int] = {
+    var idx = start
+    var bracket = -1
+    var equals = -1
+    var arrow = -1
+    node.children.foreach {
+      case t: Token =>
+        if (bracket < 0 && opensBracket(t.kind)) bracket = idx
+        if (equals < 0 && t.kind == TokenKind.Equal) equals = idx
+        if (arrow < 0 && t.kind == TokenKind.ArrowThickR) arrow = idx
+        idx += 1
+      case t: SyntaxTree.Tree => idx += subtreeSize(t)
+      case _ => idx += 1
+    }
+    if (bracket >= 0) Some(bracket)
+    else if (equals >= 0 && node.kind.isInstanceOf[TreeKind.Decl]) Some(equals)
+    else if (arrow >= 0 && node.kind == TreeKind.Expr.MatchRuleFragment) Some(arrow)
+    else None
+  }
+
+  /** The number of tokens beneath `node`. */
+  private def subtreeSize(node: SyntaxTree.Tree): Int =
+    node.children.foldLeft(0) {
+      case (acc, t: SyntaxTree.Tree) => acc + subtreeSize(t)
+      case (acc, _) => acc + 1
+    }
+
+  /** Returns `true` if `kind` opens a bracket whose contents may be indented. */
+  private def opensBracket(kind: TokenKind): Boolean = kind match {
+    case TokenKind.CurlyL => true
+    case TokenKind.BracketL => true
+    case TokenKind.ParenL => true
+    case TokenKind.HashCurlyL => true
+    case _ => false
+  }
+
+  /** Returns `true` if `kind` closes a bracket. */
+  private def isClosingDelimiter(kind: TokenKind): Boolean = kind match {
+    case TokenKind.CurlyR => true
+    case TokenKind.BracketR => true
+    case TokenKind.ParenR => true
+    case _ => false
+  }
+
+  /** Returns `true` if the source already put token `i` on a new line. */
+  private def breaksLine(tokens: Vector[TokenStream.PrintableToken], i: Int): Boolean = {
+    val data = tokens(i).token.src.data
+    data.slice(tokens(i - 1).token.endIndex, tokens(i).token.startIndex).exists(_ == '\n')
   }
 
   /** Records the token range each node spans, and returns the index after `node`. */
@@ -114,27 +270,25 @@ object LayoutPlan {
     plan: Array[Gap],
     policy: PrettyPrinter.Separators
   ): Unit = {
-    val (start, end) = range
+    val (_, end) = range
     val arms = node.children.collect {
       case t: SyntaxTree.Tree if t.kind == TreeKind.Expr.MatchRuleFragment => t
     }.toList
     if (arms.isEmpty) return
 
-    val base = indentOfLineContaining(tokens(start).token)
-    val body = base + IndentUnit
-
     // Each arm starts a line, including the first, which breaks after the `{`.
+    // Only *that* a line starts is decided here; `indent` decides how far in.
     for (arm <- arms) {
       val (armStart, _) = ranges.get(arm)
-      if (armStart > 0) plan(armStart) = Gap.Break(body)
+      if (armStart > 0) plan(armStart) = Gap.Break(0)
     }
 
-    // The closing brace returns to the keyword's own indentation. It is the last
-    // token of the match, and only when the parser actually produced one — on a
-    // malformed match there may be none, and inventing it would change the program.
+    // The closing brace goes on its own line, and only when the parser actually
+    // produced one — on a malformed match there may be none, and inventing it
+    // would change the program.
     val lastIdx = end - 1
     if (lastIdx > 0 && lastIdx < tokens.length && tokens(lastIdx).token.kind == TokenKind.CurlyR) {
-      plan(lastIdx) = Gap.Break(base)
+      plan(lastIdx) = Gap.Break(0)
     }
 
     alignArrows(arms, ranges, tokens, plan, policy)
@@ -164,42 +318,205 @@ object LayoutPlan {
     plan: Array[Gap],
     policy: PrettyPrinter.Separators
   ): Unit = {
-    for (group <- groupArms(arms, ranges, tokens)) {
-      val measured = group.flatMap { arm =>
-        val (armStart, armEnd) = ranges.get(arm)
-        arrowIndex(tokens, armStart, armEnd).flatMap { arrow =>
-          val hasComment = (armStart until arrow).exists(i => tokens(i).token.kind.isComment)
-          if (hasComment) None else Some((arrow, prefixWidth(tokens, armStart, arrow, policy)))
+    val items = arms.flatMap { arm =>
+      val (armStart, armEnd) = ranges.get(arm)
+      // The padding goes immediately before the `=>`.
+      pivot(tokens, armStart, armEnd, _ == TokenKind.ArrowThickR).map(Alignable(armStart, _))
+    }
+    alignColumn(items, tokens, plan, policy)
+  }
+
+  /**
+    * Puts each Datalog constraint of a set on its own line.
+    *
+    * A constraint is a sentence terminated by `.`, and the corpus and the
+    * principles paper both write one per line:
+    *
+    *     let rules = #{
+    *         Path(x, y) :- Edge(x, y).
+    *         Path(x, z) :- Path(x, y), Edge(y, z).
+    *     };
+    *
+    * The body atoms of a clause stay on the head's line. The design document
+    * proposes breaking a body of two or more atoms, but its own worked example —
+    * taken from the paper — writes exactly that inline, and the corpus agrees. The
+    * threshold was offered "by analogy, not measurement"; the measurement, such as
+    * it is, contradicts it.
+    *
+    * A set holding a single constraint is left as the author wrote it, so the
+    * short inline form `#{ A(123). }` survives.
+    */
+  private def planConstraintSet(
+    node: SyntaxTree.Tree,
+    range: (Int, Int),
+    ranges: java.util.IdentityHashMap[SyntaxTree.Tree, (Int, Int)],
+    tokens: Vector[TokenStream.PrintableToken],
+    plan: Array[Gap]
+  ): Unit = {
+    val constraints = node.children.collect {
+      case t: SyntaxTree.Tree if t.kind == TreeKind.Expr.FixpointConstraint => t
+    }.toList
+    if (constraints.sizeIs < 2) return
+    for (constraint <- constraints) {
+      val (start, _) = ranges.get(constraint)
+      if (start > 0) plan(start) = Gap.Break(0)
+    }
+    // The closing brace goes on its own line, as it does for a `match`, and only
+    // when the parser produced one.
+    val lastIdx = range._2 - 1
+    if (lastIdx > 0 && lastIdx < tokens.length && tokens(lastIdx).token.kind == TokenKind.CurlyR) {
+      plan(lastIdx) = Gap.Break(0)
+    }
+  }
+
+  /**
+    * Breaks a pipeline of two or more stages, one `|>` per line.
+    *
+    * A single-stage pipeline is a function call wearing pipeline syntax and the
+    * corpus never breaks one: 493 occurrences, not one broken. Beyond that the
+    * corpus splits — 40% of two-stage pipelines are broken, 71% of three-stage —
+    * so a canonical rule has to pick. Breaking at two is the smaller error and the
+    * better reading of intent: a pipeline exists to make data flow visible
+    * top-to-bottom, which is why the language puts the subject last.
+    *
+    * The operator leads its continuation line, so the chain reads down the left
+    * margin rather than trailing off the right.
+    */
+  private def planPipeline(
+    node: SyntaxTree.Tree,
+    range: (Int, Int),
+    ranges: java.util.IdentityHashMap[SyntaxTree.Tree, (Int, Int)],
+    tokens: Vector[TokenStream.PrintableToken],
+    plan: Array[Gap]
+  ): Unit = {
+    val (start, end) = range
+    if (!isPipeOperator(node)) return
+    // `a |> b |> c` nests to the left, so only the outermost node plans the chain;
+    // an inner one would break the same operators again from a shorter span.
+    val enclosedByPipeline = ranges.entrySet().stream().anyMatch { entry =>
+      val (otherStart, otherEnd) = entry.getValue
+      (entry.getKey ne node) && isPipeOperator(entry.getKey) &&
+        otherStart <= start && end <= otherEnd
+    }
+    if (enclosedByPipeline) return
+
+    val stages = (start until math.min(end, tokens.length)).filter(isPipeToken(tokens, _))
+    if (stages.sizeIs < 2) return
+    for (i <- stages if i > 0) plan(i) = Gap.Break(0)
+  }
+
+  /** Returns `true` if `node` is a binary application of `|>`. */
+  private def isPipeOperator(node: SyntaxTree.Tree): Boolean =
+    node.kind == TreeKind.Expr.Binary && node.children.exists {
+      case t: SyntaxTree.Tree if t.kind == TreeKind.Operator =>
+        t.children.exists {
+          case tok: Token => tok.text == "|>"
+          case _ => false
         }
-      }
+      case _ => false
+    }
+
+  /** Returns `true` if token `i` is the `|>` operator. */
+  private def isPipeToken(tokens: Vector[TokenStream.PrintableToken], i: Int): Boolean =
+    tokens(i).text == "|>"
+
+  /**
+    * Pads each field of a struct so the types line up.
+    *
+    * The corpus writes struct fields as a table, with the padding after the colon:
+    *
+    *     struct Stack[a, r] {
+    *         rc:       Region[r],
+    *         mut size: Int32,
+    *         mut arr:  Array[a, r]
+    *     }
+    *
+    * Same machinery as the match arms, and for the same reason: a canonical
+    * formatter has to *derive* the padding, or two files differing only in it
+    * format differently.
+    */
+  private def alignStructFields(
+    node: SyntaxTree.Tree,
+    ranges: java.util.IdentityHashMap[SyntaxTree.Tree, (Int, Int)],
+    tokens: Vector[TokenStream.PrintableToken],
+    plan: Array[Gap],
+    policy: PrettyPrinter.Separators
+  ): Unit = {
+    val items = node.children.collect {
+      case t: SyntaxTree.Tree if t.kind == TreeKind.StructField => t
+    }.toList.flatMap { field =>
+      val (fieldStart, fieldEnd) = ranges.get(field)
+      // The padding goes after the colon, so the aligned column is the type.
+      pivot(tokens, fieldStart, fieldEnd, _ == TokenKind.Colon)
+        .map(colon => Alignable(fieldStart, colon + 1))
+    }
+    alignColumn(items, tokens, plan, policy)
+  }
+
+  /**
+    * An item taking part in a column: its first token, and the gap to pad.
+    *
+    * The width measured for it is everything from `start` up to `gap`, so putting
+    * `gap` before the `=>` of a match arm aligns the arrows, and putting it after
+    * the colon of a struct field aligns the types.
+    */
+  private case class Alignable(start: Int, gap: Int)
+
+  /**
+    * Pads a set of items so that each one's gap starts at the same column.
+    *
+    * A group is a run with no blank line between its members, following `gofmt`: a
+    * blank line is the one signal an author has that two runs are separate tables.
+    * An item far wider than the narrowest in its group opts out, taking a single
+    * space and not widening the target, so one long row cannot push the whole
+    * column across the screen. An item carrying a comment before its gap is left
+    * alone, since its width is not a property of the code.
+    */
+  private def alignColumn(
+    items: List[Alignable],
+    tokens: Vector[TokenStream.PrintableToken],
+    plan: Array[Gap],
+    policy: PrettyPrinter.Separators
+  ): Unit = {
+    for (group <- groupByBlankLine(items, tokens)) {
+      val measured = group
+        .filterNot(it => (it.start until it.gap).exists(i => tokens(i).token.kind.isComment))
+        .map(it => (it.gap, prefixWidth(tokens, it.start, it.gap, policy)))
       if (measured.sizeIs > 1) {
         val narrowest = measured.map(_._2).min
         val participating = measured.filter(_._2 <= narrowest + OutlierSlack)
         if (participating.sizeIs > 1) {
           val target = participating.map(_._2).max
-          for ((arrow, width) <- participating) {
-            plan(arrow) = Gap.Pad(target - width + 1)
+          for ((gap, width) <- participating) {
+            plan(gap) = Gap.Pad(target - width + 1)
           }
         }
       }
     }
   }
 
-  /** Splits `arms` into runs separated by a blank line in the source. */
-  private def groupArms(
-    arms: List[SyntaxTree.Tree],
-    ranges: java.util.IdentityHashMap[SyntaxTree.Tree, (Int, Int)],
+  /** The first token in `[start, end)` whose kind satisfies `p`. */
+  private def pivot(
+    tokens: Vector[TokenStream.PrintableToken],
+    start: Int,
+    end: Int,
+    p: TokenKind => Boolean
+  ): Option[Int] =
+    (start until math.min(end, tokens.length)).find(i => p(tokens(i).token.kind))
+
+  /** Splits `items` into runs separated by a blank line in the source. */
+  private def groupByBlankLine(
+    items: List[Alignable],
     tokens: Vector[TokenStream.PrintableToken]
-  ): List[List[SyntaxTree.Tree]] = {
-    val groups = scala.collection.mutable.ListBuffer.empty[List[SyntaxTree.Tree]]
-    var current = scala.collection.mutable.ListBuffer.empty[SyntaxTree.Tree]
-    for (arm <- arms) {
-      val (armStart, _) = ranges.get(arm)
-      if (current.nonEmpty && blankLineBefore(tokens, armStart)) {
+  ): List[List[Alignable]] = {
+    val groups = scala.collection.mutable.ListBuffer.empty[List[Alignable]]
+    var current = scala.collection.mutable.ListBuffer.empty[Alignable]
+    for (item <- items) {
+      if (current.nonEmpty && blankLineBefore(tokens, item.start)) {
         groups += current.toList
         current = scala.collection.mutable.ListBuffer.empty
       }
-      current += arm
+      current += item
     }
     if (current.nonEmpty) groups += current.toList
     groups.toList
@@ -213,15 +530,6 @@ object LayoutPlan {
       val gap = data.slice(tokens(i - 1).token.endIndex, tokens(i).token.startIndex)
       gap.count(_ == '\n') > 1
     }
-
-  /** The index of the `=>` belonging to the arm spanning `[start, end)`. */
-  private def arrowIndex(
-    tokens: Vector[TokenStream.PrintableToken],
-    start: Int,
-    end: Int
-  ): Option[Int] =
-    (start until math.min(end, tokens.length))
-      .find(i => tokens(i).token.kind == TokenKind.ArrowThickR)
 
   /**
     * The width the arm's text from `start` up to `arrow` will occupy once printed,
@@ -244,13 +552,6 @@ object LayoutPlan {
       width += tokens(i).text.length
     }
     width
-  }
-
-  /** The number of leading spaces on the line `token` starts on. */
-  private def indentOfLineContaining(token: Token): Int = {
-    val data = token.src.data
-    val lineStart = data.lastIndexWhere(_ == '\n', token.startIndex - 1) + 1
-    data.slice(lineStart, token.startIndex).takeWhile(_ == ' ').length
   }
 
   /** The indentation unit, per `docs/STYLE.md`: *"Indentation is 4 spaces."* */
