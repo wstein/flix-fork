@@ -190,7 +190,15 @@ object FindReferencesProvider {
     * @return The [[SourceLocation]]s of the occurrences of `x` if Flix supports "find references" for it.
     *         Otherwise, [[None]].
     */
-  private def getOccurs(x: AnyRef)(implicit root: Root): Option[Set[SourceLocation]] = x match {
+  /**
+    * Every occurrence of the symbol `x` denotes, or `None` if it denotes no symbol.
+    *
+    * `private[provider]` so [[RenameProvider]] can use it. Renaming a symbol means rewriting each
+    * of its occurrences, so the two features ask the same question, and answering it twice would
+    * let them disagree -- which is how rename came to support four kinds of symbol while find
+    * references supported fifteen.
+    */
+  private[provider] def getOccurs(x: AnyRef)(implicit root: Root): Option[Set[SourceLocation]] = x match {
     // Assoc Types
     case TypedAst.AssocTypeSig(_, _, sym, _, _, _, _) => Some(getAssocTypeSymOccurs(sym))
     case SymUse.AssocTypeSymUse(sym, _) => Some(getAssocTypeSymOccurs(sym))
@@ -501,7 +509,8 @@ object FindReferencesProvider {
     occurs
   }
 
-  private def isInProject(loc: SourceLocation): Boolean = loc.source.input match {
+  /** Whether `loc` is in code this project can edit, as opposed to a library or a package. */
+  private[provider] def isInProject(loc: SourceLocation): Boolean = loc.source.input match {
     case Input.RealFile(_, _) => false
     case Input.VirtualFile(_, _, _) => true // over-approximation
     case Input.BundledLibraryFile(_, _, _) => false  // Bundled libraries are not project code

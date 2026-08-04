@@ -172,64 +172,26 @@ object RenameProvider {
   }
 
   /**
-    * If `x` is a [[Symbol]] for which we support renaming, returns all occurrences of it. Otherwise, returns [[None]].
+    * If `x` is a [[Symbol]] that can be renamed, returns all occurrences of it. Otherwise, returns
+    * [[None]].
+    *
+    * Occurrences come from [[FindReferencesProvider]] rather than from a match of its own. Renaming
+    * is rewriting every occurrence, so the two ask the same question, and asking it twice is how
+    * this came to answer for four kinds of symbol while find references answered for fifteen: a
+    * def, trait, enum, effect, struct or type alias reported no occurrences, the empty edit reached
+    * the editor, and the IDE reported that the element could not be renamed.
+    *
+    * A symbol is refused outright when any occurrence lies outside the project. Renaming only the
+    * occurrences that can be edited would leave the rest referring to a name that no longer exists,
+    * so a partial rename is worse than none -- and this is the ordinary case for a library symbol
+    * such as `println`, whose declaration lives inside the compiler jar.
     *
     * @param x    The object that might be a [[Symbol]] for which we search for occurrences.
     * @param root The root AST node for the Flix project.
-    * @return All occurrences of the [[Symbol]] we want to rename, if it's supported. Otherwise, [[None]].
+    * @return All occurrences of the [[Symbol]] we want to rename, if it can be. Otherwise, [[None]].
     */
-  private def getOccurs(x: AnyRef)(implicit root: Root): Option[Set[SourceLocation]] = x match {
-    // Type Vars
-    case TypedAst.TypeParam(_, sym, _) => Some(getTypeVarSymOccurs(sym))
-    case Type.Var(sym, _) => Some(getTypeVarSymOccurs(sym))
-    // Vars
-    case TypedAst.Expr.Var(sym, _, _) => Some(getVarOccurs(sym))
-    case TypedAst.Binder(sym, _) => Some(getVarOccurs(sym))
-
-    case _ => None
-  }
-
-  private def getTypeVarSymOccurs(sym: Symbol.KindedTypeVarSym)(implicit root: Root): Set[SourceLocation] = {
-    var occurs: Set[SourceLocation] = Set.empty
-
-    def consider(s: Symbol.KindedTypeVarSym, loc: SourceLocation): Unit = {
-      if (s == sym) {
-        occurs += loc
-      }
-    }
-
-    object TypeVarSymConsumer extends Consumer {
-      override def consumeType(tpe: Type): Unit = tpe match {
-        case Type.Var(s, loc) => consider(s, loc)
-        case _ => ()
-      }
-    }
-
-    Visitor.visitRoot(root, TypeVarSymConsumer, AllAcceptor)
-
-    occurs + sym.loc
-  }
-
-  private def getVarOccurs(sym: Symbol.VarSym)(implicit root: Root): Set[SourceLocation] = {
-    var occurs: Set[SourceLocation] = Set.empty
-
-    def consider(s: Symbol.VarSym, loc: SourceLocation): Unit = {
-      if (s == sym) {
-        occurs += loc
-      }
-    }
-
-    object VarSymConsumer extends Consumer {
-      override def consumeExpr(exp: TypedAst.Expr): Unit = exp match {
-        case TypedAst.Expr.Var(s, _, loc) => consider(s, loc)
-        case _ => ()
-      }
-    }
-
-    Visitor.visitRoot(root, VarSymConsumer, AllAcceptor)
-
-    occurs + sym.loc
-  }
+  private def getOccurs(x: AnyRef)(implicit root: Root): Option[Set[SourceLocation]] =
+    FindReferencesProvider.getOccurs(x).filter(_.forall(FindReferencesProvider.isInProject))
 
   /**
     * Constructs the JSON response for renaming all `occurences` to `newName`.
