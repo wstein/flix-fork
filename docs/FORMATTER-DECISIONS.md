@@ -149,13 +149,13 @@ algebra's `fill`. It does not need a new combinator.
 **Rejected:** stripping alignment, as Prettier would. It is simpler to implement
 and it contradicts the style guide in writing.
 
-Alignment is currently **preserved rather than produced** (D17): the formatter
-keeps the padding an author wrote and does not compute it. Producing it needs the
-whole group — every arm of the match — which is the next layout rule to write.
-When it is written, groups should be bounded so one pathological pattern cannot
-push every `=>` off the right margin: a blank line ends a group, and an arm whose
-pattern is far longer than its neighbours' opts out and takes a single space.
-That is the `gofmt` model for struct field alignment.
+Alignment is **produced**, not preserved (D20): the padding is computed from the
+group rather than copied from the author, which is what makes two files differing
+only in alignment format identically. Groups are bounded so one pathological
+pattern cannot push every `=>` off the right margin — a blank line ends a group,
+and an arm far wider than its group's narrowest opts out and takes a single
+space. That is the `gofmt` model, and it is applied to struct fields and record
+type aliases too.
 
 ---
 
@@ -582,8 +582,47 @@ throughout. After the fixes, `Option.flix` changes by 12 lines, every one of the
 alignment the file did not previously have.
 
 **Still preserved:** blank lines (they carry paragraph structure and define the
-alignment groups), spacing that is semantic (D16, D18), and everything inside a
-declaration that failed to parse (D19).
+alignment groups), spacing that is semantic (D16, D18), everything inside a
+declaration that failed to parse (D19), and the author's choice of *where* to
+break a non-pipeline expression — only its indentation is decided.
+
+## D22 — What a diff review found that the property tests could not
+
+**Status: Settled.**
+
+Formatting all 403 corpus files and ranking them by the proportion of lines
+changed found five defects. Every one of them passed the fidelity, idempotence
+and comment-anchor gates, because each produced output that was wrong *and*
+perfectly consistent.
+
+1. **The whole file drifted right.** A declaration's doc comment is folded into
+   its node, so a node starts before its own header; indenting everything after
+   the node's start pushed every header in by a level at every nesting depth.
+   `Option.flix`: 612 changed lines.
+2. **A comment introducing the next declaration** was indented into the previous
+   one's body, because `Parser2.close` folds a trailing comment into the
+   declaration it follows.
+3. **`inject l into Link/2` became `Link / 2`.** The slash in a predicate arity is
+   part of the name, but a name-slash-number triple is indistinguishable from
+   division without the tree.
+4. **Inline record types were padded into columns.** `{a = 1, b = 2}` shares a
+   line, so aligning it lined nothing up and merely inserted gaps mid-expression.
+   Alignment now applies only to fields that start their own line.
+5. **Continuations inferred from the preceding token stair-stepped.** Declarations
+   do not end in `;`, so a run of `use` lines read as one long continuation and
+   moved four columns right per line — 24,000 changed lines became 50,000. The
+   rule was narrowed: only a construct rule declares a continuation, and a line
+   the plan says nothing about is treated as an item.
+
+Total changed lines across the corpus fell from 50,027 to 23,894 as these were
+fixed, and `Option.flix` from 612 to 12 — the remaining 12 being `=>` alignment
+the file did not previously have.
+
+The lesson is the one the design document already suspected and this work kept
+re-learning: the automated properties prove a formatter *destroys* nothing, and
+say nothing at all about whether the result is any good. Reading a diff is not a
+final acceptance step to be done once; it is the only instrument that sees this
+entire class of defect.
 
 ## Validation against real codebases
 

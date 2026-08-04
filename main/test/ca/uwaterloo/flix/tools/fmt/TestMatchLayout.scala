@@ -225,6 +225,66 @@ class TestMatchLayout extends TestFormatterCommon {
     assert(canonical(src) == src)
   }
 
+  test("datalog: the slash of a predicate arity stays tight") {
+    // `Link/2` names a predicate and its arity. Nothing tells it apart from
+    // division in a pair of adjacent tokens — both are a name, a slash and a
+    // number — so only the tree can keep it closed up.
+    val src =
+      """def r(l: List[(Int32, Int32)]): #{ Link(Int32, Int32) } = inject l into Link/2
+        |""".stripMargin
+    assert(canonical(src) == src)
+  }
+
+  test("record type: fields on their own lines are aligned") {
+    val src =
+      """type alias Program = {
+        |    classes = Vector[String],
+        |    classImplements = Vector[String]
+        |}
+        |""".stripMargin
+    val expected =
+      """type alias Program = {
+        |    classes         = Vector[String],
+        |    classImplements = Vector[String]
+        |}
+        |""".stripMargin
+    assert(canonical(src) == expected)
+  }
+
+  test("record type: fields sharing a line are not padded apart") {
+    // A column only exists down a page; padding an inline record just inserts
+    // gaps in the middle of an expression.
+    val src = "def f(): {a = Int32, bb = Int32} = {a = 1, bb = 2}\n"
+    assert(canonical(src) == src)
+  }
+
+  test("continuation: a wrapped operator indents past the line it continues") {
+    val src =
+      """def f(): List[String] =
+        |    "a"
+        |    :: "b"
+        |    :: Nil
+        |""".stripMargin
+    val expected =
+      """def f(): List[String] =
+        |    "a"
+        |        :: "b"
+        |        :: Nil
+        |""".stripMargin
+    assert(canonical(src) == expected)
+  }
+
+  test("continuation: a run of continuations does not stair-step") {
+    // Each continuation hangs off the line that began the item, not off the line
+    // before it, so the third stage sits at the same column as the first.
+    val src =
+      "def f(l: List[Int32]): Int32 = l |> List.map(x -> x) |> List.reverse |> List.length\n"
+    val out = canonical(src)
+    val columns = out.linesIterator.filter(_.contains("|>")).map(_.indexOf("|>")).toList
+    assert(columns.sizeIs == 3, s"expected three stages, got $columns:\n$out")
+    assert(columns.distinct.sizeIs == 1, s"stages should share a column:\n$out")
+  }
+
   test("match: the default policy still reproduces its input exactly") {
     // Vertical layout belongs to the canonical mode. `flix format` must remain a
     // round trip, or every file in the corpus would be rewritten by the mode that

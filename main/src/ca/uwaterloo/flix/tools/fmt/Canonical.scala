@@ -150,6 +150,7 @@ object Canonical extends PrettyPrinter.Separators {
   private def opensGroup(kind: TokenKind): Boolean = kind match {
     case TokenKind.ParenL => true
     case TokenKind.BracketL => true
+    case TokenKind.HashParenL => true
     case _ => false
   }
 

@@ -52,7 +52,20 @@ object LayoutPlan {
     /** No opinion: the separator policy decides. */
     case object Unspecified extends Gap
 
-    /** A line break followed by `indent` spaces. */
+    /**
+      * Requests that a new item begin here — a declaration, a match arm, a
+      * Datalog constraint. How far it is indented is decided by [[indent]].
+      */
+    case object StartLine extends Gap
+
+    /**
+      * Requests that the line continue on the next one — a broken pipeline, a
+      * wrapped expression. A continuation is indented one unit past the line that
+      * began the item, rather than being treated as a new item at that level.
+      */
+    case object ContinueLine extends Gap
+
+    /** A line break followed by `indent` spaces, as resolved by [[indent]]. */
     case class Break(indent: Int) extends Gap
 
     /** Exactly `spaces` spaces, used to line a column up. */
@@ -82,6 +95,10 @@ object LayoutPlan {
         planConstraintSet(node, range, ranges, tokens, plan)
       } else if (node.kind == TreeKind.Expr.Binary) {
         planPipeline(node, range, ranges, tokens, plan)
+      } else if (node.kind == TreeKind.PredicateAndArity) {
+        tightenArity(range, plan)
+      } else if (node.kind == TreeKind.Type.Record) {
+        alignRecordFields(node, ranges, tokens, plan, policy)
       }
     }
     indent(tokens, ranges, plan)
@@ -113,16 +130,23 @@ object LayoutPlan {
   ): Unit = {
     val openers = indentingAncestors(tokens, ranges)
     val lineIndent = Array.fill(tokens.length)(0)
+    // The indentation of the line that began the item currently being written. A
+    // continuation hangs one unit off this, not off whatever line precedes it, so
+    // a chain of continuations does not stair-step further right with each line.
+    var itemIndent = 0
 
     for (i <- tokens.indices) {
       val startsLine = i > 0 && (plan(i) match {
-        case Gap.Break(_) => true
+        case Gap.StartLine | Gap.ContinueLine => true
         case _ => breaksLine(tokens, i)
       })
       if (i == 0) {
         lineIndent(i) = 0
       } else if (!startsLine) {
         lineIndent(i) = lineIndent(i - 1)
+      } else if (continues(plan, i)) {
+        lineIndent(i) = itemIndent + IndentUnit
+        plan(i) = Gap.Break(lineIndent(i))
       } else {
         // A closing delimiter ends the construct it belongs to, so it returns to
         // the indentation of the line that construct opened on. Everything else is
@@ -131,10 +155,28 @@ object LayoutPlan {
         lineIndent(i) =
           if (isClosingDelimiter(tokens(i).token.kind)) innermost.map(lineIndent).getOrElse(0)
           else innermost.map(a => lineIndent(a) + IndentUnit).getOrElse(0)
+        itemIndent = lineIndent(i)
         plan(i) = Gap.Break(lineIndent(i))
       }
     }
   }
+
+  /**
+    * Returns `true` if the line beginning at token `i` continues the previous one
+    * rather than starting a new item.
+    *
+    * Wrapping an expression across lines is not the same as starting a new
+    * statement, and indenting both the same way loses the distinction: a broken
+    * pipeline would sit at the same column as the `let` it belongs to. A
+    * continuation is therefore indented one unit further in.
+    *
+    * Only a construct rule can say so. Inferring it from the preceding token was
+    * tried and was badly wrong: declarations do not end in `;`, so a run of `use`
+    * lines read as one long continuation and stair-stepped four columns further
+    * right with each line. A line the plan says nothing about keeps being treated
+    * as an item, which is the conservative reading.
+    */
+  private def continues(plan: Array[Gap], i: Int): Boolean = plan(i) == Gap.ContinueLine
 
   /**
     * For each token, the start indices of the constructs enclosing it, innermost
@@ -280,7 +322,7 @@ object LayoutPlan {
     // Only *that* a line starts is decided here; `indent` decides how far in.
     for (arm <- arms) {
       val (armStart, _) = ranges.get(arm)
-      if (armStart > 0) plan(armStart) = Gap.Break(0)
+      if (armStart > 0) plan(armStart) = Gap.StartLine
     }
 
     // The closing brace goes on its own line, and only when the parser actually
@@ -288,7 +330,7 @@ object LayoutPlan {
     // would change the program.
     val lastIdx = end - 1
     if (lastIdx > 0 && lastIdx < tokens.length && tokens(lastIdx).token.kind == TokenKind.CurlyR) {
-      plan(lastIdx) = Gap.Break(0)
+      plan(lastIdx) = Gap.StartLine
     }
 
     alignArrows(arms, ranges, tokens, plan, policy)
@@ -359,13 +401,13 @@ object LayoutPlan {
     if (constraints.sizeIs < 2) return
     for (constraint <- constraints) {
       val (start, _) = ranges.get(constraint)
-      if (start > 0) plan(start) = Gap.Break(0)
+      if (start > 0) plan(start) = Gap.StartLine
     }
     // The closing brace goes on its own line, as it does for a `match`, and only
     // when the parser produced one.
     val lastIdx = range._2 - 1
     if (lastIdx > 0 && lastIdx < tokens.length && tokens(lastIdx).token.kind == TokenKind.CurlyR) {
-      plan(lastIdx) = Gap.Break(0)
+      plan(lastIdx) = Gap.StartLine
     }
   }
 
@@ -390,7 +432,17 @@ object LayoutPlan {
     plan: Array[Gap]
   ): Unit = {
     val (start, end) = range
-    if (!isPipeOperator(node)) return
+    if (!isPipeOperator(node)) {
+      // Not a pipeline, but still a binary chain. If the author already broke the
+      // line before an operator, that line continues the expression rather than
+      // starting a new item, and indenting it as an item flattens `::` chains and
+      // the like against the statement they belong to. The break itself is left
+      // to the author; only its indentation is decided.
+      operatorIndex(node, start).foreach { op =>
+        if (op > 0 && op < tokens.length && breaksLine(tokens, op)) plan(op) = Gap.ContinueLine
+      }
+      return
+    }
     // `a |> b |> c` nests to the left, so only the outermost node plans the chain;
     // an inner one would break the same operators again from a shorter span.
     val enclosedByPipeline = ranges.entrySet().stream().anyMatch { entry =>
@@ -402,7 +454,20 @@ object LayoutPlan {
 
     val stages = (start until math.min(end, tokens.length)).filter(isPipeToken(tokens, _))
     if (stages.sizeIs < 2) return
-    for (i <- stages if i > 0) plan(i) = Gap.Break(0)
+    for (i <- stages if i > 0) plan(i) = Gap.ContinueLine
+  }
+
+  /** The token index of `node`'s operator, if it has one. */
+  private def operatorIndex(node: SyntaxTree.Tree, start: Int): Option[Int] = {
+    var idx = start
+    var found = -1
+    node.children.foreach {
+      case t: SyntaxTree.Tree =>
+        if (found < 0 && t.kind == TreeKind.Operator) found = idx
+        idx += subtreeSize(t)
+      case _ => idx += 1
+    }
+    if (found >= 0) Some(found) else None
   }
 
   /** Returns `true` if `node` is a binary application of `|>`. */
@@ -454,6 +519,47 @@ object LayoutPlan {
   }
 
   /**
+    * Closes up the `/` of a `Predicate/Arity`.
+    *
+    * `inject links into Link/2` names a predicate and its arity; the slash is part
+    * of the name rather than division. Nothing distinguishes it from `a / b` in a
+    * pair of adjacent tokens — both are a name, a slash and a number — so the
+    * separator policy spaces it out and only the tree can say otherwise.
+    */
+  private def tightenArity(range: (Int, Int), plan: Array[Gap]): Unit = {
+    val (start, end) = range
+    for (i <- math.max(start + 1, 1) until end) plan(i) = Gap.Pad(0)
+  }
+
+  /**
+    * Pads the fields of a record type so their `=` line up.
+    *
+    * Record type aliases are written as tables throughout the corpus, in the same
+    * spirit as struct fields:
+    *
+    *     type alias Program = {
+    *         classes         = Vector[String],
+    *         finalClasses    = Vector[String],
+    *         classImplements = Vector[(String, String)]
+    *     }
+    */
+  private def alignRecordFields(
+    node: SyntaxTree.Tree,
+    ranges: java.util.IdentityHashMap[SyntaxTree.Tree, (Int, Int)],
+    tokens: Vector[TokenStream.PrintableToken],
+    plan: Array[Gap],
+    policy: PrettyPrinter.Separators
+  ): Unit = {
+    val items = node.children.collect {
+      case t: SyntaxTree.Tree if t.kind == TreeKind.Type.RecordFieldFragment => t
+    }.toList.flatMap { field =>
+      val (fieldStart, fieldEnd) = ranges.get(field)
+      pivot(tokens, fieldStart, fieldEnd, _ == TokenKind.Equal).map(Alignable(fieldStart, _))
+    }
+    alignColumn(items, tokens, plan, policy)
+  }
+
+  /**
     * An item taking part in a column: its first token, and the gap to pad.
     *
     * The width measured for it is everything from `start` up to `gap`, so putting
@@ -478,7 +584,11 @@ object LayoutPlan {
     plan: Array[Gap],
     policy: PrettyPrinter.Separators
   ): Unit = {
-    for (group <- groupByBlankLine(items, tokens)) {
+    // A column only exists down a page. Fields written inline — `{a = 1, b = 2}` —
+    // share a line, and padding them apart lines nothing up; it just inserts gaps
+    // in the middle of an expression.
+    val onOwnLine = items.filter(it => it.start > 0 && startsItsOwnLine(tokens, plan, it.start))
+    for (group <- groupByBlankLine(onOwnLine, tokens)) {
       val measured = group
         .filterNot(it => (it.start until it.gap).exists(i => tokens(i).token.kind.isComment))
         .map(it => (it.gap, prefixWidth(tokens, it.start, it.gap, policy)))
@@ -503,6 +613,16 @@ object LayoutPlan {
     p: TokenKind => Boolean
   ): Option[Int] =
     (start until math.min(end, tokens.length)).find(i => p(tokens(i).token.kind))
+
+  /**
+    * Returns `true` if token `i` will begin a line, either because a rule asked
+    * for it or because the source already broke there.
+    */
+  private def startsItsOwnLine(
+    tokens: Vector[TokenStream.PrintableToken],
+    plan: Array[Gap],
+    i: Int
+  ): Boolean = plan(i) == Gap.StartLine || breaksLine(tokens, i)
 
   /** Splits `items` into runs separated by a blank line in the source. */
   private def groupByBlankLine(
