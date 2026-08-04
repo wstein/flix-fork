@@ -87,6 +87,12 @@ to get wrong from reading the pretty-printing literature instead of the code:
   emit whitespace tokens. `Token` carries `startIndex`/`endIndex` into its
   `Source`, so the gap between two tokens is recoverable by slicing. A printer
   that wants the original spacing has to go back to the source for it.
+- **Not every character belongs to a token.** `Lexer.acceptEscapedName` resets the
+  token start past the `$` of an escaped name, so the `$` of `$run` or `x.$and(y)`
+  is in no token at all. Concatenating `Token.text` therefore emits `def run` and
+  renames a definition to a keyword. Print through
+  `TokenStream.printableTokens`, which attributes such characters to the token
+  that follows them, rather than reading `Token.text` directly.
 
 The formatter test suites live in `main/test/ca/uwaterloo/flix/tools/fmt/` and
 share their corpus — the standard library plus `examples` — through

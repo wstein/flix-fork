@@ -79,7 +79,7 @@ trait TestFormatterCommon extends AnyFunSuite {
     Library.CoreLibrary ++ Library.StandardLibrary
 
   /** Flix instance used to compile example programs. The standard library is loaded by default. */
-  private val exampleFlix: Flix = {
+  protected val exampleFlix: Flix = {
     val flix = new Flix().setOptions(Options.Default)
     flix.check()
     flix
@@ -97,13 +97,16 @@ trait TestFormatterCommon extends AnyFunSuite {
   }
 
   /**
-    * Every `.flix` file under `examples/`, used as a corpus for all properties.
-    * `apps` and `package-manager` and `datalog/train-schedule.flix` are excluded.
+    * Every standalone `.flix` file under `examples/`, used as a corpus for all properties.
+    *
+    * Each sample is compiled on its own, so files belonging to a multi-file project
+    * are excluded: they refer to declarations in sibling files and do not compile
+    * alone. `datalog/train-schedule.flix` is excluded separately.
     */
   protected val ExampleSamples: List[Sample] =
     findFlixFiles(
       Paths.get("examples"),
-      exclude = Set("apps", "package-manager", "datalog/train-schedule.flix")
+      exclude = Set("datalog/train-schedule.flix")
     ).map { p =>
       val content = Files.readString(Paths.get(p))
       Sample(p, content, src => reparseAt(exampleFlix, p, src, restoreTo = None))
@@ -118,16 +121,28 @@ trait TestFormatterCommon extends AnyFunSuite {
     }
 
   /**
-    * Find all `.flix` files under `root` excluding the ones that are in the `exclude` set.
+    * Find all standalone `.flix` files under `root`, excluding those in the
+    * `exclude` set and those belonging to a multi-file project.
+    *
+    * A directory holding a `flix.toml` is a project: its sources are compiled
+    * together and generally do not compile individually. Detecting them by their
+    * manifest rather than listing their names keeps this correct as examples are
+    * added — a new project would otherwise fail the suite on the day it lands,
+    * with an error about an orphaned module rather than about the corpus.
     *
     * Returns full paths (including `root`) as forward-slash strings, sorted
     * platform-independently. The `exclude` entries are matched as substrings.
     */
   private def findFlixFiles(root: Path, exclude: Set[String]): List[String] = {
+    val projectDirs = FileOps.getFilesIn(root, depth = Int.MaxValue)
+      .filter(_.getFileName.toString == "flix.toml")
+      .map(_.getParent.normalize().toString)
+
     val files = FileOps.getFlixFilesIn(root, depth = Int.MaxValue)
     FileOps.sortPlatformIndependently(root, files)
       .map { case (path, _) => path.normalize().toString() }
       .filterNot(str => exclude.exists(str.contains))
+      .filterNot(str => projectDirs.exists(str.startsWith))
   }
 
   /**

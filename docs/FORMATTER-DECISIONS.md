@@ -281,6 +281,36 @@ across a project to no purpose and defeating incremental builds.
 
 ---
 
+## D14 — Tokens are printed through `printableTokens`, never from `Token.text`
+
+**Status: Settled.**
+
+The syntax tree is full-fidelity in the sense that matters — every non-whitespace
+character of the source can be recovered from it — but not in the sense a printer
+would naively assume. `Lexer.acceptEscapedName` resets the token start past the
+`$` of an escaped name, with the comment *"Don't include the $ sign in the
+name"*, so in `def $run(...)` and `x.$and(y)` the `$` belongs to **no token**.
+
+A printer that concatenated `Token.text` would emit `def run(...)`, renaming a
+definition to a keyword and either changing the program's meaning or breaking it
+outright. Nothing in the AST-shape check would catch it, because the weeder
+strips the `$` too.
+
+`TokenStream.printableTokens` attributes any non-whitespace character between two
+tokens to the token that follows, which restores the `$` and generalises to any
+future character the lexer chooses to exclude. The corpus test asserts the
+resulting property directly: the printable texts account for every non-whitespace
+character of every file.
+
+This was found by measurement, not by reading the lexer — the corpus check failed
+on `BigInt.flix` and one interoperability example, and the lexer explained why.
+It is the third time in this work that a claim about the implementation was
+settled by running something rather than by reasoning about it.
+
+**Rejected:** changing the lexer to include the `$` in the token. The exclusion is
+deliberate — the resolved name really is `run`, not `$run` — and a formatter is
+the wrong reason to change what a name means.
+
 ## Open questions
 
 - **Pipeline break threshold.** Breaking at two stages disagrees with ~60% of
