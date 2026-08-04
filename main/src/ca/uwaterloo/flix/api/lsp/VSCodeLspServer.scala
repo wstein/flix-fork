@@ -21,9 +21,6 @@ import ca.uwaterloo.flix.language.CompilationMessage
 import ca.uwaterloo.flix.language.ast.TypedAst
 import ca.uwaterloo.flix.language.ast.TypedAst.Root
 import ca.uwaterloo.flix.language.ast.shared.SecurityContext
-import ca.uwaterloo.flix.language.phase.Documentor
-import ca.uwaterloo.flix.language.phase.SvgDocumentor
-import ca.uwaterloo.flix.tools.pkg.PackageModules
 import ca.uwaterloo.flix.language.phase.extra.CodeHinter
 import ca.uwaterloo.flix.util.*
 import ca.uwaterloo.flix.util.Formatter.NoFormatter
@@ -99,16 +96,11 @@ class VSCodeLspServer(port: Int, o: Options) extends WebSocketServer(new InetSoc
   private var currentErrors: List[CompilationMessage] = Nil
 
   /**
-    * Cached diagram manifest, computed once per compilation and reused for all getDiagram requests.
-    * Invalidated (reset to empty) whenever a new compilation produces a fresh root.
+    * Diagrams for the current compilation. Shared with the standard LSP server's
+    * `flix.showDiagram` command so both protocols answer identically; it notices a new root by
+    * itself, so nothing here has to invalidate it.
     */
-  private var diagramManifest: SvgDocumentor.DiagramManifest = SvgDocumentor.DiagramManifest(Map.empty)
-
-  /**
-    * Cached set of all documentable item names (traits, modules), used by getDiagram to distinguish
-    * "item exists but has no diagram" from "item not found". Populated together with [[diagramManifest]].
-    */
-  private var cachedKnownNames: Set[String] = Set.empty
+  private val diagramCache: DiagramProvider.Cache = new DiagramProvider.Cache
 
   /**
     * Invoked when the server is started.
@@ -304,7 +296,8 @@ class VSCodeLspServer(port: Int, o: Options) extends WebSocketServer(new InetSoc
         ("id" -> id) ~ ("status" -> ResponseStatus.Success) ~ ("result" -> JArray(highlights.map(_.toJSON).toList))
 
     case Request.Hover(id, uri, pos) =>
-      HoverProvider.processHover(uri, pos)(root, flix) match {
+      // The VS Code extension registers `flix.showDiagram`, so the hover may offer the link.
+      HoverProvider.processHover(uri, pos, commandLinks = true)(root, flix) match {
         case Some(hover) => ("id" -> id) ~ hover.toJSON
         case None => ("id" -> id) ~ ("status" -> ResponseStatus.InvalidRequest) ~ ("result" -> "Nothing found for this hover.")
       }
@@ -359,23 +352,13 @@ class VSCodeLspServer(port: Int, o: Options) extends WebSocketServer(new InetSoc
       ("id" -> id) ~ ("status" -> ResponseStatus.Success) ~ ("result" -> JArray(FoldingRangeProvider.getFoldingRanges(uri)(root).map(_.toJSON)))
 
     case Request.GetDiagram(id, itemName) =>
-      // Populate the caches lazily on first request after each compilation.
-      if (diagramManifest.diagrams.isEmpty && root != TypedAst.empty) {
-        val moduleTree = Documentor.build(root, PackageModules.All)
-        diagramManifest = SvgDocumentor.DiagramManifest(
-          SvgDocumentor.generateAll(moduleTree)(flix)
-        )
-        cachedKnownNames = SvgDocumentor.allItemNames(moduleTree)
-      }
-      diagramManifest.diagrams.get(s"$itemName.svg") match {
-        case Some(svg) =>
+      DiagramProvider.getDiagram(itemName, diagramCache)(root, flix) match {
+        case DiagramProvider.Result.Svg(svg) =>
           ("id" -> id) ~ ("status" -> ResponseStatus.Success) ~ ("result" -> JString(svg))
-        case None if cachedKnownNames.contains(itemName) =>
-          ("id" -> id) ~ ("status" -> ResponseStatus.Success) ~
-            ("message" -> s"'$itemName' exists but has no structural diagram (no supertrait or submodule relationships).")
-        case None =>
-          ("id" -> id) ~ ("status" -> ResponseStatus.InvalidRequest) ~
-            ("message" -> s"Unknown item '$itemName': no such trait or module found in the current compilation.")
+        case r@DiagramProvider.Result.NoDiagram(_) =>
+          ("id" -> id) ~ ("status" -> ResponseStatus.Success) ~ ("message" -> DiagramProvider.messageFor(r))
+        case r@DiagramProvider.Result.Unknown(_) =>
+          ("id" -> id) ~ ("status" -> ResponseStatus.InvalidRequest) ~ ("message" -> DiagramProvider.messageFor(r))
       }
   }
 
@@ -423,9 +406,6 @@ class VSCodeLspServer(port: Int, o: Options) extends WebSocketServer(new InetSoc
     // Update the root and the errors.
     this.root = root
     this.currentErrors = errors
-    // Invalidate the diagram caches so the next getDiagram request regenerates from the fresh root.
-    this.diagramManifest = SvgDocumentor.DiagramManifest(Map.empty)
-    this.cachedKnownNames = Set.empty
 
     // Compute elapsed time.
     val e = System.nanoTime() - t0

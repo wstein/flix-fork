@@ -27,14 +27,27 @@ import ca.uwaterloo.flix.language.phase.unification.SetFormula
 
 object HoverProvider {
 
-  def processHover(uri: String, pos: Position)(implicit root: Root, flix: Flix): Option[Hover] = {
+  /**
+    * The hover for the item at `pos`.
+    *
+    * `commandLinks` decides whether the `View Diagram` link is offered. It is written as a
+    * `command:` URI, which only VS Code resolves; every other client hands the unknown scheme to
+    * the operating system, which reports that it cannot open it. Offering a link that is certain to
+    * fail is worse than offering none, so a client that cannot follow it is not shown it -- and
+    * reaches the same diagram through the `flix.showDiagram` command instead.
+    */
+  def processHover(uri: String, pos: Position, commandLinks: Boolean = false)(implicit root: Root, flix: Flix): Option[Hover] = {
     val consumer = StackConsumer()
     Visitor.visitRoot(root, consumer, InsideAcceptor(uri, pos))
 
-    consumer.getStack.headOption.flatMap(hoverAny)
+    consumer.getStack.headOption.flatMap(hoverAny(_)(root, flix, commandLinks))
   }
 
-  private def hoverAny(x: AnyRef)(implicit root: Root, flix: Flix): Option[Hover] = x match {
+  /** The `View Diagram` link, or nothing for a client that cannot follow a `command:` URI. */
+  private def diagramLink(itemName: String)(implicit commandLinks: Boolean): String =
+    if (commandLinks) s"\n[📊 View Diagram](command:flix.showDiagram?$itemName)" else ""
+
+  private def hoverAny(x: AnyRef)(implicit root: Root, flix: Flix, commandLinks: Boolean): Option[Hover] = x match {
     case tpe: Type => hoverKind(tpe.kind, tpe.loc)
     case (varSym: Symbol.VarSym, tpe: Type) => hoverType(tpe, varSym.loc)
     case exp: Expr => hoverTypeAndEff(exp.tpe, exp.eff, exp.loc)
@@ -71,7 +84,7 @@ object HoverProvider {
     Some(Hover(contents, range))
   }
 
-  private def hoverDef(sym: Symbol.DefnSym, loc: SourceLocation)(implicit root: Root, flix: Flix): Option[Hover] = {
+  private def hoverDef(sym: Symbol.DefnSym, loc: SourceLocation)(implicit root: Root, flix: Flix, commandLinks: Boolean): Option[Hover] = {
     val defDecl = root.defs(sym)
     val markup =
       s"""```flix
@@ -79,15 +92,14 @@ object HoverProvider {
          |```
          |
          |${FormatDoc.asMarkDown(defDecl.spec.doc)}
-         |
-         |[📊 View Diagram](command:flix.showDiagram?${sym.name})
+         |${diagramLink(sym.name)}
          |""".stripMargin
     val contents = MarkupContent(MarkupKind.Markdown, markup)
     val range = Range.from(loc)
     Some(Hover(contents, range))
   }
 
-  private def hoverSig(sym: Symbol.SigSym, loc: SourceLocation)(implicit root: Root, flix: Flix): Option[Hover] = {
+  private def hoverSig(sym: Symbol.SigSym, loc: SourceLocation)(implicit root: Root, flix: Flix, commandLinks: Boolean): Option[Hover] = {
     val sigDecl = root.sigs(sym)
     val markup =
       s"""```flix
@@ -95,8 +107,7 @@ object HoverProvider {
          |```
          |
          |${FormatDoc.asMarkDown(sigDecl.spec.doc)}
-         |
-         |[📊 View Diagram](command:flix.showDiagram?${sym.trt.name})
+         |${diagramLink(sym.trt.name)}
          |""".stripMargin
     val contents = MarkupContent(MarkupKind.Markdown, markup)
     val range = Range.from(loc)

@@ -27,6 +27,7 @@ import ca.uwaterloo.flix.util.Formatter.NoFormatter
 import ca.uwaterloo.flix.util.{FileOps, Options}
 import org.eclipse.lsp4j
 import org.eclipse.lsp4j.*
+import org.eclipse.lsp4j.jsonrpc
 import org.eclipse.lsp4j.jsonrpc.messages
 import org.eclipse.lsp4j.launch.LSPLauncher
 import org.eclipse.lsp4j.services.*
@@ -103,8 +104,23 @@ object LspServer {
     // `resolveProvider`, and there is no `resolveInlayHint` here to advertise. A hint arrives
     // complete or not at all.
     serverCapabilities.setInlayHintProvider(true)
+    serverCapabilities.setExecuteCommandProvider(new ExecuteCommandOptions(Commands.All.asJava))
 
     serverCapabilities
+  }
+
+  /**
+    * Commands a client may ask this server to run.
+    *
+    * `ShowDiagram` is what the `View Diagram` link in a hover resolves to. That link is written as
+    * a `command:` URI, which only VS Code resolves on its own; every other client needs the command
+    * to exist as a real LSP command, and needs it advertised above before it may send one.
+    */
+  private[lsp] object Commands {
+    /** Returns the SVG for a trait or module, given its name. */
+    val ShowDiagram: String = "flix.showDiagram"
+
+    val All: List[String] = List(ShowDiagram)
   }
 
   private class FlixLanguageServer(o: Options) extends LanguageServer with LanguageClientAware {
@@ -127,6 +143,15 @@ object LspServer {
       * The current compilation errors.
       */
     var currentErrors: List[CompilationMessage] = Nil
+
+    /**
+      * Diagrams for the current compilation, backing the `flix.showDiagram` command.
+      *
+      * Generating them walks the whole module tree, so it happens once per compilation. The cache
+      * notices a new root by itself, which is why nothing on the recompilation path has to remember
+      * to clear it.
+      */
+    val diagramCache: DiagramProvider.Cache = new DiagramProvider.Cache
 
     /**
       * The proxy to the language client.
@@ -505,6 +530,57 @@ object LspServer {
       val query = params.getQuery
       val symbols = SymbolProvider.processWorkspaceSymbols(query)(flixLanguageServer.root)
       CompletableFuture.completedFuture(messages.Either.forRight(symbols.map(_.toLsp4j).asJava))
+    }
+
+    /**
+      * Runs one of [[Commands]].
+      *
+      * `flix.showDiagram` returns the SVG as a plain string, so a client can render it without a
+      * second round trip. An item that exists but has nothing to draw, and a name that matches
+      * nothing at all, are different answers: the first returns the explanation as a string, the
+      * second fails the request. Returning `null` for both would leave a client unable to tell
+      * "there is no diagram for this" from "I asked the wrong question".
+      */
+    override def executeCommand(params: ExecuteCommandParams): CompletableFuture[AnyRef] = {
+      params.getCommand match {
+        case Commands.ShowDiagram =>
+          val itemName = params.getArguments.asScala.headOption.map(stringArgument).getOrElse("")
+          DiagramProvider.getDiagram(itemName, flixLanguageServer.diagramCache)(flixLanguageServer.root, flixLanguageServer.flix) match {
+            case DiagramProvider.Result.Svg(svg) =>
+              CompletableFuture.completedFuture(svg)
+            case r@DiagramProvider.Result.NoDiagram(_) =>
+              CompletableFuture.completedFuture(DiagramProvider.messageFor(r))
+            case r@DiagramProvider.Result.Unknown(_) =>
+              CompletableFuture.failedFuture(invalidParams(DiagramProvider.messageFor(r)))
+          }
+        case other =>
+          CompletableFuture.failedFuture(invalidParams(s"Unknown command '$other'."))
+      }
+    }
+
+    /**
+      * A failure the client can show the user.
+      *
+      * An arbitrary exception is reported to the client as a bare "Internal error." with the
+      * message discarded, which would waste the distinction between "no such item" and "this item
+      * has nothing to draw" -- the reason those are separate answers at all.
+      */
+    private def invalidParams(message: String): jsonrpc.ResponseErrorException =
+      new jsonrpc.ResponseErrorException(
+        new messages.ResponseError(messages.ResponseErrorCode.InvalidParams, message, null)
+      )
+
+    /**
+      * Reads a command argument as a string.
+      *
+      * Arguments arrive as parsed JSON, so a string sent by the client is a `JsonPrimitive` rather
+      * than a `String`. Taking `toString` of that would keep the surrounding quotes and look up an
+      * item that cannot exist.
+      */
+    private def stringArgument(arg: AnyRef): String = arg match {
+      case p: com.google.gson.JsonPrimitive => p.getAsString
+      case s: String => s
+      case other => String.valueOf(other)
     }
   }
 }

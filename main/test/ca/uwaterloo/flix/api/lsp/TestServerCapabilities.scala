@@ -50,6 +50,18 @@ class TestServerCapabilities extends AnyFunSuite {
     assert(provider.getLeft, "the boolean must be true, or the capability is absent in effect")
   }
 
+  test("executeCommand is advertised, and names the commands it accepts") {
+    // The `View Diagram` link in a hover is written as a `command:` URI, which only VS Code
+    // resolves by itself. Every other client needs the command to exist as a real LSP command --
+    // and may not send one at all unless it is named here.
+    val provider = Option(capabilities.getExecuteCommandProvider)
+      .getOrElse(fail("no executeCommandProvider; no client may run flix.showDiagram"))
+    assert(
+      provider.getCommands.contains("flix.showDiagram"),
+      s"expected flix.showDiagram among ${provider.getCommands}",
+    )
+  }
+
   test("the capabilities that already worked are still advertised") {
     // Guards the lift of mkServerCapabilities out of FlixLanguageServer: it must keep describing
     // the same server. These are the ones with observable editor behaviour.
