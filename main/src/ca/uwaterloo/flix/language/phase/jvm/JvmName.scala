@@ -211,6 +211,10 @@ object JvmName {
   val JavaSet: JvmName = JvmName(JavaUtil, "Set")
   val AbstractSet: JvmName = JvmName(JavaUtil, "AbstractSet")
   val ArrayDeque: JvmName = JvmName(JavaUtil, "ArrayDeque")
+  val JavaMap: JvmName = JvmName(JavaUtil, "Map")
+  val AbstractMap: JvmName = JvmName(JavaUtil, "AbstractMap")
+  /** `java.util.AbstractMap.SimpleImmutableEntry`, which saves generating an entry class. */
+  val SimpleImmutableEntry: JvmName = JvmName(JavaUtil, "AbstractMap$SimpleImmutableEntry")
   val Long: JvmName = JvmName(JavaLang, "Long")
   val LongConsumer: JvmName = JvmName(JavaUtilFunction, "LongConsumer")
   val LongFunction: JvmName = JvmName(JavaUtilFunction, "LongFunction")

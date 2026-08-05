@@ -481,7 +481,7 @@ how three of the claims in the first draft of this report came to be false.
 | `Some(null)` collapse (§7) | Measured and pinned in CI, Appendix B.5 |
 | Six-language matrix (§5) | Java in CI; Scala/Kotlin re-measured per B.3–B.4 but not yet in CI; Groovy, Clojure, JRuby hand-run only |
 | `List` → `java.util.List` (§7) | Implemented as an eager copy; lazy view built for `Set` first |
-| `Set` → `java.util.Set` (§7) | Implemented as a lazy view over the red-black tree, in ascending order |
+| `Set` and `Map` → `java.util.Set`/`Map` (§7) | Implemented as lazy views over the red-black tree, in ascending key order |
 | Polymorphic exports (§4.1) | Implemented for unconstrained variables; constrained ones rejected |
 | Java generic type arguments (§7) | Implemented for returns and parameters |
 | Inbound Flix → Java boundary (§7.2) | Out of scope; unsound today, tracked upstream |

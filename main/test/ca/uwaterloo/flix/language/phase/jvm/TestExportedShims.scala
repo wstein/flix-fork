@@ -397,6 +397,26 @@ class TestExportedShims extends AnyFunSuite {
     assert(signatures.get("numbers").contains("()Ljava/util/Set<Ljava/lang/Integer;>;"))
   }
 
+  test("an exported Map is presented as a java.util.Map") {
+    // Two type arguments rather than one, so the signature is the first place a key and a value
+    // could be swapped or one of them dropped.
+    val (descriptors, signatures) = membersOf(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    @Export
+        |    pub def ages(): Map[String, Int32] = Map#{"a" => 1}
+        |
+        |    @Export
+        |    pub def codes(): Map[Int32, String] = Map#{1 => "a"}
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin, "Pkg/Mod")
+    assert(descriptors.get("ages").contains("()Ljava/util/Map;"))
+    assert(signatures.get("ages").contains("()Ljava/util/Map<Ljava/lang/String;Ljava/lang/Integer;>;"))
+    assert(signatures.get("codes").contains("()Ljava/util/Map<Ljava/lang/Integer;Ljava/lang/String;>;"))
+  }
+
   test("no return type the front end accepts leaks the Flix representation") {
     // `EntryPoints` decides what may be exported and `ExportPlan` decides how, over different type
     // representations, so a gate widened ahead of a plan compiles into a shim that falls through
@@ -428,7 +448,11 @@ class TestExportedShims extends AnyFunSuite {
       "Set[String]" -> "Set#{\"s\"}",
       "Set[Int32]" -> "Set#{1}",
       "Set[Float64]" -> "Set#{1.0f64}",
-      "Set[BigInt]" -> "Set#{1ii}"
+      "Set[BigInt]" -> "Set#{1ii}",
+      "Map[String, Int32]" -> "Map#{\"s\" => 1}",
+      "Map[Int32, String]" -> "Map#{1 => \"s\"}",
+      "Map[String, Float64]" -> "Map#{\"s\" => 1.0f64}",
+      "Map[BigInt, BigInt]" -> "Map#{1ii => 1ii}"
     )
     val defs = returnTypes.zipWithIndex.map {
       case ((tpe, value), i) => s"    @Export\n    pub def f$i(): $tpe = $value"

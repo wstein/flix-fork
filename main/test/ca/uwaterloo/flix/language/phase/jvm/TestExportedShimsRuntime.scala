@@ -404,6 +404,120 @@ class TestExportedShimsRuntime extends AnyFunSuite {
     }
   }
 
+  test("an exported Map arrives with its entries, in ascending key order") {
+    // The same tree walk as a `Set`, handing out `Map.Entry` instead of a key. Order is asserted
+    // because it is a promise (J10) that membership alone would not catch, and the entries are
+    // drained through `entrySet` rather than compared as a map so that the order is visible.
+    withFacade(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    @Export
+        |    pub def ages(): Map[String, Int32] =
+        |        Map#{"delta" => 4, "alpha" => 1, "charlie" => 3, "bravo" => 2}
+        |
+        |    @Export
+        |    pub def none(): Map[String, Int32] = Map#{}
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin, "Pkg.Mod") { facade =>
+      val ages = invoke(facade, "ages").asInstanceOf[java.util.Map[?, ?]]
+      assertResult(List("alpha", "bravo", "charlie", "delta"))(drain(ages.keySet()))
+      assertResult(List(1, 2, 3, 4))(drain(ages.entrySet()).map(_.asInstanceOf[java.util.Map.Entry[?, ?]].getValue))
+      assert(invoke(facade, "none").asInstanceOf[java.util.Map[?, ?]].isEmpty)
+    }
+  }
+
+  test("an exported Map honours the java.util.Map contract") {
+    // `AbstractMap` writes `get`, `containsKey`, `keySet`, `values`, `equals` and `hashCode` in
+    // terms of `entrySet()`. They are checked together because an entry set that is subtly wrong
+    // -- entries in the wrong order of key and value, say -- still satisfies a single traversal.
+    withFacade(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    @Export
+        |    pub def ages(): Map[String, Int32] = Map#{"a" => 1, "b" => 2}
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin, "Pkg.Mod") { facade =>
+      val ages = invoke(facade, "ages").asInstanceOf[java.util.Map[Any, Any]]
+      assertResult(2)(ages.size())
+      assertResult(1)(ages.get("a"))
+      assertResult(2)(ages.get("b"))
+      assertResult(null)(ages.get("z"))
+      assert(ages.containsKey("a"))
+      assert(ages.containsValue(2))
+      assertResult(java.util.Map.of("a", 1, "b", 2))(ages)
+      assertResult(java.util.Map.of("a", 1, "b", 2).hashCode())(ages.hashCode())
+      // A `Map` holds references, so a primitive value is a real `Integer`, not Flix's own box.
+      assertResult(classOf[java.lang.Integer])(ages.get("a").getClass)
+    }
+  }
+
+  test("an exported Map of primitives boxes both key and value") {
+    // Key and value are converted by separate plans, so a boxing applied to one and not the other
+    // is a shape only a map with primitives on both sides can show.
+    withFacade(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    @Export
+        |    pub def squares(): Map[Int32, Float64] = Map#{2 => 4.0f64, 1 => 1.0f64}
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin, "Pkg.Mod") { facade =>
+      val squares = invoke(facade, "squares").asInstanceOf[java.util.Map[Any, Any]]
+      assertResult(List(1, 2))(drain(squares.keySet()))
+      assertResult(classOf[java.lang.Integer])(drain(squares.keySet()).head.getClass)
+      assertResult(classOf[java.lang.Double])(squares.get(1).getClass)
+      assertResult(1.0)(squares.get(1))
+    }
+  }
+
+  test("an exported Map cannot be written to") {
+    // As for the set view, immutability follows from never overriding `Iterator.remove` -- plus
+    // `AbstractMap.put`, which throws on its own. `Map.Entry.setValue` is the third way in, and it
+    // is closed by using the JDK's immutable entry rather than a mutable one.
+    withFacade(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    @Export
+        |    pub def ages(): Map[String, Int32] = Map#{"a" => 1}
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin, "Pkg.Mod") { facade =>
+      val ages = invoke(facade, "ages").asInstanceOf[java.util.Map[Any, Any]]
+      assertThrows[UnsupportedOperationException](ages.put("b", 2))
+      assertThrows[UnsupportedOperationException](ages.remove("a"))
+      assertThrows[UnsupportedOperationException](ages.clear())
+      val entry = ages.entrySet().iterator().next()
+      assertThrows[UnsupportedOperationException](entry.setValue(2))
+    }
+  }
+
+  test("an exported Map reports the same size on every call") {
+    // The entry set is built once in the constructor rather than per call, so its size cache
+    // survives. A fresh entry set per call would still be correct and would walk the tree every
+    // time, which is the mistake this pins.
+    withFacade(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    @Export
+        |    pub def ages(): Map[String, Int32] = Map#{"a" => 1, "b" => 2, "c" => 3}
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin, "Pkg.Mod") { facade =>
+      val ages = invoke(facade, "ages").asInstanceOf[java.util.Map[Any, Any]]
+      assertResult(3)(ages.size())
+      assertResult(3)(ages.size())
+      assert(!ages.isEmpty)
+      assert(ages.entrySet() eq ages.entrySet())
+    }
+  }
+
   /** Drains `set` into a list, so a traversal can be compared in order rather than as a set. */
   private def drain(set: java.util.Set[?]): List[Any] = {
     val it = set.iterator()

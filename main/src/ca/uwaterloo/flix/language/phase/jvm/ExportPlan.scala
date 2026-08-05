@@ -162,7 +162,7 @@ object ExportPlan {
     *
     * The set value is a single-case tag holding the tree, so the tree is one field read away.
     */
-  case class AsSet(element: ExportPlan, setTag: BackendObjType.Tag, view: BackendObjType.SetView) extends ExportPlan {
+  case class AsSet(element: ExportPlan, setTag: BackendObjType.Tag, view: BackendObjType.TreeSetView) extends ExportPlan {
     def flixType: BackendType = BackendObjType.Tagged.toTpe
 
     def javaType: BackendType = BackendObjType.Native(JvmName.JavaSet).toTpe
@@ -170,22 +170,53 @@ object ExportPlan {
     def typeArgument: String = s"L${JvmName.JavaSet.toInternalName}<${element.typeArgument}>;"
 
     def emit(loc: SourceLocation, nextLocal: Int)(implicit root: JvmAst.Root, mv: MethodVisitor): Unit =
-      // The tree goes through a local because `new` has to be on the stack below its argument, and
-      // the argument is what is already there.
-      withName(nextLocal, BackendObjType.Tagged.toTpe) { tree =>
-        CHECKCAST(setTag.jvmName)
-        GETFIELD(setTag.IndexField(0))
-        CHECKCAST(BackendObjType.Tagged.jvmName)
-        tree.store()
-        NEW(view.jvmName)
-        DUP()
-        tree.load()
-        INVOKESPECIAL(view.Constructor)
-      }
+      emitTreeView(setTag, view.jvmName, view.Constructor, nextLocal)
 
     override def generatedClasses: List[BackendObjType.ExportView] =
       view :: view.iteratorType :: element.generatedClasses
   }
+
+  /**
+    * A Flix `Map` presented as an unmodifiable `java.util.Map`, without copying it.
+    *
+    * The same shape as [[AsSet]] -- one tag holding a red-black tree -- and the same view over it,
+    * differing only in what each node contributes: an entry rather than a key.
+    */
+  case class AsMap(key: ExportPlan, value: ExportPlan, mapTag: BackendObjType.Tag, view: BackendObjType.MapView) extends ExportPlan {
+    def flixType: BackendType = BackendObjType.Tagged.toTpe
+
+    def javaType: BackendType = BackendObjType.Native(JvmName.JavaMap).toTpe
+
+    def typeArgument: String =
+      s"L${JvmName.JavaMap.toInternalName}<${key.typeArgument}${value.typeArgument}>;"
+
+    def emit(loc: SourceLocation, nextLocal: Int)(implicit root: JvmAst.Root, mv: MethodVisitor): Unit =
+      emitTreeView(mapTag, view.jvmName, view.Constructor, nextLocal)
+
+    override def generatedClasses: List[BackendObjType.ExportView] =
+      view :: view.entrySetType :: view.entrySetType.iteratorType ::
+        (key.generatedClasses ::: value.generatedClasses)
+  }
+
+  /**
+    * Unwraps the red-black tree of a tree-backed collection and hands it to its view.
+    *
+    * `[..., tagged collection] --> [..., view]`
+    *
+    * The tree goes through a local because `new` has to be on the stack below its argument, and
+    * the argument is what is already there.
+    */
+  private def emitTreeView(containerTag: BackendObjType.Tag, view: JvmName, constructor: ClassMaker.ConstructorMethod, nextLocal: Int)(implicit mv: MethodVisitor): Unit =
+    withName(nextLocal, BackendObjType.Tagged.toTpe) { tree =>
+      CHECKCAST(containerTag.jvmName)
+      GETFIELD(containerTag.IndexField(0))
+      CHECKCAST(BackendObjType.Tagged.jvmName)
+      tree.store()
+      NEW(view)
+      DUP()
+      tree.load()
+      INVOKESPECIAL(constructor)
+    }
 
   /**
     * A Flix `List` presented as an unmodifiable `java.util.List`.
@@ -262,8 +293,13 @@ object ExportPlan {
         Some(AsList(elementPlan(element, consTag.elms.head), nilOrdinal, consTag))
       case SimpleType.Enum(sym, List(element)) if isStdEnum(sym, "Set") =>
         val erasedKey = BackendType.toErasedBackendType(element)
-        val view = BackendObjType.SetView(viewElementPlan(erasedKey))
-        Some(AsSet(elementPlan(element, erasedKey), setTag(erased), view))
+        val view = BackendObjType.TreeSetView(viewElementPlan(erasedKey), None)
+        Some(AsSet(elementPlan(element, erasedKey), treeTag(erased, "Set"), view))
+      case SimpleType.Enum(sym, List(k, v)) if isStdEnum(sym, "Map") =>
+        val erasedKey = BackendType.toErasedBackendType(k)
+        val erasedValue = BackendType.toErasedBackendType(v)
+        val view = BackendObjType.MapView(viewElementPlan(erasedKey), viewElementPlan(erasedValue))
+        Some(AsMap(elementPlan(k, erasedKey), elementPlan(v, erasedValue), treeTag(erased, "Map"), view))
       case SimpleType.Native(clazz, targs) if targs.nonEmpty =>
         // Every argument must be describable, and `EntryPoints.isExportableType` has already
         // ensured it: a Flix type argument such as `ArrayList[SomeEnum]` is rejected there,
@@ -344,14 +380,14 @@ object ExportPlan {
   }
 
   /**
-    * Returns the tag class of the single `Set` case, which holds the red-black tree.
+    * Returns the tag class of the single case of `Set` or `Map`, which holds the red-black tree.
     *
     * Only this much is read from the AST. The tree's own enum cannot be: the eraser rewrites this
-    * case's field type to `Object`, so nothing here still says that what a `Set` holds is a tree.
-    * The shape the view walks is stated in [[BackendObjType.SetIterator]] instead.
+    * case's field type to `Object`, so nothing here still says that what the collection holds is a
+    * tree. The shape the view walks is stated in [[BackendObjType.TreeIterator]] instead.
     */
-  private def setTag(erased: SimpleType)(implicit root: JvmAst.Root): BackendObjType.Tag =
-    tagOf(enumSymOf(erased, "Set"), "Set")
+  private def treeTag(erased: SimpleType, name: String)(implicit root: JvmAst.Root): BackendObjType.Tag =
+    tagOf(enumSymOf(erased, name), name)
 
   /** Returns the enum symbol of `tpe`, which describes a `what` that reaches the boundary. */
   private def enumSymOf(tpe: SimpleType, what: String): Symbol.EnumSym = tpe match {

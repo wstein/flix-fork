@@ -483,11 +483,11 @@ object EntryPoints {
       case List(tpe) if isUnitType(tpe) == Result.Ok(true) => Nil
       case tpes => tpes
     }
-    // `Option[t]`, `List[t]` and `Set[t]` are exportable in return position, where the shim
-    // marshals them into `java.util.Optional`, an unmodifiable `java.util.List`, and an
-    // unmodifiable `java.util.Set`. None is exportable as a parameter, which would need the
-    // reverse conversion. What must be exportable is the element type, so that is what is checked,
-    // and an error points at it rather than at the container.
+    // `Option[t]`, `List[t]`, `Set[t]` and `Map[k, v]` are exportable in return position, where
+    // the shim marshals them into `java.util.Optional`, an unmodifiable `java.util.List`, and
+    // unmodifiable `java.util.Set` and `java.util.Map` views. None is exportable as a parameter,
+    // which would need the reverse conversion. What must be exportable is what they contain, so
+    // that is what is checked, and an error points at it rather than at the container.
     //
     // Only the element, and only one level: an element that is itself a container has no plan, so
     // admitting `List[Option[t]]` here would produce a shim returning the internal tag class. The
@@ -495,7 +495,7 @@ object EntryPoints {
     val retTpe = defn.spec.retTpe
     val returnTypes =
       if (isUnitType(retTpe) == Result.Ok(true)) Nil
-      else List(unapplyContainer(retTpe).getOrElse(retTpe))
+      else unapplyContainer(retTpe).getOrElse(List(retTpe))
     val types = returnTypes ::: paramTypes
     types.flatMap(tpe => {
       isExportableType(tpe) match {
@@ -530,6 +530,21 @@ object EntryPoints {
   private def unapplySet(tpe: Type): Option[Type] = unapplyStdEnum(tpe, "Set")
 
   /**
+    * Returns the key and value types of `tpe` if it is the standard library's `Map[k, v]`.
+    *
+    * Separate from [[unapplyStdEnum]] because a binary application is a different shape, not
+    * because `Map` is treated differently: both of its arguments must be exportable, exactly as a
+    * `Set`'s one must.
+    */
+  @tailrec
+  private def unapplyMap(tpe: Type): Option[List[Type]] = tpe match {
+    case Type.Apply(Type.Apply(Type.Cst(TypeConstructor.Enum(sym, _), _), k, _), v, _)
+      if sym.namespace.isEmpty && sym.text == "Map" => Some(List(k, v))
+    case Type.Alias(_, _, t, _) => unapplyMap(t)
+    case _ => None
+  }
+
+  /**
     * Returns the argument of `tpe` if it is the standard library's unary enum named `name`.
     *
     * By symbol rather than by name alone, so a user-defined `Foo.Set` stays an ordinary enum and
@@ -545,13 +560,16 @@ object EntryPoints {
   }
 
   /**
-    * Returns the element type of `tpe` if it is a container the shim converts.
+    * Returns the types inside `tpe` if it is a container the shim converts.
     *
     * This must admit exactly what `ExportPlan.of` can build, no more: a type accepted here without
     * a plan compiles into a shim that returns the internal tag class instead of failing.
     */
-  private def unapplyContainer(tpe: Type): Option[Type] =
-    unapplyOption(tpe).orElse(unapplyList(tpe)).orElse(unapplySet(tpe))
+  private def unapplyContainer(tpe: Type): Option[List[Type]] =
+    unapplyOption(tpe).map(List(_))
+      .orElse(unapplyList(tpe).map(List(_)))
+      .orElse(unapplySet(tpe).map(List(_)))
+      .orElse(unapplyMap(tpe))
 
   /**
     * Returns `true` if `tpe` is a valid Java type that can be exported.

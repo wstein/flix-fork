@@ -1047,6 +1047,71 @@ class TestEntryPoints extends AnyFunSuite with TestUtils {
     expectError[EntryPointError.IllegalExportType](result)
   }
 
+  test("Test.ExportMap.01") {
+    // `Map` in return position is presented as an unmodifiable `java.util.Map` over the same tree
+    // view a `Set` uses, differing only in what each node hands out.
+    val input =
+      """
+        |mod Pkg { }
+        |mod Pkg.Mod { @Export pub def ages(): Map[String, Int32] = Map#{"a" => 1} }
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibAll)
+    expectSuccess(result)
+  }
+
+  test("Test.ExportMap.02") {
+    // *Both* arguments are checked, not just the first. Checking only the key would admit a map
+    // whose values iterate into generated classes, which is the leak in the values that a
+    // `java.util.Map` descriptor does nothing to reveal.
+    val input =
+      """
+        |mod Pkg { }
+        |mod Pkg.Mod {
+        |    pub enum Colour { case Red, case Green }
+        |    @Export pub def f(): Map[String, Colour] = Map#{}
+        |}
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibAll)
+    expectError[EntryPointError.IllegalExportType](result)
+  }
+
+  test("Test.ExportMap.03") {
+    // And the key, symmetrically.
+    val input =
+      """
+        |mod Pkg { }
+        |mod Pkg.Mod {
+        |    pub enum Colour { case Red, case Green }
+        |    @Export pub def f(): Map[Colour, String] = Map#{}
+        |}
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibAll)
+    expectError[EntryPointError.IllegalExportType](result)
+  }
+
+  test("Test.ExportMap.04") {
+    // One level, as for `List` and `Set`: a value that is itself a container has no plan.
+    val input =
+      """
+        |mod Pkg { }
+        |mod Pkg.Mod { @Export pub def f(): Map[String, List[Int32]] = Map#{"a" => 1 :: Nil} }
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibAll)
+    expectError[EntryPointError.IllegalExportType](result)
+  }
+
+  test("Test.ExportMap.05") {
+    // Return position only. A parameter would need a Java map turned back into a red-black tree,
+    // which needs the key's `Order` instance and so has no conversion at all.
+    val input =
+      """
+        |mod Pkg { }
+        |mod Pkg.Mod { @Export pub def f(m: Map[String, Int32]): Int32 = Map.size(m) }
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibAll)
+    expectError[EntryPointError.IllegalExportType](result)
+  }
+
   test("Test.ExportPolymorphic.01") {
     // An unconstrained type variable is exported as `java.lang.Object`. The monomorpher defaults
     // it to `AnyType`, which is represented as `Object`, so the boundary needs no special case.

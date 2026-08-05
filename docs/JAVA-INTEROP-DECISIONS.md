@@ -328,8 +328,8 @@ which would satisfy the descriptor and break every use of it.
 ## J10 — `List` crosses as an unmodifiable `java.util.List`, copied eagerly
 
 **Status: Settled** for the copy, which is shipped. **Shipped** for the lazy
-view, but for `Set` only so far — `Map` and `List` are still to come, and until
-`List` lands the eager copy below is what a `List` export still does.
+view, for `Set` and `Map` — `List` is still to come, and until it lands the
+eager copy below is what a `List` export still does.
 
 `List[t]` is exportable in return position, converted by walking the cons chain
 into an `ArrayList` and wrapping it with `Collections.unmodifiableList`. The
@@ -416,6 +416,28 @@ element, not the declared one. `Set[String]` and `Set[Regex]` share a single
 view and differ only in the shim's signature, because the bytecode a view emits
 depends on nothing else. That is what makes the class name a sound key rather
 than a name that merely happens not to collide.
+
+### `Map` cost one class, not three
+
+The estimate above said two classes per collection. `Map` needed one, because
+`Set` and `Map` are *the same tree* — `Set[t]` is `RedBlackTree[t, Unit]` and
+`Map[k, v]` is `RedBlackTree[k, v]` — and differ only in what a node hands out:
+a key, or a `Map.Entry` of key and value. So the set view and its iterator each
+took an optional value plan, and `MapView` is little more than an `entrySet()`.
+`java.util.AbstractMap` writes `get`, `containsKey`, `keySet`, `values`,
+`equals` and `hashCode` in terms of that one method, so the rest is inherited.
+
+Two details are worth keeping:
+
+- **The entry set is built in the constructor, not per call.** `AbstractMap`
+  caches `keySet` and `values` but not `entrySet`, so a fresh one per call would
+  mean a fresh *size cache* per call, and `size()` would walk the tree every
+  time. Building it once also makes `entrySet() == entrySet()`, which is what
+  `AbstractMap`'s own subclasses promise.
+- **`SimpleImmutableEntry` closes the third way in.** Immutability elsewhere
+  comes from not overriding `Iterator.remove`, and `AbstractMap.put` throws on
+  its own — but `Map.Entry.setValue` is a mutator on the entry rather than on
+  the map, and using the JDK's immutable entry is what makes it throw.
 
 ### Why the copy shipped first
 

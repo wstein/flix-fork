@@ -66,8 +66,11 @@ sealed trait BackendObjType {
     case BackendObjType.Namespace(ns) => JvmName.facadeOfNamespace(ns)
     // Export views. Named after the element's *erased* type, which is what decides their bytecode:
     // `Set[String]` and `Set[Regex]` share a view, and only the shim's signature tells them apart.
-    case BackendObjType.SetView(element) => JvmName(DevFlixGen, mkClassName("SetView", element.flixType))
-    case BackendObjType.SetIterator(element) => JvmName(DevFlixGen, mkClassName("SetIterator", element.flixType))
+    case BackendObjType.TreeSetView(key, None) => JvmName(DevFlixGen, mkClassName("SetView", key.flixType))
+    case BackendObjType.TreeSetView(key, Some(v)) => JvmName(DevFlixGen, mkClassName("EntrySetView", List(key.flixType, v.flixType)))
+    case BackendObjType.TreeIterator(key, None) => JvmName(DevFlixGen, mkClassName("SetIterator", key.flixType))
+    case BackendObjType.TreeIterator(key, Some(v)) => JvmName(DevFlixGen, mkClassName("EntryIterator", List(key.flixType, v.flixType)))
+    case BackendObjType.MapView(key, value) => JvmName(DevFlixGen, mkClassName("MapView", List(key.flixType, value.flixType)))
     // Java classes
     case BackendObjType.Native(className) => className
     // Effects Runtime
@@ -1574,24 +1577,28 @@ object BackendObjType {
   }
 
   /**
-    * A Flix `Set` presented to Java as an unmodifiable `java.util.Set`, without copying it.
+    * A red-black tree presented to Java as an unmodifiable `java.util.Set`, without copying it.
     *
-    * A `Set` is a red-black tree, so the view holds the tree's root and walks it on demand. It
-    * extends `java.util.AbstractSet`, which needs only `iterator()` and `size()` and supplies the
-    * rest of the contract -- including `equals`, `hashCode`, and mutators that throw, since every
-    * one of them is written in terms of `Iterator.remove`, whose default implementation throws.
-    * Immutability is therefore not something this class implements; it is what it gets by not
-    * overriding anything.
+    * Both Flix collections backed by a tree reach Java through this class. With no `value` it is
+    * the `Set` itself and iterates keys; with one it is the `entrySet` of a [[MapView]] and
+    * iterates `Map.Entry`. The walk, the cached size and the emptiness test are the same either
+    * way, which is the whole reason `Map` costs one extra class rather than three.
     *
-    * `element` is the *erased* element plan -- `Identity(Object)`, or the boxing of a primitive.
-    * The declared element type never reaches here: it appears only in the shim's signature, which
-    * is why `Set[String]` and `Set[Regex]` share one view class.
+    * It extends `java.util.AbstractSet`, which needs only `iterator()` and `size()` and supplies
+    * the rest of the contract -- including `equals`, `hashCode`, and mutators that throw, since
+    * every one of them is written in terms of `Iterator.remove`, whose default implementation
+    * throws. Immutability is therefore not something this class implements; it is what it gets by
+    * not overriding anything.
+    *
+    * The plans are the *erased* ones -- `Identity(Object)`, or the boxing of a primitive. Declared
+    * types never reach here: they appear only in the shim's signature, which is why `Set[String]`
+    * and `Set[Regex]` share one view class.
     *
     * See J10 for the contract this promises a caller and the cost it accepts.
     */
-  case class SetView(element: ExportPlan) extends ExportView {
+  case class TreeSetView(key: ExportPlan, value: Option[ExportPlan]) extends ExportView {
 
-    private def nodeTag: Tag = SetIterator.nodeTag(element.flixType)
+    private def nodeTag: Tag = TreeIterator.nodeTag(key, value)
 
     def genByteCode()(implicit root: JvmAst.Root, flix: Flix): Array[Byte] = {
       val cm = ClassMaker.mkClass(this.jvmName, IsFinal, superClass = JvmName.AbstractSet)
@@ -1608,7 +1615,7 @@ object BackendObjType {
     }
 
     /** The iterator this view hands out. Derived rather than stored, so the two cannot disagree. */
-    def iteratorType: SetIterator = SetIterator(element)
+    def iteratorType: TreeIterator = TreeIterator(key, value)
 
     private def TreeField: InstanceField = InstanceField(this.jvmName, "tree", Tagged.toTpe)
 
@@ -1694,7 +1701,7 @@ object BackendObjType {
       * recursion is O(log n) deep and cannot overflow the stack for any tree that fits in memory.
       *
       * The test is *for* a node rather than against a leaf, which covers `Leaf` and
-      * `DoubleBlackLeaf` alike without naming either -- see [[SetIterator.nodeTag]] for why
+      * `DoubleBlackLeaf` alike without naming either -- see [[TreeIterator.nodeTag]] for why
       * `instanceof` is exact here despite the tag class being shared.
       */
     private def countIns(implicit mv: MethodVisitor): Unit =
@@ -1705,13 +1712,13 @@ object BackendObjType {
           pushInt(1)
           tree.load()
           CHECKCAST(nodeTag.jvmName)
-          GETFIELD(nodeTag.IndexField(SetIterator.LeftIndex))
+          GETFIELD(nodeTag.IndexField(TreeIterator.LeftIndex))
           CHECKCAST(Tagged.jvmName)
           INVOKESTATIC(CountMethod)
           IADD()
           tree.load()
           CHECKCAST(nodeTag.jvmName)
-          GETFIELD(nodeTag.IndexField(SetIterator.RightIndex))
+          GETFIELD(nodeTag.IndexField(TreeIterator.RightIndex))
           CHECKCAST(Tagged.jvmName)
           INVOKESTATIC(CountMethod)
           IADD()
@@ -1722,49 +1729,58 @@ object BackendObjType {
       }
   }
 
-  object SetIterator {
+  object TreeIterator {
 
     /**
       * The field indices of `RedBlackTree.Node(Color, left, key, value, right)`.
       *
-      * Stated rather than read from the enum. `Set`'s single case declares that it holds a
-      * `RedBlackTree`, but the eraser rewrites every enum-typed field to `Object`, so by the time
-      * the backend sees it the tree's own enum -- and with it the ordinals and field types of its
-      * cases -- is no longer reachable from the exported type. What pins this shape is therefore
-      * the runtime tests, not the AST: get an index wrong and iteration returns the wrong values
-      * or fails verification.
+      * Stated rather than read from the enum. `Set` and `Map` each declare that their single case
+      * holds a `RedBlackTree`, but the eraser rewrites every enum-typed field to `Object`, so by
+      * the time the backend sees it the tree's own enum -- and with it the ordinals and field types
+      * of its cases -- is no longer reachable from the exported type. What pins this shape is
+      * therefore the runtime tests, not the AST: get an index wrong and iteration returns the wrong
+      * values or fails verification.
       */
     val LeftIndex: Int = 1
     val KeyIndex: Int = 2
+    val ValueIndex: Int = 3
     val RightIndex: Int = 4
 
     /**
-      * The tag class of `RedBlackTree.Node` for a tree whose keys erase to `key`.
+      * The tag class of `RedBlackTree.Node` for a tree with these key and value plans.
       *
-      * `Color`, both subtrees and the `Unit` value are all references, so they erase to `Object`
-      * and only the key varies. This class is shared with every other five-field tag of the same
-      * erasure, which is what makes it a sound test for "is this a `Node`" *in this position*: the
-      * field it is read from holds a `RedBlackTree` and nothing else, and the other two cases are
-      * nullary, so they are classes of their own rather than tags.
+      * `Color` and both subtrees are references, so they erase to `Object` and only the key and
+      * value vary -- and a `Set`'s value is `Unit`, which is a reference too. This class is shared
+      * with every other five-field tag of the same erasure, which is what makes it a sound test for
+      * "is this a `Node`" *in this position*: the field it is read from holds a `RedBlackTree` and
+      * nothing else, and the other two cases are nullary, so they are classes of their own rather
+      * than tags.
       */
-    def nodeTag(key: BackendType): Tag =
-      Tag(List(BackendType.Object, BackendType.Object, key, BackendType.Object, BackendType.Object))
+    def nodeTag(key: ExportPlan, value: Option[ExportPlan]): Tag =
+      Tag(List(
+        BackendType.Object,
+        BackendType.Object,
+        key.flixType,
+        value.map(_.flixType).getOrElse(BackendType.Object),
+        BackendType.Object
+      ))
   }
 
   /**
-    * The in-order walk behind a [[SetView]].
+    * The in-order walk behind a [[TreeSetView]].
     *
-    * A stack of the nodes whose keys are still owed, deepest-left first. `next` pops one, pushes
-    * the left spine of its right child, and converts the key. That is O(1) amortized per element
-    * and O(h) in memory, which J10 notes is what *any* tree traversal costs -- ascending order is
-    * not paid for, it is the order the tree is already in.
+    * A stack of the nodes still owed, deepest-left first. `next` pops one, pushes the left spine
+    * of its right child, and converts what that node contributes -- the key alone for a `Set`, or
+    * an immutable `Map.Entry` of key and value. That is O(1) amortized per element and O(h) in
+    * memory, which J10 notes is what *any* tree traversal costs: ascending order is not paid for,
+    * it is the order the tree is already in.
     *
     * `remove` is not overridden, so `Iterator`'s default implementation throws, which is what
     * makes every inherited mutator on the view throw as well.
     */
-  case class SetIterator(element: ExportPlan) extends ExportView {
+  case class TreeIterator(key: ExportPlan, value: Option[ExportPlan]) extends ExportView {
 
-    private def nodeTag: Tag = SetIterator.nodeTag(element.flixType)
+    private def nodeTag: Tag = TreeIterator.nodeTag(key, value)
 
     def genByteCode()(implicit root: JvmAst.Root, flix: Flix): Array[Byte] = {
       val cm = ClassMaker.mkClass(this.jvmName, IsFinal, interfaces = List(JvmName.Iterator))
@@ -1827,15 +1843,31 @@ object BackendObjType {
         INVOKEVIRTUAL(JvmName.ArrayDeque, "pop", mkDescriptor()(BackendType.Object))
         CHECKCAST(nodeTag.jvmName)
         node.store()
-        // The right child owes everything under it once this key is handed out.
+        // The right child owes everything under it once this node is handed out.
         thisLoad()
         node.load()
-        GETFIELD(nodeTag.IndexField(SetIterator.RightIndex))
+        GETFIELD(nodeTag.IndexField(TreeIterator.RightIndex))
         CHECKCAST(Tagged.jvmName)
         INVOKESPECIAL(this.jvmName, PushLeftSpineMethod.name, PushLeftSpineMethod.d)
-        node.load()
-        GETFIELD(nodeTag.IndexField(SetIterator.KeyIndex))
-        element.emit(SourceLocation.Unknown, 2)
+        value match {
+          case None =>
+            node.load()
+            GETFIELD(nodeTag.IndexField(TreeIterator.KeyIndex))
+            key.emit(SourceLocation.Unknown, 2)
+          case Some(v) =>
+            // The JDK's own immutable entry, rather than a seventh generated class. Its `setValue`
+            // throws, which is the same immutability the rest of the view has.
+            NEW(JvmName.SimpleImmutableEntry)
+            DUP()
+            node.load()
+            GETFIELD(nodeTag.IndexField(TreeIterator.KeyIndex))
+            key.emit(SourceLocation.Unknown, 2)
+            node.load()
+            GETFIELD(nodeTag.IndexField(TreeIterator.ValueIndex))
+            v.emit(SourceLocation.Unknown, 2)
+            INVOKESPECIAL(JvmName.SimpleImmutableEntry, JvmName.ConstructorMethod,
+              mkDescriptor(BackendType.Object, BackendType.Object)(VoidableType.Void))
+        }
         ARETURN()
       }
 
@@ -1855,12 +1887,96 @@ object BackendObjType {
           INVOKEVIRTUAL(JvmName.ArrayDeque, "push", mkDescriptor(BackendType.Object)(VoidableType.Void))
           cursor.load()
           CHECKCAST(nodeTag.jvmName)
-          GETFIELD(nodeTag.IndexField(SetIterator.LeftIndex))
+          GETFIELD(nodeTag.IndexField(TreeIterator.LeftIndex))
           CHECKCAST(Tagged.jvmName)
           cursor.store()
         }
         RETURN()
       }
+  }
+
+  /**
+    * A Flix `Map` presented to Java as an unmodifiable `java.util.Map`, without copying it.
+    *
+    * `java.util.AbstractMap` is written almost entirely in terms of `entrySet()`, so this class is
+    * little more than one: `get`, `containsKey`, `keySet`, `values`, `equals` and `hashCode` all
+    * come from there, and `put` throws while `remove` throws through the entry set's iterator.
+    *
+    * The entry set is built once in the constructor rather than per call. `AbstractMap` caches
+    * `keySet` and `values` but not `entrySet`, so a fresh one per call would also mean a fresh
+    * size cache per call, and `size()` would walk the tree every time it was asked.
+    */
+  case class MapView(key: ExportPlan, value: ExportPlan) extends ExportView {
+
+    def genByteCode()(implicit root: JvmAst.Root, flix: Flix): Array[Byte] = {
+      val cm = ClassMaker.mkClass(this.jvmName, IsFinal, superClass = JvmName.AbstractMap)
+
+      cm.mkConstructor(Constructor, IsPublic, constructorIns(_))
+      cm.mkField(EntriesField, IsPrivate, IsFinal, NotVolatile)
+      cm.mkMethod(Nil, EntrySetMethod, IsPublic, IsFinal, entrySetIns(_))
+      cm.mkMethod(Nil, SizeMethod, IsPublic, IsFinal, sizeIns(_))
+      cm.mkMethod(Nil, IsEmptyMethod, IsPublic, IsFinal, isEmptyIns(_))
+
+      cm.closeClassMaker()
+    }
+
+    /** The entry set backing this map, which is the tree view that does all the work. */
+    def entrySetType: TreeSetView = TreeSetView(key, Some(value))
+
+    /** Typed as the view rather than as `java.util.Set`, so its own methods can be called. */
+    private def EntriesField: InstanceField =
+      InstanceField(this.jvmName, "entries", entrySetType.toTpe)
+
+    def Constructor: ConstructorMethod = ConstructorMethod(this.jvmName, List(Tagged.toTpe))
+
+    /** `[] --> return` */
+    private def constructorIns(implicit mv: MethodVisitor): Unit =
+      withName(1, Tagged.toTpe) { tree =>
+        thisLoad()
+        INVOKESPECIAL(JvmName.AbstractMap, JvmName.ConstructorMethod, mkDescriptor()(VoidableType.Void))
+        thisLoad()
+        NEW(entrySetType.jvmName)
+        DUP()
+        tree.load()
+        INVOKESPECIAL(entrySetType.Constructor)
+        PUTFIELD(EntriesField)
+        RETURN()
+      }
+
+    def EntrySetMethod: InstanceMethod =
+      InstanceMethod(this.jvmName, "entrySet", mkDescriptor()(BackendObjType.Native(JvmName.JavaSet).toTpe))
+
+    /** `[] --> return Set` */
+    private def entrySetIns(implicit mv: MethodVisitor): Unit = {
+      thisLoad()
+      GETFIELD(EntriesField)
+      ARETURN()
+    }
+
+    def SizeMethod: InstanceMethod = InstanceMethod(this.jvmName, "size", mkDescriptor()(BackendType.Int32))
+
+    /** `[] --> return int` */
+    private def sizeIns(implicit mv: MethodVisitor): Unit = {
+      thisLoad()
+      GETFIELD(EntriesField)
+      INVOKEVIRTUAL(entrySetType.SizeMethod)
+      xReturn(BackendType.Int32)
+    }
+
+    def IsEmptyMethod: InstanceMethod = InstanceMethod(this.jvmName, "isEmpty", mkDescriptor()(BackendType.Bool))
+
+    /**
+      * `[] --> return boolean`
+      *
+      * Overridden for the same reason as on the set view: `AbstractMap.isEmpty` is `size() == 0`,
+      * which would walk the tree, whereas the entry set answers it from the root alone.
+      */
+    private def isEmptyIns(implicit mv: MethodVisitor): Unit = {
+      thisLoad()
+      GETFIELD(EntriesField)
+      INVOKEVIRTUAL(entrySetType.IsEmptyMethod)
+      xReturn(BackendType.Bool)
+    }
   }
 
   //

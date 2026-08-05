@@ -258,6 +258,30 @@ not force it. As with `List`, the element type is declared in the `Signature`, a
 primitive element is boxed, the element must itself be exportable, and the type
 is return-only.
 
+## Maps
+
+`Map[k, v]` is exportable **as a return type**, where the shim presents it as an
+unmodifiable `java.util.Map` over the same view:
+
+```flix
+@Export
+pub def ages(): Map[String, Int32] = Map#{"delta" => 4, "alpha" => 1}
+```
+
+```java
+Map<String, Integer> m = Acme.Greeter.ages();   // {alpha=1, delta=4}
+m.get("alpha");                                 // 1
+m.put("echo", 5);                               // UnsupportedOperationException
+```
+
+Not copied, and iterated in ascending key order, exactly as a `Set` is — the
+entry set *is* a set view, handing out `Map.Entry` instead of a bare key.
+Entries are the JDK's own `AbstractMap.SimpleImmutableEntry`, so `setValue`
+throws too.
+
+Both the key and the value must be exportable, and both are declared in the
+`Signature`, so `Map[Int32, String]` is `Map<Integer, String>`.
+
 ## Why some conversions are return-only
 
 `Option` is *not* exportable as a parameter. Mapping `Optional.empty()` to
