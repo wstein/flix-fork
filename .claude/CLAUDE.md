@@ -70,6 +70,23 @@ alignment, pipeline breaking, and one Datalog constraint per line. It is opt-in,
 and choosing it is the consent to reformat, so it does not preserve padding "in
 case it was deliberate" — only spacing that is *semantic* survives untouched.
 
+**Editors get the canonical layout, with no flag.** `textDocument/formatting`
+goes through `FormattingProvider`, which formats with `Canonical`: asking an
+editor to reformat is the same consent the CLI flag stands for, so there is
+nothing further to opt into. The client's `FormattingOptions` — `tabSize`,
+`insertSpaces` — are ignored on purpose, since honouring them would make the
+formatter configurable through the back door and give editor users a different
+indentation from everyone else. `textDocument/rangeFormatting` is deliberately
+not advertised: laying out a fragment without its enclosing context is a
+standing source of idempotence bugs, so "format selection" does nothing on
+`.flix` and that is the intended behaviour.
+
+Test the LSP through `FormattingProvider`, not through `PrettyPrinter`. The
+provider was wired to the *default* policy for its whole life, so it handed back
+whatever document it was given and format-on-save did nothing in any editor —
+while every formatter property test passed, because none of them went through
+that door. `TestFormattingProvider` now does.
+
 **It does not decide where an ordinary expression breaks.** If the author wrapped
 a call across three lines it stays wrapped; the formatter fixes the indentation
 of those lines but not the decision to have them. That is roughly 5,000 sites in
