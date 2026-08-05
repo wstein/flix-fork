@@ -656,9 +656,25 @@ no conversion and stays fully usable on the other side, in a `switch`, an
 The compiler cannot do this for you: which representation is right is a question
 about the API you mean to publish, not about the type.
 
-**Residual:** parameters are still raw. The declared type reaches codegen for
-the return only (J5), so `ArrayList[String]` in argument position exports raw.
-The same carrier would have to be threaded for parameters.
+**Parameters too, and for free.** An earlier draft recorded them as a residual,
+reasoning that J5 carries the declared type for the return only. That was true
+of `exportedReturnType` and beside the point: `Eraser.visitParam` runs the same
+`visitType` as everything else, so once `SimpleType.Native` carried its
+arguments the parameters had them as well. Only the signature builder had to
+learn to read them.
+
+A signature describes the whole method or it is malformed, so one is emitted
+when *either* the result or any parameter has something to declare, and the
+parts with nothing to declare repeat their descriptor — `(ArrayList<String>;I)I`
+rather than an attempt to sign the interesting half alone.
+
+A parameter plan may only *describe*, never convert. A shim converts its result
+and passes its parameters straight into the closure it builds, so a plan
+emitting instructions here would declare a signature the bytecode does not
+honour. `ExportPlan.ofParameter` therefore admits `GenericNative` and nothing
+else, which is also why an `Option` or `List` parameter is absent from it rather
+than merely unimplemented: both need a conversion, and J7 rejects them in this
+position anyway.
 
 ---
 

@@ -355,11 +355,13 @@ Acme.Api` still puts a class `Acme` next to a package `Acme`. Exports cannot
 reach it — a one-segment module may not export — so it needs a `main` or a
 `@Test`, and the right fix is a diagnostic rather than another rename.
 
-The type arguments of a Java generic reach the backend in *return* position
-only. They are carried the same way an enum's are, and an exported
-`ArrayList[String]` now declares them; but the declared type is threaded for the
-return alone, so the same type in argument position still exports raw. That
-asymmetry is a missing carrier rather than a principle.
+The type arguments of a Java generic reach the backend in both positions. They
+are carried the same way an enum's are, and an exported `ArrayList[String]`
+declares them whether it is returned or accepted. We had recorded parameters as
+a residual on the reasoning that the declared type is threaded only for the
+return; that was true of the mechanism J5 added and irrelevant, because the
+ordinary type-visiting path already carried the arguments into the parameters.
+The residual was a claim about the code that had not been checked against it.
 
 One thing about that change is worth stating as a limitation rather than an
 achievement: the arguments deliberately do not participate in type equality — a
@@ -479,7 +481,7 @@ how three of the claims in the first draft of this report came to be false.
 | Six-language matrix (§5) | Java in CI; Scala/Kotlin re-measured per B.3–B.4 but not yet in CI; Groovy, Clojure, JRuby hand-run only |
 | `List` → `java.util.List` (§7) | Implemented as an eager copy; lazy view designed, not built |
 | Polymorphic exports (§4.1) | Implemented for unconstrained variables; constrained ones rejected |
-| Java generic type arguments (§7) | Implemented for return types; parameters still raw |
+| Java generic type arguments (§7) | Implemented for returns and parameters |
 | Inbound Flix → Java boundary (§7.2) | Out of scope; unsound today, tracked upstream |
 
 ## Appendix B: reproducing the measurements

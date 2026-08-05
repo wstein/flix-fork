@@ -129,8 +129,9 @@ ArrayList<String> xs = Acme.Greeter.names();   // not a raw ArrayList
 
 Nested and multi-argument types work (`ArrayList[ArrayList[String]]`,
 `HashMap[String, Int32]`), and a primitive argument is boxed, so
-`ArrayList[Int32]` is `ArrayList<Integer>`. In *parameter* position a generic
-type still exports raw.
+`ArrayList[Int32]` is `ArrayList<Integer>`. Parameters are declared too, so a
+caller passing an `ArrayList<String>` needs no cast and takes no unchecked
+conversion.
 
 Every type argument must itself be exportable. `ArrayList[SomeFlixEnum]` is an
 error, not a raw `ArrayList`: the elements crossing would be generated classes

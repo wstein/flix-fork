@@ -162,9 +162,6 @@ several genuinely open problems, each larger than it first appears:
   the moment it ships and needs its mutability, iteration and `size()` behaviour
   settled first — and for a primitive element it re-converts on every traversal
   where a copy converts once.
-- **Java generic type arguments in parameter position.** A return type declares
-  them; the declared type is threaded to the code generator for the return only,
-  so the same type as a parameter still exports raw.
 - **The inbound boundary**, which is a separate mechanism with open soundness
   defects (issues 8618 and 5172, on Java functional interfaces) and duplicated
   conversion logic (issue 8592). Nothing in the export work addresses it. The
