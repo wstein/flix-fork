@@ -487,82 +487,140 @@ carries the boundary.
 
 ---
 
-## J13 — Polymorphic exports need a specialization root, not a codegen change
+## J13 — An unconstrained polymorphic export is `Object`
 
-**Status: Proposed.** Not built. Larger than it first looked.
+**Status: Settled.** Shipped.
 
-Given J12, `pub def identity[a](x: a): a` could be exported by declaring `<T> T
-identity(T)` over the erased-reference instantiation, with the unchecked cast
-Java performs for its own generics. Four things stand in the way, none of them
-representation.
+`@Export pub def id(x: t): t` is `public static Object id(Object)`. This is the
+part #2359 never reached, and it cost two lines:
 
-1. **The instantiation must be requested, and in `Specialization`, not
-   `Eraser`.** An earlier draft said `Eraser`. It cannot: `Eraser.run` is a 1:1
-   `parMapValues` over `root.defs` and creates declarations only for enums and
-   structs, and by the time it runs `Specialization` has already dropped every
-   parametric function. The root belongs in `Specialization.run`, which today
-   seeds only `root.defs.filter(_.spec.tparams.isEmpty)`. An unconstrained
-   `Kind.Star` variable already defaults to `AnyType`, which erases to `Object`
-   — that default is the evidence the instantiation exists.
-2. **It is not tree-shaking.** An earlier draft said the def "would be
-   tree-shaken". `TreeShaker1` seeds from `root.entryPoints`, which contains
-   exports, and runs *before* `Specialization`. The def is never removed; it is
-   never created.
-3. **It is partly a codegen change.** `shimSignature` builds
-   `s"($params)${plan.typeArgument}"` and has no way to emit the formal
-   parameter section `<T:Ljava/lang/Object;>` that `<T> T identity(T)` needs.
-   The specialization must also retain the original `DefnSym`: the shim
-   publishes `defn.sym.name`, `checkValidJavaName` demands `[a-z][a-zA-Z0-9]*`,
-   and `specializedDefnSym` folds in a `$` and a base58 hash.
-4. **The gate must be relaxed in the same change.** `checkNoTypeVariables`
-   (E1069) rejects polymorphic exports outright. By J16 that relaxation ships
-   with the plan, not before it — and by J14 it must admit unconstrained
-   variables only.
+- `Specialization.run` seeds exported parametric defs alongside the
+  non-parametric ones. `StrictSubstitution` already defaults an unbound
+  `Kind.Star` variable to `AnyType`, which `BackendType.toBackendType` maps to
+  `Object`, so the *empty* substitution specializes the def at exactly the
+  erased-reference instantiation. Seeding it there also keeps its symbol, which
+  is load-bearing: `CodeGen` emits a shim only for a def in `root.entryPoints`,
+  and a specialization minted at a call site gets a hashed name that is not in
+  that set. The existing comment at the seeding site says non-parametric defs
+  keep their symbol "to not invalidate the set of entryPoints functions"; an
+  exported parametric def needs the same property for the same reason.
+- The front-end gate stops rejecting it (below).
 
-This is the part #2359 never reached.
+A variable is accepted only where it *is* the whole type of a parameter or the
+return value. One nested inside another type — the region of `S[Int32, r]` — is
+not the boundary type, so defaulting it would pick a representation the exported
+signature never mentions; that stays E1069, as does an effect variable, which
+would silently default to pure.
 
----
+**Corrected:** an earlier draft of this entry called the work "larger than it
+first looked" and listed four obstacles. Three were wrong, and all three were
+wrong in the same way — they were derived from reading rather than from trying.
 
-## J14 — Trait-constrained polymorphism has no `Object` instantiation
+| Earlier claim | What building it showed |
+| --- | --- |
+| Needs a signature encoder that can emit `<T:Ljava/lang/Object;>` | Not needed. `Object` is the honest signature: by parametricity such a function can only shuffle, drop or duplicate its argument, so `<T>` would imply a guarantee the shim does not enforce. |
+| The specialization must be made to retain the original `DefnSym` | Free. Seeding it like a non-parametric def retains it by construction. |
+| The root must be requested in `Specialization`, not `Eraser` | Correct, and the only one that held. |
 
-**Status: Deferred.**
+**Rejected:** `<T> T id(T)`. It buys inference at the call site and nothing
+else, at the cost of a promise the boundary cannot keep — the cast is unchecked
+either way. Revisit if a Flix collection ever crosses, where the argument
+becomes real information rather than decoration.
 
-J13 covers an *unconstrained* type variable. A constrained one — `def show[a:
-ToString](x: a)` — has no erased-reference instantiation to route to.
-`mkInstanceMap` keys instances on `(TraitSym, TypeConstructor)` and
-`Type.typeConstructor` is `None` for a variable, so there is nothing to resolve
-against; no instance is declared for `java.lang.Object`; and Flix compiles
-traits away by specialization rather than by passing dictionaries, so there is
-no runtime witness to fall back on.
-
-**Blocker named:** instance resolution is a specialization-time decision. Making
-it a runtime one means introducing dictionary passing, which is a language-wide
-change and not an interop one.
+**One hazard worth recording.** `isExportableType` used to answer `Err` for a
+type variable, and `checkJavaTypes` discards an `Err` without reporting
+anything. Relaxing the gate alone would therefore have admitted type variables
+*by accident* rather than by decision — passing for the same reason a malformed
+type passes. The case is now explicit.
 
 ---
 
-## J15 — Type arguments of Java generics do not reach the backend today
+## J14 — A constrained type variable is rejected, and will stay rejected
 
-**Status: Deferred.**
+**Status: Settled.** Shipped as the error E1970.
 
-`SimpleType` does carry type arguments — `Enum(sym, targs)`, `Struct(sym,
-targs)`, `Arrow(targs, result)` — and `ExportPlan` recovers the `String` of
-`Option[String]` from exactly those, which is the shipped mechanism of J4 and
-J5. But a *Java* class arrives as `SimpleType.Native(clazz: Class[?])`, which
-has no argument list, so there is nowhere for `String` to live.
+J13 covers an *unconstrained* type variable. A constrained one — `def
+describe(x: a): String with ToString[a]` — has no erased-reference instantiation
+to route to, and this is structural rather than unimplemented:
 
-The argument is not destroyed; it is *dropped on the way down*. The front end
-knows `ArrayList[String]` — that is what `EntryPoints` type-checks — and there
-is no reason in principle it could not be preserved. What is missing is a
-carrier. J5 solved the same problem for returns by threading one extra field
-through the ASTs; this needs the same, but on a type constructor rather than a
-def, so every phase that builds a `Native` has to build the arguments too.
+- `mkInstanceMap` keys instances on `(TraitSym, TypeConstructor)`, and the
+  defaulted variable's constructor is `AnyType`.
+- `"AnyType"` is a reserved name, so no instance for it can ever be declared.
+- `Instances.checkSimple` rejects a `Type.Var` instance head, so Flix has no
+  blanket instances either. Of 819 instances in the standard library, none is on
+  a Java type.
+- Flix compiles traits away by specialization rather than by passing
+  dictionaries; the backend emits nothing per instance, and `root.instances` is
+  dead after `Specialization.run`. There is no runtime witness because there is
+  no runtime witness *at all*.
 
-**Blocker named:** an AST-wide change, not a codegen one — which is why a
-hand-written `ArrayList[String]` still exports raw while a converted
-`Option[String]` does not. The wording of this entry was previously
-"irrecoverable", which overstated it: the information is unavailable in the
-backend's current type representation, not lost from the compiler.
+Left unchecked this does not fail, it crashes — seeding such a def reaches
+`resolveSigSym` with the defaulted variable and dies on a map lookup:
+
+```
+java.util.NoSuchElementException: key not found: (ToString,AnyType)
+  at Specialization.resolveSigSym(Specialization.scala:1237)
+```
+
+So E1970 is not a stylistic preference; it is what keeps that unreachable, which
+is why it ships in the same change as J13 rather than after it (J16).
+
+**Rejected:** dictionary passing. It is the correct general answer and a
+language-wide change, taken on to buy one interop feature. **Also rejected:**
+`@Export(at = [Int32, String])`, generating one overload per named
+instantiation — attractive, because it would reuse the specializer unchanged and
+produce idiomatic Java overloads, but annotations are a single lexer token with
+no argument syntax, so it forks the grammar, which J2 refuses.
+
+**What to do instead** needs no compiler support and works today, so the error
+says it:
+
+```flix
+pub def describe(x: a): String with ToString[a] = ToString.toString(x)
+
+@Export
+pub def describeInt(x: Int32): String = describe(x)
+```
+
+---
+
+## J15 — The type arguments of an exported Java generic are declared
+
+**Status: Settled.** Shipped for return types.
+
+An exported `ArrayList[String]` declares
+`()Ljava/util/ArrayList<Ljava/lang/String;>;`, nested and multi-argument types
+included. A primitive argument is boxed, as an `Option` element is.
+
+The argument was never destroyed — it was dropped at *one line*.
+`Simplifier.visitType` reads `tpe.typeArguments` for an enum and a struct two
+cases above, and did not for a Java class, where they were still in scope.
+`SimpleType.Native` now carries them, as `Enum` and `Struct` do.
+
+**The arguments are not part of the type's identity.** A Flix enum's arguments
+select which class the backend generates; a Java class is one class however it
+was applied, and the compiler reaches the same one down paths that box or erase
+the arguments differently — `ArrayList[Bool]` and `ArrayList[Object]` both arise
+for a single expression. Nineteen generic-interop tests failed on exactly that
+before `equals` and `hashCode` were narrowed to the class. This is the one place
+a `SimpleType` deliberately ignores a field, and `TestSimpleType` pins it.
+
+**An argument that cannot be described leaves the signature absent, not wrong.**
+`ArrayList[Colour]` stays raw, because a Flix enum has no name a Java caller may
+depend on and writing one would publish the representation J0 protects. This is
+what makes the change safe under J16 without touching the gate at all: the gate
+already accepted these types, the plan merely became able to describe more of
+them, and no program that compiled before stops compiling.
+
+**Corrected:** this entry previously called the work "an AST-wide change, not a
+codegen one" and left it Deferred. That was wrong — three construction sites and
+about six matches — and it was the second time this entry overstated its
+blocker, the first being the word "irrecoverable". Both drafts were written from
+reading the code rather than from changing it.
+
+**Residual:** parameters are still raw. The declared type reaches codegen for
+the return only (J5), so `ArrayList[String]` in argument position exports raw.
+The same carrier would have to be threaded for parameters.
 
 ---
 

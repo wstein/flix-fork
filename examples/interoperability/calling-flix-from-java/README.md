@@ -99,7 +99,8 @@ java_import "Acme.Greeter"            # JRuby lowercases a bare Java::Acme
 An exported function must:
 
 - be `pub`;
-- have no type variables (no polymorphism, no trait constraints);
+- have no *constrained* type variables. An unconstrained one is fine and is
+  exported as `java.lang.Object` (below);
 - live in a *nested* module — the class of a def in `A.B` is `B` in package
   `A`, so a top-level `mod B` would put the facade in the unnamed package,
   which Java code in a named package cannot import;
@@ -109,8 +110,25 @@ An exported function must:
 ## Which types can cross the boundary
 
 Exportable: `Bool`, `Char`, `Int8`, `Int16`, `Int32`, `Int64`, `Float32`,
-`Float64`, `String`, `BigInt`, `BigDecimal`, `Regex`, and any Java type
-(including generic ones, which Java erases to their raw class).
+`Float64`, `String`, `BigInt`, `BigDecimal`, `Regex`, and any Java type.
+
+A generic Java type keeps its type arguments in *return* position:
+
+```flix
+@Export
+pub def names(): ArrayList[String] \ IO = new ArrayList()
+```
+
+```java
+ArrayList<String> xs = Acme.Greeter.names();   // not a raw ArrayList
+```
+
+Nested and multi-argument types work (`ArrayList[ArrayList[String]]`,
+`HashMap[String, Int32]`), and a primitive argument is boxed, so
+`ArrayList[Int32]` is `ArrayList<Integer>`. In *parameter* position a generic
+type still exports raw. So does one whose argument has no Java name of its own —
+`ArrayList[SomeFlixEnum]` is a raw `ArrayList`, because naming that enum would
+expose a class the compiler is free to rename.
 
 `Unit` is exportable in the two places where it can be rendered away: as a
 return type it becomes `void`, and the `Unit` parameter Flix gives a nullary
@@ -147,9 +165,40 @@ payload is a Java `null` arrives as `Optional.empty()` — the same value `None`
 produces. `Optional.of` would raise a `NullPointerException` at the boundary
 instead; absence and a null payload cannot both be represented.
 
-`Option` is *not* exportable as a parameter. That would need the reverse
-conversion, and there is no answer for a Java caller passing `Optional.empty()`
-to a function whose Flix type is not optional.
+`Option` is *not* exportable as a parameter. Mapping `Optional.empty()` to
+`None` would be unproblematic; what is missing is the machinery. The declared
+type is carried to the code generator for the return only, so a parameter
+arrives with its element type already erased, and the conversion is described in
+one direction.
+
+## Polymorphic functions
+
+An *unconstrained* type variable is exported as `java.lang.Object`:
+
+```flix
+@Export
+pub def id(x: t): t = x
+```
+
+```java
+String s = (String) Acme.Greeter.id("round-trip");
+```
+
+That is not a special case in the boundary — every Flix reference value is
+already represented as `Object`, so the variable needs no conversion at all. The
+cast is the one Java performs for its own generics.
+
+A *constrained* variable is rejected, and this is not a temporary restriction.
+Flix picks a trait implementation from the concrete type while compiling; a
+variable that stayed a variable has no implementation to pick and nothing is
+passed at run time to choose one. Export a wrapper per type instead:
+
+```flix
+pub def describe(x: a): String with ToString[a] = ToString.toString(x)
+
+@Export
+pub def describeInt(x: Int32): String = describe(x)
+```
 
 ## Callbacks
 
@@ -166,11 +215,11 @@ String]` is a kind error. Use `UnaryOperator`, `BinaryOperator`, `BiFunction`,
 A Flix closure cannot travel the other way: a function type is not exportable,
 so an exported function cannot return one.
 
-Not exportable: Flix enums other than `Option`, tuples, records, functions,
-`Array`, and anything polymorphic. Their JVM representation is an implementation
-detail of the compiler — a `Some(x)` is a class called `Tag$Obj` distinguished
-only by an `int ordinal` field — so exposing them would freeze names the backend
-needs to stay free to change.
+Not exportable: Flix enums other than `Option`, tuples, records, functions, and
+`Array`. Their JVM representation is an implementation detail of the compiler —
+a `Some(x)` is a class called `Tag$Obj` distinguished only by an `int ordinal`
+field — so exposing them would freeze names the backend needs to stay free to
+change.
 
 That is also why `Option` is *converted* rather than exposed: the shim reads the
 tag and builds an `Optional`, so Java never names the tag class. To hand any

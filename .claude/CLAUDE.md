@@ -297,6 +297,21 @@ box, that `Some(null)` collapses onto `None` — belongs in
 `TestExportedShimsRuntime`, which loads a compiled facade in an isolated
 classloader and calls it. Descriptors alone cannot see those.
 
+Two things about type variables. An **unconstrained** one is exported as
+`Object`: `Specialization.run` seeds exported parametric defs so the empty
+substitution specializes them at the monomorphizer's own default, and seeding
+them *there* is what keeps their symbol, without which `CodeGen` emits no shim.
+A **constrained** one is rejected by `EntryPoints` (E1970) — not as a policy but
+because reaching `resolveSigSym` with a defaulted variable crashes the compiler
+on a missing instance. Relaxing one without the other is a compiler crash on
+ordinary code.
+
+`SimpleType.Native` carries the type arguments of a Java generic so an exported
+return can declare them, and **deliberately ignores them in `equals`** — a Java
+class is one class however it was applied, and the compiler reaches the same one
+down paths that erase the arguments differently. `TestSimpleType` pins that; a
+change that "fixes" the equality will fail nineteen generic-interop tests.
+
 All of this is the *outbound* direction only. Flix calling Java — generic method
 results, anonymous-class overrides, `super` arguments, functional interfaces —
 is a separate mechanism with open soundness defects upstream (flix/flix#12970,

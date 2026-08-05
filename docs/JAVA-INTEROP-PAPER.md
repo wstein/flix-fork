@@ -217,27 +217,41 @@ This also inverts a design detail. Because reference types share a class, the
 therefore be keyed on the *declared* type; keying it on the erased type would
 conflate the two and emit a signature that is wrong for one of them.
 
-### 4.1 Implication for polymorphic exports
+### 4.1 Polymorphic exports
 
-A polymorphic function could then be exported by declaring `<T> T identity(T)`
-over the erased-reference instantiation, with the unchecked cast Java performs
-for its own generics. The obstacle is not representation but existence: a
-compiler that emits only the instantiations a program uses never creates a
-polymorphic function that Flix never calls, so `@Export` must act as a
-specialization root at that instantiation. Because functions specialize on the
-source type (above), the root belongs in the monomorphizer, not in the erasure
-pass — an ordering we initially got backwards.
+The result above predicts that a polymorphic function can be exported, and it
+can: `pub def id(x: t): t` is `public static Object id(Object)`. The obstacle
+was never representation but *existence* — a compiler that emits only the
+instantiations a program uses never creates a function Flix never calls — so
+`@Export` has to act as a specialization root. Because functions specialize on
+the source type, that root belongs in the monomorphizer rather than the erasure
+pass, an ordering we initially had backwards.
 
-Two further constraints are not representational either: the signature encoder
-must learn to emit a formal type-parameter section, and the specialization must
-retain the original symbol, since the shim publishes the Flix name and the
-specializer would otherwise fold a hash into it. The construction is also
-limited to *unconstrained* type variables: a trait-constrained one has no
-`Object` instantiation to route to, because instance resolution is a
-specialization-time decision in this compiler with no runtime witness.
+What the implementation cost was two lines, and the reason is §4 again. The
+monomorphizer already defaults an unconstrained variable to a type that the
+backend represents as `Object`, so seeding an exported parametric def with the
+*empty* substitution specializes it at precisely the erased-reference
+instantiation. Seeding it there also keeps its symbol, which is required rather
+than convenient: a shim is emitted only for a def the compiler still recognizes
+as an entry point, and a specialization requested at a call site is renamed with
+a hash.
 
-We have not implemented this. We claim only that the reason it was thought
-impossible does not hold.
+We had also predicted that a signature encoder would have to learn to emit a
+formal type-parameter section, for `<T> T id(T)`. Building it changed our mind
+about wanting that. By parametricity such a function can only shuffle, drop or
+duplicate its argument, so `<T>` buys inference at the call site while implying
+a guarantee the shim does not enforce — the cast is unchecked either way. The
+honest signature is the one the representation supports.
+
+The construction stops exactly at trait constraints, and stops hard. A
+constrained variable has no `Object` instantiation because instance resolution
+here is a specialization-time decision keyed on a concrete type constructor: no
+instance exists for the defaulted variable, none can be declared for it, and the
+language admits no blanket instances. Nothing is passed at run time because
+there is nothing to pass — the backend emits no artifact per instance at all.
+Left ungated this does not fail, it crashes the compiler on a map lookup, which
+makes the front-end rejection a correctness requirement rather than a policy.
+Users write a monomorphic wrapper, which needs no compiler support.
 
 ## 5. Six languages, two defects
 
@@ -341,15 +355,20 @@ Acme.Api` still puts a class `Acme` next to a package `Acme`. Exports cannot
 reach it — a one-segment module may not export — so it needs a `main` or a
 `@Test`, and the right fix is a diagnostic rather than another rename.
 
-The type arguments of *Java* generics do not reach the backend. Its type
-representation carries type arguments for Flix enums and structs, which is how
-`Option[String]` is recovered, but a Java class arrives as an opaque
-`java.lang.Class` with no argument list. The front end does know
-`ArrayList[String]` — it type-checks it — so this is a carrier that was never
-threaded down, not information the compiler destroys; adding one means changing
-every phase that builds the type, which is why it has not been done. A
-hand-written `ArrayList[String]` therefore exports raw where a converted
-`Option[String]` does not.
+The type arguments of a Java generic reach the backend in *return* position
+only. They are carried the same way an enum's are, and an exported
+`ArrayList[String]` now declares them; but the declared type is threaded for the
+return alone, so the same type in argument position still exports raw. That
+asymmetry is a missing carrier rather than a principle.
+
+Two things about that change are worth stating as limitations rather than
+achievements. The arguments deliberately do not participate in type equality —
+a Java class is one class however it was applied, and the compiler reaches the
+same one down paths that erase the arguments differently — which makes this the
+one place a backend type ignores a field it carries. And an argument that cannot
+be described, such as a Flix enum, leaves the signature *absent* rather than
+approximated; that is the right failure, but it means the precision of the
+exported API depends on what the argument happens to be.
 
 Conversion is one-way, and not for a semantic reason. Mapping
 `Optional.empty()` to `None` in parameter position is unproblematic; what is
@@ -448,8 +467,8 @@ how three of the claims in the first draft of this report came to be false.
 | `Some(null)` collapse (§7) | Measured and pinned in CI, Appendix B.5 |
 | Six-language matrix (§5) | Java in CI; Scala/Kotlin re-measured per B.3–B.4 but not yet in CI; Groovy, Clojure, JRuby hand-run only |
 | Lazy collection views | Designed, not built |
-| Polymorphic exports (§4.1) | Argued feasible for unconstrained variables, not built |
-| Java generic type arguments (§7) | Blocked |
+| Polymorphic exports (§4.1) | Implemented for unconstrained variables; constrained ones rejected |
+| Java generic type arguments (§7) | Implemented for return types; parameters still raw |
 | Inbound Flix → Java boundary (§7.2) | Out of scope; unsound today, tracked upstream |
 
 ## Appendix B: reproducing the measurements

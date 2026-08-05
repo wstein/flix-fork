@@ -155,26 +155,30 @@ and the generated classes are named so that a jar is consumable from Scala,
 Kotlin, Groovy, Clojure and JRuby rather than Java alone. What that leaves is
 several genuinely open problems, each larger than it first appears:
 
-- **Polymorphic exports.** The reason this was thought impossible does not hold
-  — Flix represents polymorphic *data* after erasure, so `Option[String]` and
-  `Option[BigInt]` are already one class holding an `Object`, which is what a
-  Java `<T>` erases to. Exporting `identity[a](x: a): a` needs `@Export` to seed
-  a specialization at the erased-reference instantiation in the monomorphizer,
-  a `Signature` encoder that can emit a formal type-parameter section, and a
-  relaxed entry-point check. It works only for *unconstrained* type variables.
-- **Trait-constrained polymorphism**, which has no such instantiation to route
-  to: instance resolution is a specialization-time decision in this compiler,
-  with no runtime witness to fall back on. Making one exist means dictionary
-  passing, which is a language-wide change rather than an interop one.
 - **Collections across the boundary.** A Flix `List` has no exact Java form, so
   it must be converted. A lazy view over the cons chain avoids the O(n)
   allocation an eager copy costs on every call, but it is API the moment it
   ships and needs its mutability, iteration and `size()` behavior settled first.
-- **Type arguments of Java generics**, which the front end knows and the backend
-  does not, so a hand-written `ArrayList[String]` still exports raw.
+  This is the largest remaining piece, and it is what would make polymorphic
+  exports genuinely useful — a type argument only carries information once a
+  container crosses.
+- **Java generic type arguments in parameter position.** A return type declares
+  them; the declared type is threaded to the code generator for the return only,
+  so the same type as a parameter still exports raw.
 - **The inbound boundary**, which is a separate mechanism with open soundness
-  defects (issues 12970, 12972, 8618, 5172) and duplicated conversion logic
-  (issue 8592). Nothing in the export work addresses it.
+  defects (issues 12972, 8618, 5172) and duplicated conversion logic (issue
+  8592). Nothing in the export work addresses it. Issue 12972 in particular is
+  reachable from ordinary code: every primitive instantiation of a generic Java
+  functional interface with parameters — `Comparator[Int32]`, `Comparator[Int64]`
+  — fails verification, because the method is declared with the erased parameter
+  types and its body loads them at the Flix types.
+
+Two problems that were open here have since been settled, and the reasoning is
+worth keeping: **unconstrained polymorphic exports** now work (they are exported
+as `Object`), while **trait-constrained** ones are rejected permanently, because
+instance resolution is a specialization-time decision with no runtime witness
+and giving it one means dictionary passing — a language-wide change bought for a
+single interop feature.
 
 `docs/JAVA-INTEROP-DECISIONS.md` records the decisions taken so far with their
 evidence and the alternatives rejected; `docs/JAVA-INTEROP-PAPER.md` is the
