@@ -263,33 +263,12 @@ object TypeReduction2 {
     * Returns the Java reflective class object corresponding to the given Flix `tpe`.
     */
   private def getJavaType(tpe: Type): Class[?] = tpe match {
-    case Type.Bool => java.lang.Boolean.TYPE
-    case Type.Int8 => java.lang.Byte.TYPE
-    case Type.Int16 => java.lang.Short.TYPE
-    case Type.Int32 => java.lang.Integer.TYPE
-    case Type.Int64 => java.lang.Long.TYPE
-    case Type.Char => java.lang.Character.TYPE
-    case Type.Float32 => java.lang.Float.TYPE
-    case Type.Float64 => java.lang.Double.TYPE
-    case Type.Cst(TypeConstructor.BigDecimal, _) => classOf[java.math.BigDecimal]
-    case Type.Cst(TypeConstructor.BigInt, _) => classOf[java.math.BigInteger]
-    case Type.Cst(TypeConstructor.Str, _) => classOf[String]
-    case Type.Cst(TypeConstructor.Regex, _) => classOf[java.util.regex.Pattern]
-    case Type.Cst(TypeConstructor.Native(clazz), _) => clazz
-
     // The Null type has no Java class; `null` is a valid value of any reference
     // type. Apache Commons treats a `null` element in the parameter-type array
     // as assignable to any non-primitive parameter (and not to primitives), so
     // returning `null` lets `null` arguments resolve against specific reference
     // parameters (e.g. `String`), not just `Object`.
     case Type.Cst(TypeConstructor.Null, _) => null
-
-    // Parameterized Java types (e.g. ArrayList[String])
-    case Type.Apply(_, _, _) if isNativeBase(tpe) =>
-      tpe.baseType match {
-        case Type.Cst(TypeConstructor.Native(clazz), _) => clazz
-        case _ => classOf[Object]
-      }
 
     // Arrays
     case Type.Apply(Type.Apply(Type.Cst(TypeConstructor.Array, _), elmType, _), _, _) =>
@@ -305,7 +284,13 @@ object TypeReduction2 {
         case Some(mapping) => mapping.javaClass
         case None => classOf[Object]
       }
-    case _ => classOf[Object] // default
+
+    // Everything else -- the primitives, the built-in reference types, and a Java class with or
+    // without type arguments -- is the question `Type.classFromFlixType` already answers, and this
+    // file already asks it in `lookupField`. The cases above come first because they are the ones
+    // it does not cover: only the resolver has a use for `Null` and for the functional-interface
+    // mapping, and `classFromFlixType` returns `None` for an array rather than its Java class.
+    case _ => Type.classFromFlixType(tpe).getOrElse(classOf[Object])
   }
 
   /**
