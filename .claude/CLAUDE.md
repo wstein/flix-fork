@@ -281,12 +281,21 @@ standing invariant is that the gate is widened in the same change as the plan,
 never ahead of it. `TestExportedShims` asserts it: no return type the gate
 accepts may produce a shim naming a `dev.flix.gen` class.
 
-Two things bite. Generated classes are named *beside* their namespace
-(`Acme.Api$Def$get` in package `Acme`), never beneath it, because a class and a
-package of the same name make every export unreachable from Scala and Kotlin;
-this is still unfixed for module trees three levels deep. And an exported def's
-return type is deliberately left un-erased in `Eraser`, which is what lets the
-shim present the declared type.
+Two things bite. **Only the first namespace segment becomes a package** — `mod
+A.B.C` is the facade `A.B$C` with defs `A.B$C$Def$…`, all in package `A` — so no
+facade can be a package prefix at any depth. A class and a package of the same
+name make every export unreachable from Scala and Kotlin, and taking the
+*parent* package instead fixes depth two while moving the clash to depth three,
+which is why the rule is stated on the whole namespace. `JvmName.facadeOfNamespace`
+and `JvmName.packageOfNamespace` must keep agreeing; `TestJvmName` asserts they
+do. And an exported def's return type is deliberately left un-erased in
+`Eraser`, which is what lets the shim present the declared type.
+
+Anything about a shim that only shows up when it *runs* — that a conversion
+produced the value the signature promised, that a primitive came back as a Java
+box, that `Some(null)` collapses onto `None` — belongs in
+`TestExportedShimsRuntime`, which loads a compiled facade in an isolated
+classloader and calls it. Descriptors alone cannot see those.
 
 All of this is the *outbound* direction only. Flix calling Java — generic method
 results, anonymous-class overrides, `super` arguments, functional interfaces —

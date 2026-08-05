@@ -144,9 +144,41 @@ features must first be cleanly encapsulated behind suitable abstractions.
 Flix compiles to the JVM and can interoperate with Java, but calling Flix code
 *from* Java is awkward because Flix functions are often polymorphic and compiled
 in ways that do not present a stable, predictable Java signature. Allowing
-programmers to *export* selected non-polymorphic functions would let the compiler
+programmers to *export* selected non-polymorphic functions lets the compiler
 generate a stable Java interface — a facade — that Java code can call directly,
 making Flix usable as a library from the wider JVM ecosystem.
+
+The mechanism itself now exists: `@Export` generates a facade class carrying
+`public static` shims, non-polymorphic types cross with their declared Java
+types, `Option` is converted to `java.util.Optional` with a generic `Signature`,
+and the generated classes are named so that a jar is consumable from Scala,
+Kotlin, Groovy, Clojure and JRuby rather than Java alone. What that leaves is
+several genuinely open problems, each larger than it first appears:
+
+- **Polymorphic exports.** The reason this was thought impossible does not hold
+  — Flix represents polymorphic *data* after erasure, so `Option[String]` and
+  `Option[BigInt]` are already one class holding an `Object`, which is what a
+  Java `<T>` erases to. Exporting `identity[a](x: a): a` needs `@Export` to seed
+  a specialization at the erased-reference instantiation in the monomorphizer,
+  a `Signature` encoder that can emit a formal type-parameter section, and a
+  relaxed entry-point check. It works only for *unconstrained* type variables.
+- **Trait-constrained polymorphism**, which has no such instantiation to route
+  to: instance resolution is a specialization-time decision in this compiler,
+  with no runtime witness to fall back on. Making one exist means dictionary
+  passing, which is a language-wide change rather than an interop one.
+- **Collections across the boundary.** A Flix `List` has no exact Java form, so
+  it must be converted. A lazy view over the cons chain avoids the O(n)
+  allocation an eager copy costs on every call, but it is API the moment it
+  ships and needs its mutability, iteration and `size()` behavior settled first.
+- **Type arguments of Java generics**, which the front end knows and the backend
+  does not, so a hand-written `ArrayList[String]` still exports raw.
+- **The inbound boundary**, which is a separate mechanism with open soundness
+  defects (issues 12970, 12972, 8618, 5172) and duplicated conversion logic
+  (issue 8592). Nothing in the export work addresses it.
+
+`docs/JAVA-INTEROP-DECISIONS.md` records the decisions taken so far with their
+evidence and the alternatives rejected; `docs/JAVA-INTEROP-PAPER.md` is the
+longer design report.
 
 ## Analysis & Metaprogramming
 

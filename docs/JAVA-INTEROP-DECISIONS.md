@@ -56,7 +56,7 @@ representation at all.
 
 ## J1 — Generated classes are named beside their namespace, not beneath it
 
-**Status: Partial.** Shipped for two-level module trees; see the residual.
+**Status: Settled.** Shipped, at every module depth.
 
 `mod Acme.Api` compiles to the class `Acme.Api`, and its defs used to be
 generated into a *package* of the same name. The JVM permits a class and a
@@ -82,47 +82,53 @@ make no claim about JVM languages beyond these.
 (`dev.flix.gen.Acme.Api.Def$get`). It also removes the clash, and it was
 implemented first, but it diverges from every neighbouring language for no gain.
 
-### Residual: the clash returns at module depth three
+### Only the first segment becomes a package
 
-Moving the *defs* was not enough, because the *facade* nests too.
-`BackendObjType.Namespace(ns)` is `JvmName(ns.dropRight(1), ns.last)`, so the
-facade of `mod Acme.Api.Deep` is the class `Deep` in package `Acme.Api` — and
-`Acme.Api` is itself a facade class. The sibling rule moved the clash down one
-level rather than removing it.
+Moving the *defs* to the parent package was not enough, because the *facade*
+nests too. With `packageOfNamespace` returning `ns.dropRight(1)`, the facade of
+`mod Acme.Api.Deep` is the class `Deep` in package `Acme.Api` — and `Acme.Api`
+is itself a facade class. That fixed depth two and moved the clash to depth
+three, where a jar carried `Acme/Api.class` beside a directory `Acme/Api/`, and
+scalac 3 failed against it with the very message quoted above.
 
-Reproduced with this compiler: `mod Acme.Api` with an export, plus `mod
-Acme.Api.Deep` with an export, emits
+The rule is therefore stated on the whole namespace rather than on its parent:
+**the package is the first segment, and every segment below it is part of the
+class name.**
 
-```
-Acme/Api.class          <- the facade class Acme.Api
-Acme/Api/Deep.class     <- inside the package Acme.Api
-Acme/Api$Def$get.class
-Acme/Api/Deep$Def$deeper.class
-```
+| Module | Facade | Its defs |
+| --- | --- | --- |
+| `Acme` | `Acme` (unnamed package) | `dev.flix.gen.Acme$Def$…` |
+| `Acme.Api` | `Acme.Api` | `Acme.Api$Def$…` |
+| `Acme.Api.Deep` | `Acme.Api$Deep` | `Acme.Api$Deep$Def$…` |
+| `Acme.Api.Deep.Deeper` | `Acme.Api$Deep$Deeper` | `Acme.Api$Deep$Deeper$Def$…` |
 
-and scalac 3 fails against the resulting jar with the same message quoted above.
-Both exports are accepted by the front end; this is ordinary user code.
+`Acme` is the only package the tree creates, at any depth, so no facade can be a
+package prefix. Two-level names — the ones Java callers already write — do not
+move.
 
-So J1's *rule* is right and its *coverage* is not. Until this is closed, an
-exported module tree must be two levels deep.
+**Rejected:** giving the facade a suffix (`Acme.Api$` beside package
+`Acme.Api`), which is the cleanest uniform convention and is what Scala does for
+its module classes. It renames *every* existing export, including the two-level
+ones that work today, to fix a case that only arises at depth three.
+**Also rejected:** diagnosing the clash instead of removing it. That refuses
+programs which work from Java today, and is a mitigation to reach for only if
+the layout change cannot be made.
 
-**Remedies, in preference order.** (a) Give the facade a suffix, as Scala does
-for its module classes — `Acme.Api$` beside package `Acme.Api`. The log already
-cites `acme.Api$` as the neighbouring convention and did not adopt it; it
-changes the Java-visible name of every export, so it is a public API decision.
-(b) Apply the sibling rule to facades as well, making `mod A.B.C` the class
-`A.B$C` in package `A`; leaves two-level names untouched and only renames depth
-≥ 3. (c) Reject the configuration with a diagnostic, which keeps names stable
-but refuses programs that work from Java today.
-
-**Second residual:** entry points in `mod Acme` *and* a nested `mod Acme.Api`
-clash differently — a *top-level* class `Acme` in the unnamed package meets the
-package `Acme`. This one is unreachable for exports, since
-`checkNonRootNamespace` rejects `@Export` in a one-segment module, so it needs
-a `main` or a `@Test`.
-javac diagnoses it as *"class Api clashes with package of same name"* only when
-both are compiled from source in one run; against a jar it emits no clash
+**Residual:** entry points in `mod Acme` *and* a nested `mod Acme.Api` still
+clash, because a one-segment namespace has no parent to sit beside and keeps its
+facade in the unnamed package — a *top-level* class `Acme` meeting the package
+`Acme`. It is unreachable for exports, since `checkNonRootNamespace` rejects
+`@Export` in a one-segment module, so it needs a `main` or a `@Test`. javac
+diagnoses the same shape as *"class Api clashes with package of same name"* only
+when both are compiled from source in one run; against a jar it emits no clash
 diagnostic and fails at the use site. Flix should diagnose it.
+
+**Pinned by** `TestJvmName` (the naming functions, and that the facade and its
+own defs never disagree about the package), `TestNamespaceClasses` (no emitted
+class name is a package prefix of another, at depths two through four and with a
+non-exporting ancestor), and `TestExportedShimsRuntime` (a depth-three shim
+loads and runs under its sibling name). The depth test fails under the old
+`ns.dropRight(1)` rule, so it is a regression test rather than a restatement.
 
 ---
 
@@ -309,9 +315,13 @@ not expressible, because Flix does not distinguish a nullable Java reference
 from a non-nullable one. A faithful encoding would need something other than
 `Optional`, which is the whole reason `Optional` was chosen.
 
-Nothing pins this. `TestExportedShims` inspects bytecode with an ASM visitor and
-never invokes a shim, so a regression test needs a load-and-invoke harness that
-does not exist yet.
+**Pinned by** `TestExportedShimsRuntime`, which compiles a fixture, loads the
+facade in an isolated classloader and calls the shim. Nothing else can see this:
+`Some(null)` and `None` have identical descriptors and identical signatures, so
+bytecode inspection cannot distinguish the two outcomes. That harness is also
+what makes the boxing of J8 checkable as a value rather than as a signature —
+`Optional.get()` returns a `java.lang.Integer`, not Flix's own `Value` wrapper,
+which would satisfy the descriptor and break every use of it.
 
 ---
 

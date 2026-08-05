@@ -26,7 +26,8 @@ the Java descriptor, the generic signature, and the emitted bytecode are all
 derived, so that the API a caller compiles against cannot drift from the code it
 calls. We report two defects found by testing across six JVM languages that a
 Java-only test suite cannot detect, one of which made every export unreachable
-from Scala and Kotlin, and which we show is only partly repaired.
+from Scala and Kotlin — and whose first repair fixed the depth we happened to
+test and moved the defect one level down.
 
 **Scope.** This report concerns values returned *outward* through `@Export`
 shims. It does not establish correctness of the broader Flix–Java boundary —
@@ -261,9 +262,16 @@ already do: emit generated classes as siblings (`Acme.Api$Def$get`), never as a
 package named after a class. Scala emits `acme.Api$`, Kotlin `acme.ApiKt`,
 Clojure `acme.api$get_it`; none creates such a package.
 
-That repair is incomplete, and §7 records the remainder: because the *facade*
-class nests as well, a three-level module tree reproduces the same clash one
-level down.
+Our first attempt at that remedy was itself instructive. Putting a module's
+classes in its *parent* package fixes `Acme.Api` and moves the clash to
+`Acme.Api.Deep`, whose facade is then `Deep` in a package named after the facade
+class `Acme.Api` — the same defect one level down, and invisible to a test suite
+whose fixtures were all two levels deep. The rule has to be stated on the whole
+namespace rather than on its parent: only the first segment becomes a package,
+and everything below it joins the class name, so `mod A.B.C` is the class
+`A.B$C` in package `A`. That leaves two-level names — the ones callers already
+write — untouched, and it makes the property hold at every depth rather than at
+the depth that happened to be tested.
 
 **A missing signature.** Omitting the `Signature` attribute does not degrade
 gracefully anywhere except Java, and there only conditionally:
@@ -326,12 +334,12 @@ both from one plan (§3) matters.
 
 ### 7.1 Of the export boundary
 
-The sibling-naming repair covers two-level module trees only. The facade of `mod
-A.B.C` is the class `C` in package `A.B`, and `A.B` is itself a facade class, so
-a three-level tree emits `A/B.class` beside a directory `A/B/` and reproduces
-the Scala and Kotlin failures of §5 exactly. Closing it means renaming the
-facade — a public API decision, since the facade name is what Java callers
-write.
+One residual of the naming repair remains, at the top rather than the bottom of
+a module tree: a one-segment module has no parent to sit beside, so its facade
+stays in the unnamed package, and `mod Acme` with a `main` alongside a `mod
+Acme.Api` still puts a class `Acme` next to a package `Acme`. Exports cannot
+reach it — a one-segment module may not export — so it needs a `main` or a
+`@Test`, and the right fix is a diagnostic rather than another rename.
 
 The type arguments of *Java* generics do not reach the backend. Its type
 representation carries type arguments for Flix enums and structs, which is how
@@ -428,17 +436,17 @@ how three of the claims in the first draft of this report came to be false.
 
 | Result | State |
 | --- | --- |
-| Sibling naming of generated classes | Implemented for two-level modules; residual clash at depth ≥ 3 (§7) |
+| Sibling naming of generated classes | Implemented at every depth; one residual for top-level modules (§7.1) |
 | `Option` → `Optional` conversion | Implemented; not injective (§7) |
 | Generic `Signature` on exported methods | Implemented |
 | Conversion plan | Implemented for three of four consumers (§3) |
 | Gate-does-not-outrun-plan invariant (§3.1) | Implemented as a test, in CI |
 | Erasure-directed specialization of data (§4) | Measured, Appendix B.2 |
 | Source-type monomorphization of functions (§4) | Measured, Appendix B.1 |
-| Class/package clash (§5) | Measured, Appendix B.3 |
+| Class/package clash (§5) | Names pinned in CI; consumer compilation measured, Appendix B.3 |
 | Missing-`Signature` effects (§5) | Measured, Appendix B.4 |
-| `Some(null)` collapse (§7) | Measured, Appendix B.5 |
-| Six-language matrix (§5) | Java in CI; Scala/Kotlin re-measured per B.3–B.4; Groovy, Clojure, JRuby hand-run only |
+| `Some(null)` collapse (§7) | Measured and pinned in CI, Appendix B.5 |
+| Six-language matrix (§5) | Java in CI; Scala/Kotlin re-measured per B.3–B.4 but not yet in CI; Groovy, Clojure, JRuby hand-run only |
 | Lazy collection views | Designed, not built |
 | Polymorphic exports (§4.1) | Argued feasible for unconstrained variables, not built |
 | Java generic type arguments (§7) | Blocked |
@@ -472,13 +480,22 @@ artifact/*.jar <Module>` shows the boxing of §4 end to end:
 `Optional<String>`, `Optional<BigInteger>`, `Optional<Integer>`,
 `Optional<Double>`. Measure this on the export path — see the note in §4.
 
-**B.3 The class/package clash (§5, §7).** A module `Acme.Api` with an export,
-plus a nested `Acme.Api.Deep` with an export, emits `Acme/Api.class` beside the
-directory `Acme/Api/`. Against the resulting `build-jar` artifact, `scalac`
-fails with *"package Acme contains object and package with same name: Api / one
-of them needs to be removed from classpath"*, `kotlinc` with *"unresolved
-reference"*, and `javac` succeeds. Removing `Acme.Api.Deep` leaves the two-level
-control, which all three accept.
+**B.3 The class/package clash (§5).** Build a module tree with exports at
+`Acme.Api`, `Acme.Api.Deep`, `Acme.Api.Deep.Deeper` and `Acme.Quiet.Sub`, whose
+ancestor `Acme.Quiet` exports nothing. `find build/class/Acme` must list only
+files — `Api.class`, `Api$Deep.class`, `Api$Deep$Deeper.class`,
+`Quiet$Sub.class` and their `$Def$` siblings — and no directory, since a
+directory under `Acme` is a package below a facade class. `javap` on the
+`build-jar` artifact confirms the Java-visible names, and `javac`, `scalac` and
+`kotlinc` all compile a consumer calling all four.
+
+To see the defect this replaced, restore `packageOfNamespace` to
+`ns.dropRight(1)`: the tree then emits `Acme/Api.class` beside a directory
+`Acme/Api/`, and `scalac` fails with *"package Acme contains object and package
+with same name: Api / one of them needs to be removed from classpath"* while
+`kotlinc` reports an unresolved reference and `javac` still succeeds. The
+two-level subset compiles under all three either way, which is why a suite whose
+fixtures were two levels deep could not see it.
 
 **B.4 What a missing `Signature` costs (§5).** Compile two Java classes with
 identical descriptors — `Optional<String> find(String)` and a raw
@@ -492,14 +509,23 @@ reports the signed return as `Optional<String!>!` — still a platform type,
 which is the null-safety point of §5.
 
 **B.5 `Some(null)` and `None` are indistinguishable (§7).** Export
-`pub def maybeNull(): Option[String] = Some(unchecked_cast(null as String))`
-beside `pub def none(): Option[String] = None`, then from Java print both and
-compare. Both print `Optional.empty` and `equals` returns `true`.
+`pub def someNull(): Option[String] = Some(unchecked_cast(null as String))`
+beside `pub def none(): Option[String] = None`, then call both from Java and
+compare. Both are `Optional.empty` and `equals` returns `true`.
 
-**In CI.** B.1, B.2 and the §3.1 invariant are covered by the Scala test suite
-(`TestExportedShims`, `TestNamespaceClasses`). B.3 through B.5 are not: they
-need a `build-jar` artifact and, for B.3 and B.4, non-Java toolchains. Wiring
-them in — a fixture per consumer language, skipped when the toolchain is absent
-— is the single highest-value piece of unfinished work in this report, because
-§5's whole
-argument is that the defects it describes are invisible to a Java-only suite.
+**In CI.** B.1, B.2, B.5, the naming property of B.3 and the §3.1 invariant are
+covered by the Scala test suite — `TestJvmName` and `TestNamespaceClasses` for
+the names, `TestExportedShims` for the API surface, and
+`TestExportedShimsRuntime`, which loads a compiled facade in an isolated
+classloader and *calls* it. That last one is what makes B.5 checkable at all:
+`Some(null)` and `None` produce identical descriptors and identical signatures,
+so no amount of bytecode inspection can tell the two outcomes apart.
+
+Still outside CI is the part of B.3 and B.4 that needs a non-Java compiler. The
+unit suite pins the emitted *names*, and names are what the Scala and Kotlin
+failures turn on, so the gap is narrower than it was — but it is the same gap in
+kind, and §5's whole argument is that a Java-only suite cannot observe these
+defects. Pinned Scala and Kotlin toolchains, each compiling a consumer against a
+real artifact, are the remaining work; Groovy, Clojure and JRuby may stay
+optional with a reported skip, since the static consumers are the ones that
+reject.

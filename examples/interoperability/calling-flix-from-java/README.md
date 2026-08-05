@@ -60,12 +60,21 @@ and never sees the class. This is the convention the other JVM languages follow:
 Scala emits `acme.Api$`, Kotlin `acme.ApiKt`, Groovy `acme.Api$_use_closure1`,
 and Clojure compiles the namespace `acme.api` to `acme.api$get_it`.
 
-That removes the clash for a module whose submodules have no code of their own.
-It does not remove it in general: the facade of `Acme.Greeter.Deep` is the class
-`Deep` in package `Acme.Greeter`, which is the class `Acme.Greeter` again. A
-module tree three levels deep therefore still emits `Acme/Greeter.class` beside
-a directory `Acme/Greeter/`, and Scala and Kotlin still reject it. Keep exported
-modules two levels deep until the facade adopts a suffix of its own.
+Only the *first* segment of a module path becomes a package, so this holds at
+any depth: `mod Acme.Greeter.Deep` is the class `Acme.Greeter$Deep`, not `Deep`
+in a package named after the class `Acme.Greeter`. Two-level names — the ones
+above — are unaffected.
+
+```
+mod Acme.Greeter             ->  Acme.Greeter
+mod Acme.Greeter.Deep        ->  Acme.Greeter$Deep
+mod Acme.Greeter.Deep.Inner  ->  Acme.Greeter$Deep$Inner
+```
+
+One case is left: a *top-level* `mod Acme` with a `main` or a `@Test` puts a
+class `Acme` in the unnamed package, which meets the package `Acme` that its
+submodules use. Exports cannot reach it — a one-segment module may not export —
+but avoid giving a top-level module entry points if any submodule has them.
 
 ## Other JVM languages
 
