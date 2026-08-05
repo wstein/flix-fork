@@ -12,7 +12,8 @@ The project uses [Mill](https://mill-build.org/) as its build tool.
 
 `flix init` (`Bootstrap.init`) writes a new project into an existing directory:
 `src/`, `test/`, `.github/workflows/build-and-test.yaml`, `flix.toml`,
-`.gitignore`, `.editorconfig`, `AGENTS.md`, `CLAUDE.md`, `LICENSE.md`, and
+`.gitignore`, `.editorconfig`, `AGENTS.md`, `CLAUDE.md`,
+`.github/copilot-instructions.md`, `LICENSE.md`, and
 `README.md`. Every file is written through `FileOps.newFileIfAbsent`, so running
 `init` in a directory that already has one of them leaves that file untouched —
 new template files must keep that property, since users edit what `init` gives
@@ -27,7 +28,9 @@ file to the project, the same contract `MarkdownDocumentor` uses for pages it
 did not write. `CLAUDE.md` is never rewritten: it is a two-line `@AGENTS.md`
 import (Claude Code reads `CLAUDE.md`, not `AGENTS.md`) and anything a project
 adds below the import is its own. A `CLAUDE.md` without that import loads
-nothing and reports nothing, so `--refresh` says so.
+nothing and reports nothing, so `--refresh` says so. Copilot's
+`.github/copilot-instructions.md` is also written only if absent; it points to
+the root guide and is left for the project to edit or delete.
 
 Four rules bind what may go in the generated guide, and a change that breaks one
 is a bug even though nothing fails to compile:

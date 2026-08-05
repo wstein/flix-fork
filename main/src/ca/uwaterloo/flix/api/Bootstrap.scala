@@ -73,6 +73,7 @@ object Bootstrap {
     val editorConfigFile = getEditorConfigFile(p)
     val agentsFile = getAgentsFile(p)
     val claudeMdFile = getClaudeMdFile(p)
+    val copilotInstructionsFile = getCopilotInstructionsFile(p)
     val licenseFile = getLicenseFile(p)
     val readmeFile = getReadmeFile(p)
     val mainSourceFile = getMainSourceFile(p)
@@ -162,6 +163,10 @@ object Bootstrap {
 
     FileOps.newFileIfAbsent(claudeMdFile) {
       ClaudeMd
+    }
+
+    FileOps.newFileIfAbsent(copilotInstructionsFile) {
+      CopilotInstructions
     }
 
     FileOps.newFileIfAbsent(licenseFile) {
@@ -341,6 +346,18 @@ object Bootstrap {
       |@AGENTS.md
       |""".stripMargin
 
+  /**
+    * The generated GitHub Copilot repository instructions.
+    *
+    * The project guide remains the single source of truth. This small wrapper makes that guide
+    * discoverable from Copilot's repository-wide instruction location without duplicating it.
+    */
+  private val CopilotInstructions: String =
+    """# Flix Project Instructions
+      |
+      |Read and follow [`AGENTS.md`](../AGENTS.md) for this project's commands, layout, and Flix guidance.
+      |""".stripMargin
+
   /** The class file extension. Does not contain leading '.' */
   private val EXT_CLASS: String = "class"
 
@@ -367,6 +384,9 @@ object Bootstrap {
 
   /** The file name Claude Code reads. */
   private val CLAUDE_MD: String = "CLAUDE.md"
+
+  /** The file name GitHub Copilot reads for repository-wide instructions. */
+  private val COPILOT_INSTRUCTIONS_MD: String = "copilot-instructions.md"
 
   /**
     * The opening of the marker comment on a generated agent guide.
@@ -507,6 +527,12 @@ object Bootstrap {
     * Returns the path to the CLAUDE.md file relative to the given path `p`.
     */
   private def getClaudeMdFile(p: Path): Path = p.resolve(s"./$CLAUDE_MD").normalize()
+
+  /**
+    * Returns the path to the GitHub Copilot instructions file relative to the given path `p`.
+    */
+  private def getCopilotInstructionsFile(p: Path): Path =
+    p.resolve(s"./.github/$COPILOT_INSTRUCTIONS_MD").normalize()
 
   /**
     * Returns the path to the jar file based on the given path `p`.

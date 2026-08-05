@@ -48,18 +48,21 @@ class TestBootstrap extends AnyFunSuite {
       s"Markdown is not exempt from whitespace trimming:\n$content")
   }
 
-  test("init writes an agent guide and a CLAUDE.md that imports it") {
+  test("init writes agent instruction files") {
     val p = Files.createTempDirectory(ProjectPrefix)
     Bootstrap.init(p)(System.out).unsafeGet
 
     val guide = p.resolve("AGENTS.md")
     val claudeMd = p.resolve("CLAUDE.md")
+    val copilotInstructions = p.resolve(".github/copilot-instructions.md")
     assert(Files.exists(guide), "init did not write an AGENTS.md")
     assert(Files.exists(claudeMd), "init did not write a CLAUDE.md")
+    assert(Files.exists(copilotInstructions), "init did not write Copilot instructions")
 
     // Claude Code reads CLAUDE.md and not AGENTS.md. Without the import the guide is never
     // loaded, and nothing reports it: the feature just quietly does nothing.
     assert(Files.readString(claudeMd).contains("@AGENTS.md"), "CLAUDE.md does not import AGENTS.md")
+    assert(Files.readString(copilotInstructions).contains("AGENTS.md"), "Copilot instructions do not point to AGENTS.md")
 
     // The guide states which compiler wrote it, so a project that has moved on can tell.
     val content = Files.readString(guide)
@@ -79,17 +82,21 @@ class TestBootstrap extends AnyFunSuite {
     assert(!content.contains("flix format"), s"the guide advertises the formatter stub:\n$content")
   }
 
-  test("init does not overwrite an existing agent guide or CLAUDE.md") {
+  test("init does not overwrite existing agent instruction files") {
     val p = Files.createTempDirectory(ProjectPrefix)
     val guide = p.resolve("AGENTS.md")
     val claudeMd = p.resolve("CLAUDE.md")
+    val copilotInstructions = p.resolve(".github/copilot-instructions.md")
+    Files.createDirectories(copilotInstructions.getParent)
     FileOps.writeString(guide, "my own notes\n")
     FileOps.writeString(claudeMd, "my own instructions\n")
+    FileOps.writeString(copilotInstructions, "my own Copilot instructions\n")
 
     Bootstrap.init(p)(System.out).unsafeGet
 
     assert(Files.readString(guide) == "my own notes\n", "init clobbered a project's own AGENTS.md")
     assert(Files.readString(claudeMd) == "my own instructions\n", "init clobbered a project's own CLAUDE.md")
+    assert(Files.readString(copilotInstructions) == "my own Copilot instructions\n", "init clobbered a project's own Copilot instructions")
   }
 
   test("refresh rewrites a generated guide for the running compiler") {
