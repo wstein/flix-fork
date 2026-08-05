@@ -101,7 +101,15 @@ are derivable there. Pass 1 is the technique `kapt` uses for Kotlin — `javac`'
 parsing does not resolve, so signatures can be read from the parse tree and
 emitted as stubs.
 
-- **Cost:** entirely in the build plugin. Flix is untouched.
+Pass 0 must name Java types the same way the backend does, or a caller compiles
+against a stub the real facade does not match. That mapping lived inside
+`ExportPlan`, which pass 0 cannot construct — it reads tag ordinals off compiled
+enums, and at pass 0 nothing is compiled. `ExportSignature` is the half that
+depends on nothing but the type, extracted so both use it; `ExportPlan` derives
+one rather than holding one, so the two cannot disagree.
+
+- **Cost:** almost entirely in the build plugin. The one compiler change is that
+  extraction, which is a refactor with no behaviour change.
 - **Buys:** mutual references within one source set, no manual partitioning, and
   the `rewrite-fork` bridge becomes ordinary static calls with no source-set split.
 - **Limits:** stubs must be faithful enough for Flix's resolver — signatures,
@@ -165,9 +173,10 @@ the workaround.
 
 ## 5. What this changes for the build plugins
 
-Both plugins currently shell out to `flix.jar`, so neither can do any of this.
-The prerequisite work is the same for both and is worth doing on its own merits
-(see `docs/BUILD-INTEGRATION.md` when written):
+The Mill plugin shells out to `flix.jar`, so it can do none of this. The Gradle
+plugin no longer does: it calls `Bootstrap` inside a Gradle worker process, which
+is what surfaced the embedding blocker in §7. The prerequisite work is the same
+for both and is worth doing on its own merits:
 
 - Invoke the compiler through `ca.uwaterloo.flix.api.Flix` in a worker process
   rather than as a subprocess, so diagnostics arrive as `CompilationMessage`
@@ -195,7 +204,10 @@ instance, or pass 0's parse is thrown away.
   first version invalidates the whole Java side when any Flix `@Export` changes.
   Correct, and coarse.
 
-## 7. Blocker found by running it: Flix does not resolve its own runtime when embedded
+## 7. Blocker found by running it: Flix did not resolve its own runtime when embedded
+
+**Fixed.** The diagnosis is kept because it is a prerequisite an upstream reviewer
+will want to see argued, and because the first reading of it was wrong.
 
 The first consumer build against the new Gradle plugin failed while compiling the
 *standard library*, before reaching any user code:
@@ -224,24 +236,48 @@ class ExternalJarLoader extends URLClassLoader(Array.empty, ClassLoader.getPlatf
 
 `AvailableClasses` is seeded from `ClassList.txt`, which holds JDK platform
 classes only and names none of `dev.flix.runtime`. Java classes are then loaded
-through `ExternalJarLoader`, whose parent is the **platform** class loader — which
-by construction cannot see the application classpath. Under `java -jar flix.jar`
-the runtime classes are reachable anyway; in a worker, where Flix itself is loaded
-by the host's class loader, they are not.
+through `ExternalJarLoader`, whose parent is the **platform** class loader.
+
+The obvious reading is that the platform parent is the bug, since it cannot see
+the application classpath. That reading is wrong, and the next section says why.
 
 **This blocks every embedding, not just joint compilation.** Any build tool that
 calls the compiler API instead of spawning a process hits it on the first
 compile, which is a plausible reason no build tool does.
 
-Candidate fixes, none yet taken:
+### Diagnosis, and the fix taken
 
-- Have `Flix` add the code source of its own classes to `availableClasses` and to
-  the loader, so the runtime is found wherever the compiler was loaded from.
-- Give `ExternalJarLoader` the loader that loaded `Flix` as its parent, rather
-  than the platform loader.
-- Let an embedder supply the loader explicitly, which is the most honest of the
-  three: the host knows its own classpath and the compiler should not guess.
+The first reading above was wrong about the cause, and two experiments settled it
+before anything was changed. Running the *identical* project through the CLI
+succeeded; re-running Gradle after that still failed. So the project and its
+classpath were fine and the difference was in how the compiler was loaded.
 
-The third is the one to propose upstream, with the first as its default. It is a
-small, self-contained change, and it is a **prerequisite for everything in this
-document** — passes 0 and 2 both run embedded.
+The platform parent is not the cause. It is deliberate — it stops compiled Flix
+code reaching the compiler's classes — and a whitelist for exactly these names
+already existed beside it. The cause was what the whitelist resolved *against*:
+
+```scala
+// ExternalJarLoader.findClass, before
+if (name == "dev.flix.runtime.Global") super.findSystemClass(name)
+```
+
+`findSystemClass` searches the loader built from `java.class.path`. That holds
+the compiler only under `java -jar flix.jar`. Embedded — a Gradle worker, an IDE,
+a test harness — the system loader holds the *host's* classpath and the compiler
+sits in a child loader, so the whitelist found nothing.
+
+Fixed in `fix: resolve the Flix runtime from the compiler's own loader, not the
+system one` by resolving against `classOf[ExternalJarLoader].getClassLoader`,
+which is correct in both cases because `dev.flix.runtime` ships in the same
+artifact as that class. The platform parent is untouched; this widens only the
+two names already whitelisted, and only to the artifact they are already part of.
+
+Verified by the full suite — 88 suites, 0 aborted, 16,946 tests, 0 failures. That
+is the relevant evidence rather than a smoke test: `dev.flix.test.*` is the other
+whitelisted prefix, so `StandardLibrarySuite` and every Flix test file naming a
+test Java class exercise the changed path directly.
+
+**Still worth proposing upstream on top of it:** letting an embedder supply the
+loader explicitly. The host knows its own classpath and the compiler should not
+have to infer it. The fix above is the right default and removes the blocker; an
+explicit hook is the honest interface.
