@@ -862,6 +862,53 @@ class TestEntryPoints extends AnyFunSuite with TestUtils {
     expectError[EntryPointError.IllegalExportType](result)
   }
 
+  test("Test.ExportList.01") {
+    // `List` in return position is converted to an unmodifiable `java.util.List` by the shim.
+    val input =
+      """
+        |mod Pkg { }
+        |mod Pkg.Mod { @Export pub def names(): List[String] = "a" :: Nil }
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibAll)
+    expectSuccess(result)
+  }
+
+  test("Test.ExportList.02") {
+    // The element must itself be exportable. An element with no plan would fall through to a shim
+    // returning the internal tag class, which is the failure J16 exists to prevent, so the gate
+    // and the solver admit exactly the same set.
+    val input =
+      """
+        |mod Pkg { }
+        |mod Pkg.Mod { @Export pub def f(): List[List[String]] = ("a" :: Nil) :: Nil }
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibAll)
+    expectError[EntryPointError.IllegalExportType](result)
+  }
+
+  test("Test.ExportList.03") {
+    // Nested containers are rejected for the same reason, and the error points at the element
+    // rather than at the `List` that contains it.
+    val input =
+      """
+        |mod Pkg { }
+        |mod Pkg.Mod { @Export pub def f(): List[Option[String]] = None :: Nil }
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibAll)
+    expectError[EntryPointError.IllegalExportType](result)
+  }
+
+  test("Test.ExportList.04") {
+    // Return position only: a parameter would need the reverse conversion, which does not exist.
+    val input =
+      """
+        |mod Pkg { }
+        |mod Pkg.Mod { @Export pub def f(xs: List[String]): Int32 = List.length(xs) }
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibAll)
+    expectError[EntryPointError.IllegalExportType](result)
+  }
+
   test("Test.ExportPolymorphic.01") {
     // An unconstrained type variable is exported as `java.lang.Object`. The monomorpher defaults
     // it to `AnyType`, which is represented as `Object`, so the boundary needs no special case.

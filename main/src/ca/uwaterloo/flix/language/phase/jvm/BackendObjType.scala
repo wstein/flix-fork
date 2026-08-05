@@ -1503,7 +1503,7 @@ object BackendObjType {
     private def shimIns(defn: JvmAst.Def)(implicit root: JvmAst.Root, mv: MethodVisitor): Unit = {
       val defnT = Defn(defn.sym)
       withNames(0, shimParamTypes(defn)) {
-        case (_, args) =>
+        case (nextLocal, args) =>
           NEW(defnT.jvmName)
           DUP()
           INVOKESPECIAL(ConstructorMethod(defnT.jvmName, Nil))
@@ -1531,7 +1531,7 @@ object BackendObjType {
             // Java type that is only being described starts as itself, and reading it as a tag
             // emits a cast that fails verification rather than a conversion.
             Result.unwindSuspensionFreeThunkToType(plan.flixType, hint, defn.loc)
-            plan.emit(defn.loc)
+            plan.emit(defn.loc, nextLocal)
             xReturn(plan.javaType)
           } else {
             val resultType = shimType(defn, defn.unboxedType.tpe)

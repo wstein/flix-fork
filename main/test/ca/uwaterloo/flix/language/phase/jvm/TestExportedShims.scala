@@ -297,6 +297,25 @@ class TestExportedShims extends AnyFunSuite {
     assert(descriptors.get("add").contains("(II)I"))
   }
 
+  test("an exported List is presented as a java.util.List") {
+    val (descriptors, signatures) = membersOf(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    @Export
+        |    pub def names(): List[String] = "a" :: "b" :: Nil
+        |
+        |    @Export
+        |    pub def numbers(): List[Int32] = 1 :: 2 :: Nil
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin, "Pkg/Mod")
+    assert(descriptors.get("names").contains("()Ljava/util/List;"))
+    assert(signatures.get("names").contains("()Ljava/util/List<Ljava/lang/String;>;"))
+    // A `List` holds references, so a primitive element is boxed -- as an `Optional` element is.
+    assert(signatures.get("numbers").contains("()Ljava/util/List<Ljava/lang/Integer;>;"))
+  }
+
   test("no return type the front end accepts leaks the Flix representation") {
     // `EntryPoints` decides what may be exported and `ExportPlan` decides how, over different type
     // representations, so a gate widened ahead of a plan compiles into a shim that falls through
@@ -320,7 +339,11 @@ class TestExportedShims extends AnyFunSuite {
       "Option[Int32]" -> "Some(1)",
       "Option[Float64]" -> "Some(1.0f64)",
       "Option[BigInt]" -> "Some(1ii)",
-      "Option[Regex]" -> "Some(regex\"a\")"
+      "Option[Regex]" -> "Some(regex\"a\")",
+      "List[String]" -> "\"s\" :: Nil",
+      "List[Int32]" -> "1 :: Nil",
+      "List[Float64]" -> "1.0f64 :: Nil",
+      "List[BigInt]" -> "1ii :: Nil"
     )
     val defs = returnTypes.zipWithIndex.map {
       case ((tpe, value), i) => s"    @Export\n    pub def f$i(): $tpe = $value"

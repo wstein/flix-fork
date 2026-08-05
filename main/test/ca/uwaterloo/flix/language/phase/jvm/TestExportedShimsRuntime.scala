@@ -180,6 +180,51 @@ class TestExportedShimsRuntime extends AnyFunSuite {
     }
   }
 
+  test("an exported List arrives with its elements, in order") {
+    // The conversion walks a cons chain with a loop, so order, the empty case, and the boundary
+    // between the last element and `Nil` are all things only running it can check.
+    withFacade(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    @Export
+        |    pub def names(): List[String] = "a" :: "b" :: "c" :: Nil
+        |
+        |    @Export
+        |    pub def none(): List[String] = Nil
+        |
+        |    @Export
+        |    pub def numbers(): List[Int32] = 1 :: 2 :: 3 :: Nil
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin, "Pkg.Mod") { facade =>
+      val names = invoke(facade, "names").asInstanceOf[java.util.List[?]]
+      assertResult(java.util.List.of("a", "b", "c"))(names)
+      assertResult(java.util.List.of())(invoke(facade, "none"))
+      // A `List` holds references, so the element is a real `Integer`, not Flix's own box.
+      val numbers = invoke(facade, "numbers").asInstanceOf[java.util.List[?]]
+      assertResult(java.util.List.of(1, 2, 3))(numbers)
+      assertResult(classOf[java.lang.Integer])(numbers.get(0).getClass)
+    }
+  }
+
+  test("an exported List cannot be written to") {
+    // A Flix list is immutable. Handing back a mutable copy would invite a caller to write to
+    // something that looks like the Flix value and is not.
+    withFacade(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    @Export
+        |    pub def names(): List[String] = "a" :: Nil
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin, "Pkg.Mod") { facade =>
+      val names = invoke(facade, "names").asInstanceOf[java.util.List[Any]]
+      assertThrows[UnsupportedOperationException](names.add("b"))
+    }
+  }
+
   test("an exported polymorphic def round-trips any reference") {
     // The monomorpher defaults the unconstrained variable to `AnyType`, which is represented as
     // `Object`. The point of calling it rather than reading the descriptor is that the def is

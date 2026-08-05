@@ -60,8 +60,12 @@ sealed trait ExportPlan {
     * Emits the conversion.
     *
     * `[..., flix value] --> [..., java value]`
+    *
+    * `nextLocal` is the first local variable slot the enclosing method is not already using.
+    * Walking a data structure needs somewhere to keep its cursor, and a shim's own parameters own
+    * the slots below it.
     */
-  def emit(loc: SourceLocation)(implicit root: JvmAst.Root, mv: MethodVisitor): Unit
+  def emit(loc: SourceLocation, nextLocal: Int)(implicit root: JvmAst.Root, mv: MethodVisitor): Unit
 }
 
 object ExportPlan {
@@ -72,7 +76,7 @@ object ExportPlan {
 
     def typeArgument: String = javaType.toDescriptor
 
-    def emit(loc: SourceLocation)(implicit root: JvmAst.Root, mv: MethodVisitor): Unit = ()
+    def emit(loc: SourceLocation, nextLocal: Int)(implicit root: JvmAst.Root, mv: MethodVisitor): Unit = ()
   }
 
   /**
@@ -89,7 +93,7 @@ object ExportPlan {
 
     def typeArgument: String = s"L${clazz.toInternalName}<${targs.map(_.typeArgument).mkString}>;"
 
-    def emit(loc: SourceLocation)(implicit root: JvmAst.Root, mv: MethodVisitor): Unit = ()
+    def emit(loc: SourceLocation, nextLocal: Int)(implicit root: JvmAst.Root, mv: MethodVisitor): Unit = ()
   }
 
   /** A primitive that must be boxed, because the value it is being placed into holds references. */
@@ -100,7 +104,7 @@ object ExportPlan {
 
     def typeArgument: String = boxed.toDescriptor
 
-    def emit(loc: SourceLocation)(implicit root: JvmAst.Root, mv: MethodVisitor): Unit =
+    def emit(loc: SourceLocation, nextLocal: Int)(implicit root: JvmAst.Root, mv: MethodVisitor): Unit =
       INVOKESTATIC(boxed, "valueOf", mkDescriptor(primitive)(boxed.toTpe))
   }
 
@@ -117,7 +121,7 @@ object ExportPlan {
 
     def typeArgument: String = s"L${JvmName.Optional.toInternalName}<${element.typeArgument}>;"
 
-    def emit(loc: SourceLocation)(implicit root: JvmAst.Root, mv: MethodVisitor): Unit = {
+    def emit(loc: SourceLocation, nextLocal: Int)(implicit root: JvmAst.Root, mv: MethodVisitor): Unit = {
       DUP()
       GETFIELD(BackendObjType.Tagged.OrdinalField)
       pushInt(noneOrdinal)
@@ -127,10 +131,67 @@ object ExportPlan {
       } {
         CHECKCAST(someTag.jvmName)
         GETFIELD(someTag.IndexField(0))
-        element.emit(loc)
+        element.emit(loc, nextLocal)
         // `ofNullable` rather than `of`: a `Some` may hold a Java value that is itself null, and
         // `of` would turn that into a NullPointerException at the boundary.
         INVOKESTATIC(JvmName.Optional, "ofNullable", mkDescriptor(BackendType.Object)(javaType))
+      }
+    }
+  }
+
+  /**
+    * A Flix `List` presented as an unmodifiable `java.util.List`.
+    *
+    * The copy is eager. A lazy view over the cons chain would allocate O(1) instead of O(n), but
+    * it is a class with a published contract -- mutability, iteration, `size()` -- that has to be
+    * settled before it ships rather than after, and for a primitive element it re-converts on
+    * every traversal, which is worse than copying once. The copy is the conservative half of that
+    * trade and can be replaced without the caller noticing, since what a caller is handed is a
+    * `java.util.List` either way.
+    *
+    * Unmodifiable because a Flix list is immutable and a mutable copy would invite a caller to
+    * write to something that looks like the Flix value and is not.
+    */
+  case class AsList(element: ExportPlan, nilOrdinal: Int, consTag: BackendObjType.Tag) extends ExportPlan {
+    def flixType: BackendType = BackendObjType.Tagged.toTpe
+
+    def javaType: BackendType = BackendObjType.Native(JvmName.JavaList).toTpe
+
+    def typeArgument: String = s"L${JvmName.JavaList.toInternalName}<${element.typeArgument}>;"
+
+    def emit(loc: SourceLocation, nextLocal: Int)(implicit root: JvmAst.Root, mv: MethodVisitor): Unit = {
+      val arrayList = BackendObjType.Native(JvmName.ArrayList).toTpe
+      // The chain is walked with a cursor rather than on the stack: keeping both the accumulator
+      // and the cursor as stack values needs the operand stack shuffled on every iteration, which
+      // is easy to get subtly wrong and impossible to read afterwards.
+      withName(nextLocal, BackendObjType.Tagged.toTpe) { cursor =>
+        withName(nextLocal + 1, arrayList) { acc =>
+          cursor.store()
+          NEW(JvmName.ArrayList)
+          DUP()
+          INVOKESPECIAL(JvmName.ArrayList, JvmName.ConstructorMethod, mkDescriptor()(VoidableType.Void))
+          acc.store()
+          whileLoop(Condition.ICMPNE) {
+            cursor.load()
+            GETFIELD(BackendObjType.Tagged.OrdinalField)
+            pushInt(nilOrdinal)
+          } {
+            acc.load()
+            cursor.load()
+            CHECKCAST(consTag.jvmName)
+            GETFIELD(consTag.IndexField(0))
+            element.emit(loc, nextLocal + 2)
+            INVOKEVIRTUAL(JvmName.ArrayList, "add", mkDescriptor(BackendType.Object)(BackendType.Bool))
+            POP()
+            cursor.load()
+            CHECKCAST(consTag.jvmName)
+            GETFIELD(consTag.IndexField(1))
+            CHECKCAST(BackendObjType.Tagged.jvmName)
+            cursor.store()
+          }
+          acc.load()
+          INVOKESTATIC(JvmName.Collections, "unmodifiableList", mkDescriptor(javaType)(javaType))
+        }
       }
     }
   }
@@ -146,6 +207,9 @@ object ExportPlan {
       case SimpleType.Enum(sym, List(element)) if isOption(sym) =>
         val (noneOrdinal, someTag) = optionTags(erased)
         Some(AsOptional(elementPlan(element, someTag.elms.head), noneOrdinal, someTag))
+      case SimpleType.Enum(sym, List(element)) if isList(sym) =>
+        val (nilOrdinal, consTag) = listTags(erased)
+        Some(AsList(elementPlan(element, consTag.elms.head), nilOrdinal, consTag))
       case SimpleType.Native(clazz, targs) if targs.nonEmpty =>
         // Only when every argument can be described. A Flix type argument, say
         // `ArrayList[SomeEnum]`, has no name a caller may depend on, and writing one would publish
@@ -191,6 +255,23 @@ object ExportPlan {
   /** Returns `true` if `sym` is the standard library's `Option`. */
   private def isOption(sym: ca.uwaterloo.flix.language.ast.Symbol.EnumSym): Boolean =
     sym.namespace.isEmpty && sym.text == "Option"
+
+  /** Returns `true` if `sym` is the standard library's `List`. */
+  private def isList(sym: ca.uwaterloo.flix.language.ast.Symbol.EnumSym): Boolean =
+    sym.namespace.isEmpty && sym.text == "List"
+
+  /** Returns the ordinal of `Nil` and the tag class of `Cons` for the specialized `List`. */
+  private def listTags(erased: SimpleType)(implicit root: JvmAst.Root): (Int, BackendObjType.Tag) = {
+    val sym = erased match {
+      case SimpleType.Enum(s, _) => s
+      case other => throw InternalCompilerException(s"Exported List is not an enum: '$other'", SourceLocation.Unknown)
+    }
+    val cases = root.enums(sym).cases
+    def caseNamed(name: String) = cases.keys.find(_.name == name).getOrElse(
+      throw InternalCompilerException(s"Exported List has no $name case: '$sym'", SourceLocation.Unknown))
+    val cons = caseNamed("Cons")
+    (caseNamed("Nil").ordinal, BackendObjType.Tag(cases(cons).tpes.map(BackendType.toErasedBackendType)))
+  }
 
   /**
     * Returns the plan for a value held inside a converted container.

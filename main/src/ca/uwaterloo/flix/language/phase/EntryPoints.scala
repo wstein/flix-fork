@@ -483,15 +483,18 @@ object EntryPoints {
       case List(tpe) if isUnitType(tpe) == Result.Ok(true) => Nil
       case tpes => tpes
     }
-    // `Option[t]` is exportable in return position, where the shim marshals it into
-    // `java.util.Optional`. It is not exportable as a parameter: that would need the reverse
-    // conversion, which has no obvious answer for a Java caller passing `Optional.empty()` to a
-    // function whose Flix type is not optional. What must be exportable is the element type, so
-    // that is what is checked, and an error points at it rather than at the `Option`.
+    // `Option[t]` and `List[t]` are exportable in return position, where the shim marshals them
+    // into `java.util.Optional` and an unmodifiable `java.util.List`. Neither is exportable as a
+    // parameter, which would need the reverse conversion. What must be exportable is the element
+    // type, so that is what is checked, and an error points at it rather than at the container.
+    //
+    // Only the element, and only one level: an element that is itself a container has no plan, so
+    // admitting `List[Option[t]]` here would produce a shim returning the internal tag class. The
+    // gate and the solver are widened together, never one ahead of the other.
     val retTpe = defn.spec.retTpe
     val returnTypes =
       if (isUnitType(retTpe) == Result.Ok(true)) Nil
-      else List(unapplyOption(retTpe).getOrElse(retTpe))
+      else List(unapplyContainer(retTpe).getOrElse(retTpe))
     val types = returnTypes ::: paramTypes
     types.flatMap(tpe => {
       isExportableType(tpe) match {
@@ -518,6 +521,24 @@ object EntryPoints {
     case Type.Alias(_, _, t, _) => unapplyOption(t)
     case _ => None
   }
+
+  /** Returns the element type of `tpe` if it is the standard library's `List[t]`. */
+  @tailrec
+  private def unapplyList(tpe: Type): Option[Type] = tpe match {
+    case Type.Apply(Type.Cst(TypeConstructor.Enum(sym, _), _), elm, _)
+      if sym.namespace.isEmpty && sym.text == "List" => Some(elm)
+    case Type.Alias(_, _, t, _) => unapplyList(t)
+    case _ => None
+  }
+
+  /**
+    * Returns the element type of `tpe` if it is a container the shim converts.
+    *
+    * This must admit exactly what `ExportPlan.of` can build, no more: a type accepted here without
+    * a plan compiles into a shim that returns the internal tag class instead of failing.
+    */
+  private def unapplyContainer(tpe: Type): Option[Type] =
+    unapplyOption(tpe).orElse(unapplyList(tpe))
 
   /**
     * Returns `true` if `tpe` is a valid Java type that can be exported.
