@@ -500,7 +500,12 @@ object Lowering {
     case TypedAst.Expr.InvokeSuperConstructor(constructor, exps, tpe, eff, loc) =>
       val es = exps.map(lowerExp)
       val t = lowerType(tpe)
-      MonoAst.Expr.ApplyAtomic(AtomicOp.InvokeSuperConstructor(constructor), es, t, eff, loc)
+      // Box primitive args, exactly as `InvokeConstructor` above: extending a generic class at a
+      // primitive, `new TestGenericAbstractClass[Int32] { def new() = super(1) }`, passes an
+      // `Int32` where the erased constructor takes `Object`.
+      val javaParamTypes = constructor.getParameterTypes
+      val boxedArgs = es.zip(javaParamTypes).map { case (arg, paramType) => boxIfNecessary(arg, paramType) }
+      MonoAst.Expr.ApplyAtomic(AtomicOp.InvokeSuperConstructor(constructor), boxedArgs, t, eff, loc)
 
     case TypedAst.Expr.InvokeMethod(method, exp, exps, tpe, eff, loc) =>
       val e = lowerExp(exp)
@@ -519,9 +524,17 @@ object Lowering {
     case TypedAst.Expr.InvokeSuperMethod(method, exps, tpe, eff, loc) =>
       val es = exps.map(lowerExp)
       val t = lowerType(tpe)
+      // Box primitive args and unbox `Object` returns, exactly as `InvokeMethod` below: a
+      // `super.getValue()` on a class extended at a primitive returns the erased `Object`.
+      val javaParamTypes = method.getParameterTypes
+      val boxedArgs = es.zip(javaParamTypes).map { case (arg, paramType) => boxIfNecessary(arg, paramType) }
+      val javaReturnType = method.getReturnType
+      val needsUnbox = isPrimType(t) && !javaReturnType.isPrimitive
+      val invokeType = if (needsUnbox) boxedWrapperType(t, loc) else t
       (lctx.sym, lctx.thisRef) match {
         case (Some(sym), Some(thisRef)) =>
-          MonoAst.Expr.ApplyAtomic(AtomicOp.InvokeSuperMethod(sym, method), thisRef :: es, t, eff, loc)
+          val invoke = MonoAst.Expr.ApplyAtomic(AtomicOp.InvokeSuperMethod(sym, method), thisRef :: boxedArgs, invokeType, eff, loc)
+          unboxIfNecessary(invoke, t, javaReturnType)
         case _ =>
           throw InternalCompilerException("InvokeSuperMethod outside NewObject context", loc)
       }

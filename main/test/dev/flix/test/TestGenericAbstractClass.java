@@ -20,4 +20,9 @@ public abstract class TestGenericAbstractClass<T> {
     public String describe() {
         return "value=" + value.toString();
     }
+
+    /** A concrete method taking the type parameter, so `super.echo(x)` has an argument to bridge. */
+    public T echo(T input) {
+        return input;
+    }
 }
