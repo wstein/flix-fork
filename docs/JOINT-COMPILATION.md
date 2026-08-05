@@ -194,3 +194,54 @@ instance, or pass 0's parse is thrown away.
   in one analysis. Flix's `dependencyGraph` has no Java nodes at all, so the
   first version invalidates the whole Java side when any Flix `@Export` changes.
   Correct, and coarse.
+
+## 7. Blocker found by running it: Flix does not resolve its own runtime when embedded
+
+The first consumer build against the new Gradle plugin failed while compiling the
+*standard library*, before reaching any user code:
+
+```
+-- Resolution Error [E1803] ------------------------------- Sys/Env.flix
+>> Undefined Java class 'dev.flix.runtime.Global'.
+21 |     import dev.flix.runtime.Global
+```
+
+The compiler ran — `Bootstrap` and `Flix` loaded and reported a normal Flix
+diagnostic — so this is not a classpath mistake in the plugin. It is the
+embedding path itself.
+
+Two facts locate it:
+
+```console
+$ grep -c "dev.flix.runtime" main/src/ca/uwaterloo/flix/util/ClassList.txt
+0
+```
+
+```scala
+// ExternalJarLoader.scala:26
+class ExternalJarLoader extends URLClassLoader(Array.empty, ClassLoader.getPlatformClassLoader)
+```
+
+`AvailableClasses` is seeded from `ClassList.txt`, which holds JDK platform
+classes only and names none of `dev.flix.runtime`. Java classes are then loaded
+through `ExternalJarLoader`, whose parent is the **platform** class loader — which
+by construction cannot see the application classpath. Under `java -jar flix.jar`
+the runtime classes are reachable anyway; in a worker, where Flix itself is loaded
+by the host's class loader, they are not.
+
+**This blocks every embedding, not just joint compilation.** Any build tool that
+calls the compiler API instead of spawning a process hits it on the first
+compile, which is a plausible reason no build tool does.
+
+Candidate fixes, none yet taken:
+
+- Have `Flix` add the code source of its own classes to `availableClasses` and to
+  the loader, so the runtime is found wherever the compiler was loaded from.
+- Give `ExternalJarLoader` the loader that loaded `Flix` as its parent, rather
+  than the platform loader.
+- Let an embedder supply the loader explicitly, which is the most honest of the
+  three: the host knows its own classpath and the compiler should not guess.
+
+The third is the one to propose upstream, with the first as its default. It is a
+small, self-contained change, and it is a **prerequisite for everything in this
+document** — passes 0 and 2 both run embedded.
