@@ -1477,10 +1477,12 @@ object BackendObjType {
     /**
       * The generic signature of the shim method of `defn`, when it has type arguments to declare.
       *
-      * A descriptor cannot express `Optional<String>`, so without this the return type arrives
-      * raw: Java warns about an unchecked conversion, Scala refuses to assign `Optional[?]` to
-      * `Optional[String]`, and Kotlin degrades it to the platform type `Optional<Any!>`, which
-      * silently switches off its null-safety for the value.
+      * A descriptor cannot express `Optional<String>`, so without this the element type is lost and
+      * only Java can still be made to compile, by naming the type at the use site and accepting an
+      * unchecked conversion. Scala 3 and Kotlin both reject the raw value outright.
+      *
+      * The signature restores the element type, not nullability: Kotlin reads even a signed return
+      * as the platform type `Optional<String!>!`, because the shim carries no nullness annotations.
       */
     private def shimSignature(defn: JvmAst.Def)(implicit root: JvmAst.Root): Option[String] =
       exportPlan(defn).map { plan =>

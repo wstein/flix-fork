@@ -60,16 +60,21 @@ and never sees the class. This is the convention the other JVM languages follow:
 Scala emits `acme.Api$`, Kotlin `acme.ApiKt`, Groovy `acme.Api$_use_closure1`,
 and Clojure compiles the namespace `acme.api` to `acme.api$get_it`.
 
+That removes the clash for a module whose submodules have no code of their own.
+It does not remove it in general: the facade of `Acme.Greeter.Deep` is the class
+`Deep` in package `Acme.Greeter`, which is the class `Acme.Greeter` again. A
+module tree three levels deep therefore still emits `Acme/Greeter.class` beside
+a directory `Acme/Greeter/`, and Scala and Kotlin still reject it. Keep exported
+modules two levels deep until the facade adopts a suffix of its own.
+
 ## Other JVM languages
 
 Nothing here is Java-specific — an exported function is an ordinary static
-method. The example is verified against Java, Scala 3, Kotlin, Groovy, Clojure
-and JRuby.
+method. Java is what the test suite checks; Scala 3, Kotlin, Groovy, Clojure and
+JRuby were run against this example by hand, on a two-level module.
 
-Scala and Kotlin see the erased signature, so a generic return type arrives raw:
-`Optional` rather than `Optional<String>`. Scala needs an ascription to recover
-it and Kotlin treats it as a platform type. Each language converts with its own
-standard bridge, so Flix needs no per-language support:
+Each language converts with its own standard bridge, so Flix needs no
+per-language support:
 
 ```scala
 import scala.jdk.OptionConverters.*
@@ -117,10 +122,21 @@ Optional<String> miss = Acme.Greeter.find("z");  // Optional.empty
 ```
 
 The element type is declared in the method's `Signature`, so Java, Scala and
-Kotlin all see `Optional<String>` rather than a raw `Optional`. An element that
-is a primitive is boxed, since an `Optional` holds references: `Option[Int32]`
-is `Optional<Integer>`. The element must itself be exportable, so a nested
-`Option[Option[t]]` is rejected.
+Kotlin all see `Optional<String>` rather than a raw `Optional`. Without it only
+Java would still compile, by naming the type at the use site and taking an
+unchecked conversion; Scala 3 and Kotlin both reject a raw return. The signature
+carries the element type, not nullability — Kotlin still reads the result as the
+platform type `Optional<String!>!`, since the shim emits no nullness
+annotations.
+
+An element that is a primitive is boxed, since an `Optional` holds references:
+`Option[Int32]` is `Optional<Integer>`. The element must itself be exportable,
+so a nested `Option[Option[t]]` is rejected.
+
+One conversion is lossy. The shim uses `Optional.ofNullable`, so a `Some` whose
+payload is a Java `null` arrives as `Optional.empty()` — the same value `None`
+produces. `Optional.of` would raise a `NullPointerException` at the boundary
+instead; absence and a null payload cannot both be represented.
 
 `Option` is *not* exportable as a parameter. That would need the reverse
 conversion, and there is no answer for a Java caller passing `Optional.empty()`

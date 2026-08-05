@@ -146,9 +146,9 @@ class TestExportedShims extends AnyFunSuite {
   }
 
   test("an exported Option declares its element type in the signature") {
-    // A descriptor cannot express `Optional<String>`. Without the signature the return arrives raw:
-    // Java warns, Scala refuses to assign it to `Optional[String]`, and Kotlin degrades it to a
-    // platform type and switches off its null-safety for the value.
+    // A descriptor cannot express `Optional<String>`. Without the signature the element type is
+    // lost: Java still compiles if the use site names the type and takes an unchecked conversion,
+    // while Scala 3 and Kotlin both reject the raw value.
     val signatures = signaturesOf(
       """mod Pkg { }
         |mod Pkg.Mod {
