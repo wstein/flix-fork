@@ -830,8 +830,75 @@ footing, and it has not.
 - **flix/flix#8592** — interop logic is duplicated across the compiler.
   `ExportPlan` is a local answer for one direction of one boundary, not the
   compiler-wide abstraction that issue asks for. J4 should be read as evidence
-  that the approach generalizes, not as the generalization.
+  that the approach generalizes, not as the generalization. A first pass over
+  the duplication itself is J19; the issue stays open.
 
 **Rejected:** presenting `ExportPlan` as *the* interop abstraction. It converts
 outbound return values and nothing else; the shared conversion helpers #12972
 and #8592 call for would subsume it, and that is the right direction of travel.
+
+---
+
+## J19 — Interop facts are collected only where they were stated twice
+
+**Status: Settled**, for the five collections below. flix/flix#8592 stays open;
+this is a first pass over it, not a closure of it.
+
+#8592 asks for the compiler's JVM-interop helpers to be gathered, naming
+`TypeReduction`, `Loader`, `Safety` and `JvmOps` and giving "is this jvm method
+static" as the example. Surveying it produced a sharper statement of the
+problem than "helpers are scattered": a handful of *facts about the JVM* were
+each written down several times, in phases that have to agree about them.
+
+Five were collected, and the criterion in every case was that the fact already
+had more than one statement:
+
+1. **The eight primitives and their boxing.** Stated six times — the box,
+   unbox and wrapper tables in `Lowering`, its list of unboxing method names,
+   its `isPrimType`, and the unboxing check in `TypeReduction2`. Now
+   `JvmUtils.Primitives`. Neither method name is listed: boxing is always
+   `valueOf`, unboxing is always the primitive's own name plus `Value`, so the
+   rows are derived rather than transcribed.
+2. **`Modifier.isStatic(x.getModifiers)`.** Written out in three places while
+   `JvmUtils.isStatic` existed — including inside `JvmUtils` itself, and in a
+   file already calling it twice elsewhere. This is #8592's own example.
+3. **The argument cast on an inbound call.** The `CHECKCAST`-unless-primitive
+   loop appeared at all five invoke forms in `GenExpression`. Now
+   `compileJavaCallArgs`, beside `castFromJavaType` — the same rule for the
+   result, in the other direction.
+4. **The primitive-to-wrapper mapping in `ExportPlan`.** Two copies, added the
+   same day, for the two positions a primitive can reach the boundary in.
+5. **`Class` for a Flix type.** `TypeReduction2.getJavaType` restated thirteen
+   rows of `Type.classFromFlixType`, in a file that already called the latter.
+   It now handles only what `classFromFlixType` does not — `Null`, arrays,
+   vectors, and the functional-interface mapping — and delegates the rest.
+
+Why this is worth doing at all, given none of it changes behavior: the typer
+decides whether a Java call resolves and monomorphization inserts the
+conversions that make the resolved call verify. Those two must agree about
+boxing while stating the rule separately, which is the shape #12972 had, and
+five copies of the argument cast is five places to omit it, which is what
+#12970 is (J18).
+
+**Rejected: moving the single-caller helpers.** `Safety.isPublicClass`,
+`Safety.isAbstractMethod`, `Safety.hasNonPrivateZeroArgConstructor`,
+`ConstraintGen`'s `isFinal` check, and
+`GenAnonymousClasses.javaClassToBackendType` are each the only statement of
+their fact. Collecting them would relocate one-liners and add unused API to
+`JvmUtils` on the theory that a second caller appears. The rule applied here is
+that a helper moves when it has been copied, not when it might be.
+
+**Rejected: presenting this as what #8592 asked for.** The issue's list is
+about `Loader` and `JvmOps` too, which this pass did not reach, and its title
+is "collect interop functions" rather than "remove duplicated tables". What is
+done is the duplication; the wider question of where interop logic *belongs* is
+untouched.
+
+Equivalence was argued case by case rather than assumed, and one hazard turned
+up: routing `getJavaType`'s fallback through `classFromFlixType` would change
+behavior if `Type.baseType` unwrapped a `Type.Alias` to the Java class beneath
+it, since the old code fell through to `Object`. It does not — `Alias` extends
+`BaseType`, so `baseType` returns the alias itself. Probing further showed the
+question is moot in practice: `String.concat(String)` resolves through an
+alias-typed parameter, and it has no `Object` overload to fall back on, so an
+alias is not reaching `getJavaType` unresolved in the first place.
