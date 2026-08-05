@@ -539,7 +539,7 @@ object TypeReduction2 {
     */
   private def buildTypeVarSubstitution(method: Method, typeArgs: List[Type]): Map[String, Type] = {
     val classParamNames: Array[String] =
-      if (java.lang.reflect.Modifier.isStatic(method.getModifiers)) Array.empty
+      if (JvmUtils.isStatic(method)) Array.empty
       else method.getDeclaringClass.getTypeParameters.map(_.getName)
     val methodParamNames: Array[String] = method.getTypeParameters.map(_.getName)
     val allParamNames = classParamNames ++ methodParamNames

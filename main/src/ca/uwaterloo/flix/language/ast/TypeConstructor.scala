@@ -3,6 +3,7 @@ package ca.uwaterloo.flix.language.ast
 import ca.uwaterloo.flix.language.ast.shared.ScalaAnnotations.{EliminatedBy, IntroducedBy}
 import ca.uwaterloo.flix.language.phase.monomorph.Specialization
 import ca.uwaterloo.flix.language.phase.{Kinder, monomorph, Simplifier}
+import ca.uwaterloo.flix.util.JvmUtils
 
 import java.lang.reflect.{Constructor, Field, Method}
 import scala.collection.immutable.SortedSet
@@ -297,7 +298,7 @@ object TypeConstructor {
     * Type arguments are applied via `Type.Apply`, e.g., `JvmMethod(ArrayList.get)[String]`.
     */
   case class JvmMethod(method: Method) extends TypeConstructor {
-    val numClassParams: Int = if (java.lang.reflect.Modifier.isStatic(method.getModifiers)) 0
+    val numClassParams: Int = if (JvmUtils.isStatic(method)) 0
                               else method.getDeclaringClass.getTypeParameters.length
     val numMethodParams: Int = method.getTypeParameters.length
     def kind: Kind = Kind.mkArrowTo(numClassParams + numMethodParams, Kind.Jvm)

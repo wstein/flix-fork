@@ -250,7 +250,7 @@ object JvmUtils {
     */
   def resolveTypeParamMapping(method: Method, instantiatedClass: Class[?]): Map[String, Int] = {
     val declaringClass = method.getDeclaringClass
-    if (Modifier.isStatic(method.getModifiers)) return Map.empty
+    if (isStatic(method)) return Map.empty
     if (declaringClass == instantiatedClass) {
       // Method declared directly on the class — identity mapping.
       instantiatedClass.getTypeParameters.map(_.getName).zipWithIndex.toMap
