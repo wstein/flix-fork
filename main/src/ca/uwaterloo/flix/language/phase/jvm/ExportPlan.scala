@@ -245,15 +245,11 @@ object ExportPlan {
     * Unlike [[elementPlan]] there is no erased type to consult, because nothing is converted: this
     * only ever produces the text of a signature.
     */
-  private def typeArgumentPlan(declared: SimpleType): Option[ExportPlan] = declared match {
-    case SimpleType.Bool => Some(Boxed(BackendType.Bool, JvmName.Boolean))
-    case SimpleType.Char => Some(Boxed(BackendType.Char, JvmName.Character))
-    case SimpleType.Int8 => Some(Boxed(BackendType.Int8, JvmName.Byte))
-    case SimpleType.Int16 => Some(Boxed(BackendType.Int16, JvmName.Short))
-    case SimpleType.Int32 => Some(Boxed(BackendType.Int32, JvmName.Integer))
-    case SimpleType.Int64 => Some(Boxed(BackendType.Int64, JvmName.Long))
-    case SimpleType.Float32 => Some(Boxed(BackendType.Float32, JvmName.Float))
-    case SimpleType.Float64 => Some(Boxed(BackendType.Float64, JvmName.Double))
+  private def typeArgumentPlan(declared: SimpleType): Option[ExportPlan] =
+    boxedPlan(BackendType.toErasedBackendType(declared)).orElse(nonPrimitiveTypeArgumentPlan(declared))
+
+  /** The part of [[typeArgumentPlan]] that applies once boxing has been ruled out. */
+  private def nonPrimitiveTypeArgumentPlan(declared: SimpleType): Option[ExportPlan] = declared match {
     case SimpleType.String => Some(Identity(BackendType.String))
     case SimpleType.BigInt => Some(Identity(BackendObjType.Native(JvmName.BigInteger).toTpe))
     case SimpleType.BigDecimal => Some(Identity(BackendObjType.Native(JvmName.BigDecimal).toTpe))
@@ -300,18 +296,25 @@ object ExportPlan {
     * `declared` is only consulted once nested conversions exist.
     */
   private def elementPlan(declared: SimpleType, erased: BackendType)(implicit root: JvmAst.Root): ExportPlan =
-    erased match {
-      case BackendType.Bool => Boxed(erased, JvmName.Boolean)
-      case BackendType.Char => Boxed(erased, JvmName.Character)
-      case BackendType.Int8 => Boxed(erased, JvmName.Byte)
-      case BackendType.Int16 => Boxed(erased, JvmName.Short)
-      case BackendType.Int32 => Boxed(erased, JvmName.Integer)
-      case BackendType.Int64 => Boxed(erased, JvmName.Long)
-      case BackendType.Float32 => Boxed(erased, JvmName.Float)
-      case BackendType.Float64 => Boxed(erased, JvmName.Double)
-      // The field is erased to `Object`, so the declared type is what a caller should see.
-      case _ => Identity(BackendType.toBackendType(declared))
-    }
+    // Where there is no boxing the field is erased to `Object`, so the declared type is what a
+    // caller should see.
+    boxedPlan(erased).getOrElse(Identity(BackendType.toBackendType(declared)))
+
+  /** The wrapper each primitive is boxed into. */
+  private val Wrappers: Map[BackendType, JvmName] = Map(
+    BackendType.Bool -> JvmName.Boolean,
+    BackendType.Char -> JvmName.Character,
+    BackendType.Int8 -> JvmName.Byte,
+    BackendType.Int16 -> JvmName.Short,
+    BackendType.Int32 -> JvmName.Integer,
+    BackendType.Int64 -> JvmName.Long,
+    BackendType.Float32 -> JvmName.Float,
+    BackendType.Float64 -> JvmName.Double,
+  )
+
+  /** Returns the plan that boxes `erased`, or `None` if it is already a reference. */
+  private def boxedPlan(erased: BackendType): Option[Boxed] =
+    Wrappers.get(erased).map(Boxed(erased, _))
 
   /** Returns the ordinal of `None` and the tag class of `Some` for the specialized `Option`. */
   private def optionTags(erased: SimpleType)(implicit root: JvmAst.Root): (Int, BackendObjType.Tag) = {
