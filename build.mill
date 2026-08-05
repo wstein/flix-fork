@@ -209,6 +209,18 @@ object flix extends ScalaModule {
     runSuite("ca.uwaterloo.flix.tools.fmt.CanonicalFixtureUpdate", test.runClasspath(), Task.env)
   }
 
+  /**
+   * Run: ./mill flix.breakEvidenceReport
+   *
+   * Measures where the corpus's authors break `let` bindings and `if`/`else`,
+   * so that the refusal recorded as D24 can be reopened on evidence. It asserts
+   * nothing: the numbers are the deliverable, and D24 asks for a measurement
+   * rather than an argument before any break rule is added.
+   */
+  def breakEvidenceReport = Task {
+    runSuite("ca.uwaterloo.flix.tools.fmt.BreakEvidenceReport", test.runClasspath(), Task.env)
+  }
+
   /** Run: ./mill flix.vscode */
   def vscode() = Task.Command {
     val envFile = root / ".env"

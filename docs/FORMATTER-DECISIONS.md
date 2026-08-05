@@ -825,6 +825,80 @@ yet taken:
 The fixture `comments.flix` freezes the current behaviour deliberately, so that
 whichever option is taken shows up as a reviewed diff rather than as a surprise.
 
+## D27 — The measurement D24 asked for: no `let` rule, one narrow `if` rule, no width rule
+
+**Status: Settled**, on evidence. Corrects D24 in one place and confirms it in two.
+Reproduce with `./mill flix.breakEvidenceReport`.
+
+D24 refused break rules for `let` and `if`/`else` and asked to be reopened "with
+a measurement, not an argument". This is that measurement, over the same corpus
+(403 files, nothing skipped).
+
+**One caveat governs every number below.** "Broken" means a node's first and last
+code tokens are on different lines — *not* that the author broke it at the top
+level. An `if` whose then-branch is a `match` counts as broken, but the break
+belongs to the `match`. Quoting a top-line percentage without subtracting the
+constructs whose layout is already decided elsewhere is exactly the error D24
+documents, in a new place. The construct-attribution tables in the report exist
+to make that subtraction, and for both constructs the effect is large.
+
+### `let`: D24 was right to disown 98.9%, and the real knee is not `let`'s
+
+Isolating the bound expression — verified: for all 3,582 bindings the code token
+after the measured span is the `;` that terminates it — inverts the artifact.
+Bindings are **89.7% inline, 10.3% broken**, not 98.9% broken.
+
+By bound-expression size the split has a genuinely sharp knee, 0.0% → 0.5% →
+6.0% → **46.1%** → 92.5% across the 1-5 / 6-10 / 11-20 / 21-40 / 40+ buckets. Of
+2,407 bindings at ten tokens or fewer, 2,400 are inline.
+
+**The knee is nevertheless not evidence for a `let` rule.** Of the 369 breaks,
+`Binary` accounts for 91, `Lambda` 87, `FixpointConstraintSet` 53, `Match` 42 —
+and D20 and D21 already decide the last two. Ordinary `Apply` bound expressions,
+the case a `let` rule would actually govern, account for **25**. The knee
+measures which constructs are large, not a size threshold authors apply to
+bindings. **No `let` break rule.** D24's refusal stands, for a better reason than
+the one it gave.
+
+### `if`/`else`: braced implies broken, and nothing else does
+
+D24's headline reproduces exactly — 1,357 sites, 444 inline (32.7%), 913 broken
+(67.3%) — so this is the same population.
+
+The brace hypothesis holds decisively **in one direction**: of 308 sites with at
+least one braced branch, **2 are inline (99.4%)**. One braced branch is enough;
+"only else braced" is 98.3% broken and "only then braced" is 100%. Braced-ness is
+not a per-branch property in practice, it infects the site.
+
+The converse fails. Unbraced sites are 42.2% inline, and with the 174 `else if`
+chain parents removed (a chain cannot be inline, so they are 100% broken by
+construction) the unbraced row is **417 inline / 416 broken on 833 sites** — the
+worst number obtainable.
+
+So the 33/67 split is one clean population plus one genuinely undecided one.
+**D24 was half wrong**: it missed a rule covering 308 sites at 99.4% agreement.
+It was right that the remaining majority admits no discriminator.
+
+**The rule is worth adding and it is nearly vacuous.** Those 308 sites are
+already broken, so `braced ⇒ break` reformats **2 sites in the whole corpus**.
+Its value is prescriptive — pinning a layout so future code cannot drift — not
+corrective, and it should be described that way rather than as a migration.
+
+### Width: still refused, now with the number
+
+For the undecided unbraced population the broken share runs 17.3% → 29.3% →
+67.0% → 100.0% by token count. There is a step, but a threshold at 21 tokens
+disagrees with **207 of 833 sites (24.9%)**. The pipeline rule of D21 cleared
+~85% agreement because single-stage pipelines are broken 0 times in 493; nothing
+here approaches that. The apparent width effect is also partly construct effect
+again: `LetMatch` (27) and `Unary` (18) branch bodies are 100% broken regardless
+of size.
+
+D1 refuses a width-driven rule on evidential rather than architectural grounds,
+and notes the question could be reopened by better evidence. This is the attempt,
+and it fails: **no width rule.** The ~5,000 author-decided breaks of D23 stay
+with the author, and this tool stays `gofmt`-class deliberately.
+
 ## Validation against real codebases
 
 `flix format --canonical` was run over nine third-party Flix repositories, in
