@@ -30,9 +30,9 @@ import ca.uwaterloo.flix.tools.*
 import ca.uwaterloo.flix.tools.pkg.PackageModules
 import ca.uwaterloo.flix.util.*
 
-import java.io.{File, PrintStream}
+import java.io.{File, IOException, PrintStream}
 import java.net.BindException
-import java.nio.file.Paths
+import java.nio.file.{Files, Paths}
 
 object Main {
 
@@ -203,7 +203,12 @@ object Main {
             System.exit(1)
           }
           exitOnResult {
-            Bootstrap.init(cwd).flatMap { _ =>
+            val initOptions = if (Files.exists(cwd.resolve("flix.toml"))) {
+              Bootstrap.InitOptions.Default
+            } else {
+              promptForInitOptions()
+            }
+            Bootstrap.init(cwd, initOptions).flatMap { _ =>
               // Everything init writes is written only if absent, so refreshing is a separate step
               // rather than a mode: it is the one thing that overwrites a file.
               if (cmdOpts.refresh) Bootstrap.refreshAgentGuide(cwd) else Result.Ok(())
@@ -644,7 +649,7 @@ object Main {
       head("The Flix Programming Language", Version.CurrentVersion.toString)
 
       // Command
-      cmd("init").action((_, c) => c.copy(command = Command.Init)).text("  creates a new project in the current directory.").children(
+      cmd("init").action((_, c) => c.copy(command = Command.Init)).text("  interactively creates a new project in the current directory.").children(
         opt[Unit]("refresh").action((_, c) => c.copy(refresh = true)).
           text("rewrites the generated agent guide for this version of Flix. An edited guide is left alone."),
       )
@@ -825,6 +830,52 @@ object Main {
     }
 
     parser.parse(flixArgs, CmdOpts()).map(_.copy(args = progArgs.toList))
+  }
+
+  /** Collects the metadata that cannot be inferred from the project directory. */
+  private def promptForInitOptions(): Bootstrap.InitOptions = {
+    val defaults = Bootstrap.InitOptions(
+      description = Bootstrap.InitOptions.Default.description,
+      author = defaultInitAuthor(readGitConfig)
+    )
+
+    if (System.console() == null) {
+      return defaults
+    }
+
+    Bootstrap.InitOptions(
+      description = promptWithDefault("Project description", defaults.description),
+      author = promptWithDefault("Author", defaults.author)
+    )
+  }
+
+  /** Uses a complete Git identity when available, otherwise preserves the explicit TODO. */
+  private[flix] def defaultInitAuthor(readConfig: String => Option[String]): String = {
+    val identity = for {
+      name <- readConfig("user.name")
+      email <- readConfig("user.email")
+    } yield s"$name <$email>"
+    identity.getOrElse(Bootstrap.InitOptions.Default.author)
+  }
+
+  /** Reads one value from Git configuration without making Git a requirement for `flix init`. */
+  private def readGitConfig(key: String): Option[String] = {
+    try {
+      val process = new ProcessBuilder("git", "config", "--get", key).redirectErrorStream(true).start()
+      val output = try scala.io.Source.fromInputStream(process.getInputStream).mkString finally process.getInputStream.close()
+      if (process.waitFor() == 0) Option(output.trim).filter(_.nonEmpty) else None
+    } catch {
+      case _: IOException => None
+      case _: InterruptedException =>
+        Thread.currentThread.interrupt()
+        None
+    }
+  }
+
+  /** Prompts on an interactive terminal and uses `default` for blank or EOF input. */
+  private def promptWithDefault(label: String, default: String): String = {
+    val answer = System.console().readLine(s"$label [$default]: ")
+    Option(answer).map(_.trim).filter(_.nonEmpty).getOrElse(default)
   }
 
   /**

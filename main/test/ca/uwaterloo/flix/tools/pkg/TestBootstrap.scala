@@ -24,6 +24,29 @@ class TestBootstrap extends AnyFunSuite {
     Bootstrap.init(p)(System.out)
   }
 
+  test("init writes the supplied package metadata") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    val options = Bootstrap.InitOptions(
+      description = "An \"experimental\" package\\with a newline\n",
+      author = "Ada Lovelace <ada@example.com>"
+    )
+
+    Bootstrap.init(p, options)(System.out).unsafeGet
+
+    val manifest = ManifestParser.parse(p.resolve("flix.toml")).unsafeGet
+    assert(manifest.description == options.description)
+    assert(manifest.authors == List(options.author))
+  }
+
+  test("init uses explicit TODO metadata by default") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out).unsafeGet
+
+    val manifest = ManifestParser.parse(p.resolve("flix.toml")).unsafeGet
+    assert(manifest.description == Bootstrap.InitOptions.Default.description)
+    assert(manifest.authors == List(Bootstrap.InitOptions.Default.author))
+  }
+
   test("init writes an .editorconfig that agrees with Flix layout") {
     val p = Files.createTempDirectory(ProjectPrefix)
     Bootstrap.init(p)(System.out).unsafeGet

@@ -41,6 +41,17 @@ class TestMain extends AnyFunSuite {
     assert(!opts.refresh)
   }
 
+  test("init author uses a complete Git identity") {
+    val completeIdentity = Map(
+      "user.name" -> "Ada Lovelace",
+      "user.email" -> "ada@example.com"
+    )
+
+    assert(Main.defaultInitAuthor(completeIdentity.get) == "Ada Lovelace <ada@example.com>")
+    assert(Main.defaultInitAuthor(_ => None) == "TODO")
+    assert(Main.defaultInitAuthor(key => completeIdentity.get(key).filter(_ => key == "user.name")) == "TODO")
+  }
+
   test("build") {
     val args = Array("build")
     val opts = Main.parseCmdOpts(args).get

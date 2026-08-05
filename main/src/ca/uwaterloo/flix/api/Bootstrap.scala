@@ -43,12 +43,28 @@ import scala.util.{Failure, Success, Using}
 
 object Bootstrap {
 
+  /** Metadata collected by the `flix init` wizard. */
+  case class InitOptions(description: String, author: String)
+
+  object InitOptions {
+    val Default: InitOptions = InitOptions(
+      description = "TODO",
+      author = "TODO"
+    )
+  }
+
   /**
     * Initializes a new flix project at the given path `p`.
     *
     * The project must not already exist.
     */
-  def init(p: Path)(implicit out: PrintStream): Result[Unit, BootstrapError] = {
+  def init(p: Path)(implicit out: PrintStream): Result[Unit, BootstrapError] =
+    init(p, InitOptions.Default)
+
+  /**
+    * Initializes a new Flix project at `p` with the supplied package metadata.
+    */
+  def init(p: Path, options: InitOptions)(implicit out: PrintStream): Result[Unit, BootstrapError] = {
     //
     // Check that the current working directory is usable.
     //
@@ -90,10 +106,10 @@ object Bootstrap {
     FileOps.newFileIfAbsent(manifestFile) {
       s"""[package]
          |name        = "$packageName"
-         |description = "test"
+         |description = "${escapeTomlString(options.description)}"
          |version     = "0.1.0"
          |flix        = "${Version.CurrentVersion}"
-         |authors     = ["John Doe <john@example.com>"]
+         |authors     = ["${escapeTomlString(options.author)}"]
          |""".stripMargin
     }
 
@@ -507,6 +523,19 @@ object Bootstrap {
     * Returns the path to the Manifest file relative to the given path `p`.
     */
   private def getManifestFile(p: Path): Path = p.resolve(s"./$FLIX_TOML").normalize()
+
+  /** Escapes a value for a TOML basic string. */
+  private def escapeTomlString(s: String): String = s.flatMap {
+    case '\\' => "\\\\"
+    case '"'  => "\\\""
+    case '\b' => "\\b"
+    case '\t' => "\\t"
+    case '\n' => "\\n"
+    case '\f' => "\\f"
+    case '\r' => "\\r"
+    case c if c < ' ' => f"\\u${c.toInt}%04x"
+    case c => c.toString
+  }
 
   /**
     * Returns the path to the .gitignore file relative to the given path `p`.

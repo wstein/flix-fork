@@ -19,6 +19,16 @@ The project uses [Mill](https://mill-build.org/) as its build tool.
 new template files must keep that property, since users edit what `init` gives
 them.
 
+In an interactive terminal, `flix init` asks only for the required package
+metadata that it cannot infer: **Project description** and **Author**. The
+author default is `git config user.name` plus `user.email` when both are set;
+otherwise it is the explicit `TODO`. Blank answers accept the displayed
+defaults. In a non-interactive invocation, or when `flix.toml` already exists,
+it uses those defaults without prompting;
+an existing manifest is still never overwritten. `Bootstrap.InitOptions` keeps
+the prompt layer separate from the file-writing layer, and manifest strings
+must be TOML-escaped before they are written.
+
 `flix init --refresh` (`Bootstrap.refreshAgentGuide`) is the one thing that
 overwrites, and it overwrites exactly one file. `AGENTS.md` names the compiler
 version that generated it, so it goes stale the moment a project upgrades;
