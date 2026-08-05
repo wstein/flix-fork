@@ -216,10 +216,22 @@ something new is firing too widely.
 
 The formatter test suites live in `main/test/ca/uwaterloo/flix/tools/fmt/` and
 share their corpus — the standard library plus `examples` — through
-`TestFormatterCommon`. They are the slowest part of the run — roughly six of the
-full suite's sixteen minutes — because each property parses the corpus and each
-parse is a full compile. Keep that in mind before adding another corpus-wide
-property; prefer asserting it inside a pass that already exists.
+`TestFormatterCommon`. They are the slowest part of the run — around ten of the
+full suite's twenty-odd minutes, which is what pushed CI past its wall — because
+each property reparses the corpus and each reparse is a full `Flix.check()`.
+
+So: **prefer asserting a new property inside a pass that already exists** rather
+than adding another corpus-wide one. Idempotency and non-destructiveness share a
+pass in `TestFormatterCorrectness` for exactly this reason — both need `p(f(c))`,
+and computing it twice was four corpus-wide compiles where two do.
+
+The larger saving is still on the table and is not free: `check()` runs the whole
+pipeline through `Typer`, while the formatter needs only `Parser2` and `Weeder2`.
+A parse-and-weed entry point would cut these suites several-fold, at the cost of
+no longer proving that formatted output still type checks. That guarantee is
+weaker than it looks — the negative-literal defect produced non-compiling output
+and the corpus compile did not catch it, because the corpus had no case — but it
+is not nothing, and dropping it is a decision rather than an optimisation.
 
 The fixtures are held by that file's companion *object*
 rather than by the trait, and each `Sample` memoises the parse of its own

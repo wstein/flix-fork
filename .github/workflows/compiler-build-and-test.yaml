@@ -35,7 +35,11 @@ jobs:
       - name: Build
         run: ./mill flix.compile
       - name: Run tests with timeout
-        timeout-minutes: 20
+        # The suite ran ~21 minutes against a 20 minute wall and was killed with
+        # CompilerSuite, the last suite, already running. This is headroom, not a
+        # new budget: the wall exists so a hung test cannot burn a runner, and it
+        # only does that job if it sits above the honest runtime rather than on it.
+        timeout-minutes: 30
         # ScalaTest flags: -o = stdout reporter, C = suppress TestSucceeded, O = suppress SuiteCompleted
         run: ./mill flix.test.testForked "-oCO"
 

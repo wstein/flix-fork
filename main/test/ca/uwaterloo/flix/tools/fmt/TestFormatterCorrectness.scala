@@ -27,6 +27,12 @@ package ca.uwaterloo.flix.tools.fmt
   *   3. Non-destructiveness: forall c in C,  w(c) = w(p(f(c)))
   *
   * Each property is run on both corpora: the standard library and the `examples`.
+  *
+  * Properties 2 and 3 share a pass, because they share the intermediate value
+  * that costs the time. `p` here is a full `Flix.check()` — the whole pipeline
+  * through `Typer`, not just the parse the formatter needs — so a corpus-wide
+  * reparse is the most expensive thing this suite does, and it is worth some
+  * awkwardness not to do one twice.
   */
 class TestFormatterCorrectness extends TestFormatterCommon {
 
@@ -43,34 +49,30 @@ class TestFormatterCorrectness extends TestFormatterCommon {
   }
 
   /**
-    * Property 2 -- Idempotency: `forall c in C, f(p(f(c))) = f(c)`.
+    * Properties 2 and 3, in a single pass over the corpus.
     *
-    * Applying the formatter to its own output yields the same output.
-    * The inner `p` accounts for the fact that the formatter produces a string.
+    *   2. Idempotency:         `forall c in C, f(p(f(c))) = f(c)`
+    *   3. Non-destructiveness: `forall c in C, shape(w(c)) = shape(w(p(f(c))))`
+    *
+    * They are checked together because they need the *same* intermediate value:
+    * `p(f(c))`, the parse of the formatted output. That parse is a full compile
+    * and is the dominant cost of this suite, so running the two as separate
+    * properties reparsed identical text twice per file — four corpus-wide compiles
+    * where two suffice, which is most of the six minutes this suite used to take.
+    *
+    * The assertions stay distinct, and each names the property it belongs to, so a
+    * failure still says which one broke.
     */
-  private def checkIdempotency(samples: List[Sample]): Unit = {
+  private def checkIdempotentAndNonDestructive(samples: List[Sample]): Unit = {
     for (sample <- samples) {
       val once = PrettyPrinter.format(sample.original.tree)
-      val tree2 = sample.reparse(once).tree
-      val twice = PrettyPrinter.format(tree2)
+      val reparsed = sample.reparse(once)
+
+      val twice = PrettyPrinter.format(reparsed.tree)
       assert(once == twice,
         s"Formatter is not idempotent for ${sample.path}:\n${firstDivergence(once, twice)}")
-    }
-  }
 
-  /**
-    * Property 3 -- Non-destructiveness: `forall c in C. shape(w(c)) = shape(w(p(f(c))))`.
-    *
-    * The formatter must not change the shape of the [[WeededAst]].
-    * This is  checked by comparing the weeded compilation unit of the original source
-    * against that of the reparsed formatted output, at the kind level only.
-    */
-  private def checkNonDestructive(samples: List[Sample]): Unit = {
-    for (sample <- samples) {
-      val before = sample.original
-      val formatted = PrettyPrinter.format(before.tree)
-      val after = sample.reparse(formatted)
-      assert(sameShape(before.weeded, after.weeded),
+      assert(sameShape(sample.original.weeded, reparsed.weeded),
         s"Formatter changed the AST shape for ${sample.path}")
     }
   }
@@ -100,17 +102,10 @@ class TestFormatterCorrectness extends TestFormatterCommon {
     checkCanFormat(StdlibSamples)
   }
 
-  test("PrettyPrinter: idempotency (examples)") {
-    checkIdempotency(ExampleSamples)
+  test("PrettyPrinter: idempotency and non-destructiveness (examples)") {
+    checkIdempotentAndNonDestructive(ExampleSamples)
   }
-  test("PrettyPrinter: idempotency (stdlib)") {
-    checkIdempotency(StdlibSamples)
-  }
-
-  test("PrettyPrinter: non-destructiveness (examples)") {
-    checkNonDestructive(ExampleSamples)
-  }
-  test("PrettyPrinter: non-destructiveness (stdlib)") {
-    checkNonDestructive(StdlibSamples)
+  test("PrettyPrinter: idempotency and non-destructiveness (stdlib)") {
+    checkIdempotentAndNonDestructive(StdlibSamples)
   }
 }
