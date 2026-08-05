@@ -801,6 +801,39 @@ class TestEntryPoints extends AnyFunSuite with TestUtils {
   }
 
   test("Test.IllegalExportFunction.05") {
+    // An enum other than `Option` has no Java counterpart to be converted into, so it stays
+    // unexportable in every position.
+    val input =
+      """
+        |enum Colour {
+        |  case Red
+        |  case Green
+        |}
+        |mod Pkg { }
+        |mod Pkg.Mod { @Export pub def red(): Colour = Colour.Red }
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibNix)
+    expectError[EntryPointError.IllegalExportType](result)
+  }
+
+  test("Test.IllegalExportFunction.06") {
+    // `Option` is exportable in return position only. As a parameter it would need the reverse
+    // conversion, which has no answer for a Java caller passing `Optional.empty()`.
+    val input =
+      """
+        |enum Option[t] {
+        |  case Some(t)
+        |  case None
+        |}
+        |mod Pkg { }
+        |mod Pkg.Mod { @Export pub def id(x: Int32, _y: Option[Int32]): Int32 = x }
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibNix)
+    expectError[EntryPointError.IllegalExportType](result)
+  }
+
+  test("Test.ExportOption.01") {
+    // `Option` in return position is converted to `java.util.Optional` by the shim method.
     val input =
       """
         |enum Option[t] {
@@ -811,10 +844,11 @@ class TestEntryPoints extends AnyFunSuite with TestUtils {
         |mod Pkg.Mod { @Export pub def id(x: Int32): Option[Int32] = Some(x) }
         |""".stripMargin
     val result = check(input, Options.TestWithLibNix)
-    expectError[EntryPointError.IllegalExportType](result)
+    expectSuccess(result)
   }
 
-  test("Test.IllegalExportFunction.06") {
+  test("Test.ExportOption.02") {
+    // The element type still has to be exportable: there is no conversion for a nested `Option`.
     val input =
       """
         |enum Option[t] {
@@ -822,7 +856,7 @@ class TestEntryPoints extends AnyFunSuite with TestUtils {
         |  case None
         |}
         |mod Pkg { }
-        |mod Pkg.Mod { @Export pub def id(x: Int32, _y: Option[Int32]): Int32 = x }
+        |mod Pkg.Mod { @Export pub def id(x: Int32): Option[Option[Int32]] = Some(Some(x)) }
         |""".stripMargin
     val result = check(input, Options.TestWithLibNix)
     expectError[EntryPointError.IllegalExportType](result)
