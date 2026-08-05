@@ -138,22 +138,36 @@ object ClassMaker {
     }
   }
 
-  def mkClass(className: JvmName, f: Final, superClass: JvmName = JvmName.Object, interfaces: List[JvmName] = Nil)(implicit flix: Flix): InstanceClassMaker = {
-    new InstanceClassMaker(mkClassWriter(className, IsPublic, f, NotAbstract, NotInterface, superClass, interfaces))
+  def mkClass(className: JvmName, f: Final, superClass: JvmName = JvmName.Object, interfaces: List[JvmName] = Nil, signature: Option[String] = None)(implicit flix: Flix): InstanceClassMaker = {
+    new InstanceClassMaker(mkClassWriter(className, IsPublic, f, NotAbstract, NotInterface, superClass, interfaces, signature))
   }
 
-  def mkAbstractClass(className: JvmName, superClass: JvmName = JvmName.Object, interfaces: List[JvmName] = Nil)(implicit flix: Flix): AbstractClassMaker = {
-    new AbstractClassMaker(mkClassWriter(className, IsPublic, NotFinal, IsAbstract, NotInterface, superClass, interfaces))
+  def mkAbstractClass(className: JvmName, superClass: JvmName = JvmName.Object, interfaces: List[JvmName] = Nil, signature: Option[String] = None)(implicit flix: Flix): AbstractClassMaker = {
+    new AbstractClassMaker(mkClassWriter(className, IsPublic, NotFinal, IsAbstract, NotInterface, superClass, interfaces, signature))
   }
 
-  def mkInterface(interfaceName: JvmName, interfaces: List[JvmName] = Nil)(implicit flix: Flix): InterfaceMaker = {
-    new InterfaceMaker(mkClassWriter(interfaceName, IsPublic, NotFinal, IsAbstract, IsInterface, JvmName.Object, interfaces))
+  def mkInterface(interfaceName: JvmName, interfaces: List[JvmName] = Nil, signature: Option[String] = None)(implicit flix: Flix): InterfaceMaker = {
+    new InterfaceMaker(mkClassWriter(interfaceName, IsPublic, NotFinal, IsAbstract, IsInterface, JvmName.Object, interfaces, signature))
   }
 
-  private def mkClassWriter(name: JvmName, v: Visibility, f: Final, a: Abstract, i: Interface, superClass: JvmName, interfaces: List[JvmName])(implicit flix: Flix): ClassWriter = {
+  /**
+    * Writes the class header.
+    *
+    * `signature` is the class's generic signature, and exists for the same reason a method's does:
+    * a descriptor cannot express a type argument, so a class implementing `java.util.List<T>`
+    * without one implements it *raw*, which is a hard error in Scala 3 and Kotlin rather than a
+    * warning. The virtual machine ignores it; compilers and reflection read it.
+    *
+    * `None` for every class the backend generates today, and that is not an oversight. These
+    * classes exist *after* erasure, so every type argument they could declare is already `Object`
+    * -- `Fn1$Obj$Obj` implements `Function`, and saying `Function<Object, Object>` instead adds
+    * nothing a caller can use. A signature is worth writing only where the argument is still known,
+    * which on this boundary is the *method* signature of an exported shim.
+    */
+  private def mkClassWriter(name: JvmName, v: Visibility, f: Final, a: Abstract, i: Interface, superClass: JvmName, interfaces: List[JvmName], signature: Option[String])(implicit flix: Flix): ClassWriter = {
     val cw = AsmOps.mkClassWriter()
     val m = v.toInt + f.toInt + a.toInt + i.toInt
-    cw.visit(CompilerConstants.JvmTargetVersion, m, name.toInternalName, null, superClass.toInternalName, interfaces.map(_.toInternalName).toArray)
+    cw.visit(CompilerConstants.JvmTargetVersion, m, name.toInternalName, signature.orNull, superClass.toInternalName, interfaces.map(_.toInternalName).toArray)
     cw.visitSource(name.toInternalName, null)
     cw
   }
