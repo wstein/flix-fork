@@ -76,7 +76,8 @@ object Bootstrap {
   object InitOptions {
     val Default: InitOptions = InitOptions(
       description = "TODO",
-      author = "TODO"
+      author = "TODO",
+      license = InitLicense.Apache2
     )
   }
 

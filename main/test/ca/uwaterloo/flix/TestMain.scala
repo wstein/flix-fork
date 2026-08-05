@@ -66,6 +66,7 @@ class TestMain extends AnyFunSuite {
   }
 
   test("init accepts supported license choices") {
+    assert(Bootstrap.InitOptions.Default.license == Bootstrap.InitLicense.Apache2)
     assert(Main.parseInitLicense("apache2").contains(Bootstrap.InitLicense.Apache2))
     assert(Main.parseInitLicense("MIT").contains(Bootstrap.InitLicense.Mit))
     assert(Main.parseInitLicense("bsd3").contains(Bootstrap.InitLicense.Bsd3))

@@ -24,8 +24,8 @@ In an interactive terminal, `flix init` asks only for the required package
 metadata that it cannot infer: **Project description** and **Author**. The
 author default is `git config user.name` plus `user.email` when both are set;
 otherwise it is the explicit `TODO`. Blank answers accept the displayed
-defaults. It then asks for a license: `apache2`, `mit`, `bsd3`, `gpl3`, or the
-default `none`. A selected short name is written as its SPDX identifier to
+defaults. It then asks for a license: `apache2`, `mit`, `bsd3`, `gpl3`, or
+`none`; the default is `apache2`. A selected short name is written as its SPDX identifier to
 `flix.toml`; `LICENSE.md` intentionally requires the project's full license
 text and copyright notice before distribution. In a non-interactive invocation,
 or when `flix.toml` already exists, it uses those defaults without prompting;

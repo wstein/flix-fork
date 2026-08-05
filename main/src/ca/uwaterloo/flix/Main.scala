@@ -847,16 +847,20 @@ object Main {
     Bootstrap.InitOptions(
       description = promptWithDefault("Project description", defaults.description),
       author = promptWithDefault("Author", defaults.author),
-      license = promptForLicense()
+      license = promptForLicense(Bootstrap.InitOptions.Default.license)
     )
   }
 
   /** Prompts for one of the supported SPDX license identifiers. */
-  private def promptForLicense(): Bootstrap.InitLicense = {
+  private def promptForLicense(default: Bootstrap.InitLicense): Bootstrap.InitLicense = {
     val console = System.console()
     while (true) {
-      val answer = console.readLine("License [none, apache2, mit, bsd3, gpl3] [none]: ")
-      parseInitLicense(Option(answer).map(_.trim).getOrElse("")) match {
+      val answer = Option(console.readLine("License [apache2, mit, bsd3, gpl3, none] [apache2]: ")).map(_.trim)
+      val license = answer.filter(_.nonEmpty) match {
+        case Some(input) => parseInitLicense(input)
+        case None => Some(default)
+      }
+      license match {
         case Some(license) => return license
         case None => console.printf("Choose none, apache2, mit, bsd3, or gpl3.%n")
       }
