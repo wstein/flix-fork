@@ -1462,28 +1462,17 @@ object BackendObjType {
       */
     private def shimResultType(defn: JvmAst.Def)(implicit root: JvmAst.Root): VoidableType =
       if (returnsVoid(defn)) VoidableType.Void
-      else if (returnsOption(defn)) OptionalType
-      else shimType(defn, defn.unboxedType.tpe)
-
-    /** The Java type an exported `Option` is presented as. */
-    private def OptionalType: BackendType = Native(JvmName.Optional).toTpe
+      else exportPlan(defn).map(_.javaType).getOrElse(shimType(defn, defn.unboxedType.tpe))
 
     /**
-      * Returns the element type of the declared return type of `defn`, if it returns an `Option`.
+      * How the result of `defn` is converted for Java, if it needs converting.
       *
-      * The declared type is used because erasure has already specialized `Option[String]` to an
-      * `Option$42` that no longer says what it holds. `Option` is matched by symbol, so a
-      * user-defined `Foo.Option` stays an ordinary enum.
+      * The plan is the single source of truth for the boundary: the Java type below, the signature,
+      * and the instructions in [[shimIns]] all read it, so they cannot describe different things.
       */
-    private def exportedOptionElement(defn: JvmAst.Def): Option[SimpleType] =
+    private def exportPlan(defn: JvmAst.Def)(implicit root: JvmAst.Root): Option[ExportPlan] =
       if (!defn.ann.isExport) None
-      else defn.exportedReturnType.flatMap {
-        case SimpleType.Enum(sym, List(elm)) if sym.namespace.isEmpty && sym.text == "Option" => Some(elm)
-        case _ => None
-      }
-
-    /** Returns `true` if the shim method of `defn` presents its result as a `java.util.Optional`. */
-    private def returnsOption(defn: JvmAst.Def): Boolean = exportedOptionElement(defn).isDefined
+      else defn.exportedReturnType.flatMap(ExportPlan.of(_, defn.unboxedType.tpe))
 
     /**
       * The generic signature of the shim method of `defn`, when it has type arguments to declare.
@@ -1494,84 +1483,10 @@ object BackendObjType {
       * silently switches off its null-safety for the value.
       */
     private def shimSignature(defn: JvmAst.Def)(implicit root: JvmAst.Root): Option[String] =
-      exportedOptionElement(defn).map { elm =>
+      exportPlan(defn).map { plan =>
         val params = shimParamTypes(defn).map(_.toDescriptor).mkString
-        s"($params)L${JvmName.Optional.toInternalName}<${boxedDescriptor(elm)}>;"
+        s"($params)${plan.typeArgument}"
       }
-
-    /** The descriptor of `tpe` as it appears in a type argument, where primitives must be boxed. */
-    private def boxedDescriptor(tpe: SimpleType)(implicit root: JvmAst.Root): String =
-      BackendType.toBackendType(tpe) match {
-        case BackendType.Bool => JvmName.Boolean.toDescriptor
-        case BackendType.Char => JvmName.Character.toDescriptor
-        case BackendType.Int8 => JvmName.Byte.toDescriptor
-        case BackendType.Int16 => JvmName.Short.toDescriptor
-        case BackendType.Int32 => JvmName.Integer.toDescriptor
-        case BackendType.Int64 => JvmName.Long.toDescriptor
-        case BackendType.Float32 => JvmName.Float.toDescriptor
-        case BackendType.Float64 => JvmName.Double.toDescriptor
-        case reference => reference.toDescriptor
-      }
-
-    /**
-      * Converts the `Option` on the stack into a `java.util.Optional`.
-      *
-      * `[..., Tagged] --> [..., Optional]`
-      *
-      * A `None` is a tag whose ordinal identifies it and which carries nothing; a `Some` is a tag
-      * whose single field holds the value. Both are read from the specialized enum rather than
-      * assumed, since the ordinals are assigned per compilation.
-      */
-    private def marshalOptionToOptional(defn: JvmAst.Def)(implicit root: JvmAst.Root, mv: MethodVisitor): Unit = {
-      val (noneOrdinal, someTag) = optionTags(defn)
-      val payload = someTag.elms.head
-      DUP()
-      GETFIELD(Tagged.OrdinalField)
-      pushInt(noneOrdinal)
-      ifConditionElse(Condition.ICMPEQ) {
-        POP()
-        INVOKESTATIC(JvmName.Optional, "empty", mkDescriptor()(OptionalType))
-      } {
-        CHECKCAST(someTag.jvmName)
-        GETFIELD(someTag.IndexField(0))
-        boxIfPrimitive(payload)
-        // `ofNullable` rather than `of`: a `Some` may hold a Java value that is itself null, and
-        // `of` would turn that into a NullPointerException at the boundary.
-        INVOKESTATIC(JvmName.Optional, "ofNullable", mkDescriptor(BackendType.Object)(OptionalType))
-      }
-    }
-
-    /** Returns the ordinal of `None` and the tag class of `Some` for the `Option` `defn` returns. */
-    private def optionTags(defn: JvmAst.Def)(implicit root: JvmAst.Root): (Int, Tag) = {
-      val sym = defn.unboxedType.tpe match {
-        case SimpleType.Enum(s, _) => s
-        case other => throw InternalCompilerException(s"Exported Option is not an enum: '$other'", defn.loc)
-      }
-      val cases = root.enums(sym).cases
-      val none = cases.keys.find(_.name == "None").getOrElse(
-        throw InternalCompilerException(s"Exported Option has no None case: '$sym'", defn.loc))
-      val some = cases.keys.find(_.name == "Some").getOrElse(
-        throw InternalCompilerException(s"Exported Option has no Some case: '$sym'", defn.loc))
-      (none.ordinal, Tag(cases(some).tpes.map(BackendType.toErasedBackendType)))
-    }
-
-    /** Boxes the value on the stack when it is a primitive, since an `Optional` holds references. */
-    private def boxIfPrimitive(tpe: BackendType)(implicit mv: MethodVisitor): Unit = {
-      def box(owner: JvmName): Unit =
-        INVOKESTATIC(owner, "valueOf", mkDescriptor(tpe)(owner.toTpe))
-
-      tpe match {
-        case BackendType.Bool => box(JvmName.Boolean)
-        case BackendType.Char => box(JvmName.Character)
-        case BackendType.Int8 => box(JvmName.Byte)
-        case BackendType.Int16 => box(JvmName.Short)
-        case BackendType.Int32 => box(JvmName.Integer)
-        case BackendType.Int64 => box(JvmName.Long)
-        case BackendType.Float32 => box(JvmName.Float)
-        case BackendType.Float64 => box(JvmName.Double)
-        case BackendType.Array(_) | BackendType.Reference(_) => ()
-      }
-    }
 
     /** Returns `true` if the shim method of `defn` hides the `Unit` parameter of a nullary function. */
     private def dropsUnitParam(defn: JvmAst.Def): Boolean = defn.ann.isExport && (defn.fparams match {
@@ -1608,10 +1523,12 @@ object BackendObjType {
             Result.unwindSuspensionFreeThunk(hint, defn.loc)
             POP()
             RETURN()
-          } else if (returnsOption(defn)) {
+          } else if (exportPlan(defn).isDefined) {
+            val plan = exportPlan(defn).get
+            // The converted value is read as the tag it is; the plan does the rest.
             Result.unwindSuspensionFreeThunkToType(Tagged.toTpe, hint, defn.loc)
-            marshalOptionToOptional(defn)
-            xReturn(OptionalType)
+            plan.emit(defn.loc)
+            xReturn(plan.javaType)
           } else {
             val resultType = shimType(defn, defn.unboxedType.tpe)
             Result.unwindSuspensionFreeThunkToType(resultType, hint, defn.loc)
