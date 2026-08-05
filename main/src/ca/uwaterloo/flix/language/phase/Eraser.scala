@@ -332,7 +332,9 @@ object Eraser {
       case RecordExtend(label, value, rest) => RecordExtend(label, erase(value), visitType(rest))
       case ExtensibleExtend(cons, tpes, rest) => ExtensibleExtend(cons, tpes.map(erase), visitType(rest))
       case ExtensibleEmpty => ExtensibleEmpty
-      case Native(clazz) => Native(clazz)
+      // The type arguments are what the boundary declares, so they are visited rather than
+      // erased away; the representation is `clazz` alone and is unaffected either way.
+      case Native(clazz, targs) => Native(clazz, targs.map(visitType))
     }
   }
 

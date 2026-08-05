@@ -565,7 +565,7 @@ object TypeVerifier {
 
     case Expr.TryCatch(exp, rules, tpe, _, loc) =>
       for (CatchRule(sym, clazz, exp) <- rules) {
-        checkEq(tpe, visitExpr(exp)(root, env + (sym -> SimpleType.Native(clazz)), lenv), exp.loc)
+        checkEq(tpe, visitExpr(exp)(root, env + (sym -> SimpleType.Native(clazz, Nil)), lenv), exp.loc)
       }
       val t = visitExpr(exp)
       checkEq(tpe, t, loc)
@@ -604,7 +604,7 @@ object TypeVerifier {
         val signature = SimpleType.mkArrow(m.fparams.map(_.tpe), m.tpe)
         checkEq(signature, exptype, m.loc)
       }
-      checkEq(tpe, SimpleType.Native(clazz), loc)
+      checkEq(tpe, SimpleType.Native(clazz, Nil), loc)
 
   }
 
@@ -667,7 +667,7 @@ object TypeVerifier {
       case SimpleType.Array(elmt) =>
         (klazz.isArray && isJavaSubtype(elmt, klazz.getComponentType)) || klazz == classOf[Object]
 
-      case SimpleType.Native(k) => klazz.isAssignableFrom(k)
+      case SimpleType.Native(k, _) => klazz.isAssignableFrom(k)
 
       case SimpleType.Int8 => klazz == classOf[Byte]
       case SimpleType.Int16 => klazz == classOf[Short]

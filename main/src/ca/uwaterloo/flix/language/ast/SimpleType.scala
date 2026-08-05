@@ -80,7 +80,7 @@ object SimpleType {
   // Compound Types.
   //
 
-  val Object: SimpleType = Native(classOf[java.lang.Object])
+  val Object: SimpleType = Native(classOf[java.lang.Object], Nil)
 
   case class Array(tpe: SimpleType) extends SimpleType
 
@@ -102,7 +102,31 @@ object SimpleType {
 
   case class ExtensibleExtend(cons: Name.Pred, tpes: List[SimpleType], rest: SimpleType) extends SimpleType
 
-  case class Native(clazz: Class[?]) extends SimpleType
+  /**
+    * A Java class, with the type arguments it was applied to.
+    *
+    * `targs` is what the JVM erases: `ArrayList[String]` and `ArrayList[Int32]` are one class at
+    * run time. It is kept for the same reason [[Enum]] keeps its own -- a generic `Signature` on
+    * an exported boundary cannot be written without it -- and it is read *only* there. Empty for a
+    * class that takes no type arguments, and for a raw use of one that does.
+    *
+    * **The arguments are deliberately not part of this type's identity.** Unlike a Flix enum,
+    * whose type arguments select which class the backend generates, a Java class is one class
+    * however it was applied, and the compiler reaches the same one down paths that box or erase
+    * the arguments differently -- `ArrayList[Bool]` and `ArrayList[Object]` both arise for the
+    * same expression. Letting `targs` decide equality makes those paths disagree about a type
+    * they agree about representationally, which the type verifier rightly rejects. So `equals`
+    * and `hashCode` are on `clazz` alone, and the arguments ride along as the boundary's
+    * description of where the type came from.
+    */
+  case class Native(clazz: Class[?], targs: List[SimpleType]) extends SimpleType {
+    override def equals(that: Any): Boolean = that match {
+      case Native(thatClazz, _) => clazz == thatClazz
+      case _ => false
+    }
+
+    override def hashCode(): Int = clazz.hashCode()
+  }
 
   /**
     * Smart constructor for [[SimpleType.Array]].
@@ -149,7 +173,7 @@ object SimpleType {
       case Int64 => Int64
       case Void | AnyType | Unit | BigDecimal | BigInt | String | Regex | Region | Array(_) |
            Lazy(_) | Tuple(_) | Enum(_, _) | Struct(_, _) | Arrow(_, _) | RecordEmpty |
-           RecordExtend(_, _, _) | ExtensibleEmpty | ExtensibleExtend(_, _, _) | Native(_) | Null =>
+           RecordExtend(_, _, _) | ExtensibleEmpty | ExtensibleExtend(_, _, _) | Native(_, _) | Null =>
         SimpleType.Object
     }
   }

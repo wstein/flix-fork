@@ -372,7 +372,11 @@ object Reducer {
         val taskList1 = tpe match {
           case Void | AnyType | Unit | Bool | Char | Float32 | Float64 | BigDecimal | Int8 | Int16 |
                Int32 | Int64 | BigInt | String | Regex | Region | RecordEmpty | ExtensibleEmpty |
-               Native(_) | Null => taskList
+               // A Java type stays a leaf even now that it carries type arguments. This collects
+               // the types the backend must generate a class for, and a type argument needs none:
+               // the JVM erases it, and anything that is actually constructed is reached by the
+               // expression that constructs it.
+               Native(_, _) | Null => taskList
           case Array(elm) => taskList.enqueue(elm)
           case Lazy(elm) => taskList.enqueue(elm)
           case Tuple(elms) => taskList.enqueueAll(elms)

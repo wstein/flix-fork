@@ -50,7 +50,7 @@ object SimpleTypePrinter {
     case SimpleType.RecordExtend(label, value, rest) => Type.RecordExtend(label, print(value), print(rest))
     case SimpleType.ExtensibleEmpty => Type.ExtensibleEmpty
     case SimpleType.ExtensibleExtend(cons, tpes, rest) => Type.ExtensibleExtend(cons.name, tpes.map(print), print(rest))
-    case SimpleType.Native(clazz) => Type.Native(clazz)
+    case SimpleType.Native(clazz, _) => Type.Native(clazz)
   }
 
 }

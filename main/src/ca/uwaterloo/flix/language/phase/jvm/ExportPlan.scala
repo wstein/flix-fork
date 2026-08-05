@@ -63,6 +63,21 @@ object ExportPlan {
     def emit(loc: SourceLocation)(implicit root: JvmAst.Root, mv: MethodVisitor): Unit = ()
   }
 
+  /**
+    * A Java class that was applied to type arguments, presented with them.
+    *
+    * Nothing is converted -- an `ArrayList[String]` already *is* a `java.util.ArrayList`. The plan
+    * exists only to say what the arguments are, because the descriptor cannot, and because the
+    * declared type is the last place they survive.
+    */
+  case class GenericNative(clazz: JvmName, targs: List[ExportPlan]) extends ExportPlan {
+    def javaType: BackendType = BackendObjType.Native(clazz).toTpe
+
+    def typeArgument: String = s"L${clazz.toInternalName}<${targs.map(_.typeArgument).mkString}>;"
+
+    def emit(loc: SourceLocation)(implicit root: JvmAst.Root, mv: MethodVisitor): Unit = ()
+  }
+
   /** A primitive that must be boxed, because the value it is being placed into holds references. */
   case class Boxed(primitive: BackendType, boxed: JvmName) extends ExportPlan {
     def javaType: BackendType = boxed.toTpe
@@ -113,7 +128,46 @@ object ExportPlan {
       case SimpleType.Enum(sym, List(element)) if isOption(sym) =>
         val (noneOrdinal, someTag) = optionTags(erased)
         Some(AsOptional(elementPlan(element, someTag.elms.head), noneOrdinal, someTag))
+      case SimpleType.Native(clazz, targs) if targs.nonEmpty =>
+        // Only when every argument can be described. A Flix type argument, say
+        // `ArrayList[SomeEnum]`, has no name a caller may depend on, and writing one would publish
+        // the representation. Falling back to no plan leaves the type raw, which is what it has
+        // always been -- an unsignable argument makes the signature absent, never wrong.
+        traverse(targs)(typeArgumentPlan).map(GenericNative(JvmName.ofClass(clazz), _))
       case _ => None
+    }
+
+  /**
+    * Returns how a value of type `declared` is described as a type argument, if it can be.
+    *
+    * Unlike [[elementPlan]] there is no erased type to consult, because nothing is converted: this
+    * only ever produces the text of a signature.
+    */
+  private def typeArgumentPlan(declared: SimpleType): Option[ExportPlan] = declared match {
+    case SimpleType.Bool => Some(Boxed(BackendType.Bool, JvmName.Boolean))
+    case SimpleType.Char => Some(Boxed(BackendType.Char, JvmName.Character))
+    case SimpleType.Int8 => Some(Boxed(BackendType.Int8, JvmName.Byte))
+    case SimpleType.Int16 => Some(Boxed(BackendType.Int16, JvmName.Short))
+    case SimpleType.Int32 => Some(Boxed(BackendType.Int32, JvmName.Integer))
+    case SimpleType.Int64 => Some(Boxed(BackendType.Int64, JvmName.Long))
+    case SimpleType.Float32 => Some(Boxed(BackendType.Float32, JvmName.Float))
+    case SimpleType.Float64 => Some(Boxed(BackendType.Float64, JvmName.Double))
+    case SimpleType.String => Some(Identity(BackendType.String))
+    case SimpleType.BigInt => Some(Identity(BackendObjType.Native(JvmName.BigInteger).toTpe))
+    case SimpleType.BigDecimal => Some(Identity(BackendObjType.Native(JvmName.BigDecimal).toTpe))
+    case SimpleType.Regex => Some(Identity(BackendObjType.Native(JvmName.Regex).toTpe))
+    // A type variable reaches the boundary as `Object`, which is also what it erases to.
+    case SimpleType.AnyType => Some(Identity(BackendType.Object))
+    case SimpleType.Native(clazz, Nil) => Some(Identity(BackendObjType.Native(JvmName.ofClass(clazz)).toTpe))
+    case SimpleType.Native(clazz, inner) =>
+      traverse(inner)(typeArgumentPlan).map(GenericNative(JvmName.ofClass(clazz), _))
+    case _ => None
+  }
+
+  /** Returns the plans for every element of `xs`, or `None` if any of them has none. */
+  private def traverse(xs: List[SimpleType])(f: SimpleType => Option[ExportPlan]): Option[List[ExportPlan]] =
+    xs.foldRight(Option(List.empty[ExportPlan])) {
+      case (x, acc) => for (plans <- acc; plan <- f(x)) yield plan :: plans
     }
 
   /** Returns `true` if `sym` is the standard library's `Option`. */

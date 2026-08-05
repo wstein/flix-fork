@@ -130,6 +130,59 @@ class TestExportedShims extends AnyFunSuite {
     assert(descriptors.get("sizeOf").contains("(Ljava/util/ArrayList;)I"))
   }
 
+  test("an exported generic Java return type declares its type arguments") {
+    // The descriptor can only say `ArrayList`. The arguments survive as far as the declared type
+    // and nowhere further, so this is the last point at which they can be written down.
+    val (descriptors, signatures) = membersOf(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    import java.util.ArrayList
+        |    import java.util.HashMap
+        |
+        |    @Export
+        |    pub def strings(): ArrayList[String] \ IO = new ArrayList()
+        |
+        |    @Export
+        |    pub def ints(): ArrayList[Int32] \ IO = new ArrayList()
+        |
+        |    @Export
+        |    pub def nested(): ArrayList[ArrayList[String]] \ IO = new ArrayList()
+        |
+        |    @Export
+        |    pub def mapping(): HashMap[String, Int32] \ IO = new HashMap()
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin, "Pkg/Mod")
+    assert(descriptors.get("strings").contains("()Ljava/util/ArrayList;"))
+    assert(signatures.get("strings").contains("()Ljava/util/ArrayList<Ljava/lang/String;>;"))
+    // A type argument is a reference, so a primitive one is boxed -- as in `Optional<Integer>`.
+    assert(signatures.get("ints").contains("()Ljava/util/ArrayList<Ljava/lang/Integer;>;"))
+    assert(signatures.get("nested").contains("()Ljava/util/ArrayList<Ljava/util/ArrayList<Ljava/lang/String;>;>;"))
+    assert(signatures.get("mapping").contains("()Ljava/util/HashMap<Ljava/lang/String;Ljava/lang/Integer;>;"))
+  }
+
+  test("a generic Java type with an undescribable argument stays raw") {
+    // A Flix enum has no name a Java caller may depend on, so naming it in a signature would
+    // publish exactly what the boundary exists to hide. The signature is omitted instead, which
+    // leaves the type as raw as it has always been: an argument that cannot be described makes
+    // the signature absent, never wrong.
+    val (descriptors, signatures) = membersOf(
+      """enum Colour { case Red, case Green }
+        |mod Pkg { }
+        |mod Pkg.Mod {
+        |    import java.util.ArrayList
+        |
+        |    @Export
+        |    pub def colours(): ArrayList[Colour] \ IO = new ArrayList()
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin, "Pkg/Mod")
+    assert(descriptors.get("colours").contains("()Ljava/util/ArrayList;"))
+    assert(!signatures.contains("colours"), s"expected no signature, got: ${signatures.get("colours")}")
+  }
+
   test("an exported def returning Option is presented as Optional") {
     // The Flix representation of `Option` is a tag class the backend is free to rename, so it is
     // converted at the boundary rather than exposed.

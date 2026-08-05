@@ -343,7 +343,12 @@ object Simplifier {
             val enumSym = new Symbol.EnumSym(None, sym.namespace, sym.name, sym.loc)
             SimpleType.mkEnum(enumSym, targs.map(visitType))
 
-          case TypeConstructor.Native(clazz) => SimpleType.Native(clazz)
+          // Kept for the same reason the enum and struct cases above keep theirs: the JVM erases
+          // them, but a generic `Signature` on an exported boundary cannot be written without
+          // them, and this is the last phase that still has them.
+          case TypeConstructor.Native(clazz) =>
+            val targs = tpe.typeArguments
+            SimpleType.Native(clazz, targs.map(visitType))
 
           case TypeConstructor.Array =>
             // Remove the region from the array.

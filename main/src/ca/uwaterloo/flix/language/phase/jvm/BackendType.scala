@@ -159,7 +159,7 @@ object BackendType {
       case SimpleType.RecordExtend(_, _, _) => BackendObjType.Record.toTpe
       case SimpleType.ExtensibleEmpty => BackendObjType.ExtTagged.toTpe
       case SimpleType.ExtensibleExtend(_, _, _) => BackendObjType.ExtTagged.toTpe
-      case SimpleType.Native(clazz) => BackendObjType.Native(JvmName.ofClass(clazz)).toTpe
+      case SimpleType.Native(clazz, _) => BackendObjType.Native(JvmName.ofClass(clazz)).toTpe
       case SimpleType.Enum(_, _) => throw InternalCompilerException(s"Unexpected type '$tpe0'", SourceLocation.Unknown)
       case SimpleType.Struct(_, _) => throw InternalCompilerException(s"Unexpected type '$tpe0'", SourceLocation.Unknown)
     }
@@ -196,7 +196,7 @@ object BackendType {
          SimpleType.String | SimpleType.Regex | SimpleType.Array(_) | SimpleType.Lazy(_) |
          SimpleType.Tuple(_) | SimpleType.Enum(_, _) | SimpleType.Struct(_, _) | SimpleType.Arrow(_, _) |
          SimpleType.RecordEmpty | SimpleType.RecordExtend(_, _, _) |
-         SimpleType.ExtensibleExtend(_, _, _) | SimpleType.ExtensibleEmpty | SimpleType.Native(_) |
+         SimpleType.ExtensibleExtend(_, _, _) | SimpleType.ExtensibleEmpty | SimpleType.Native(_, _) |
          SimpleType.Region | SimpleType.Null =>
       BackendType.Object
   }
