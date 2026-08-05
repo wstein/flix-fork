@@ -10,7 +10,7 @@ and several entries below exist because an earlier claim was checked and failed.
 shims. They do not establish correctness of the broader Flix–Java boundary —
 generic Java method results, anonymous-class overrides, superclass calls, or
 functional-interface adaptation — which is a separate mechanism with its own
-open defects. J17 records what is tracked elsewhere and why none of it is
+open defects. J18 records what is tracked elsewhere and why none of it is
 settled here.
 
 Status values are **Settled** (evidence is decisive and in the repository),
@@ -194,7 +194,7 @@ element with a plan of its own.
 The fourth — the front-end check — could not be folded in. `EntryPoints` works
 on `Type` and the backend on `SimpleType`; carrying a plan between them would
 touch six ASTs. It keeps its own recognizer, which duplicates
-`ExportPlan.isOption` verbatim, and J16 records what that costs.
+`ExportPlan.isOption` verbatim, and J17 records what that costs.
 
 **Rejected:** threading the plan down from the front end, for the reason above.
 
@@ -267,7 +267,7 @@ None` is the obvious mapping. The real reasons are these.
    `Option$…` with the type argument already gone and cannot tell what to
    convert from. Parameters need the same mechanism J5 gives returns, extended.
 2. **`ExportPlan` only runs one way.** `emit` describes Flix → Java. The reverse
-   is a second tree of instructions, and by J16 the gate may not accept a
+   is a second tree of instructions, and by J17 the gate may not accept a
    parameter type until that tree exists.
 3. **Construction is harder than inspection.** Returning reads a tag with
    `GETFIELD`; accepting one means *building* a Flix value — allocating the
@@ -280,7 +280,7 @@ None` is the obvious mapping. The real reasons are these.
    plan has to choose whether `null` is a `None` or an error, and that choice is
    API policy, not an implementation detail.
 
-**Rejected:** accepting `Optional` parameters ahead of (1) and (2). That is J16
+**Rejected:** accepting `Optional` parameters ahead of (1) and (2). That is J17
 exactly — a gate wider than the plan.
 
 ---
@@ -333,7 +333,7 @@ it with a lazy view, which is not.
 `List[t]` is exportable in return position, converted by walking the cons chain
 into an `ArrayList` and wrapping it with `Collections.unmodifiableList`. The
 element must itself be exportable, so `List[List[t]]` and `List[Option[t]]` are
-rejected — one level, matching what the solver can build (J16). Unmodifiable
+rejected — one level, matching what the solver can build (J17). Unmodifiable
 because a Flix list is immutable, and handing back a mutable copy invites a
 caller to write to something that looks like the Flix value and is not.
 
@@ -582,7 +582,7 @@ java.util.NoSuchElementException: key not found: (ToString,AnyType)
 ```
 
 So E1970 is not a stylistic preference; it is what keeps that unreachable, which
-is why it ships in the same change as J13 rather than after it (J16).
+is why it ships in the same change as J13 rather than after it (J17).
 
 **Rejected:** dictionary passing. It is the correct general answer and a
 language-wide change, taken on to buy one interop feature. **Also rejected:**
@@ -662,7 +662,49 @@ The same carrier would have to be threaded for parameters.
 
 ---
 
-## J16 — The front-end gate may not outrun the backend plan
+## J16 — A class-level signature is plumbed, and deliberately unused
+
+**Status: Settled.** Shipped as capability; no generator declares one.
+
+`ClassMaker` can now write a class's generic signature, the counterpart of the
+method-level one J6 relies on. A class implementing `java.util.List<T>` without
+it implements it *raw*, which by J6's measurement Scala 3 and Kotlin reject
+rather than warn about.
+
+Nothing the backend generates passes one, and that is the finding rather than an
+omission. **Every generated class exists after erasure, so every argument it
+could declare is already `Object`.** `Fn1$Obj$Obj` implements
+`java.util.function.Function`, `Consumer` and `Predicate` raw today; writing
+`Function<Object, Object>` instead adds nothing a caller can use. The type
+argument is still known only at the *method* boundary, which is where J6, J12
+and J15 put it.
+
+Two candidate consumers were checked and neither survives:
+
+- **The lazy `List` view (J10).** Measured rather than assumed: a deliberately
+  raw class behind a *signed method return* is invisible. Scala 3 and Kotlin
+  both compile against `List<String>`, and `Method.getGenericReturnType` reports
+  `java.util.List<java.lang.String>`. Only `Class.getGenericSuperclass` on the
+  implementation class sees raw, and a caller never names that class.
+- **`BackendObjType.Arrow`.** A Flix closure reaching Java is typed by the Java
+  side's own declaration, so our class name never appears in a signature a
+  compiler reads.
+
+**Rejected:** wiring it to `Arrow` anyway to give it a caller. A signature that
+says `<Object, Object>` claims information it does not have, which is worse than
+the raw form it replaces.
+
+The plumbing is tested directly rather than through a caller — that the default
+stays *absent* rather than empty, that each of the three class shapes writes
+what it is given, and that passing a signature does not shift the superclass or
+interface list, since it is one positional argument among several on
+`ClassWriter.visit`. It is here so that a generator with something real to
+declare can rely on it; it was implemented on request, with this entry recording
+that no such generator exists yet.
+
+---
+
+## J17 — The front-end gate may not outrun the backend plan
 
 **Status: Settled.**
 
@@ -690,7 +732,7 @@ rather than merely assumed to.
 
 ---
 
-## J17 — The inbound boundary is out of scope and is not sound today
+## J18 — The inbound boundary is out of scope and is not sound today
 
 **Status: Deferred**, and deferred to other people — these are upstream issues,
 not decisions this fork has taken.
