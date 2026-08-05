@@ -232,6 +232,32 @@ signature.
 
 `List` is not exportable as a parameter, for the same reason `Option` is not.
 
+## Sets
+
+`Set[t]` is exportable **as a return type**, where the shim presents it as an
+unmodifiable `java.util.Set`:
+
+```flix
+@Export
+pub def names(): Set[String] = Set#{"delta", "alpha", "charlie", "bravo"}
+```
+
+```java
+Set<String> xs = Acme.Greeter.names();   // [alpha, bravo, charlie, delta]
+xs.add("echo");                          // UnsupportedOperationException
+```
+
+Unlike a `List`, a `Set` is **not** copied: what crosses is a view over the
+red-black tree, which allocates O(1) rather than O(n) and holds the Flix value
+alive for as long as the view is reachable. Iteration is in ascending key order,
+which is the order a Flix `Set` already enumerates in — so the same set walked
+from Flix and from Java yields the same sequence.
+
+`size()` walks the tree once and caches the result; `isEmpty()` is O(1) and does
+not force it. As with `List`, the element type is declared in the `Signature`, a
+primitive element is boxed, the element must itself be exportable, and the type
+is return-only.
+
 ## Why some conversions are return-only
 
 `Option` is *not* exportable as a parameter. Mapping `Optional.empty()` to

@@ -376,6 +376,27 @@ class TestExportedShims extends AnyFunSuite {
     assert(signatures.get("numbers").contains("()Ljava/util/List<Ljava/lang/Integer;>;"))
   }
 
+  test("an exported Set is presented as a java.util.Set") {
+    // The interface, not the generated view class behind it. A caller must never be able to name
+    // the view: it is keyed on the erased element, so `Set[String]` and `Set[Regex]` share one,
+    // and its name says so.
+    val (descriptors, signatures) = membersOf(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    @Export
+        |    pub def names(): Set[String] = Set#{"a", "b"}
+        |
+        |    @Export
+        |    pub def numbers(): Set[Int32] = Set#{1, 2}
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin, "Pkg/Mod")
+    assert(descriptors.get("names").contains("()Ljava/util/Set;"))
+    assert(signatures.get("names").contains("()Ljava/util/Set<Ljava/lang/String;>;"))
+    assert(signatures.get("numbers").contains("()Ljava/util/Set<Ljava/lang/Integer;>;"))
+  }
+
   test("no return type the front end accepts leaks the Flix representation") {
     // `EntryPoints` decides what may be exported and `ExportPlan` decides how, over different type
     // representations, so a gate widened ahead of a plan compiles into a shim that falls through
@@ -403,7 +424,11 @@ class TestExportedShims extends AnyFunSuite {
       "List[String]" -> "\"s\" :: Nil",
       "List[Int32]" -> "1 :: Nil",
       "List[Float64]" -> "1.0f64 :: Nil",
-      "List[BigInt]" -> "1ii :: Nil"
+      "List[BigInt]" -> "1ii :: Nil",
+      "Set[String]" -> "Set#{\"s\"}",
+      "Set[Int32]" -> "Set#{1}",
+      "Set[Float64]" -> "Set#{1.0f64}",
+      "Set[BigInt]" -> "Set#{1ii}"
     )
     val defs = returnTypes.zipWithIndex.map {
       case ((tpe, value), i) => s"    @Export\n    pub def f$i(): $tpe = $value"

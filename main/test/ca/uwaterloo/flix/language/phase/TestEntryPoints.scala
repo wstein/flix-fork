@@ -979,6 +979,74 @@ class TestEntryPoints extends AnyFunSuite with TestUtils {
     expectError[EntryPointError.IllegalExportType](result)
   }
 
+  test("Test.ExportSet.01") {
+    // `Set` in return position is presented as an unmodifiable `java.util.Set` by a lazy view over
+    // the red-black tree, rather than copied.
+    val input =
+      """
+        |mod Pkg { }
+        |mod Pkg.Mod { @Export pub def names(): Set[String] = Set#{"a"} }
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibAll)
+    expectSuccess(result)
+  }
+
+  test("Test.ExportSet.02") {
+    // One level, as for `List`: an element that is itself a container has no plan, and the view
+    // would hand back the internal tag class rather than fail.
+    val input =
+      """
+        |mod Pkg { }
+        |mod Pkg.Mod { @Export pub def f(): Set[List[String]] = Set#{"a" :: Nil} }
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibAll)
+    expectError[EntryPointError.IllegalExportType](result)
+  }
+
+  test("Test.ExportSet.03") {
+    // A Flix enum element is rejected here rather than at the view, since a `Set[Colour]` would
+    // otherwise iterate into `dev.flix.gen` class instances -- a leak in the values, which the
+    // descriptor `java.util.Set` does nothing to reveal.
+    val input =
+      """
+        |mod Pkg { }
+        |mod Pkg.Mod {
+        |    pub enum Colour { case Red, case Green }
+        |    @Export pub def f(): Set[Colour] = Set#{}
+        |}
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibAll)
+    expectError[EntryPointError.IllegalExportType](result)
+  }
+
+  test("Test.ExportSet.04") {
+    // Return position only. A parameter would need a Java set turned back into a red-black tree,
+    // which needs the element's `Order` instance and so has no conversion at all.
+    val input =
+      """
+        |mod Pkg { }
+        |mod Pkg.Mod { @Export pub def f(xs: Set[String]): Int32 = Set.size(xs) }
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibAll)
+    expectError[EntryPointError.IllegalExportType](result)
+  }
+
+  test("Test.ExportSet.05") {
+    // Identified by symbol, so a user-defined `Set` stays an ordinary enum and unexportable. The
+    // gate and `ExportPlan` ask this question separately, of different representations, so a
+    // disagreement here would admit a type the backend cannot build.
+    val input =
+      """
+        |mod Pkg { }
+        |mod Pkg.Mod {
+        |    pub enum Set[t] { case Set(t) }
+        |    @Export pub def f(): Pkg.Mod.Set[String] = Pkg.Mod.Set.Set("a")
+        |}
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibAll)
+    expectError[EntryPointError.IllegalExportType](result)
+  }
+
   test("Test.ExportPolymorphic.01") {
     // An unconstrained type variable is exported as `java.lang.Object`. The monomorpher defaults
     // it to `AnyType`, which is represented as `Object`, so the boundary needs no special case.

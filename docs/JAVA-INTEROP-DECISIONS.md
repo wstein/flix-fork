@@ -327,8 +327,9 @@ which would satisfy the descriptor and break every use of it.
 
 ## J10 — `List` crosses as an unmodifiable `java.util.List`, copied eagerly
 
-**Status: Settled** for the copy, which is shipped. **Proposed** for replacing
-it with a lazy view, which is not.
+**Status: Settled** for the copy, which is shipped. **Shipped** for the lazy
+view, but for `Set` only so far — `Map` and `List` are still to come, and until
+`List` lands the eager copy below is what a `List` export still does.
 
 `List[t]` is exportable in return position, converted by walking the cons chain
 into an `ArrayList` and wrapping it with `Collections.unmodifiableList`. The
@@ -382,8 +383,39 @@ reason does not.
 `AbstractMap.SimpleImmutableEntry` rather than generating a seventh. Unlike
 every other generated class, these are keyed on an *export plan* rather than on
 a type in `root.types`, so `CodeGen` has to collect them by walking the
-exported defs. `size()` is cached and `isEmpty()` tests the root ordinal, for
-all three.
+exported defs. `size()` is cached and `isEmpty()` tests the root, for all three.
+
+### What building the `Set` view actually cost
+
+One thing the design above got wrong, found by building it. The plan was to read
+the tree's ordinals and erased field types out of the specialized enums, the way
+`Option` and `List` read theirs. That cannot be done: **the eraser rewrites an
+enum-typed field to `Object`**, so by the time the backend sees `Set`'s single
+case, nothing says that what it holds is a `RedBlackTree` — the tree's enum, and
+with it the ordinal of `Node`, is unreachable from the exported type.
+`Option` and `List` never noticed because their walk stays inside the enum they
+started from; a `Set`'s walk crosses into a different one.
+
+What replaced it costs less than the original plan. The view tests
+`instanceof Tag$Obj$Obj$…` rather than comparing an ordinal, which is *exact*
+here even though that tag class is shared with every other five-field tag: the
+field it is read from holds a `RedBlackTree` and nothing else, and the other two
+cases are nullary, so they are classes of their own rather than tags. That
+removes the ordinal from the design entirely — including the assumption, which
+was never stated let alone checked, that ordinals agree across specializations.
+
+What is left stated rather than derived is the shape of `Node` itself: which of
+its five fields are the subtrees and which is the key. That is pinned by the
+runtime tests — get an index wrong and iteration returns the wrong values or
+fails verification — rather than by a type, and it is the one place this view
+knows something about the standard library that the standard library does not
+tell it.
+
+**Also settled by building it:** the view class is keyed on the *erased*
+element, not the declared one. `Set[String]` and `Set[Regex]` share a single
+view and differ only in the shim's signature, because the bytecode a view emits
+depends on nothing else. That is what makes the class name a sound key rather
+than a name that merely happens not to collide.
 
 ### Why the copy shipped first
 

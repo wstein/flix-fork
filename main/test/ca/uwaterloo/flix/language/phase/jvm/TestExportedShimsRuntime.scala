@@ -267,4 +267,148 @@ class TestExportedShimsRuntime extends AnyFunSuite {
       assertResult("three")(invoke(facade, "three"))
     }
   }
+
+  test("an exported Set arrives with its elements, in ascending order") {
+    // A `Set` is a red-black tree and the view walks it lazily, so nothing about this is visible
+    // statically: the descriptor says `java.util.Set` whether the walk is right, wrong, or absent.
+    // The order is asserted rather than the membership alone, because ascending order is a promise
+    // the view makes (J10) and an in-order walk is the only traversal that keeps it -- a pre-order
+    // one would pass a membership test and break the promise.
+    withFacade(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    @Export
+        |    pub def names(): Set[String] = Set#{"delta", "alpha", "charlie", "bravo"}
+        |
+        |    @Export
+        |    pub def none(): Set[String] = Set#{}
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin, "Pkg.Mod") { facade =>
+      val names = invoke(facade, "names").asInstanceOf[java.util.Set[?]]
+      assertResult(List("alpha", "bravo", "charlie", "delta"))(drain(names))
+      assertResult(java.util.Set.of())(invoke(facade, "none"))
+    }
+  }
+
+  test("an exported Set of a primitive arrives boxed, in ascending order") {
+    // The element conversion is emitted inside the iterator rather than at construction, so a
+    // primitive is boxed once per element per traversal. That the box is a real `Integer` -- and
+    // not Flix's own `Value` wrapper -- can only be seen by taking an element out.
+    withFacade(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    @Export
+        |    pub def numbers(): Set[Int32] = Set#{5, 3, 9, 1}
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin, "Pkg.Mod") { facade =>
+      val numbers = invoke(facade, "numbers").asInstanceOf[java.util.Set[?]]
+      assertResult(List(1, 3, 5, 9))(drain(numbers))
+      assertResult(classOf[java.lang.Integer])(numbers.iterator().next().getClass)
+    }
+  }
+
+  test("an exported Set reports its size and emptiness") {
+    // `size()` is computed by walking the tree once and cached, so it is asked for twice here: a
+    // cache that stores the wrong value, or that fails to store one, shows up on the second call.
+    // `isEmpty` is overridden separately to stay O(1), which means it can disagree with `size()`.
+    withFacade(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    @Export
+        |    pub def names(): Set[String] = Set#{"a", "b", "c"}
+        |
+        |    @Export
+        |    pub def none(): Set[String] = Set#{}
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin, "Pkg.Mod") { facade =>
+      val names = invoke(facade, "names").asInstanceOf[java.util.Set[?]]
+      assertResult(3)(names.size())
+      assertResult(3)(names.size())
+      assert(!names.isEmpty)
+
+      val none = invoke(facade, "none").asInstanceOf[java.util.Set[?]]
+      assertResult(0)(none.size())
+      assert(none.isEmpty)
+    }
+  }
+
+  test("an exported Set honours the java.util.Set contract") {
+    // The view inherits `contains`, `equals`, `hashCode` and `stream` from `AbstractSet`, all of
+    // which are written in terms of `iterator()` and `size()`. They are checked together because
+    // an iterator that is subtly wrong -- one element short, or not resettable -- satisfies a
+    // single traversal and fails these.
+    withFacade(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    @Export
+        |    pub def names(): Set[String] = Set#{"a", "b", "c"}
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin, "Pkg.Mod") { facade =>
+      val names = invoke(facade, "names").asInstanceOf[java.util.Set[Any]]
+      assert(names.contains("b"))
+      assert(!names.contains("z"))
+      assertResult(java.util.Set.of("a", "b", "c"))(names)
+      assertResult(java.util.Set.of("a", "b", "c").hashCode())(names.hashCode())
+      // Each `iterator()` walks from the root independently, so a second traversal sees everything
+      // the first one did.
+      assertResult(drain(names))(drain(names))
+    }
+  }
+
+  test("an exported Set cannot be written to") {
+    // Immutability is not implemented by the view; it is what the view gets by never overriding
+    // `Iterator.remove`, which every inherited mutator is written in terms of. That makes it worth
+    // checking rather than assuming, since it holds by omission.
+    withFacade(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    @Export
+        |    pub def names(): Set[String] = Set#{"a"}
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin, "Pkg.Mod") { facade =>
+      val names = invoke(facade, "names").asInstanceOf[java.util.Set[Any]]
+      assertThrows[UnsupportedOperationException](names.add("b"))
+      assertThrows[UnsupportedOperationException](names.remove("a"))
+      assertThrows[UnsupportedOperationException](names.clear())
+      assertThrows[UnsupportedOperationException](names.iterator().remove())
+    }
+  }
+
+  test("an exhausted Set iterator throws NoSuchElementException") {
+    // Required of every `Iterator`. The view gets it from `ArrayDeque.pop` rather than from a
+    // check of its own, so it is worth confirming that the exception a caller sees is the one the
+    // interface specifies.
+    withFacade(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    @Export
+        |    pub def names(): Set[String] = Set#{"a"}
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin, "Pkg.Mod") { facade =>
+      val it = invoke(facade, "names").asInstanceOf[java.util.Set[Any]].iterator()
+      assertResult("a")(it.next())
+      assert(!it.hasNext)
+      assertThrows[java.util.NoSuchElementException](it.next())
+    }
+  }
+
+  /** Drains `set` into a list, so a traversal can be compared in order rather than as a set. */
+  private def drain(set: java.util.Set[?]): List[Any] = {
+    val it = set.iterator()
+    val buffer = scala.collection.mutable.ListBuffer.empty[Any]
+    while (it.hasNext) buffer += it.next()
+    buffer.toList
+  }
 }

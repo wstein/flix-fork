@@ -61,6 +61,12 @@ object CodeGen {
         else Some(JvmClass(nsClass.jvmName, nsClass.genByteCode(entrypointDefs)))
       }).toList
 
+    // The classes an export hands back instead of a copy. Unlike every other family here these are
+    // keyed on an export plan rather than on a type in `root.types`, so they are collected from the
+    // exported defs -- by the same call the shim itself uses, so a view a shim returns is always a
+    // view that was emitted.
+    val exportViewClasses = ExportPlan.viewClassesOf(root).map(bt => JvmClass(bt.jvmName, bt.genByteCode()))
+
     // Generate function classes.
     val functionAndClosureClasses = GenFunAndClosureClasses.gen(root.defs).values.toList
     val erasedFunctionTypes = JvmOps.getErasedArrowsOf(allTypes)
@@ -120,6 +126,7 @@ object CodeGen {
     val allClasses = List(
       mainClass,
       namespaceClasses,
+      exportViewClasses,
       functionInterfaces,
       functionAndClosureClasses,
       closureAbstractClasses,

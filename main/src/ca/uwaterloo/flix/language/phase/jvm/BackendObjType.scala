@@ -64,6 +64,10 @@ sealed trait BackendObjType {
     case BackendObjType.Main => JvmName(RootPackage, "Main")
     case BackendObjType.Namespace(Nil) => JvmName(DevFlixGen, s"Root${Flix.Delimiter}")
     case BackendObjType.Namespace(ns) => JvmName.facadeOfNamespace(ns)
+    // Export views. Named after the element's *erased* type, which is what decides their bytecode:
+    // `Set[String]` and `Set[Regex]` share a view, and only the shim's signature tells them apart.
+    case BackendObjType.SetView(element) => JvmName(DevFlixGen, mkClassName("SetView", element.flixType))
+    case BackendObjType.SetIterator(element) => JvmName(DevFlixGen, mkClassName("SetIterator", element.flixType))
     // Java classes
     case BackendObjType.Native(className) => className
     // Effects Runtime
@@ -1468,11 +1472,11 @@ object BackendObjType {
       * How the result of `defn` is converted for Java, if it needs converting.
       *
       * The plan is the single source of truth for the boundary: the Java type below, the signature,
-      * and the instructions in [[shimIns]] all read it, so they cannot describe different things.
+      * the instructions in [[shimIns]], and the view classes `CodeGen` emits all read it, so they
+      * cannot describe different things.
       */
     private def exportPlan(defn: JvmAst.Def)(implicit root: JvmAst.Root): Option[ExportPlan] =
-      if (!defn.ann.isExport) None
-      else defn.exportedReturnType.flatMap(ExportPlan.of(_, defn.unboxedType.tpe))
+      ExportPlan.ofDef(defn)
 
     /**
       * The generic signature of the shim method of `defn`, when it has type arguments to declare.
@@ -1556,6 +1560,307 @@ object BackendObjType {
           }
       }
     }
+  }
+
+  /**
+    * A class that exists to present a Flix value to Java without copying it.
+    *
+    * These are the only generated classes keyed on an [[ExportPlan]] rather than on a type in
+    * `root.types`, so `CodeGen` collects them by walking the exported defs. The trait exists so it
+    * can generate them without knowing which kind each one is.
+    */
+  sealed trait ExportView extends BackendObjType {
+    def genByteCode()(implicit root: JvmAst.Root, flix: Flix): Array[Byte]
+  }
+
+  /**
+    * A Flix `Set` presented to Java as an unmodifiable `java.util.Set`, without copying it.
+    *
+    * A `Set` is a red-black tree, so the view holds the tree's root and walks it on demand. It
+    * extends `java.util.AbstractSet`, which needs only `iterator()` and `size()` and supplies the
+    * rest of the contract -- including `equals`, `hashCode`, and mutators that throw, since every
+    * one of them is written in terms of `Iterator.remove`, whose default implementation throws.
+    * Immutability is therefore not something this class implements; it is what it gets by not
+    * overriding anything.
+    *
+    * `element` is the *erased* element plan -- `Identity(Object)`, or the boxing of a primitive.
+    * The declared element type never reaches here: it appears only in the shim's signature, which
+    * is why `Set[String]` and `Set[Regex]` share one view class.
+    *
+    * See J10 for the contract this promises a caller and the cost it accepts.
+    */
+  case class SetView(element: ExportPlan) extends ExportView {
+
+    private def nodeTag: Tag = SetIterator.nodeTag(element.flixType)
+
+    def genByteCode()(implicit root: JvmAst.Root, flix: Flix): Array[Byte] = {
+      val cm = ClassMaker.mkClass(this.jvmName, IsFinal, superClass = JvmName.AbstractSet)
+
+      cm.mkConstructor(Constructor, IsPublic, constructorIns(_))
+      cm.mkField(TreeField, IsPrivate, IsFinal, NotVolatile)
+      cm.mkField(SizeField, IsPrivate, NotFinal, NotVolatile)
+      cm.mkMethod(Nil, IteratorMethod, IsPublic, IsFinal, iteratorIns(_))
+      cm.mkMethod(Nil, SizeMethod, IsPublic, IsFinal, sizeIns(_))
+      cm.mkMethod(Nil, IsEmptyMethod, IsPublic, IsFinal, isEmptyIns(_))
+      cm.mkStaticMethod(CountMethod, IsPrivate, IsFinal, countIns(_))
+
+      cm.closeClassMaker()
+    }
+
+    /** The iterator this view hands out. Derived rather than stored, so the two cannot disagree. */
+    def iteratorType: SetIterator = SetIterator(element)
+
+    private def TreeField: InstanceField = InstanceField(this.jvmName, "tree", Tagged.toTpe)
+
+    /**
+      * The cached size, or `-1` before it has been computed.
+      *
+      * The one piece of per-view state J10 admits: without it `AbstractCollection.isEmpty` and
+      * every size-dependent method walk the tree again on each call. A sentinel rather than a
+      * separate flag, because a size is never negative.
+      */
+    private def SizeField: InstanceField = InstanceField(this.jvmName, "size", BackendType.Int32)
+
+    def Constructor: ConstructorMethod = ConstructorMethod(this.jvmName, List(Tagged.toTpe))
+
+    /** `[] --> return` */
+    private def constructorIns(implicit mv: MethodVisitor): Unit =
+      withName(1, Tagged.toTpe) { tree =>
+        thisLoad()
+        INVOKESPECIAL(JvmName.AbstractSet, JvmName.ConstructorMethod, mkDescriptor()(VoidableType.Void))
+        thisLoad()
+        tree.load()
+        PUTFIELD(TreeField)
+        thisLoad()
+        pushInt(-1)
+        PUTFIELD(SizeField)
+        RETURN()
+      }
+
+    def IteratorMethod: InstanceMethod =
+      InstanceMethod(this.jvmName, "iterator", mkDescriptor()(BackendObjType.Native(JvmName.Iterator).toTpe))
+
+    /** `[] --> return Iterator` */
+    private def iteratorIns(implicit mv: MethodVisitor): Unit = {
+      NEW(iteratorType.jvmName)
+      DUP()
+      thisLoad()
+      GETFIELD(TreeField)
+      INVOKESPECIAL(iteratorType.Constructor)
+      ARETURN()
+    }
+
+    def SizeMethod: InstanceMethod = InstanceMethod(this.jvmName, "size", mkDescriptor()(BackendType.Int32))
+
+    /** `[] --> return int` */
+    private def sizeIns(implicit mv: MethodVisitor): Unit = {
+      thisLoad()
+      GETFIELD(SizeField)
+      ifCondition(Condition.LT) {
+        thisLoad()
+        thisLoad()
+        GETFIELD(TreeField)
+        INVOKESTATIC(CountMethod)
+        PUTFIELD(SizeField)
+      }
+      thisLoad()
+      GETFIELD(SizeField)
+      xReturn(BackendType.Int32)
+    }
+
+    def IsEmptyMethod: InstanceMethod = InstanceMethod(this.jvmName, "isEmpty", mkDescriptor()(BackendType.Bool))
+
+    /**
+      * `[] --> return boolean`
+      *
+      * Overridden so that emptiness stays O(1) even before `size()` has been forced.
+      * `AbstractCollection.isEmpty` is `size() == 0`, which would walk the whole tree.
+      */
+    private def isEmptyIns(implicit mv: MethodVisitor): Unit = {
+      thisLoad()
+      GETFIELD(TreeField)
+      INSTANCEOF(nodeTag.jvmName)
+      ifConditionElse(Condition.NE)(pushBool(false))(pushBool(true))
+      xReturn(BackendType.Bool)
+    }
+
+    private def CountMethod: StaticMethod =
+      StaticMethod(this.jvmName, "count", mkDescriptor(Tagged.toTpe)(BackendType.Int32))
+
+    /**
+      * `[] --> return int`
+      *
+      * Recursive rather than iterative: a red-black tree is balanced by construction, so the
+      * recursion is O(log n) deep and cannot overflow the stack for any tree that fits in memory.
+      *
+      * The test is *for* a node rather than against a leaf, which covers `Leaf` and
+      * `DoubleBlackLeaf` alike without naming either -- see [[SetIterator.nodeTag]] for why
+      * `instanceof` is exact here despite the tag class being shared.
+      */
+    private def countIns(implicit mv: MethodVisitor): Unit =
+      withName(0, Tagged.toTpe) { tree =>
+        tree.load()
+        INSTANCEOF(nodeTag.jvmName)
+        ifConditionElse(Condition.NE) {
+          pushInt(1)
+          tree.load()
+          CHECKCAST(nodeTag.jvmName)
+          GETFIELD(nodeTag.IndexField(SetIterator.LeftIndex))
+          CHECKCAST(Tagged.jvmName)
+          INVOKESTATIC(CountMethod)
+          IADD()
+          tree.load()
+          CHECKCAST(nodeTag.jvmName)
+          GETFIELD(nodeTag.IndexField(SetIterator.RightIndex))
+          CHECKCAST(Tagged.jvmName)
+          INVOKESTATIC(CountMethod)
+          IADD()
+        } {
+          pushInt(0)
+        }
+        xReturn(BackendType.Int32)
+      }
+  }
+
+  object SetIterator {
+
+    /**
+      * The field indices of `RedBlackTree.Node(Color, left, key, value, right)`.
+      *
+      * Stated rather than read from the enum. `Set`'s single case declares that it holds a
+      * `RedBlackTree`, but the eraser rewrites every enum-typed field to `Object`, so by the time
+      * the backend sees it the tree's own enum -- and with it the ordinals and field types of its
+      * cases -- is no longer reachable from the exported type. What pins this shape is therefore
+      * the runtime tests, not the AST: get an index wrong and iteration returns the wrong values
+      * or fails verification.
+      */
+    val LeftIndex: Int = 1
+    val KeyIndex: Int = 2
+    val RightIndex: Int = 4
+
+    /**
+      * The tag class of `RedBlackTree.Node` for a tree whose keys erase to `key`.
+      *
+      * `Color`, both subtrees and the `Unit` value are all references, so they erase to `Object`
+      * and only the key varies. This class is shared with every other five-field tag of the same
+      * erasure, which is what makes it a sound test for "is this a `Node`" *in this position*: the
+      * field it is read from holds a `RedBlackTree` and nothing else, and the other two cases are
+      * nullary, so they are classes of their own rather than tags.
+      */
+    def nodeTag(key: BackendType): Tag =
+      Tag(List(BackendType.Object, BackendType.Object, key, BackendType.Object, BackendType.Object))
+  }
+
+  /**
+    * The in-order walk behind a [[SetView]].
+    *
+    * A stack of the nodes whose keys are still owed, deepest-left first. `next` pops one, pushes
+    * the left spine of its right child, and converts the key. That is O(1) amortized per element
+    * and O(h) in memory, which J10 notes is what *any* tree traversal costs -- ascending order is
+    * not paid for, it is the order the tree is already in.
+    *
+    * `remove` is not overridden, so `Iterator`'s default implementation throws, which is what
+    * makes every inherited mutator on the view throw as well.
+    */
+  case class SetIterator(element: ExportPlan) extends ExportView {
+
+    private def nodeTag: Tag = SetIterator.nodeTag(element.flixType)
+
+    def genByteCode()(implicit root: JvmAst.Root, flix: Flix): Array[Byte] = {
+      val cm = ClassMaker.mkClass(this.jvmName, IsFinal, interfaces = List(JvmName.Iterator))
+
+      cm.mkConstructor(Constructor, IsPublic, constructorIns(_))
+      cm.mkField(StackField, IsPrivate, IsFinal, NotVolatile)
+      cm.mkMethod(Nil, HasNextMethod, IsPublic, IsFinal, hasNextIns(_))
+      cm.mkMethod(Nil, NextMethod, IsPublic, IsFinal, nextIns(root, _))
+      cm.mkMethod(Nil, PushLeftSpineMethod, IsPrivate, IsFinal, pushLeftSpineIns(_))
+
+      cm.closeClassMaker()
+    }
+
+    private def StackField: InstanceField =
+      InstanceField(this.jvmName, "stack", BackendObjType.Native(JvmName.ArrayDeque).toTpe)
+
+    def Constructor: ConstructorMethod = ConstructorMethod(this.jvmName, List(Tagged.toTpe))
+
+    /** `[] --> return` */
+    private def constructorIns(implicit mv: MethodVisitor): Unit =
+      withName(1, Tagged.toTpe) { tree =>
+        thisLoad()
+        INVOKESPECIAL(ClassConstants.Object.Constructor)
+        thisLoad()
+        NEW(JvmName.ArrayDeque)
+        DUP()
+        INVOKESPECIAL(JvmName.ArrayDeque, JvmName.ConstructorMethod, mkDescriptor()(VoidableType.Void))
+        PUTFIELD(StackField)
+        thisLoad()
+        tree.load()
+        INVOKESPECIAL(this.jvmName, PushLeftSpineMethod.name, PushLeftSpineMethod.d)
+        RETURN()
+      }
+
+    def HasNextMethod: InstanceMethod =
+      InstanceMethod(this.jvmName, "hasNext", mkDescriptor()(BackendType.Bool))
+
+    /** `[] --> return boolean` */
+    private def hasNextIns(implicit mv: MethodVisitor): Unit = {
+      thisLoad()
+      GETFIELD(StackField)
+      INVOKEVIRTUAL(JvmName.ArrayDeque, "isEmpty", mkDescriptor()(BackendType.Bool))
+      ifConditionElse(Condition.EQ)(pushBool(true))(pushBool(false))
+      xReturn(BackendType.Bool)
+    }
+
+    def NextMethod: InstanceMethod =
+      InstanceMethod(this.jvmName, "next", mkDescriptor()(BackendType.Object))
+
+    /**
+      * `[] --> return Object`
+      *
+      * Exhaustion is not checked here: `ArrayDeque.pop` throws `NoSuchElementException` on an
+      * empty deque, which is exactly what `Iterator.next` is required to throw.
+      */
+    private def nextIns(implicit root: JvmAst.Root, mv: MethodVisitor): Unit =
+      withName(1, nodeTag.toTpe) { node =>
+        thisLoad()
+        GETFIELD(StackField)
+        INVOKEVIRTUAL(JvmName.ArrayDeque, "pop", mkDescriptor()(BackendType.Object))
+        CHECKCAST(nodeTag.jvmName)
+        node.store()
+        // The right child owes everything under it once this key is handed out.
+        thisLoad()
+        node.load()
+        GETFIELD(nodeTag.IndexField(SetIterator.RightIndex))
+        CHECKCAST(Tagged.jvmName)
+        INVOKESPECIAL(this.jvmName, PushLeftSpineMethod.name, PushLeftSpineMethod.d)
+        node.load()
+        GETFIELD(nodeTag.IndexField(SetIterator.KeyIndex))
+        element.emit(SourceLocation.Unknown, 2)
+        ARETURN()
+      }
+
+    private def PushLeftSpineMethod: InstanceMethod =
+      InstanceMethod(this.jvmName, "pushLeftSpine", mkDescriptor(Tagged.toTpe)(VoidableType.Void))
+
+    /** `[] --> return` */
+    private def pushLeftSpineIns(implicit mv: MethodVisitor): Unit =
+      withName(1, Tagged.toTpe) { cursor =>
+        whileLoop(Condition.NE) {
+          cursor.load()
+          INSTANCEOF(nodeTag.jvmName)
+        } {
+          thisLoad()
+          GETFIELD(StackField)
+          cursor.load()
+          INVOKEVIRTUAL(JvmName.ArrayDeque, "push", mkDescriptor(BackendType.Object)(VoidableType.Void))
+          cursor.load()
+          CHECKCAST(nodeTag.jvmName)
+          GETFIELD(nodeTag.IndexField(SetIterator.LeftIndex))
+          CHECKCAST(Tagged.jvmName)
+          cursor.store()
+        }
+        RETURN()
+      }
   }
 
   //

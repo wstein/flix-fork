@@ -15,7 +15,7 @@
  */
 package ca.uwaterloo.flix.language.phase.jvm
 
-import ca.uwaterloo.flix.language.ast.{JvmAst, SimpleType, SourceLocation}
+import ca.uwaterloo.flix.language.ast.{JvmAst, SimpleType, SourceLocation, Symbol}
 import ca.uwaterloo.flix.language.phase.jvm.BytecodeInstructions.*
 import ca.uwaterloo.flix.language.phase.jvm.JvmName.MethodDescriptor.mkDescriptor
 import ca.uwaterloo.flix.util.InternalCompilerException
@@ -66,6 +66,15 @@ sealed trait ExportPlan {
     * the slots below it.
     */
   def emit(loc: SourceLocation, nextLocal: Int)(implicit root: JvmAst.Root, mv: MethodVisitor): Unit
+
+  /**
+    * The classes this plan needs generated, including those of any nested plan.
+    *
+    * A conversion that hands back a view rather than a copy needs a class to be that view. These
+    * are the only generated classes keyed on a plan rather than on a type in `root.types`, which is
+    * why `CodeGen` has to collect them from the exported defs.
+    */
+  def generatedClasses: List[BackendObjType.ExportView] = Nil
 }
 
 object ExportPlan {
@@ -94,6 +103,8 @@ object ExportPlan {
     def typeArgument: String = s"L${clazz.toInternalName}<${targs.map(_.typeArgument).mkString}>;"
 
     def emit(loc: SourceLocation, nextLocal: Int)(implicit root: JvmAst.Root, mv: MethodVisitor): Unit = ()
+
+    override def generatedClasses: List[BackendObjType.ExportView] = targs.flatMap(_.generatedClasses)
   }
 
   /** A primitive that must be boxed, because the value it is being placed into holds references. */
@@ -137,6 +148,43 @@ object ExportPlan {
         INVOKESTATIC(JvmName.Optional, "ofNullable", mkDescriptor(BackendType.Object)(javaType))
       }
     }
+
+    override def generatedClasses: List[BackendObjType.ExportView] = element.generatedClasses
+  }
+
+  /**
+    * A Flix `Set` presented as an unmodifiable `java.util.Set`, without copying it.
+    *
+    * Unlike [[AsList]] this converts nothing here: it unwraps the red-black tree and hands it to a
+    * generated view that walks it on demand. `element` describes the element for the *signature*;
+    * the conversion the view emits per element lives in the view class, which is keyed on the
+    * erased element instead (see [[BackendObjType.SetView]]).
+    *
+    * The set value is a single-case tag holding the tree, so the tree is one field read away.
+    */
+  case class AsSet(element: ExportPlan, setTag: BackendObjType.Tag, view: BackendObjType.SetView) extends ExportPlan {
+    def flixType: BackendType = BackendObjType.Tagged.toTpe
+
+    def javaType: BackendType = BackendObjType.Native(JvmName.JavaSet).toTpe
+
+    def typeArgument: String = s"L${JvmName.JavaSet.toInternalName}<${element.typeArgument}>;"
+
+    def emit(loc: SourceLocation, nextLocal: Int)(implicit root: JvmAst.Root, mv: MethodVisitor): Unit =
+      // The tree goes through a local because `new` has to be on the stack below its argument, and
+      // the argument is what is already there.
+      withName(nextLocal, BackendObjType.Tagged.toTpe) { tree =>
+        CHECKCAST(setTag.jvmName)
+        GETFIELD(setTag.IndexField(0))
+        CHECKCAST(BackendObjType.Tagged.jvmName)
+        tree.store()
+        NEW(view.jvmName)
+        DUP()
+        tree.load()
+        INVOKESPECIAL(view.Constructor)
+      }
+
+    override def generatedClasses: List[BackendObjType.ExportView] =
+      view :: view.iteratorType :: element.generatedClasses
   }
 
   /**
@@ -194,6 +242,8 @@ object ExportPlan {
         }
       }
     }
+
+    override def generatedClasses: List[BackendObjType.ExportView] = element.generatedClasses
   }
 
   /**
@@ -210,6 +260,10 @@ object ExportPlan {
       case SimpleType.Enum(sym, List(element)) if isList(sym) =>
         val (nilOrdinal, consTag) = listTags(erased)
         Some(AsList(elementPlan(element, consTag.elms.head), nilOrdinal, consTag))
+      case SimpleType.Enum(sym, List(element)) if isStdEnum(sym, "Set") =>
+        val erasedKey = BackendType.toErasedBackendType(element)
+        val view = BackendObjType.SetView(viewElementPlan(erasedKey))
+        Some(AsSet(elementPlan(element, erasedKey), setTag(erased), view))
       case SimpleType.Native(clazz, targs) if targs.nonEmpty =>
         // Every argument must be describable, and `EntryPoints.isExportableType` has already
         // ensured it: a Flix type argument such as `ArrayList[SomeEnum]` is rejected there,
@@ -269,25 +323,50 @@ object ExportPlan {
     }
 
   /** Returns `true` if `sym` is the standard library's `Option`. */
-  private def isOption(sym: ca.uwaterloo.flix.language.ast.Symbol.EnumSym): Boolean =
-    sym.namespace.isEmpty && sym.text == "Option"
+  private def isOption(sym: Symbol.EnumSym): Boolean = isStdEnum(sym, "Option")
 
   /** Returns `true` if `sym` is the standard library's `List`. */
-  private def isList(sym: ca.uwaterloo.flix.language.ast.Symbol.EnumSym): Boolean =
-    sym.namespace.isEmpty && sym.text == "List"
+  private def isList(sym: Symbol.EnumSym): Boolean = isStdEnum(sym, "List")
+
+  /**
+    * Returns `true` if `sym` is the standard library's enum named `name`.
+    *
+    * By symbol rather than by name alone, so a user-defined `Foo.Set` stays an ordinary enum. This
+    * has to agree with `EntryPoints`, which decides the same question on the front-end type.
+    */
+  private def isStdEnum(sym: Symbol.EnumSym, name: String): Boolean =
+    sym.namespace.isEmpty && sym.text == name
 
   /** Returns the ordinal of `Nil` and the tag class of `Cons` for the specialized `List`. */
   private def listTags(erased: SimpleType)(implicit root: JvmAst.Root): (Int, BackendObjType.Tag) = {
-    val sym = erased match {
-      case SimpleType.Enum(s, _) => s
-      case other => throw InternalCompilerException(s"Exported List is not an enum: '$other'", SourceLocation.Unknown)
-    }
-    val cases = root.enums(sym).cases
-    def caseNamed(name: String) = cases.keys.find(_.name == name).getOrElse(
-      throw InternalCompilerException(s"Exported List has no $name case: '$sym'", SourceLocation.Unknown))
-    val cons = caseNamed("Cons")
-    (caseNamed("Nil").ordinal, BackendObjType.Tag(cases(cons).tpes.map(BackendType.toErasedBackendType)))
+    val sym = enumSymOf(erased, "List")
+    (caseSymOf(sym, "Nil").ordinal, tagOf(sym, "Cons"))
   }
+
+  /**
+    * Returns the tag class of the single `Set` case, which holds the red-black tree.
+    *
+    * Only this much is read from the AST. The tree's own enum cannot be: the eraser rewrites this
+    * case's field type to `Object`, so nothing here still says that what a `Set` holds is a tree.
+    * The shape the view walks is stated in [[BackendObjType.SetIterator]] instead.
+    */
+  private def setTag(erased: SimpleType)(implicit root: JvmAst.Root): BackendObjType.Tag =
+    tagOf(enumSymOf(erased, "Set"), "Set")
+
+  /** Returns the enum symbol of `tpe`, which describes a `what` that reaches the boundary. */
+  private def enumSymOf(tpe: SimpleType, what: String): Symbol.EnumSym = tpe match {
+    case SimpleType.Enum(sym, _) => sym
+    case other => throw InternalCompilerException(s"Exported $what is not an enum: '$other'", SourceLocation.Unknown)
+  }
+
+  /** Returns the symbol of the case of `sym` named `name`. */
+  private def caseSymOf(sym: Symbol.EnumSym, name: String)(implicit root: JvmAst.Root): Symbol.CaseSym =
+    root.enums(sym).cases.keys.find(_.name == name).getOrElse(
+      throw InternalCompilerException(s"Exported '${sym.text}' has no $name case: '$sym'", SourceLocation.Unknown))
+
+  /** Returns the tag class of the case of `sym` named `name`, which must carry at least one field. */
+  private def tagOf(sym: Symbol.EnumSym, name: String)(implicit root: JvmAst.Root): BackendObjType.Tag =
+    BackendObjType.Tag(root.enums(sym).cases(caseSymOf(sym, name)).tpes.map(BackendType.toErasedBackendType))
 
   /**
     * Returns the plan for a value held inside a converted container.
@@ -318,14 +397,34 @@ object ExportPlan {
 
   /** Returns the ordinal of `None` and the tag class of `Some` for the specialized `Option`. */
   private def optionTags(erased: SimpleType)(implicit root: JvmAst.Root): (Int, BackendObjType.Tag) = {
-    val sym = erased match {
-      case SimpleType.Enum(s, _) => s
-      case other => throw InternalCompilerException(s"Exported Option is not an enum: '$other'", SourceLocation.Unknown)
-    }
-    val cases = root.enums(sym).cases
-    def caseNamed(name: String) = cases.keys.find(_.name == name).getOrElse(
-      throw InternalCompilerException(s"Exported Option has no $name case: '$sym'", SourceLocation.Unknown))
-    val some = caseNamed("Some")
-    (caseNamed("None").ordinal, BackendObjType.Tag(cases(some).tpes.map(BackendType.toErasedBackendType)))
+    val sym = enumSymOf(erased, "Option")
+    (caseSymOf(sym, "None").ordinal, tagOf(sym, "Some"))
+  }
+
+  /**
+    * Returns the plan a generated view emits for each of its elements.
+    *
+    * Keyed on the erased element rather than the declared one, so that every `Set` whose elements
+    * are references shares a single view class. What a caller is told the elements are is the
+    * *signature*, which the plan tree carries separately.
+    */
+  private def viewElementPlan(erased: BackendType): ExportPlan =
+    boxedPlan(erased).getOrElse(Identity(BackendType.Object))
+
+  /**
+    * Returns how the result of `defn` is converted for Java, if it needs converting.
+    *
+    * The one place a def's plan is built. The shim reads it for its descriptor, its signature and
+    * its instructions, and `CodeGen` reads it for the classes it needs generated -- so a view that
+    * a shim returns is always a view that was emitted.
+    */
+  def ofDef(defn: JvmAst.Def)(implicit root: JvmAst.Root): Option[ExportPlan] =
+    if (!defn.ann.isExport) None
+    else defn.exportedReturnType.flatMap(of(_, defn.unboxedType.tpe))
+
+  /** Returns every class the export plans of `root` need generated. */
+  def viewClassesOf(root: JvmAst.Root): List[BackendObjType.ExportView] = {
+    implicit val r: JvmAst.Root = root
+    root.defs.values.toList.flatMap(defn => ofDef(defn).toList.flatMap(_.generatedClasses)).distinct
   }
 }

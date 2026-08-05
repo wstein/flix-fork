@@ -483,10 +483,11 @@ object EntryPoints {
       case List(tpe) if isUnitType(tpe) == Result.Ok(true) => Nil
       case tpes => tpes
     }
-    // `Option[t]` and `List[t]` are exportable in return position, where the shim marshals them
-    // into `java.util.Optional` and an unmodifiable `java.util.List`. Neither is exportable as a
-    // parameter, which would need the reverse conversion. What must be exportable is the element
-    // type, so that is what is checked, and an error points at it rather than at the container.
+    // `Option[t]`, `List[t]` and `Set[t]` are exportable in return position, where the shim
+    // marshals them into `java.util.Optional`, an unmodifiable `java.util.List`, and an
+    // unmodifiable `java.util.Set`. None is exportable as a parameter, which would need the
+    // reverse conversion. What must be exportable is the element type, so that is what is checked,
+    // and an error points at it rather than at the container.
     //
     // Only the element, and only one level: an element that is itself a container has no plan, so
     // admitting `List[Option[t]]` here would produce a shim returning the internal tag class. The
@@ -523,11 +524,23 @@ object EntryPoints {
   }
 
   /** Returns the element type of `tpe` if it is the standard library's `List[t]`. */
+  private def unapplyList(tpe: Type): Option[Type] = unapplyStdEnum(tpe, "List")
+
+  /** Returns the element type of `tpe` if it is the standard library's `Set[t]`. */
+  private def unapplySet(tpe: Type): Option[Type] = unapplyStdEnum(tpe, "Set")
+
+  /**
+    * Returns the argument of `tpe` if it is the standard library's unary enum named `name`.
+    *
+    * By symbol rather than by name alone, so a user-defined `Foo.Set` stays an ordinary enum and
+    * unexportable. This has to agree with `ExportPlan`, which asks the same question of the
+    * backend type.
+    */
   @tailrec
-  private def unapplyList(tpe: Type): Option[Type] = tpe match {
+  private def unapplyStdEnum(tpe: Type, name: String): Option[Type] = tpe match {
     case Type.Apply(Type.Cst(TypeConstructor.Enum(sym, _), _), elm, _)
-      if sym.namespace.isEmpty && sym.text == "List" => Some(elm)
-    case Type.Alias(_, _, t, _) => unapplyList(t)
+      if sym.namespace.isEmpty && sym.text == name => Some(elm)
+    case Type.Alias(_, _, t, _) => unapplyStdEnum(t, name)
     case _ => None
   }
 
@@ -538,7 +551,7 @@ object EntryPoints {
     * a plan compiles into a shim that returns the internal tag class instead of failing.
     */
   private def unapplyContainer(tpe: Type): Option[Type] =
-    unapplyOption(tpe).orElse(unapplyList(tpe))
+    unapplyOption(tpe).orElse(unapplyList(tpe)).orElse(unapplySet(tpe))
 
   /**
     * Returns `true` if `tpe` is a valid Java type that can be exported.
