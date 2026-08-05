@@ -225,6 +225,131 @@ class TestExportedShimsRuntime extends AnyFunSuite {
     }
   }
 
+  test("an exported List honours the java.util.List contract") {
+    // `AbstractSequentialList` writes `get`, `indexOf`, `contains`, `equals`, `hashCode`,
+    // `subList` and `stream` in terms of the one `listIterator(int)` this view supplies. They are
+    // checked together because they are what the choice of `AbstractSequentialList` over
+    // `AbstractList` buys -- a wrong iterator satisfies a single traversal and fails these.
+    withFacade(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    @Export
+        |    pub def names(): List[String] = "a" :: "b" :: "c" :: Nil
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin, "Pkg.Mod") { facade =>
+      val names = invoke(facade, "names").asInstanceOf[java.util.List[Any]]
+      assertResult(3)(names.size())
+      assertResult("b")(names.get(1))
+      assertResult(1)(names.indexOf("b"))
+      assertResult(-1)(names.indexOf("z"))
+      assert(names.contains("c"))
+      assertResult(java.util.List.of("a", "b", "c"))(names)
+      assertResult(java.util.List.of("a", "b", "c").hashCode())(names.hashCode())
+      assertResult(java.util.List.of("b", "c"))(names.subList(1, 3))
+    }
+  }
+
+  test("an exported List iterates backwards as well as forwards") {
+    // `previous` re-walks from the head, since a cons chain has no back-pointers (J10). That makes
+    // it the one part of the iterator whose implementation differs from `next` rather than
+    // mirroring it, so the two are checked against each other here.
+    withFacade(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    @Export
+        |    pub def names(): List[String] = "a" :: "b" :: "c" :: Nil
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin, "Pkg.Mod") { facade =>
+      val names = invoke(facade, "names").asInstanceOf[java.util.List[Any]]
+      val it = names.listIterator()
+      assert(!it.hasPrevious)
+      assertResult(0)(it.nextIndex())
+      assertResult(-1)(it.previousIndex())
+      assertResult(List("a", "b", "c"))(List(it.next(), it.next(), it.next()))
+      assert(!it.hasNext)
+      assertResult(3)(it.nextIndex())
+      // Walking back yields the same elements in reverse, and lands where it started.
+      assertResult(List("c", "b", "a"))(List(it.previous(), it.previous(), it.previous()))
+      assert(!it.hasPrevious)
+      assertResult(0)(it.nextIndex())
+      assertThrows[java.util.NoSuchElementException](it.previous())
+    }
+  }
+
+  test("an exported List rejects an out-of-range index") {
+    // `AbstractSequentialList.get` turns a `NoSuchElementException` from the iterator into an
+    // `IndexOutOfBoundsException`, but `listIterator(int)` is also called directly and has to
+    // reject a bad index itself rather than walk off the end of the chain.
+    withFacade(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    @Export
+        |    pub def names(): List[String] = "a" :: "b" :: Nil
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin, "Pkg.Mod") { facade =>
+      val names = invoke(facade, "names").asInstanceOf[java.util.List[Any]]
+      assertThrows[IndexOutOfBoundsException](names.get(2))
+      assertThrows[IndexOutOfBoundsException](names.get(-1))
+      assertThrows[IndexOutOfBoundsException](names.listIterator(3))
+      assertThrows[IndexOutOfBoundsException](names.listIterator(-1))
+      // The position *after* the last element is legal: it is where a forward walk ends.
+      assert(!names.listIterator(2).hasNext)
+      assert(names.listIterator(2).hasPrevious)
+    }
+  }
+
+  test("an exported List refuses every list-iterator mutator") {
+    // `java.util.ListIterator` declares all nine methods abstract -- there are no defaults to
+    // inherit as there are on `Iterator` -- so unlike the set view, immutability here is written
+    // rather than inherited, and each of the three has to be checked.
+    withFacade(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    @Export
+        |    pub def names(): List[String] = "a" :: Nil
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin, "Pkg.Mod") { facade =>
+      val names = invoke(facade, "names").asInstanceOf[java.util.List[Any]]
+      val it = names.listIterator()
+      assertThrows[UnsupportedOperationException](it.add("b"))
+      assertThrows[UnsupportedOperationException](it.set("b"))
+      assertThrows[UnsupportedOperationException](it.remove())
+      assertThrows[UnsupportedOperationException](names.set(0, "b"))
+      assertThrows[UnsupportedOperationException](names.remove(0))
+      assertThrows[UnsupportedOperationException](names.clear())
+    }
+  }
+
+  test("an exported empty List is empty at every level") {
+    // `Nil` is a nullary tag rather than a `Cons`, so an empty chain is the case where the
+    // `instanceof` test that drives the whole walk decides everything.
+    withFacade(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    @Export
+        |    pub def none(): List[String] = Nil
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin, "Pkg.Mod") { facade =>
+      val none = invoke(facade, "none").asInstanceOf[java.util.List[Any]]
+      assert(none.isEmpty)
+      assertResult(0)(none.size())
+      assertResult(java.util.List.of())(none)
+      assert(!none.listIterator().hasNext)
+      assert(!none.listIterator().hasPrevious)
+      assertThrows[java.util.NoSuchElementException](none.listIterator().next())
+    }
+  }
+
   test("an exported polymorphic def round-trips any reference") {
     // The monomorpher defaults the unconstrained variable to `AnyType`, which is represented as
     // `Object`. The point of calling it rather than reading the descriptor is that the def is

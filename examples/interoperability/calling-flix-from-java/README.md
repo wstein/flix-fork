@@ -205,7 +205,7 @@ instead; absence and a null payload cannot both be represented.
 
 ## Lists
 
-`List[t]` is exportable **as a return type**, where the shim converts it to an
+`List[t]` is exportable **as a return type**, where the shim presents it as an
 unmodifiable `java.util.List`:
 
 ```flix
@@ -223,12 +223,12 @@ boxed, so `List[Int32]` is `List<Integer>`. The element must itself be
 exportable: `List[List[t]]` and `List[Option[t]]` are rejected, and the error
 points at the element rather than at the list.
 
-The list is *copied* when it crosses, not wrapped in a lazy view over the Flix
-chain. A view would allocate O(1) instead of O(n), but it is a class with a
-contract of its own to settle first, and for a primitive element it re-boxes on
-every traversal where a copy boxes once. Since what a caller receives is a
-`java.util.List` either way, this can change later without affecting any
-signature.
+The list is not copied: what crosses is a view over the Flix chain, which
+allocates O(1) instead of O(n) and holds the Flix value alive for as long as the
+view is reachable. `get(i)` walks from the head, so indexed access is O(i) --
+the view extends `AbstractSequentialList`, which means iteration stays linear
+rather than becoming quadratic. Iterating backwards through a `ListIterator`
+re-walks from the head and is O(n) per step.
 
 `List` is not exportable as a parameter, for the same reason `Option` is not.
 

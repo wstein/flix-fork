@@ -71,6 +71,8 @@ sealed trait BackendObjType {
     case BackendObjType.TreeIterator(key, None) => JvmName(DevFlixGen, mkClassName("SetIterator", key.flixType))
     case BackendObjType.TreeIterator(key, Some(v)) => JvmName(DevFlixGen, mkClassName("EntryIterator", List(key.flixType, v.flixType)))
     case BackendObjType.MapView(key, value) => JvmName(DevFlixGen, mkClassName("MapView", List(key.flixType, value.flixType)))
+    case BackendObjType.ListView(element) => JvmName(DevFlixGen, mkClassName("ListView", element.flixType))
+    case BackendObjType.ChainIterator(element) => JvmName(DevFlixGen, mkClassName("ChainIterator", element.flixType))
     // Java classes
     case BackendObjType.Native(className) => className
     // Effects Runtime
@@ -1977,6 +1979,400 @@ object BackendObjType {
       INVOKEVIRTUAL(entrySetType.IsEmptyMethod)
       xReturn(BackendType.Bool)
     }
+  }
+
+  object ChainIterator {
+    /** The field indices of `List.Cons(head, tail)`. */
+    val HeadIndex: Int = 0
+    val TailIndex: Int = 1
+
+    /**
+      * The tag class of `List.Cons` for a chain whose elements erase to `element`.
+      *
+      * The same argument as [[TreeIterator.nodeTag]]: this class is shared with every other
+      * two-field tag of the same erasure, and it is still an exact test for "is this a `Cons`" in
+      * a field that holds a `List` and nothing else, because `Nil` is nullary and so a class of
+      * its own.
+      */
+    def consTag(element: BackendType): Tag = Tag(List(element, BackendType.Object))
+  }
+
+  /**
+    * A Flix `List` presented to Java as an unmodifiable `java.util.List`, without copying it.
+    *
+    * A cons chain has no indexing, so this extends `java.util.AbstractSequentialList` rather than
+    * `AbstractList`, whose `get(i)` would make a full traversal quadratic. What that costs is
+    * having to supply a real `ListIterator` -- nine methods rather than two -- which is why this
+    * was the largest of the three views to build even though a chain is the simplest structure.
+    *
+    * Every mutator throws, as on the other two views, and here `AbstractList.add` and `set` throw
+    * because they are written in terms of the list iterator's own mutators.
+    */
+  case class ListView(element: ExportPlan) extends ExportView {
+
+    private def consTag: Tag = ChainIterator.consTag(element.flixType)
+
+    def genByteCode()(implicit root: JvmAst.Root, flix: Flix): Array[Byte] = {
+      val cm = ClassMaker.mkClass(this.jvmName, IsFinal, superClass = JvmName.AbstractSequentialList)
+
+      cm.mkConstructor(Constructor, IsPublic, constructorIns(_))
+      cm.mkField(ChainField, IsPrivate, IsFinal, NotVolatile)
+      cm.mkField(SizeField, IsPrivate, NotFinal, NotVolatile)
+      cm.mkMethod(Nil, ListIteratorMethod, IsPublic, IsFinal, listIteratorIns(_))
+      cm.mkMethod(Nil, SizeMethod, IsPublic, IsFinal, sizeIns(_))
+      cm.mkMethod(Nil, IsEmptyMethod, IsPublic, IsFinal, isEmptyIns(_))
+      cm.mkStaticMethod(CountMethod, IsPrivate, IsFinal, countIns(_))
+
+      cm.closeClassMaker()
+    }
+
+    /** The iterator this view hands out. Derived rather than stored, so the two cannot disagree. */
+    def iteratorType: ChainIterator = ChainIterator(element)
+
+    private def ChainField: InstanceField = InstanceField(this.jvmName, "chain", Tagged.toTpe)
+
+    /** The cached size, or `-1` before it has been computed. See [[TreeSetView]]. */
+    private def SizeField: InstanceField = InstanceField(this.jvmName, "size", BackendType.Int32)
+
+    def Constructor: ConstructorMethod = ConstructorMethod(this.jvmName, List(Tagged.toTpe))
+
+    /** `[] --> return` */
+    private def constructorIns(implicit mv: MethodVisitor): Unit =
+      withName(1, Tagged.toTpe) { chain =>
+        thisLoad()
+        INVOKESPECIAL(JvmName.AbstractSequentialList, JvmName.ConstructorMethod, mkDescriptor()(VoidableType.Void))
+        thisLoad()
+        chain.load()
+        PUTFIELD(ChainField)
+        thisLoad()
+        pushInt(-1)
+        PUTFIELD(SizeField)
+        RETURN()
+      }
+
+    def ListIteratorMethod: InstanceMethod =
+      InstanceMethod(this.jvmName, "listIterator",
+        mkDescriptor(BackendType.Int32)(BackendObjType.Native(JvmName.JavaListIterator).toTpe))
+
+    /**
+      * `[] --> return ListIterator`
+      *
+      * The one method `AbstractSequentialList` leaves abstract, and the one everything else it
+      * provides is written in terms of -- including `iterator()`, `get`, and every mutator.
+      */
+    private def listIteratorIns(implicit mv: MethodVisitor): Unit =
+      withName(1, BackendType.Int32) { index =>
+        NEW(iteratorType.jvmName)
+        DUP()
+        thisLoad()
+        GETFIELD(ChainField)
+        index.load()
+        INVOKESPECIAL(iteratorType.Constructor)
+        ARETURN()
+      }
+
+    def SizeMethod: InstanceMethod = InstanceMethod(this.jvmName, "size", mkDescriptor()(BackendType.Int32))
+
+    /** `[] --> return int` */
+    private def sizeIns(implicit mv: MethodVisitor): Unit = {
+      thisLoad()
+      GETFIELD(SizeField)
+      ifCondition(Condition.LT) {
+        thisLoad()
+        thisLoad()
+        GETFIELD(ChainField)
+        INVOKESTATIC(CountMethod)
+        PUTFIELD(SizeField)
+      }
+      thisLoad()
+      GETFIELD(SizeField)
+      xReturn(BackendType.Int32)
+    }
+
+    def IsEmptyMethod: InstanceMethod = InstanceMethod(this.jvmName, "isEmpty", mkDescriptor()(BackendType.Bool))
+
+    /** `[] --> return boolean`, from the head alone rather than through `size()`. */
+    private def isEmptyIns(implicit mv: MethodVisitor): Unit = {
+      thisLoad()
+      GETFIELD(ChainField)
+      INSTANCEOF(consTag.jvmName)
+      ifConditionElse(Condition.NE)(pushBool(false))(pushBool(true))
+      xReturn(BackendType.Bool)
+    }
+
+    private def CountMethod: StaticMethod =
+      StaticMethod(this.jvmName, "count", mkDescriptor(Tagged.toTpe)(BackendType.Int32))
+
+    /**
+      * `[] --> return int`
+      *
+      * Iterative, unlike the tree's recursive count: a chain is as deep as it is long, so
+      * recursion would overflow the stack on a list the program had no trouble building.
+      */
+    private def countIns(implicit mv: MethodVisitor): Unit =
+      withName(0, Tagged.toTpe) { cursor =>
+        withName(1, BackendType.Int32) { count =>
+          pushInt(0)
+          count.store()
+          whileLoop(Condition.NE) {
+            cursor.load()
+            INSTANCEOF(consTag.jvmName)
+          } {
+            count.load()
+            pushInt(1)
+            IADD()
+            count.store()
+            cursor.load()
+            CHECKCAST(consTag.jvmName)
+            GETFIELD(consTag.IndexField(ChainIterator.TailIndex))
+            CHECKCAST(Tagged.jvmName)
+            cursor.store()
+          }
+          count.load()
+          xReturn(BackendType.Int32)
+        }
+      }
+  }
+
+  /**
+    * The walk behind a [[ListView]], as a `java.util.ListIterator`.
+    *
+    * Forward iteration is O(1) per step and holds only a cursor and an index. Backward iteration
+    * re-walks from the head, because a cons chain has no back-pointers: `previous` is O(n) per
+    * step, which J10 accepts as the cost of the case this view is *not* built for.
+    *
+    * `remove`, `set` and `add` throw. `java.util.ListIterator` declares all nine of its methods
+    * abstract -- there are no defaults to inherit as there are on `Iterator` -- so unlike the tree
+    * iterator, immutability here is written rather than inherited.
+    */
+  case class ChainIterator(element: ExportPlan) extends ExportView {
+
+    private def consTag: Tag = ChainIterator.consTag(element.flixType)
+
+    def genByteCode()(implicit root: JvmAst.Root, flix: Flix): Array[Byte] = {
+      val cm = ClassMaker.mkClass(this.jvmName, IsFinal, interfaces = List(JvmName.JavaListIterator))
+
+      cm.mkConstructor(Constructor, IsPublic, constructorIns(_))
+      cm.mkField(HeadField, IsPrivate, IsFinal, NotVolatile)
+      cm.mkField(CursorField, IsPrivate, NotFinal, NotVolatile)
+      cm.mkField(IndexField, IsPrivate, NotFinal, NotVolatile)
+      cm.mkMethod(Nil, HasNextMethod, IsPublic, IsFinal, hasNextIns(_))
+      cm.mkMethod(Nil, NextMethod, IsPublic, IsFinal, nextIns(root, _))
+      cm.mkMethod(Nil, HasPreviousMethod, IsPublic, IsFinal, hasPreviousIns(_))
+      cm.mkMethod(Nil, PreviousMethod, IsPublic, IsFinal, previousIns(root, _))
+      cm.mkMethod(Nil, NextIndexMethod, IsPublic, IsFinal, nextIndexIns(_))
+      cm.mkMethod(Nil, PreviousIndexMethod, IsPublic, IsFinal, previousIndexIns(_))
+      cm.mkMethod(Nil, RemoveMethod, IsPublic, IsFinal, refuse(_))
+      cm.mkMethod(Nil, SetMethod, IsPublic, IsFinal, refuse(_))
+      cm.mkMethod(Nil, AddMethod, IsPublic, IsFinal, refuse(_))
+      cm.mkStaticMethod(AdvanceMethod, IsPrivate, IsFinal, advanceIns(_))
+
+      cm.closeClassMaker()
+    }
+
+    /** The chain this iterator started from, kept only so that `previous` can re-walk it. */
+    private def HeadField: InstanceField = InstanceField(this.jvmName, "head", Tagged.toTpe)
+
+    /** The node holding the element `next` would return, or `Nil` at the end. */
+    private def CursorField: InstanceField = InstanceField(this.jvmName, "cursor", Tagged.toTpe)
+
+    private def IndexField: InstanceField = InstanceField(this.jvmName, "index", BackendType.Int32)
+
+    def Constructor: ConstructorMethod = ConstructorMethod(this.jvmName, List(Tagged.toTpe, BackendType.Int32))
+
+    /**
+      * `[] --> return`
+      *
+      * `AbstractSequentialList` calls this with an arbitrary index, so a bad one is rejected here
+      * rather than allowed to walk off the end of the chain. `index == size` is legal: it is the
+      * position after the last element.
+      */
+    private def constructorIns(implicit mv: MethodVisitor): Unit =
+      withName(1, Tagged.toTpe) { chain =>
+        withName(2, BackendType.Int32) { index =>
+          thisLoad()
+          INVOKESPECIAL(ClassConstants.Object.Constructor)
+          index.load()
+          ifCondition(Condition.LT) {
+            throwWithMessage(JvmName.IndexOutOfBoundsException, "negative index")
+          }
+          thisLoad()
+          chain.load()
+          PUTFIELD(HeadField)
+          thisLoad()
+          chain.load()
+          index.load()
+          INVOKESTATIC(AdvanceMethod)
+          PUTFIELD(CursorField)
+          thisLoad()
+          index.load()
+          PUTFIELD(IndexField)
+          RETURN()
+        }
+      }
+
+    private def AdvanceMethod: StaticMethod =
+      StaticMethod(this.jvmName, "advance", mkDescriptor(Tagged.toTpe, BackendType.Int32)(Tagged.toTpe))
+
+    /**
+      * `[] --> return Tagged`
+      *
+      * Returns the node `steps` places along `chain`, throwing if the chain runs out first. This
+      * is the only place the O(n) of `previous` lives; `next` never calls it.
+      */
+    private def advanceIns(implicit mv: MethodVisitor): Unit =
+      withName(0, Tagged.toTpe) { cursor =>
+        withName(1, BackendType.Int32) { steps =>
+          whileLoop(Condition.GT) {
+            steps.load()
+          } {
+            cursor.load()
+            INSTANCEOF(consTag.jvmName)
+            ifConditionElse(Condition.NE) {
+              cursor.load()
+              CHECKCAST(consTag.jvmName)
+              GETFIELD(consTag.IndexField(ChainIterator.TailIndex))
+              CHECKCAST(Tagged.jvmName)
+              cursor.store()
+            } {
+              throwWithMessage(JvmName.IndexOutOfBoundsException, "index past the end of the list")
+            }
+            steps.load()
+            pushInt(-1)
+            IADD()
+            steps.store()
+          }
+          cursor.load()
+          ARETURN()
+        }
+      }
+
+    def HasNextMethod: InstanceMethod = InstanceMethod(this.jvmName, "hasNext", mkDescriptor()(BackendType.Bool))
+
+    /** `[] --> return boolean` */
+    private def hasNextIns(implicit mv: MethodVisitor): Unit = {
+      thisLoad()
+      GETFIELD(CursorField)
+      INSTANCEOF(consTag.jvmName)
+      xReturn(BackendType.Bool)
+    }
+
+    def NextMethod: InstanceMethod = InstanceMethod(this.jvmName, "next", mkDescriptor()(BackendType.Object))
+
+    /** `[] --> return Object` */
+    private def nextIns(implicit root: JvmAst.Root, mv: MethodVisitor): Unit = {
+      thisLoad()
+      GETFIELD(CursorField)
+      INSTANCEOF(consTag.jvmName)
+      ifCondition(Condition.EQ) {
+        throwWithMessage(JvmName.NoSuchElementException, "no elements remain")
+      }
+      // index++
+      thisLoad()
+      thisLoad()
+      GETFIELD(IndexField)
+      pushInt(1)
+      IADD()
+      PUTFIELD(IndexField)
+      // cursor = cursor.tail, keeping the element it held
+      withName(1, consTag.toTpe) { node =>
+        thisLoad()
+        GETFIELD(CursorField)
+        CHECKCAST(consTag.jvmName)
+        node.store()
+        thisLoad()
+        node.load()
+        GETFIELD(consTag.IndexField(ChainIterator.TailIndex))
+        CHECKCAST(Tagged.jvmName)
+        PUTFIELD(CursorField)
+        node.load()
+        GETFIELD(consTag.IndexField(ChainIterator.HeadIndex))
+        element.emit(SourceLocation.Unknown, 2)
+        ARETURN()
+      }
+    }
+
+    def HasPreviousMethod: InstanceMethod =
+      InstanceMethod(this.jvmName, "hasPrevious", mkDescriptor()(BackendType.Bool))
+
+    /** `[] --> return boolean` */
+    private def hasPreviousIns(implicit mv: MethodVisitor): Unit = {
+      thisLoad()
+      GETFIELD(IndexField)
+      ifConditionElse(Condition.GT)(pushBool(true))(pushBool(false))
+      xReturn(BackendType.Bool)
+    }
+
+    def PreviousMethod: InstanceMethod =
+      InstanceMethod(this.jvmName, "previous", mkDescriptor()(BackendType.Object))
+
+    /**
+      * `[] --> return Object`
+      *
+      * Steps back by re-walking from the head, since the chain runs one way only.
+      */
+    private def previousIns(implicit root: JvmAst.Root, mv: MethodVisitor): Unit = {
+      thisLoad()
+      GETFIELD(IndexField)
+      ifCondition(Condition.LE) {
+        throwWithMessage(JvmName.NoSuchElementException, "no elements precede the cursor")
+      }
+      // index--
+      thisLoad()
+      thisLoad()
+      GETFIELD(IndexField)
+      pushInt(-1)
+      IADD()
+      PUTFIELD(IndexField)
+      // cursor = advance(head, index)
+      thisLoad()
+      thisLoad()
+      GETFIELD(HeadField)
+      thisLoad()
+      GETFIELD(IndexField)
+      INVOKESTATIC(AdvanceMethod)
+      PUTFIELD(CursorField)
+      thisLoad()
+      GETFIELD(CursorField)
+      CHECKCAST(consTag.jvmName)
+      GETFIELD(consTag.IndexField(ChainIterator.HeadIndex))
+      element.emit(SourceLocation.Unknown, 1)
+      ARETURN()
+    }
+
+    def NextIndexMethod: InstanceMethod =
+      InstanceMethod(this.jvmName, "nextIndex", mkDescriptor()(BackendType.Int32))
+
+    /** `[] --> return int` */
+    private def nextIndexIns(implicit mv: MethodVisitor): Unit = {
+      thisLoad()
+      GETFIELD(IndexField)
+      xReturn(BackendType.Int32)
+    }
+
+    def PreviousIndexMethod: InstanceMethod =
+      InstanceMethod(this.jvmName, "previousIndex", mkDescriptor()(BackendType.Int32))
+
+    /** `[] --> return int` */
+    private def previousIndexIns(implicit mv: MethodVisitor): Unit = {
+      thisLoad()
+      GETFIELD(IndexField)
+      pushInt(-1)
+      IADD()
+      xReturn(BackendType.Int32)
+    }
+
+    def RemoveMethod: InstanceMethod = InstanceMethod(this.jvmName, "remove", mkDescriptor()(VoidableType.Void))
+
+    def SetMethod: InstanceMethod =
+      InstanceMethod(this.jvmName, "set", mkDescriptor(BackendType.Object)(VoidableType.Void))
+
+    def AddMethod: InstanceMethod =
+      InstanceMethod(this.jvmName, "add", mkDescriptor(BackendType.Object)(VoidableType.Void))
+
+    /** `[] --> throw`, for the three mutators there is nothing to write through to. */
+    private def refuse(implicit mv: MethodVisitor): Unit =
+      throwUnsupportedOperationException("Flix lists are immutable")
   }
 
   //

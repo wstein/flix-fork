@@ -212,6 +212,10 @@ object JvmName {
   val AbstractSet: JvmName = JvmName(JavaUtil, "AbstractSet")
   val ArrayDeque: JvmName = JvmName(JavaUtil, "ArrayDeque")
   val JavaMap: JvmName = JvmName(JavaUtil, "Map")
+  val AbstractSequentialList: JvmName = JvmName(JavaUtil, "AbstractSequentialList")
+  val JavaListIterator: JvmName = JvmName(JavaUtil, "ListIterator")
+  val NoSuchElementException: JvmName = JvmName(JavaUtil, "NoSuchElementException")
+  val IndexOutOfBoundsException: JvmName = JvmName(JavaLang, "IndexOutOfBoundsException")
   val AbstractMap: JvmName = JvmName(JavaUtil, "AbstractMap")
   /** `java.util.AbstractMap.SimpleImmutableEntry`, which saves generating an entry class. */
   val SimpleImmutableEntry: JvmName = JvmName(JavaUtil, "AbstractMap$SimpleImmutableEntry")

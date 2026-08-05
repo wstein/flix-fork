@@ -325,11 +325,18 @@ which would satisfy the descriptor and break every use of it.
 
 ---
 
-## J10 — `List` crosses as an unmodifiable `java.util.List`, copied eagerly
+## J10 — `List`, `Set` and `Map` cross as lazy, unmodifiable views
 
-**Status: Settled** for the copy, which is shipped. **Shipped** for the lazy
-view, for `Set` and `Map` — `List` is still to come, and until it lands the
-eager copy below is what a `List` export still does.
+**Status: Settled and shipped**, for all three. The eager copy that `List` used
+first is deleted rather than kept behind a flag — two conversions for one type
+is the drift J4 exists to prevent, and the copy's one remaining advantage (a
+primitive element boxed once rather than once per traversal) did not justify a
+second code path.
+
+The reasoning that led here is kept below, including the part that argued for
+shipping the copy first. It was right about the sequencing and wrong about the
+cost: each view turned out cheaper to build than the section that estimated it
+assumed, and the estimate is left standing next to what it cost.
 
 `List[t]` is exportable in return position, converted by walking the cons chain
 into an `ArrayList` and wrapping it with `Collections.unmodifiableList`. The
@@ -439,6 +446,34 @@ Two details are worth keeping:
   its own — but `Map.Entry.setValue` is a mutator on the entry rather than on
   the map, and using the JDK's immutable entry is what makes it throw.
 
+### `List` was the expensive one, and not for the reason expected
+
+A cons chain is the simplest of the three structures and its view was the
+largest to build. `AbstractSequentialList` leaves `listIterator(int)` abstract,
+and `java.util.ListIterator` declares **all nine** of its methods abstract —
+there are no defaults to inherit as there are on `Iterator`. So where the tree
+views get immutability by *not* overriding `remove`, the chain view has to write
+`remove`, `set` and `add` and have each throw. Nine methods against two.
+
+Two consequences worth recording:
+
+- **Immutability is written here, not inherited.** That is why it is tested per
+  method rather than once: nothing about the class makes it hold.
+- **`listIterator(int)` validates its own index.** `AbstractSequentialList.get`
+  catches a `NoSuchElementException` and rethrows it as
+  `IndexOutOfBoundsException`, so clamping would have been *almost* right — but
+  `listIterator(n)` is public, and a clamped iterator for an out-of-range `n`
+  is a silently wrong cursor rather than an error. `n == size` stays legal; it
+  is where a forward walk ends.
+
+`count` is iterative here and recursive on the tree. A chain is as deep as it is
+long, so the recursion that is safe on a balanced tree would overflow the stack
+on a list the program had no trouble building.
+
+**Corrected:** the estimate of six generated classes. It is five — `Set` and
+`Map` share the tree view and its iterator, so the three collections cost
+`TreeSetView`, `TreeIterator`, `MapView`, `ListView` and `ChainIterator`.
+
 ### Why the copy shipped first
 
 Time complexity alone suggests eager copying is fine, because the common case —
@@ -472,6 +507,13 @@ the copy commits to nothing beyond the `java.util.List` interface. So the copy
 ships first and the view waits for a benchmark rather than an argument, which is
 also what keeps this entry honest about which half is evidence and which half is
 preference.
+
+**What actually decided it, in the end:** not a benchmark. Once `Set` and `Map`
+had views — and they had no copy to fall back on, since neither was exportable
+before — keeping `List` on a copy meant two conversion strategies for three
+collections of the same kind. The primitive-element regression above is real and
+is accepted: it costs a re-box per traversal, against a second code path that
+J4 says will drift. That is a preference, stated as one.
 
 **Rejected:** the claim in an earlier draft that the case "rests on allocation
 alone" uniformly. It rests on allocation, and allocation depends on the element.

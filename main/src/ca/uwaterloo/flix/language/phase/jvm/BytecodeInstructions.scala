@@ -467,12 +467,15 @@ object BytecodeInstructions {
 
   def thisLoad()(implicit mv: MethodVisitor): Unit = ALOAD(0)
 
-  def throwUnsupportedOperationException(msg: String)(implicit mv: MethodVisitor): Unit = {
-    NEW(JvmName.UnsupportedOperationException)
+  def throwUnsupportedOperationException(msg: String)(implicit mv: MethodVisitor): Unit =
+    throwWithMessage(JvmName.UnsupportedOperationException, msg)
+
+  /** Throws `clazz`, which must have a single-`String` constructor. */
+  def throwWithMessage(clazz: JvmName, msg: String)(implicit mv: MethodVisitor): Unit = {
+    NEW(clazz)
     DUP()
     pushString(msg)
-    INVOKESPECIAL(JvmName.UnsupportedOperationException, JvmName.ConstructorMethod,
-      mkDescriptor(BackendType.String)(VoidableType.Void))
+    INVOKESPECIAL(clazz, JvmName.ConstructorMethod, mkDescriptor(BackendType.String)(VoidableType.Void))
     ATHROW()
   }
 

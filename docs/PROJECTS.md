@@ -155,13 +155,15 @@ and the generated classes are named so that a jar is consumable from Scala,
 Kotlin, Groovy, Clojure and JRuby rather than Java alone. What that leaves is
 several genuinely open problems, each larger than it first appears:
 
-- **Collections beyond `List`.** `Set` and `Map` cross as unmodifiable
-  `java.util.Set` and `java.util.Map` views that are *not* copied: a generated
-  view walks the red-black tree on demand, in ascending key order, trading O(n)
-  allocation for O(1). Both share one view class — a `Map`'s entry set is a set
-  view that hands out `Map.Entry` instead of a key. `List` is still an eager
-  copy; porting it to a view over the cons chain is next, and will delete the
-  eager conversion rather than keep both.
+- **Collections.** `List`, `Set` and `Map` all cross as unmodifiable
+  `java.util.List`, `Set` and `Map` views that are *not* copied, trading O(n)
+  allocation for O(1). `Set` and `Map` share one view over the red-black tree —
+  a `Map`'s entry set is a set view handing out `Map.Entry` instead of a key —
+  and iterate in ascending key order. `List` walks the cons chain through an
+  `AbstractSequentialList`, so iteration stays linear. What is left open is
+  which *other* collections should cross at all, and whether any of them should
+  be exportable as a *parameter*, which needs a conversion in the other
+  direction that does not exist for any of them.
 - **The inbound boundary**, which is a separate mechanism with open soundness
   defects (issues 8618 and 5172, on Java functional interfaces) and duplicated
   conversion logic (issue 8592). Nothing in the export work addresses it. The

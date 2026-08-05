@@ -219,62 +219,35 @@ object ExportPlan {
     }
 
   /**
-    * A Flix `List` presented as an unmodifiable `java.util.List`.
+    * A Flix `List` presented as an unmodifiable `java.util.List`, without copying it.
     *
-    * The copy is eager. A lazy view over the cons chain would allocate O(1) instead of O(n), but
-    * it is a class with a published contract -- mutability, iteration, `size()` -- that has to be
-    * settled before it ships rather than after, and for a primitive element it re-converts on
-    * every traversal, which is worse than copying once. The copy is the conservative half of that
-    * trade and can be replaced without the caller noticing, since what a caller is handed is a
-    * `java.util.List` either way.
+    * This was an eager copy into an `ArrayList` until the views existed. Both forms hand a caller
+    * the same `java.util.List`, which is what made the copy safe to ship first and safe to replace
+    * now -- no signature changes. Only one is kept: two conversions for one type is exactly the
+    * drift J4 exists to prevent, and the copy's remaining advantage (a primitive element boxed
+    * once rather than once per traversal) is not worth a second code path.
     *
-    * Unmodifiable because a Flix list is immutable and a mutable copy would invite a caller to
-    * write to something that looks like the Flix value and is not.
+    * Unlike a `Set` or a `Map`, a `List` value *is* the chain -- there is no wrapper tag to
+    * unwrap -- so the view is constructed straight from it.
     */
-  case class AsList(element: ExportPlan, nilOrdinal: Int, consTag: BackendObjType.Tag) extends ExportPlan {
+  case class AsList(element: ExportPlan, view: BackendObjType.ListView) extends ExportPlan {
     def flixType: BackendType = BackendObjType.Tagged.toTpe
 
     def javaType: BackendType = BackendObjType.Native(JvmName.JavaList).toTpe
 
     def typeArgument: String = s"L${JvmName.JavaList.toInternalName}<${element.typeArgument}>;"
 
-    def emit(loc: SourceLocation, nextLocal: Int)(implicit root: JvmAst.Root, mv: MethodVisitor): Unit = {
-      val arrayList = BackendObjType.Native(JvmName.ArrayList).toTpe
-      // The chain is walked with a cursor rather than on the stack: keeping both the accumulator
-      // and the cursor as stack values needs the operand stack shuffled on every iteration, which
-      // is easy to get subtly wrong and impossible to read afterwards.
-      withName(nextLocal, BackendObjType.Tagged.toTpe) { cursor =>
-        withName(nextLocal + 1, arrayList) { acc =>
-          cursor.store()
-          NEW(JvmName.ArrayList)
-          DUP()
-          INVOKESPECIAL(JvmName.ArrayList, JvmName.ConstructorMethod, mkDescriptor()(VoidableType.Void))
-          acc.store()
-          whileLoop(Condition.ICMPNE) {
-            cursor.load()
-            GETFIELD(BackendObjType.Tagged.OrdinalField)
-            pushInt(nilOrdinal)
-          } {
-            acc.load()
-            cursor.load()
-            CHECKCAST(consTag.jvmName)
-            GETFIELD(consTag.IndexField(0))
-            element.emit(loc, nextLocal + 2)
-            INVOKEVIRTUAL(JvmName.ArrayList, "add", mkDescriptor(BackendType.Object)(BackendType.Bool))
-            POP()
-            cursor.load()
-            CHECKCAST(consTag.jvmName)
-            GETFIELD(consTag.IndexField(1))
-            CHECKCAST(BackendObjType.Tagged.jvmName)
-            cursor.store()
-          }
-          acc.load()
-          INVOKESTATIC(JvmName.Collections, "unmodifiableList", mkDescriptor(javaType)(javaType))
-        }
+    def emit(loc: SourceLocation, nextLocal: Int)(implicit root: JvmAst.Root, mv: MethodVisitor): Unit =
+      withName(nextLocal, BackendObjType.Tagged.toTpe) { chain =>
+        chain.store()
+        NEW(view.jvmName)
+        DUP()
+        chain.load()
+        INVOKESPECIAL(view.Constructor)
       }
-    }
 
-    override def generatedClasses: List[BackendObjType.ExportView] = element.generatedClasses
+    override def generatedClasses: List[BackendObjType.ExportView] =
+      view :: view.iteratorType :: element.generatedClasses
   }
 
   /**
@@ -289,8 +262,9 @@ object ExportPlan {
         val (noneOrdinal, someTag) = optionTags(erased)
         Some(AsOptional(elementPlan(element, someTag.elms.head), noneOrdinal, someTag))
       case SimpleType.Enum(sym, List(element)) if isList(sym) =>
-        val (nilOrdinal, consTag) = listTags(erased)
-        Some(AsList(elementPlan(element, consTag.elms.head), nilOrdinal, consTag))
+        val erasedElement = BackendType.toErasedBackendType(element)
+        val view = BackendObjType.ListView(viewElementPlan(erasedElement))
+        Some(AsList(elementPlan(element, erasedElement), view))
       case SimpleType.Enum(sym, List(element)) if isStdEnum(sym, "Set") =>
         val erasedKey = BackendType.toErasedBackendType(element)
         val view = BackendObjType.TreeSetView(viewElementPlan(erasedKey), None)
@@ -372,12 +346,6 @@ object ExportPlan {
     */
   private def isStdEnum(sym: Symbol.EnumSym, name: String): Boolean =
     sym.namespace.isEmpty && sym.text == name
-
-  /** Returns the ordinal of `Nil` and the tag class of `Cons` for the specialized `List`. */
-  private def listTags(erased: SimpleType)(implicit root: JvmAst.Root): (Int, BackendObjType.Tag) = {
-    val sym = enumSymOf(erased, "List")
-    (caseSymOf(sym, "Nil").ordinal, tagOf(sym, "Cons"))
-  }
 
   /**
     * Returns the tag class of the single case of `Set` or `Map`, which holds the red-black tree.
