@@ -126,9 +126,42 @@ ArrayList<String> xs = Acme.Greeter.names();   // not a raw ArrayList
 Nested and multi-argument types work (`ArrayList[ArrayList[String]]`,
 `HashMap[String, Int32]`), and a primitive argument is boxed, so
 `ArrayList[Int32]` is `ArrayList<Integer>`. In *parameter* position a generic
-type still exports raw. So does one whose argument has no Java name of its own —
-`ArrayList[SomeFlixEnum]` is a raw `ArrayList`, because naming that enum would
-expose a class the compiler is free to rename.
+type still exports raw.
+
+Every type argument must itself be exportable. `ArrayList[SomeFlixEnum]` is an
+error, not a raw `ArrayList`: the elements crossing would be generated classes
+such as `dev.flix.gen.Colour$Red`, which the compiler renames freely, and
+erasure hides that from the signature entirely.
+
+### Crossing with a Flix enum
+
+Give it a Java representation first. A real Java enum is the natural choice — it
+has a stable Java type of its own, so it needs no conversion and stays a proper
+enum on the other side:
+
+```flix
+mod Acme.Greeter {
+    import java.time.DayOfWeek
+    import java.util.ArrayList
+
+    @Export
+    pub def weekend(): ArrayList[DayOfWeek] \ IO =
+        let l = new ArrayList();
+        discard l.add(DayOfWeek.valueOf("SATURDAY"));
+        discard l.add(DayOfWeek.valueOf("SUNDAY"));
+        l
+}
+```
+
+```java
+ArrayList<DayOfWeek> w = Acme.Greeter.weekend();
+switch (w.get(0)) { case SATURDAY, SUNDAY -> "weekend"; default -> "weekday"; }
+EnumSet.copyOf(w);                                  // [SATURDAY, SUNDAY]
+```
+
+A `String` or an `Int32` code works the same way — map the Flix enum to one in a
+small `encode` function and export that. Which representation is right is a
+question about the API you mean to publish, so the compiler does not choose.
 
 `Unit` is exportable in the two places where it can be rendered away: as a
 return type it becomes `void`, and the `Unit` parameter Flix gives a nullary

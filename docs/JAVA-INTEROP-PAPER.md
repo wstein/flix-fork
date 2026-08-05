@@ -361,14 +361,22 @@ only. They are carried the same way an enum's are, and an exported
 return alone, so the same type in argument position still exports raw. That
 asymmetry is a missing carrier rather than a principle.
 
-Two things about that change are worth stating as limitations rather than
-achievements. The arguments deliberately do not participate in type equality —
-a Java class is one class however it was applied, and the compiler reaches the
+One thing about that change is worth stating as a limitation rather than an
+achievement: the arguments deliberately do not participate in type equality — a
+Java class is one class however it was applied, and the compiler reaches the
 same one down paths that erase the arguments differently — which makes this the
-one place a backend type ignores a field it carries. And an argument that cannot
-be described, such as a Flix enum, leaves the signature *absent* rather than
-approximated; that is the right failure, but it means the precision of the
-exported API depends on what the argument happens to be.
+one place a backend type ignores a field it carries.
+
+Carrying the arguments also exposed an older hole, and the way it hid is the
+point. The predicate deciding what may be exported recursed into the *head* of a
+type application and never looked at the argument, so a Flix container of Flix
+values was rejected while a *Java* container of the same values was accepted.
+The descriptor of the accepted one mentions nothing of Flix — it is
+`java.util.ArrayList` — and the type-level checks §3.1 describes all pass. Only
+the values crossing were wrong: generated class names, the thing the boundary
+exists to hide. Erasure is what made a leak look like a well-typed API, which is
+a variant of §5's lesson pointed inward rather than outward: a check that reads
+only types cannot see a leak that lives only in values.
 
 Conversion is one-way, and not for a semantic reason. Mapping
 `Optional.empty()` to `None` in parameter position is unproblematic; what is

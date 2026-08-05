@@ -624,18 +624,37 @@ for a single expression. Nineteen generic-interop tests failed on exactly that
 before `equals` and `hashCode` were narrowed to the class. This is the one place
 a `SimpleType` deliberately ignores a field, and `TestSimpleType` pins it.
 
-**An argument that cannot be described leaves the signature absent, not wrong.**
-`ArrayList[Colour]` stays raw, because a Flix enum has no name a Java caller may
-depend on and writing one would publish the representation J0 protects. This is
-what makes the change safe under J16 without touching the gate at all: the gate
-already accepted these types, the plan merely became able to describe more of
-them, and no program that compiled before stops compiling.
+**An argument that cannot be described is rejected, not approximated.**
+`ArrayList[Colour]` is an error. An earlier version of this entry left the
+signature absent instead, reasoning that a missing signature is never a *wrong*
+signature and that no program which compiled before would stop compiling. That
+was the wrong trade, and looking at the values rather than the types is what
+showed it: the elements crossing were `dev.flix.gen.Colour$Red`, a generated
+class the backend renames freely — J0's exact prohibition, reached by a route
+where the descriptor mentions nothing of Flix at all.
+
+The hole was older than the signatures. `isExportableType` recursed into the
+*head* of a type application and never looked at the argument, so `List[Colour]`
+was rejected — a Flix container is headed by an enum — while `ArrayList[Colour]`
+was accepted. Only the Java containers leaked, and erasure is what made it look
+safe. The gate now checks every argument, so the two containers agree.
+
+Programs that exported a Java container of Flix values do stop compiling. They
+were already handing Java a class name that changes between compiler versions,
+so they were broken and silent about it rather than working.
 
 **Corrected:** this entry previously called the work "an AST-wide change, not a
 codegen one" and left it Deferred. That was wrong — three construction sites and
 about six matches — and it was the second time this entry overstated its
 blocker, the first being the word "irrecoverable". Both drafts were written from
 reading the code rather than from changing it.
+
+**How to cross with a Flix enum:** give it a Java representation first. A real
+Java enum is the natural one — it has a stable Java type of its own, so it needs
+no conversion and stays fully usable on the other side, in a `switch`, an
+`EnumSet`, or a comparison. A `String` or an `Int32` code works the same way.
+The compiler cannot do this for you: which representation is right is a question
+about the API you mean to publish, not about the type.
 
 **Residual:** parameters are still raw. The declared type reaches codegen for
 the return only (J5), so `ArrayList[String]` in argument position exports raw.
