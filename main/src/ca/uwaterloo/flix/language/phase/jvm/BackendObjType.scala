@@ -1527,8 +1527,10 @@ object BackendObjType {
             RETURN()
           } else if (exportPlan(defn).isDefined) {
             val plan = exportPlan(defn).get
-            // The converted value is read as the tag it is; the plan does the rest.
-            Result.unwindSuspensionFreeThunkToType(Tagged.toTpe, hint, defn.loc)
+            // Read at the representation the plan converts *from*, which is not always a tag: a
+            // Java type that is only being described starts as itself, and reading it as a tag
+            // emits a cast that fails verification rather than a conversion.
+            Result.unwindSuspensionFreeThunkToType(plan.flixType, hint, defn.loc)
             plan.emit(defn.loc)
             xReturn(plan.javaType)
           } else {

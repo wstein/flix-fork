@@ -35,6 +35,16 @@ import org.objectweb.asm.MethodVisitor
   */
 sealed trait ExportPlan {
 
+  /**
+    * The type the conversion consumes, i.e. the representation the value has on the stack when
+    * [[emit]] runs.
+    *
+    * Not every plan starts from a tag. A converted `Option` does, but a Java type that is merely
+    * being described starts as itself, and reading it as a tag would emit a cast that fails
+    * verification.
+    */
+  def flixType: BackendType
+
   /** The Java type the conversion produces. */
   def javaType: BackendType
 
@@ -58,6 +68,8 @@ object ExportPlan {
 
   /** A value that already has the Java type it is declared with. */
   case class Identity(javaType: BackendType) extends ExportPlan {
+    def flixType: BackendType = javaType
+
     def typeArgument: String = javaType.toDescriptor
 
     def emit(loc: SourceLocation)(implicit root: JvmAst.Root, mv: MethodVisitor): Unit = ()
@@ -71,6 +83,8 @@ object ExportPlan {
     * declared type is the last place they survive.
     */
   case class GenericNative(clazz: JvmName, targs: List[ExportPlan]) extends ExportPlan {
+    def flixType: BackendType = javaType
+
     def javaType: BackendType = BackendObjType.Native(clazz).toTpe
 
     def typeArgument: String = s"L${clazz.toInternalName}<${targs.map(_.typeArgument).mkString}>;"
@@ -80,6 +94,8 @@ object ExportPlan {
 
   /** A primitive that must be boxed, because the value it is being placed into holds references. */
   case class Boxed(primitive: BackendType, boxed: JvmName) extends ExportPlan {
+    def flixType: BackendType = primitive
+
     def javaType: BackendType = boxed.toTpe
 
     def typeArgument: String = boxed.toDescriptor
@@ -95,6 +111,8 @@ object ExportPlan {
     * than assumed, because they are assigned per compilation.
     */
   case class AsOptional(element: ExportPlan, noneOrdinal: Int, someTag: BackendObjType.Tag) extends ExportPlan {
+    def flixType: BackendType = BackendObjType.Tagged.toTpe
+
     def javaType: BackendType = BackendObjType.Native(JvmName.Optional).toTpe
 
     def typeArgument: String = s"L${JvmName.Optional.toInternalName}<${element.typeArgument}>;"

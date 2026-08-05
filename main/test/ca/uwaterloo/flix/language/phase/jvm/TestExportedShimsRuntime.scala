@@ -154,6 +154,32 @@ class TestExportedShimsRuntime extends AnyFunSuite {
     }
   }
 
+  test("an exported generic Java return actually returns its value") {
+    // Declaring the type arguments must not change what crosses. It did once: the shim read every
+    // planned result as a tag, which is right for a converted `Option` and wrong for a Java type
+    // that is only being described, so the method verified as returning a tag and threw
+    // `VerifyError: Bad return type` on the first call. Nothing static could see it -- the
+    // descriptor and the signature were both correct, and a consumer compiled against them fine.
+    withFacade(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    import java.util.ArrayList
+        |
+        |    @Export
+        |    pub def strings(): ArrayList[String] \ IO =
+        |        let l = new ArrayList();
+        |        discard l.add("hello");
+        |        l
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin, "Pkg.Mod") { facade =>
+      val result = invoke(facade, "strings").asInstanceOf[java.util.ArrayList[?]]
+      assertResult(1)(result.size())
+      assertResult("hello")(result.get(0))
+    }
+  }
+
   test("an exported polymorphic def round-trips any reference") {
     // The monomorpher defaults the unconstrained variable to `AnyType`, which is represented as
     // `Object`. The point of calling it rather than reading the descriptor is that the def is
