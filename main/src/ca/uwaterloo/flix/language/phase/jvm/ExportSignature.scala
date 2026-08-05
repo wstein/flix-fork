@@ -46,6 +46,17 @@ sealed trait ExportSignature {
     * is `Ljava/lang/Integer;`, not `I`.
     */
   def typeArgument: String
+
+  /**
+    * How this type is written in Java source.
+    *
+    * A generated stub is source text, so a descriptor will not do -- and the two are not
+    * mechanically interconvertible in the direction that matters: `I` is `int`, and the arguments
+    * a descriptor erases are exactly the ones a stub must state. This is the third projection of
+    * the same shape rather than a separate mapping, which is what keeps a stub and the facade it
+    * stands in for describing one boundary.
+    */
+  def sourceName: String
 }
 
 object ExportSignature {
@@ -53,6 +64,8 @@ object ExportSignature {
   /** A type that is already exactly what a Java caller sees, with no arguments to report. */
   case class Exact(javaType: BackendType) extends ExportSignature {
     def typeArgument: String = javaType.toDescriptor
+
+    def sourceName: String = sourceNameOf(javaType)
   }
 
   /** A primitive appearing where a reference is required, and therefore named by its box. */
@@ -60,6 +73,8 @@ object ExportSignature {
     def javaType: BackendType = boxed.toTpe
 
     def typeArgument: String = boxed.toDescriptor
+
+    def sourceName: String = boxed.toBinaryName
   }
 
   /**
@@ -79,5 +94,31 @@ object ExportSignature {
         javaType.toDescriptor
       else
         s"L${clazz.toInternalName}<${targs.map(_.typeArgument).mkString}>;"
+
+    def sourceName: String =
+      if (targs.isEmpty) clazz.toBinaryName
+      else s"${clazz.toBinaryName}<${targs.map(_.sourceName).mkString(", ")}>"
+  }
+
+  /**
+    * Returns how `tpe` is written in Java source.
+    *
+    * A binary name is already valid source for every class a facade can name. Generated facades do
+    * contain `$` -- `mod Acme.Api.Deep` is the class `Acme.Api$Deep` -- but that is a top-level
+    * class whose name happens to hold a legal identifier character, not a nested class, so it is
+    * written exactly as it is named. A facade is never nested precisely so that this holds; see
+    * `JvmName.facadeOfNamespace`.
+    */
+  private def sourceNameOf(tpe: BackendType): String = tpe match {
+    case BackendType.Bool => "boolean"
+    case BackendType.Char => "char"
+    case BackendType.Int8 => "byte"
+    case BackendType.Int16 => "short"
+    case BackendType.Int32 => "int"
+    case BackendType.Int64 => "long"
+    case BackendType.Float32 => "float"
+    case BackendType.Float64 => "double"
+    case BackendType.Array(element) => s"${sourceNameOf(element)}[]"
+    case BackendType.Reference(ref) => ref.jvmName.toBinaryName
   }
 }
