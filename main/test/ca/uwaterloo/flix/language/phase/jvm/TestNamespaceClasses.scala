@@ -114,6 +114,50 @@ class TestNamespaceClasses extends AnyFunSuite {
         |def main(): Unit \ IO = println(Acme.Api.get(1))
         |""".stripMargin)
 
+    assertNoClassIsAlsoAPackage(result)
+  }
+
+  test("no class shares its name with a package at any module depth") {
+    // Naming a generated class after its parent package fixes `Acme.Api` and moves the clash down
+    // one level: the facade of `mod Acme.Api.Deep` becomes `Deep` in the package `Acme.Api`, and
+    // `Acme.Api` is a facade class in its own right. Only the first segment becomes a package, so
+    // the property has to hold at depth three and four as well, and for a module whose ancestor
+    // has no entry points of its own.
+    val result = compile(
+      """mod Acme { }
+        |mod Acme.Api {
+        |    @Export
+        |    pub def two(): String = "two"
+        |}
+        |mod Acme.Api.Deep {
+        |    @Export
+        |    pub def three(): String = "three"
+        |}
+        |mod Acme.Api.Deep.Deeper {
+        |    @Export
+        |    pub def four(): String = "four"
+        |}
+        |mod Acme.Quiet.Sub {
+        |    @Export
+        |    pub def mixed(): String = "mixed"
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin)
+
+    assertNoClassIsAlsoAPackage(result)
+
+    // The two-level name is the one Java callers already write, so it must survive unchanged;
+    // everything deeper is a sibling of it rather than a member of a package named after it.
+    assert(result.classNames.contains("Acme.Api"))
+    assert(result.classNames.contains("Acme.Api$Deep"))
+    assert(result.classNames.contains("Acme.Api$Deep$Deeper"))
+    // `Acme.Quiet` has no entry points and so no facade, but its child still nests below `Acme`.
+    assert(result.classNames.contains("Acme.Quiet$Sub"))
+  }
+
+  /** Fails if any emitted class name is also a package prefix of another emitted class name. */
+  private def assertNoClassIsAlsoAPackage(result: CompilationResult): Unit = {
     val packages = result.classNames.flatMap { name =>
       val segments = name.split('.').toList
       segments.inits.filter(prefix => prefix.nonEmpty && prefix != segments).map(_.mkString("."))

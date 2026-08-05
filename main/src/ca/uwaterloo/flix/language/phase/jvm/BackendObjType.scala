@@ -63,7 +63,7 @@ sealed trait BackendObjType {
     case BackendObjType.UncaughtExceptionHandler => JvmName(DevFlixRuntime, mkClassName("UncaughtExceptionHandler"))
     case BackendObjType.Main => JvmName(RootPackage, "Main")
     case BackendObjType.Namespace(Nil) => JvmName(DevFlixGen, s"Root${Flix.Delimiter}")
-    case BackendObjType.Namespace(ns) => JvmName(ns.dropRight(1), ns.last)
+    case BackendObjType.Namespace(ns) => JvmName.facadeOfNamespace(ns)
     // Java classes
     case BackendObjType.Native(className) => className
     // Effects Runtime

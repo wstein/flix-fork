@@ -270,17 +270,40 @@ object JvmName {
     * This is what the other JVM languages do: Scala emits `acme.Api$`, Kotlin `acme.ApiKt`, Groovy
     * `acme.Api$_use_closure1`, and Clojure names the namespace `acme.api` classes `acme.api$get_it`
     * -- all siblings in the parent package, never a package named after a class.
+    *
+    * Only the *first* segment becomes a package, so no facade can become a package prefix at any
+    * depth. Taking the parent instead -- `ns.dropRight(1)` -- fixes `Acme.Api` but merely moves the
+    * clash down one level, because the facade of `mod Acme.Api.Deep` is then `Deep` in the package
+    * `Acme.Api`, and `Acme.Api` is a facade class in its own right.
     */
   def packageOfNamespace(ns: List[String]): List[String] =
-    if (ns.lengthIs <= 1) DevFlixGen else ns.dropRight(1)
+    if (ns.lengthIs <= 1) DevFlixGen else ns.take(1)
 
   /**
     * Returns the prefix that ties a generated class to the namespace it belongs to.
     *
-    * Empty for the root namespace, whose classes are already alone in [[DevFlixGen]].
+    * Every segment the package did not consume, so `mod Acme.Api.Deep` gives `Api$Deep$` in the
+    * package `Acme`. Empty for the root namespace, whose classes are already alone in
+    * [[DevFlixGen]].
     */
   def classPrefixOfNamespace(ns: List[String]): String =
-    ns.lastOption.map(name => mangle(name) + Flix.Delimiter).getOrElse("")
+    segmentsBelowPackage(ns).map(name => mangle(name) + Flix.Delimiter).mkString
+
+  /**
+    * Returns the name of the facade class of namespace `ns` -- the class carrying its entry points.
+    *
+    * Nested the same way as [[mkNamespacedClassName]], so `mod Acme.Api` stays the class `Acme.Api`
+    * that Java callers already write while `mod Acme.Api.Deep` becomes `Acme.Api$Deep` rather than
+    * `Deep` in a package named after the class `Acme.Api`. A one-segment namespace has no parent to
+    * sit beside and keeps its historical place in the unnamed package.
+    */
+  def facadeOfNamespace(ns: List[String]): JvmName =
+    if (ns.lengthIs <= 1) JvmName(RootPackage, ns.mkString)
+    else JvmName(ns.take(1), segmentsBelowPackage(ns).map(mangle).mkString(Flix.Delimiter))
+
+  /** Returns the segments of `ns` that [[packageOfNamespace]] does not turn into a package. */
+  private def segmentsBelowPackage(ns: List[String]): List[String] =
+    if (ns.lengthIs <= 1) ns else ns.drop(1)
 
   /**
     * Returns the name of a backend class generated for a symbol named `name` in namespace `ns`.
