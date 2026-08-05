@@ -58,7 +58,10 @@ object Eraser {
       // declared type to Java callers. `EntryPoints.isExportableType` keeps this to types that
       // have an exact JVM representation, so nothing here needs a generated class.
       val unboxedType = if (ann.isExport) visitType(originalTpe.tpe) else erase(originalTpe.tpe)
-      ErasedAst.Def(ann, mod, sym, cparams.map(visitParam), fparams.map(visitParam), e, box(tpe), ErasedAst.UnboxedType(unboxedType), loc)
+      // `visitType` specializes `Option[String]` to `Option$42`, discarding the type argument the
+      // shim method needs to marshal and describe the return type. Keep the type as it was declared.
+      val exportedReturnType = if (ann.isExport) Some(originalTpe.tpe) else None
+      ErasedAst.Def(ann, mod, sym, cparams.map(visitParam), fparams.map(visitParam), e, box(tpe), ErasedAst.UnboxedType(unboxedType), exportedReturnType, loc)
   }
 
   private def specializeEnums(specializations: List[(Symbol.EnumSym, List[SimpleType], Symbol.EnumSym)])(implicit root: ReducedAst.Root, flix: Flix): Map[Symbol.EnumSym, ErasedAst.Enum] = {

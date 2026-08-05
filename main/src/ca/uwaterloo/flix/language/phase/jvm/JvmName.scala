@@ -218,6 +218,7 @@ object JvmName {
   val ObjFunction: JvmName = JvmName(JavaUtilFunction, "Function")
   val ObjPredicate: JvmName = JvmName(JavaUtilFunction, "Predicate")
   val Object: JvmName = JvmName(JavaLang, "Object")
+  val Optional: JvmName = JvmName(JavaUtil, "Optional")
   val PrintStream: JvmName = JvmName(JavaIO, "PrintStream")
   val ReentrantLock: JvmName = JvmName(JavaUtilConcurrentLocks, "ReentrantLock")
   val Regex: JvmName = JvmName(JavaUtilRegex, "Pattern")

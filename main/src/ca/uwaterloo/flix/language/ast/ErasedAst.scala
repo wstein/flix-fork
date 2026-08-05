@@ -30,7 +30,15 @@ object ErasedAst {
                   entryPoints: Set[Symbol.DefnSym],
                   sources: Map[Source, SourceLocation])
 
-  case class Def(ann: Annotations, mod: Modifiers, sym: Symbol.DefnSym, cparams: List[FormalParam], fparams: List[FormalParam], exp: Expr, tpe: SimpleType, unboxedType: UnboxedType, loc: SourceLocation) {
+  /**
+    * `exportedReturnType` is the return type an exported def declared, before erasure specialized
+    * it away. `Option[String]` reaches the backend as the specialized enum `Option$42`, which is
+    * enough to call but not enough to describe or convert: the shim method needs the type argument
+    * both to marshal the value into `java.util.Optional` and to give Java a `Signature` attribute,
+    * without which the return arrives raw. It is `None` for defs that are not exported, which have
+    * no Java-facing signature.
+    */
+  case class Def(ann: Annotations, mod: Modifiers, sym: Symbol.DefnSym, cparams: List[FormalParam], fparams: List[FormalParam], exp: Expr, tpe: SimpleType, unboxedType: UnboxedType, exportedReturnType: Option[SimpleType], loc: SourceLocation) {
     val arrowType: SimpleType.Arrow = SimpleType.mkArrow(fparams.map(_.tpe), tpe)
   }
 

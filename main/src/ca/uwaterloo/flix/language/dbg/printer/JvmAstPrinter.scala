@@ -26,7 +26,7 @@ object JvmAstPrinter {
   /** Returns the [[DocAst.Program]] representation of `root`. */
   def print(root: JvmAst.Root): DocAst.Program = {
     val defs = root.defs.values.map {
-      case JvmAst.Def(ann, mod, sym, cparams, fparams, _, _, stmt, tpe, _, _) =>
+      case JvmAst.Def(ann, mod, sym, cparams, fparams, _, _, stmt, tpe, _, _, _) =>
         DocAst.Def(
           ann,
           mod,

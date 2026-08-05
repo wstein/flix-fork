@@ -446,8 +446,16 @@ object EntryPoints {
       case List(tpe) if isUnitType(tpe) == Result.Ok(true) => Nil
       case tpes => tpes
     }
+    // `Option[t]` is exportable in return position, where the shim marshals it into
+    // `java.util.Optional`. It is not exportable as a parameter: that would need the reverse
+    // conversion, which has no obvious answer for a Java caller passing `Optional.empty()` to a
+    // function whose Flix type is not optional. What must be exportable is the element type, so
+    // that is what is checked, and an error points at it rather than at the `Option`.
     val retTpe = defn.spec.retTpe
-    val types = if (isUnitType(retTpe) == Result.Ok(true)) paramTypes else retTpe :: paramTypes
+    val returnTypes =
+      if (isUnitType(retTpe) == Result.Ok(true)) Nil
+      else List(unapplyOption(retTpe).getOrElse(retTpe))
+    val types = returnTypes ::: paramTypes
     types.flatMap(tpe => {
       isExportableType(tpe) match {
         case Result.Ok(true) =>
@@ -459,6 +467,19 @@ object EntryPoints {
           None
       }
     })
+  }
+
+  /**
+    * Returns the element type of `tpe`, if `tpe` is the standard library's `Option`.
+    *
+    * `Option` is identified by symbol rather than by name alone, so a user-defined `Foo.Option` is
+    * an ordinary enum and stays unexportable.
+    */
+  private def unapplyOption(tpe: Type): Option[Type] = tpe match {
+    case Type.Apply(Type.Cst(TypeConstructor.Enum(sym, _), _), elm, _)
+      if sym.namespace.isEmpty && sym.text == "Option" => Some(elm)
+    case Type.Alias(_, _, t, _) => unapplyOption(t)
+    case _ => None
   }
 
   /**
