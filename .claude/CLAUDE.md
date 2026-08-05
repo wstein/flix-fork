@@ -249,6 +249,40 @@ the formatter enforces belong in `docs/STYLE.md`, which invites exactly that:
 *"If a PR discovers a new style principle, feel free to add it to this file as
 part of the same PR."*
 
+## Exporting to the JVM
+
+`@Export` makes a Flix def reachable as a `public static` method from Java and
+every other JVM language. The compiler emits a shim on a facade class named
+after the module, and converts any value whose Flix representation is private —
+today `Option`, which crosses as `java.util.Optional`.
+
+`ExportPlan` is the single description of that boundary: the shim's return type,
+its generic `Signature`, and the conversion bytecode are all projections of one
+plan, so they cannot describe different things. The front-end gate in
+`EntryPoints` is *not* a projection of it — it runs on a different AST — so the
+standing invariant is that the gate is widened in the same change as the plan,
+never ahead of it. `TestExportedShims` asserts it: no return type the gate
+accepts may produce a shim naming a `dev.flix.gen` class.
+
+Two things bite. Generated classes are named *beside* their namespace
+(`Acme.Api$Def$get` in package `Acme`), never beneath it, because a class and a
+package of the same name make every export unreachable from Scala and Kotlin;
+this is still unfixed for module trees three levels deep. And an exported def's
+return type is deliberately left un-erased in `Eraser`, which is what lets the
+shim present the declared type.
+
+All of this is the *outbound* direction only. Flix calling Java — generic method
+results, anonymous-class overrides, `super` arguments, functional interfaces —
+is a separate mechanism with open soundness defects upstream (flix/flix#12970,
+#12972, #8618, #5172) that `ExportPlan` neither covers nor repairs. Do not cite
+it as evidence about Flix–Java interop generally.
+
+Decisions taken while building this, with their evidence and the alternatives
+rejected, are in `docs/JAVA-INTEROP-DECISIONS.md`; `docs/JAVA-INTEROP-PAPER.md`
+is the longer design report, whose Appendix B reproduces every measurement
+either document quotes. `examples/interoperability/calling-flix-from-java` is
+the worked example.
+
 ## Generating API Documentation
 
 `./mill flix.run doc <file.flix>` writes API documentation for the standard
