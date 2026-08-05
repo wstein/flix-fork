@@ -162,6 +162,67 @@ class TestExportedShims extends AnyFunSuite {
     assert(signatures.get("mapping").contains("()Ljava/util/HashMap<Ljava/lang/String;Ljava/lang/Integer;>;"))
   }
 
+  test("an exported generic Java parameter declares its type arguments") {
+    // The declared type reaches the code generator for parameters as well as for the return, so a
+    // caller passing an `ArrayList<String>` needs no cast and takes no unchecked conversion.
+    val (descriptors, signatures) = membersOf(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    import java.util.ArrayList
+        |    import java.util.HashMap
+        |
+        |    @Export
+        |    pub def sizeOf(l: ArrayList[String]): Int32 \ IO = l.size()
+        |
+        |    @Export
+        |    pub def sizeOfInts(l: ArrayList[Int32]): Int32 \ IO = l.size()
+        |
+        |    @Export
+        |    pub def merge(a: ArrayList[String], b: HashMap[String, Int32]): Int32 \ IO =
+        |        a.size() + b.size()
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin, "Pkg/Mod")
+    assert(descriptors.get("sizeOf").contains("(Ljava/util/ArrayList;)I"))
+    assert(signatures.get("sizeOf").contains("(Ljava/util/ArrayList<Ljava/lang/String;>;)I"))
+    // A type argument is a reference, so a primitive one is boxed in a parameter too.
+    assert(signatures.get("sizeOfInts").contains("(Ljava/util/ArrayList<Ljava/lang/Integer;>;)I"))
+    assert(
+      signatures
+        .get("merge")
+        .contains("(Ljava/util/ArrayList<Ljava/lang/String;>;Ljava/util/HashMap<Ljava/lang/String;Ljava/lang/Integer;>;)I")
+    )
+  }
+
+  test("a signature covers the parameters and the result together") {
+    // A `Signature` attribute describes the whole method or it is malformed, so a converted result
+    // beside a generic parameter has to produce one string, and a part with nothing to declare has
+    // to repeat its descriptor rather than be omitted.
+    val signatures = signaturesOf(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    import java.util.ArrayList
+        |
+        |    @Export
+        |    pub def firstOf(l: ArrayList[String]): Option[String] \ IO =
+        |        if (l.isEmpty()) None else Some(l.get(0))
+        |
+        |    @Export
+        |    pub def countOf(l: ArrayList[String], n: Int32): Int32 \ IO = l.size() + n
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin, "Pkg/Mod")
+    assert(
+      signatures
+        .get("firstOf")
+        .contains("(Ljava/util/ArrayList<Ljava/lang/String;>;)Ljava/util/Optional<Ljava/lang/String;>;")
+    )
+    // The `Int32` parameter has nothing to declare, so it repeats as `I`.
+    assert(signatures.get("countOf").contains("(Ljava/util/ArrayList<Ljava/lang/String;>;I)I"))
+  }
+
   test("a Java type argument keeps its own Java name") {
     // The way to give a Flix enum a representation that can cross is a real Java enum: it has a
     // stable Java type of its own, so it needs no conversion and no description beyond its name.

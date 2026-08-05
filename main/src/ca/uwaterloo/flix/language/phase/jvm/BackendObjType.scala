@@ -1483,12 +1483,28 @@ object BackendObjType {
       *
       * The signature restores the element type, not nullability: Kotlin reads even a signed return
       * as the platform type `Optional<String!>!`, because the shim carries no nullness annotations.
+      *
+      * A signature covers the whole method, so one is emitted when *either* the result or any
+      * parameter has something to declare, and the parts with nothing to declare repeat their
+      * descriptor. Writing only the interesting half is not an option: a `Signature` attribute
+      * either describes every parameter and the result or it is malformed.
       */
-    private def shimSignature(defn: JvmAst.Def)(implicit root: JvmAst.Root): Option[String] =
-      exportPlan(defn).map { plan =>
-        val params = shimParamTypes(defn).map(_.toDescriptor).mkString
-        s"($params)${plan.typeArgument}"
+    private def shimSignature(defn: JvmAst.Def)(implicit root: JvmAst.Root): Option[String] = {
+      val paramPlans = shimParamSimpleTypes(defn).map(ExportPlan.ofParameter)
+      val resultPlan = exportPlan(defn)
+      Option.when(resultPlan.isDefined || paramPlans.exists(_.isDefined)) {
+        val params = shimParamTypes(defn).zip(paramPlans).map {
+          case (_, Some(plan)) => plan.typeArgument
+          case (tpe, None) => tpe.toDescriptor
+        }.mkString
+        val result = resultPlan.map(_.typeArgument).getOrElse(shimResultType(defn).toDescriptor)
+        s"($params)$result"
       }
+    }
+
+    /** The declared types of the shim method's parameters, in the same order as [[shimParamTypes]]. */
+    private def shimParamSimpleTypes(defn: JvmAst.Def): List[SimpleType] =
+      if (dropsUnitParam(defn)) Nil else defn.fparams.map(_.tpe)
 
     /** Returns `true` if the shim method of `defn` hides the `Unit` parameter of a nullary function. */
     private def dropsUnitParam(defn: JvmAst.Def): Boolean = defn.ann.isExport && (defn.fparams match {

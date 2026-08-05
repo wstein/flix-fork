@@ -223,6 +223,23 @@ object ExportPlan {
     }
 
   /**
+    * Returns how a parameter of type `declared` is described, or `None` if it needs no description.
+    *
+    * Only descriptions, never conversions. A shim converts its *result* and passes its parameters
+    * straight into the closure it builds, so a plan that emitted instructions here would declare a
+    * signature the bytecode does not honour. [[GenericNative]] is the only case that qualifies:
+    * it says what the type arguments are and emits nothing.
+    *
+    * This is why an `Option` or a `List` parameter is not handled here rather than merely
+    * unimplemented -- both need a conversion, and `EntryPoints` rejects them in this position.
+    */
+  def ofParameter(declared: SimpleType): Option[ExportPlan] = declared match {
+    case SimpleType.Native(clazz, targs) if targs.nonEmpty =>
+      traverse(targs)(typeArgumentPlan).map(GenericNative(JvmName.ofClass(clazz), _))
+    case _ => None
+  }
+
+  /**
     * Returns how a value of type `declared` is described as a type argument, if it can be.
     *
     * Unlike [[elementPlan]] there is no erased type to consult, because nothing is converted: this
