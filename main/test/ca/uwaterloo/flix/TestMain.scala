@@ -19,12 +19,23 @@ package ca.uwaterloo.flix
 import ca.uwaterloo.flix.util.{DocFormat, LibLevel}
 import org.scalatest.funsuite.AnyFunSuite
 
+import java.io.File
+import java.nio.file.Path
+
 class TestMain extends AnyFunSuite {
 
   test("init") {
     val args = Array("init")
     val opts = Main.parseCmdOpts(args).get
     assert(opts.command == Main.Command.Init)
+  }
+
+  test("init accepts one target directory") {
+    val cwd = Path.of("/tmp/flix-init-test")
+
+    assert(Main.initProjectPath(cwd, Seq.empty).contains(cwd))
+    assert(Main.initProjectPath(cwd, Seq(new File("example"))).contains(cwd.resolve("example")))
+    assert(Main.initProjectPath(cwd, Seq(new File("one"), new File("two"))).isEmpty)
   }
 
   test("init --refresh") {

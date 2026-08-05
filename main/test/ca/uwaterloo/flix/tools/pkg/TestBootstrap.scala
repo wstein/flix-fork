@@ -24,6 +24,14 @@ class TestBootstrap extends AnyFunSuite {
     Bootstrap.init(p)(System.out)
   }
 
+  test("init creates a missing project directory") {
+    val p = Files.createTempDirectory(ProjectPrefix).resolve("new-project")
+    Bootstrap.init(p)(System.out).unsafeGet
+
+    assert(Files.isDirectory(p), "init did not create the project directory")
+    assert(Files.exists(p.resolve("flix.toml")), "init did not create the manifest")
+  }
+
   test("init writes the supplied package metadata") {
     val p = Files.createTempDirectory(ProjectPrefix)
     val options = Bootstrap.InitOptions(

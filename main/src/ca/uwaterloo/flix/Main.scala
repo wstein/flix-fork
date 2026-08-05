@@ -198,20 +198,21 @@ object Main {
           }
 
         case Command.Init =>
-          if (cmdOpts.files.nonEmpty) {
-            println("The 'init' command does not support file arguments.")
+          val projectPath = initProjectPath(cwd, cmdOpts.files).getOrElse {
+            println("The 'init' command accepts at most one directory argument.")
             System.exit(1)
+            cwd
           }
           exitOnResult {
-            val initOptions = if (Files.exists(cwd.resolve("flix.toml"))) {
+            val initOptions = if (Files.exists(projectPath.resolve("flix.toml"))) {
               Bootstrap.InitOptions.Default
             } else {
               promptForInitOptions()
             }
-            Bootstrap.init(cwd, initOptions).flatMap { _ =>
+            Bootstrap.init(projectPath, initOptions).flatMap { _ =>
               // Everything init writes is written only if absent, so refreshing is a separate step
               // rather than a mode: it is the one thing that overwrites a file.
-              if (cmdOpts.refresh) Bootstrap.refreshAgentGuide(cwd) else Result.Ok(())
+              if (cmdOpts.refresh) Bootstrap.refreshAgentGuide(projectPath) else Result.Ok(())
             }
           }
 
@@ -649,7 +650,7 @@ object Main {
       head("The Flix Programming Language", Version.CurrentVersion.toString)
 
       // Command
-      cmd("init").action((_, c) => c.copy(command = Command.Init)).text("  interactively creates a new project in the current directory.").children(
+      cmd("init").action((_, c) => c.copy(command = Command.Init)).text("  interactively creates a new project in an optional directory.").children(
         opt[Unit]("refresh").action((_, c) => c.copy(refresh = true)).
           text("rewrites the generated agent guide for this version of Flix. An edited guide is left alone."),
       )
@@ -847,6 +848,13 @@ object Main {
       description = promptWithDefault("Project description", defaults.description),
       author = promptWithDefault("Author", defaults.author)
     )
+  }
+
+  /** Returns the current directory or the single directory supplied to `flix init`. */
+  private[flix] def initProjectPath(cwd: java.nio.file.Path, files: Seq[File]): Option[java.nio.file.Path] = files match {
+    case Seq() => Some(cwd)
+    case Seq(file) => Some(cwd.resolve(file.toPath).normalize())
+    case _ => None
   }
 
   /** Uses a complete Git identity when available, otherwise preserves the explicit TODO. */

@@ -10,7 +10,8 @@ The project uses [Mill](https://mill-build.org/) as its build tool.
 
 ## Project Scaffolding
 
-`flix init` (`Bootstrap.init`) writes a new project into an existing directory:
+`flix init [directory]` (`Bootstrap.init`) writes a new project into the current
+directory or one supplied target directory, creating a missing target directory:
 `src/`, `test/`, `.github/workflows/build-and-test.yaml`, `flix.toml`,
 `.gitignore`, `.editorconfig`, `AGENTS.md`, `CLAUDE.md`,
 `.github/copilot-instructions.md`, `LICENSE.md`, and

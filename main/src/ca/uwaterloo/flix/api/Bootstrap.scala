@@ -32,7 +32,7 @@ import ca.uwaterloo.flix.util.Result.{Err, Ok}
 import ca.uwaterloo.flix.util.collection.ListMap
 import ca.uwaterloo.flix.util.{Build, FileOps, Formatter, Result}
 
-import java.io.PrintStream
+import java.io.{IOException, PrintStream}
 import java.nio.file.{FileSystems, Files, Path, StandardCopyOption}
 import java.util.zip.{ZipInputStream, ZipOutputStream}
 import scala.collection.mutable
@@ -56,7 +56,7 @@ object Bootstrap {
   /**
     * Initializes a new flix project at the given path `p`.
     *
-    * The project must not already exist.
+   * Creates the project directory when it does not already exist.
     */
   def init(p: Path)(implicit out: PrintStream): Result[Unit, BootstrapError] =
     init(p, InitOptions.Default)
@@ -66,8 +66,15 @@ object Bootstrap {
     */
   def init(p: Path, options: InitOptions)(implicit out: PrintStream): Result[Unit, BootstrapError] = {
     //
-    // Check that the current working directory is usable.
+    // Create the project directory, then check that it is usable.
     //
+    try {
+      FileOps.newDirectoryIfAbsent(p)
+    } catch {
+      case e: IOException =>
+        return Result.Err(BootstrapError.FileError(s"Unable to create directory '$p': ${e.getMessage}"))
+    }
+
     if (!Files.isDirectory(p) || !Files.isReadable(p) || !Files.isWritable(p)) {
       return Result.Err(BootstrapError.FileError(s"The directory: '$p' is not accessible. Aborting."))
     }
