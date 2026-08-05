@@ -155,13 +155,13 @@ and the generated classes are named so that a jar is consumable from Scala,
 Kotlin, Groovy, Clojure and JRuby rather than Java alone. What that leaves is
 several genuinely open problems, each larger than it first appears:
 
-- **Collections across the boundary.** A Flix `List` has no exact Java form, so
-  it must be converted. A lazy view over the cons chain avoids the O(n)
-  allocation an eager copy costs on every call, but it is API the moment it
-  ships and needs its mutability, iteration and `size()` behavior settled first.
-  This is the largest remaining piece, and it is what would make polymorphic
-  exports genuinely useful — a type argument only carries information once a
-  container crosses.
+- **Collections beyond `List`.** A `List` now crosses as an unmodifiable
+  `java.util.List`, copied eagerly. `Map` and `Set` are red-black trees rather
+  than cons chains and are a separate problem. Replacing the copy with a lazy
+  view over the chain would trade O(n) allocation for O(1), but a view is API
+  the moment it ships and needs its mutability, iteration and `size()` behaviour
+  settled first — and for a primitive element it re-converts on every traversal
+  where a copy converts once.
 - **Java generic type arguments in parameter position.** A return type declares
   them; the declared type is threaded to the code generator for the return only,
   so the same type as a parameter still exports raw.

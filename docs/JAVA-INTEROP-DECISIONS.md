@@ -325,9 +325,23 @@ which would satisfy the descriptor and break every use of it.
 
 ---
 
-## J10 — Collections convert to lazy views, not eager copies
+## J10 — `List` crosses as an unmodifiable `java.util.List`, copied eagerly
 
-**Status: Proposed.** Not built.
+**Status: Settled** for the copy, which is shipped. **Proposed** for replacing
+it with a lazy view, which is not.
+
+`List[t]` is exportable in return position, converted by walking the cons chain
+into an `ArrayList` and wrapping it with `Collections.unmodifiableList`. The
+element must itself be exportable, so `List[List[t]]` and `List[Option[t]]` are
+rejected — one level, matching what the solver can build (J16). Unmodifiable
+because a Flix list is immutable, and handing back a mutable copy invites a
+caller to write to something that looks like the Flix value and is not.
+
+The copy is deliberately the conservative half of the trade below. It is also
+reversible without a caller noticing: what crosses is a `java.util.List` either
+way, so the view can replace it later without changing a single signature.
+
+### Why not the view, yet
 
 Time complexity alone suggests eager copying is fine, because the common case —
 full traversal — is O(n) either way. Allocation is the argument, and it splits
@@ -352,9 +366,14 @@ view is, and re-runs the element conversion on repeated access. Memoizing the
 boxes would reintroduce per-view state and defeat the O(1) allocation for the
 reference case, which is the case the decision is made for.
 
-**Consequence:** adopt the view for reference elements. For primitive elements,
-either copy eagerly or accept the re-boxing knowingly; do not present it as
-O(1).
+**Consequence:** the view is worth adopting for reference elements and is not
+obviously worth it for primitive ones. What decided the order was neither: a
+view is a *class with a published contract* — mutability, iteration, `size()`
+complexity — which has to be settled before it ships rather than after, whereas
+the copy commits to nothing beyond the `java.util.List` interface. So the copy
+ships first and the view waits for a benchmark rather than an argument, which is
+also what keeps this entry honest about which half is evidence and which half is
+preference.
 
 **Rejected:** the claim in an earlier draft that the case "rests on allocation
 alone" uniformly. It rests on allocation, and allocation depends on the element.

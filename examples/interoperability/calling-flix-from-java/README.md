@@ -165,6 +165,37 @@ payload is a Java `null` arrives as `Optional.empty()` — the same value `None`
 produces. `Optional.of` would raise a `NullPointerException` at the boundary
 instead; absence and a null payload cannot both be represented.
 
+## Lists
+
+`List[t]` is exportable **as a return type**, where the shim converts it to an
+unmodifiable `java.util.List`:
+
+```flix
+@Export
+pub def names(): List[String] = "a" :: "b" :: Nil
+```
+
+```java
+List<String> xs = Acme.Greeter.names();   // [a, b]
+xs.add("c");                              // UnsupportedOperationException
+```
+
+The element type is declared in the `Signature`, and a primitive element is
+boxed, so `List[Int32]` is `List<Integer>`. The element must itself be
+exportable: `List[List[t]]` and `List[Option[t]]` are rejected, and the error
+points at the element rather than at the list.
+
+The list is *copied* when it crosses, not wrapped in a lazy view over the Flix
+chain. A view would allocate O(1) instead of O(n), but it is a class with a
+contract of its own to settle first, and for a primitive element it re-boxes on
+every traversal where a copy boxes once. Since what a caller receives is a
+`java.util.List` either way, this can change later without affecting any
+signature.
+
+`List` is not exportable as a parameter, for the same reason `Option` is not.
+
+## Why some conversions are return-only
+
 `Option` is *not* exportable as a parameter. Mapping `Optional.empty()` to
 `None` would be unproblematic; what is missing is the machinery. The declared
 type is carried to the code generator for the return only, so a parameter
