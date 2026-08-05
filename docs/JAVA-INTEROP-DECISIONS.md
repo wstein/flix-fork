@@ -341,7 +341,51 @@ The copy is deliberately the conservative half of the trade below. It is also
 reversible without a caller noticing: what crosses is a `java.util.List` either
 way, so the view can replace it later without changing a single signature.
 
-### Why not the view, yet
+### The view, and what it will cost
+
+Settled since, and recorded here so it is not re-derived:
+
+**A lazy `List` is achievable and fully correct.** `AbstractList` needs
+`get(i)` + `size()`, which makes a full traversal quadratic on a cons chain, so
+the view extends `AbstractSequentialList` and supplies a real `ListIterator`.
+Verified against the JDK with a stand-in: iteration, `get`, `indexOf`,
+`contains`, `equals`, `stream` and `subList` all behave, and mutators throw.
+The iterator needs only a cursor and an index; `previous()` re-walks from the
+head, since a cons chain has no back-pointers. Backward iteration is therefore
+O(n) per step, which is the accepted cost — forward iteration, the case this
+decision is made for, stays O(1) allocation.
+
+**`Map` and `Set` must iterate in ascending key order**, and this is not a
+preference. `RedBlackTree.foldLeft` folds the left subtree, then the node, then
+the right one — so every existing traversal already enumerates in order:
+keys inserted `delta, alpha, charlie, bravo` come back `alpha, bravo, charlie,
+delta` from both `Map.toList` and `Set.toList`. A view in any other order would
+make one collection enumerate differently in Flix and in Java.
+
+That decides the JDK type: **`LinkedHashMap` and `LinkedHashSet`**. `TreeMap`
+would re-sort with Java's comparator, which for a key ordered by its own Flix
+`Order` instance may disagree, and it demands `Comparable` of a key that need
+not have it; `HashMap` discards the order outright. Note that the choice costs
+nothing extra in the iterator — *any* tree traversal needs O(h) state, pre-order
+included, so the stack is unavoidable either way.
+
+**The view cannot lean on hand-written Java.** An abstract base in
+`dev/flix/runtime` supplying the collection contract, with only the
+chain-walking hooks generated, would be far less bytecode. It does not work:
+the whole user runtime is *generated* — `Global.java` exists only as a
+compile-time mock and `CodeGen` emits the real class — so a hand-written base
+would not be present in a compiled program. J11's conclusion stands; its stated
+reason does not.
+
+**Shape of the work.** Six generated classes: a view and an iterator for each of
+`List`, `Set` and `Map`, with `Map` reusing the JDK's
+`AbstractMap.SimpleImmutableEntry` rather than generating a seventh. Unlike
+every other generated class, these are keyed on an *export plan* rather than on
+a type in `root.types`, so `CodeGen` has to collect them by walking the
+exported defs. `size()` is cached and `isEmpty()` tests the root ordinal, for
+all three.
+
+### Why the copy shipped first
 
 Time complexity alone suggests eager copying is fine, because the common case —
 full traversal — is O(n) either way. Allocation is the argument, and it splits
