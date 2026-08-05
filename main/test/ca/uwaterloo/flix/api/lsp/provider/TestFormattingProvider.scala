@@ -16,7 +16,7 @@
 package ca.uwaterloo.flix.api.lsp.provider
 
 import ca.uwaterloo.flix.api.Flix
-import ca.uwaterloo.flix.api.lsp.{FormattingOptions, TextEdit}
+import ca.uwaterloo.flix.api.lsp.{FormatterLsp, FormattingOptions, TextEdit}
 import ca.uwaterloo.flix.language.ast.shared.SecurityContext
 import ca.uwaterloo.flix.util.Options
 import org.scalatest.funsuite.AnyFunSuite
@@ -48,11 +48,15 @@ class TestFormattingProvider extends AnyFunSuite {
     (FormattingProvider.formatDocument(Uri, AnyOptions), flix)
   }
 
-  /** The text the editor would end up with, given a single whole-document edit. */
+  /**
+    * The text the editor would end up with after applying the edits.
+    *
+    * The edits are minimal, so the result has to be computed by applying them to
+    * the buffer rather than read off a single edit's replacement text.
+    */
   private def formattedText(src: String): String = {
     val (edits, _) = formatViaLsp(src)
-    assert(edits.sizeIs == 1, s"expected one whole-document edit, got ${edits.size}")
-    edits.head.newText
+    FormatterLsp.applyTextEditsToString(src, edits)
   }
 
   test("formatting an unformatted document actually changes it") {
@@ -117,16 +121,24 @@ class TestFormattingProvider extends AnyFunSuite {
     assert(FormattingProvider.formatDocument("NoSuchFile.flix", AnyOptions).isEmpty)
   }
 
-  test("the edit spans the whole document") {
-    // The provider returns one edit covering the document. It is worth pinning:
-    // an edit whose range fell short would truncate the file rather than reformat
-    // it, and the range is computed from the source rather than from the tree.
-    val src = "def f(): Int32 =\n    1\n"
+  test("the edit covers only what changed, not the whole document") {
+    // An editor applies an edit literally, so a full-buffer replacement would
+    // collapse undo, move the caret and reset folding for a one-line change.
+    val src =
+      """def a(): Int32 = 1
+        |def b():Int32=2
+        |def c(): Int32 = 3
+        |""".stripMargin
     val (edits, _) = formatViaLsp(src)
+    assert(edits.sizeIs == 1, s"expected one edit, got ${edits.size}")
     val range = edits.head.range
-    assert(range.start.line == 1 && range.start.character == 1, s"starts at 1:1, got ${range.start}")
-    val lines = src.split("\n", -1)
-    assert(range.end.line == lines.length, s"ends on the last line, got ${range.end}")
-    assert(range.end.character == lines.last.length + 1, s"ends past the last character, got ${range.end}")
+    assert(range.start.line == 2, s"starts on the changed line, got ${range.start}")
+    assert(range.end.line == 2, s"ends on the changed line, got ${range.end}")
+  }
+
+  test("formatting an already canonical document produces no edits at all") {
+    val src = "def add(x: Int32, y: Int32): Int32 = x + y\n"
+    val (edits, _) = formatViaLsp(src)
+    assert(edits.isEmpty, s"expected no edits, got $edits")
   }
 }

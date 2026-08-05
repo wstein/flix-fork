@@ -16,6 +16,7 @@
 package ca.uwaterloo.flix.api.lsp
 
 import ca.uwaterloo.flix.api.Flix
+import ca.uwaterloo.flix.tools.fmt.{Canonical, PrettyPrinter, TestFormatterCommon}
 import org.scalatest.funsuite.AnyFunSuite
 
 import java.nio.file.{Files, Path}
@@ -140,6 +141,85 @@ class TestFormatterLsp extends AnyFunSuite {
       val edit = TextEdit(Range(Position(2, 1), Position(2, 4)), "def")
       val _ = FormatterLsp.applyTextEditsToFile(path, edit :: Nil)
       assert(new String(Files.readAllBytes(path), flix.defaultCharset) == content)
+    }
+  }
+
+  test("minimalEdits: identical text needs no edit at all") {
+    assert(FormatterLsp.minimalEdits("def f(): Int32 = 1\n", "def f(): Int32 = 1\n").isEmpty)
+  }
+
+  test("minimalEdits: a change on one line touches only that line") {
+    val before = "line one\nline  two\nline three\n"
+    val after = "line one\nline two\nline three\n"
+    val edits = FormatterLsp.minimalEdits(before, after)
+    assert(edits.sizeIs == 1)
+    val range = edits.head.range
+    assert(range.start.line == 2, s"starts on line 2, got ${range.start}")
+    assert(range.end.line == 2, s"ends on line 2, got ${range.end}")
+  }
+
+  test("minimalEdits: an insertion is an empty range, not a replacement") {
+    val edits = FormatterLsp.minimalEdits("ab", "axb")
+    assert(edits.sizeIs == 1)
+    val edit = edits.head
+    assert(edit.newText == "x", s"inserts only the new text, got '${edit.newText}'")
+    assert(edit.range.start == edit.range.end, s"empty range, got ${edit.range}")
+  }
+
+  test("minimalEdits: a deletion has empty new text") {
+    val edits = FormatterLsp.minimalEdits("axb", "ab")
+    assert(edits.sizeIs == 1)
+    assert(edits.head.newText.isEmpty, s"deletes, got '${edits.head.newText}'")
+  }
+
+  test("minimalEdits: a shared prefix and suffix that overlap do not run backwards") {
+    // "aaa" -> "aa" shares "aa" at both ends of a two-character string. Counting
+    // both would produce a range whose end precedes its start.
+    for ((before, after) <- List(("aaa", "aa"), ("aa", "aaa"), ("", "x"), ("x", ""))) {
+      val edits = FormatterLsp.minimalEdits(before, after)
+      for (edit <- edits) {
+        val s = edit.range.start
+        val e = edit.range.end
+        val ordered = s.line < e.line || (s.line == e.line && s.character <= e.character)
+        assert(ordered, s"'$before' -> '$after' produced a backwards range ${edit.range}")
+      }
+      assert(FormatterLsp.applyTextEditsToString(before, edits) == after,
+        s"'$before' -> '$after' did not round-trip")
+    }
+  }
+
+  test("minimalEdits: applying them reproduces the target exactly") {
+    // The property that matters: whatever region the edit picks, applying it has
+    // to yield the formatted text. An edit that is minimal but wrong is worse
+    // than a whole-document replacement.
+    val cases = List(
+      ("def f(): Int32 = 1\n", "def g(): Int32 = 2\n"),
+      ("a\nb\nc\n", "a\nB\nc\n"),
+      ("", "def f(): Int32 = 1\n"),
+      ("def f(): Int32 = 1\n", ""),
+      ("mod M {\nf\n}\n", "mod M {\n    f\n}\n"),
+      ("trailing\n\n\n", "trailing\n")
+    )
+    for ((before, after) <- cases) {
+      val edits = FormatterLsp.minimalEdits(before, after)
+      assert(FormatterLsp.applyTextEditsToString(before, edits) == after,
+        s"round trip failed for '$before' -> '$after'")
+    }
+  }
+
+  test("minimalEdits: applying them reproduces canonical formatting across the corpus") {
+    // The end-to-end guarantee an editor depends on. Whatever region the edit
+    // picks, applying it to the buffer has to produce exactly what the formatter
+    // would have written; a minimal edit that is subtly wrong corrupts the file
+    // rather than merely formatting it badly.
+    for (sample <- TestFormatterCommon.ExampleSamples) {
+      val formatted = PrettyPrinter.format(sample.original.tree, Canonical)
+      val edits = FormatterLsp.minimalEdits(sample.content, formatted)
+      assert(FormatterLsp.applyTextEditsToString(sample.content, edits) == formatted,
+        s"applying the edits did not reproduce the formatting of ${sample.path}")
+      if (sample.content == formatted) {
+        assert(edits.isEmpty, s"an already-formatted file should need no edit: ${sample.path}")
+      }
     }
   }
 

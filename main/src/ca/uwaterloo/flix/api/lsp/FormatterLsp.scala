@@ -29,7 +29,7 @@ object FormatterLsp {
 
   /**
     * Formats the files at the given source paths using [[PrettyPrinter]].
-    * Applies a single [[TextEdit]] to each file.
+    * A file that is already formatted is left alone.
     *
     * @param root        the syntax tree root
     * @param sourcePaths the list of source file paths
@@ -49,11 +49,11 @@ object FormatterLsp {
 
   /**
     * Formats the given syntax tree for the given URI using [[PrettyPrinter]].
-    * Returns a single [[TextEdit]] replacing the entire document.
     *
-    * @param root the syntax tree root
-    * @param uri  the file URI
-    * @return a list containing a single document text edit
+    * @param root       the syntax tree root
+    * @param uri        the file URI
+    * @param separators the layout policy deciding the gap between tokens
+    * @return the edits turning the document into its formatted form, empty if none are needed
     */
   def format(
     root: SyntaxTree.Root,
@@ -63,32 +63,80 @@ object FormatterLsp {
     findTreeBasedOnUri(root, uri).map(treeToTextEdits(_, separators)).getOrElse(Nil)
 
   /**
-    * Formats `tree` and returns the edit that replaces its whole document.
+    * Formats `tree` and returns the edits that turn its document into the result.
     *
-    * A single whole-document edit rather than a minimal diff: the printer decides
-    * the whitespace between every pair of tokens, so the edited region is the
-    * document in any case, and a client applying one edit cannot interleave it
-    * with another badly.
+    * The edit covers only the part that actually changed. Replacing the whole
+    * document would be simpler and is what this did first, but an editor applies
+    * an edit literally: a full-buffer replacement collapses undo granularity,
+    * moves the caret, and resets folding, even when formatting changed one line.
+    * A document that is already formatted yields no edits at all.
     */
   private def treeToTextEdits(
     tree: SyntaxTree.Tree,
     separators: PrettyPrinter.Separators
   ): List[TextEdit] = {
     val formatted = PrettyPrinter.format(tree, separators)
-    documentRange(tree).map(range => TextEdit(range, formatted)).toList
+    documentText(tree) match {
+      case None => Nil
+      case Some(original) => minimalEdits(original, formatted)
+    }
   }
 
   /**
-    * The range covering the whole source `tree` was parsed from.
+    * The edits that turn `before` into `after`, as one replacement of the region
+    * that differs.
     *
-    * Derived from the source rather than from the tree's own span, which starts at
-    * the first token and so excludes any leading blank lines or trailing newline.
+    * The region is found by trimming the common prefix and suffix, so an edit that
+    * reindents one line touches one line. It is a single contiguous replacement
+    * rather than a hunk per change: when a file has changes far apart, the edit
+    * spans the gap between them. That is a deliberate limit — it keeps this
+    * obviously correct, and the case it costs (scattered changes) is the case
+    * where a large edit was going to happen anyway, while the case it wins
+    * (someone edits a line and saves) is the common one.
     */
-  private def documentRange(tree: SyntaxTree.Tree): Option[Range] =
-    TokenStream.tokens(tree).headOption.map { token =>
-      val lines = token.src.data.mkString.split("\n", -1)
-      Range(Position(1, 1), Position(lines.length, lines.last.length + 1))
+  private[lsp] def minimalEdits(before: String, after: String): List[TextEdit] = {
+    if (before == after) return Nil
+
+    val maxCommon = math.min(before.length, after.length)
+    var prefix = 0
+    while (prefix < maxCommon && before.charAt(prefix) == after.charAt(prefix)) prefix += 1
+
+    // The prefix and suffix may not overlap, or the replaced region would run
+    // backwards: "aaa" -> "aa" shares "aa" at both ends of a two-character string.
+    var suffix = 0
+    while (
+      suffix < maxCommon - prefix &&
+        before.charAt(before.length - 1 - suffix) == after.charAt(after.length - 1 - suffix)
+    ) suffix += 1
+
+    val range = Range(
+      offsetToPosition(before, prefix),
+      offsetToPosition(before, before.length - suffix)
+    )
+    List(TextEdit(range, after.substring(prefix, after.length - suffix)))
+  }
+
+  /**
+    * The one-indexed line and character of `offset` in `text`, as LSP counts them
+    * in this codebase (see [[Position]], whose fields are one-indexed).
+    */
+  private def offsetToPosition(text: String, offset: Int): Position = {
+    var line = 1
+    var lineStart = 0
+    var i = 0
+    while (i < offset) {
+      if (text.charAt(i) == '\n') {
+        line += 1
+        lineStart = i + 1
+      }
+      i += 1
     }
+    Position(line, offset - lineStart + 1)
+  }
+
+  /** The full text of the source `tree` was parsed from. */
+  private def documentText(tree: SyntaxTree.Tree): Option[String] =
+    TokenStream.tokens(tree).headOption.map(_.src.data.mkString)
 
   /**
     * Applies the given text edits to the file at the specified path.
