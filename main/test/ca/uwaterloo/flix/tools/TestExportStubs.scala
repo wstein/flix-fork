@@ -249,6 +249,92 @@ class TestExportStubs extends AnyFunSuite {
     javac(List("Acme/Api.java" -> ExportStubs.javaSource(facades.head)), Nil)
   }
 
+  test("criterion 2: the mutual reference may cross a generic type") {
+    // Criterion 1 crosses only `String`, which erasure cannot damage. Here every crossing carries
+    // a type argument, in both directions and in both positions, so a stub that erased what it
+    // describes would be caught by javac rather than passing quietly:
+    //
+    //   - `for (String s : Acme.Api.names())` does not compile against a raw `List`, because the
+    //     element type would be `Object`.
+    //   - `Acme.Api.sizeOf(List.of(...))` pins the argument side, which `ExportPlan.ofParameter`
+    //     describes by a different route than the return side.
+    //   - `Helper.strings().get(0)` is the direction the *Flix* resolver has to read a generic
+    //     signature for: without it the element is `Object` and the def does not typecheck.
+    val flixSrc =
+      """mod Acme.Api {
+        |    import com.example.Helper
+        |    import java.util.{List => JList}
+        |
+        |    @Export
+        |    pub def names(): List[String] = "a" :: "b" :: Nil
+        |
+        |    @Export
+        |    pub def sizeOf(xs: JList[String]): Int32 \ IO = xs.size()
+        |
+        |    @Export
+        |    pub def firstFromJava(): String \ IO =
+        |        let xs = Helper.strings();
+        |        xs.get(0)
+        |}
+        |""".stripMargin
+
+    val javaSrc =
+      """package com.example;
+        |
+        |import java.util.List;
+        |
+        |public final class Helper {
+        |    public static List<String> strings() {
+        |        return List.of("java-a", "java-b");
+        |    }
+        |
+        |    public static String firstViaFlix() {
+        |        for (String s : Acme.Api.names()) {
+        |            return s;
+        |        }
+        |        return "none";
+        |    }
+        |
+        |    public static int sizeViaFlix() {
+        |        return Acme.Api.sizeOf(List.of("x", "y", "z"));
+        |    }
+        |}
+        |""".stripMargin
+
+    val (facades, unsupported) = stubs(flixSrc)
+    assert(unsupported.isEmpty, s"nothing should be refused, but got: $unsupported")
+    val stubSource = ExportStubs.javaSource(facades.head)
+
+    // Asserted directly as well as via javac, so a regression says *what* was lost rather than
+    // only that some generated file stopped compiling.
+    assert(stubSource.contains("java.util.List<java.lang.String> names()"), stubSource)
+    assert(stubSource.contains("sizeOf(java.util.List<java.lang.String> arg0)"), stubSource)
+
+    val javaClasses = javac(List("Acme/Api.java" -> stubSource, "com/example/Helper.java" -> javaSrc), Nil)
+    deleteRecursively(javaClasses.resolve("Acme"))
+
+    withFacade(flixSrc, jars = List(jarOf(javaClasses))) { facade =>
+      // The stub and the facade must still agree once generics are involved -- this is where a
+      // difference between the two readings would show up if there were one.
+      for (method <- facades.head.methods) {
+        val real = facade.getMethods.find(_.getName == method.name).get
+        assertResult(reflected(real), s"stub and facade disagree about '${method.name}'")(declared(method))
+      }
+
+      // Flix read a generic Java signature.
+      assertResult("java-a")(facade.getMethod("firstFromJava").invoke(null))
+
+      val finalClasses = javac(List("com/example/Helper.java" -> javaSrc),
+        List(Paths.get(facade.getProtectionDomain.getCodeSource.getLocation.toURI)))
+      val loader = new URLClassLoader(Array[URL](finalClasses.toUri.toURL), facade.getClassLoader)
+      try {
+        val helper = loader.loadClass("com.example.Helper")
+        assertResult("a")(helper.getMethod("firstViaFlix").invoke(null))
+        assertResult(3)(helper.getMethod("sizeViaFlix").invoke(null))
+      } finally loader.close()
+    }
+  }
+
   test("criterion 1: Java and Flix may call each other within one source set") {
     // The acceptance criterion from `docs/JOINT-COMPILATION.md`. `Helper` calls an exported Flix
     // def and the same Flix module calls a method on `Helper`, with no ordering hint from the

@@ -171,8 +171,17 @@ which:
    the real facade, and both directions are then called. Deleting the stubs is
    what makes it evidence rather than a demonstration — whatever links afterwards
    is the real facade.
-2. The mutual reference crosses a generic type (`List<String>`), to catch stubs
-   that erase what the resolver needs.
+2. **Met.** The mutual reference crosses a generic type (`List<String>`), to catch
+   stubs that erase what the resolver needs. `TestExportStubs`, "criterion 2",
+   crosses one in both directions and both positions: Java iterates
+   `Acme.Api.names()` with an enhanced `for`, calls `Acme.Api.sizeOf(List.of(…))`,
+   and Flix reads the element type out of `Helper.strings()`.
+
+   Checked by mutation: erasing the arguments from `ExportSignature.Applied`
+   makes **javac** reject the generated sources, so the criterion rests on real
+   compilation rather than on the string assertions beside it. An enhanced `for`
+   over a raw `List` binds `Object`, which is what makes the erasure visible; a
+   test that only assigned the result would have passed either way.
 3. A Java signature names a Flix-exported facade type, which is the case pass 0
    exists for.
 4. Deleting the Flix source produces an error naming the *Java* call site, not a
