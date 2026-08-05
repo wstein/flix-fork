@@ -14,6 +14,7 @@ mod Test.Exp.Jvm.Generic.NewObject {
     import java.util.{Iterator => JIterator}
     import java.util.TreeMap
     import java.util.concurrent.Callable
+    import java.util.function.BiFunction
 
     // CompileTests
 
@@ -535,5 +536,58 @@ mod Test.Exp.Jvm.Generic.NewObject {
         assertEq(expected = 14 :: 15 :: Nil, boxedCallable(14 :: 15 :: Nil).call());
         assertEq(expected = (16, "x"), boxedCallable((16, "x")).call());
         assertEq(expected = Shape.Circle(17), boxedCallable(Shape.Circle(17)).call())
+
+    // A generic Java interface instantiated at a primitive declares its parameters erased --
+    // `Comparator[Int64].compare` is `compare(Object, Object)` -- while the typer requires the
+    // Flix method to take `Int64`. The method body must therefore unbox, or it loads a reference
+    // slot with `LLOAD` and fails verification before running a single instruction.
+    @Test
+    def testComparatorPrimitiveInt32(): Unit \ {Assert, IO} =
+        let c = new Comparator[Int32] {
+            def compare(_this: Comparator[Int32], t: Int32, u: Int32): Int32 = t - u
+        };
+        assertTrue(c.compare(1, 2) < 0)
+
+    @Test
+    def testComparatorPrimitiveInt64(): Unit \ {Assert, IO} =
+        let c = new Comparator[Int64] {
+            def compare(_this: Comparator[Int64], t: Int64, u: Int64): Int32 =
+                if (t < u) -1 else if (t > u) 1 else 0
+        };
+        assertTrue(c.compare(1i64, 2i64) < 0)
+
+    @Test
+    def testComparatorPrimitiveFloat64(): Unit \ {Assert, IO} =
+        let c = new Comparator[Float64] {
+            def compare(_this: Comparator[Float64], t: Float64, u: Float64): Int32 =
+                if (t < u) -1 else if (t > u) 1 else 0
+        };
+        assertTrue(c.compare(1.0f64, 2.0f64) < 0)
+
+    // A 64-bit parameter claims two stack slots where the erased frame allocated one, so a
+    // parameter *after* it lands at the wrong index. Both orders are covered because only one of
+    // them puts a later parameter behind the wide one.
+    @Test
+    def testBiFunctionWideThenNarrow(): Unit \ {Assert, IO} =
+        let f = new BiFunction[Int64, Int32, String] {
+            def apply(_this: BiFunction[Int64, Int32, String], a: Int64, b: Int32): String = "${a}/${b}"
+        };
+        assertEq(expected = "9000000000/7", f.apply(9000000000i64, 7))
+
+    @Test
+    def testBiFunctionNarrowThenWide(): Unit \ {Assert, IO} =
+        let f = new BiFunction[Int32, Int64, String] {
+            def apply(_this: BiFunction[Int32, Int64, String], a: Int32, b: Int64): String = "${a}/${b}"
+        };
+        assertEq(expected = "7/9000000000", f.apply(7, 9000000000i64))
+
+    // A reference parameter beside a wide primitive one: the reference needs no unboxing, so this
+    // pins that the bridge is applied per parameter rather than to all or none.
+    @Test
+    def testBiFunctionReferenceAndWide(): Unit \ {Assert, IO} =
+        let f = new BiFunction[String, Int64, String] {
+            def apply(_this: BiFunction[String, Int64, String], a: String, b: Int64): String = "${a}/${b}"
+        };
+        assertEq(expected = "x/42", f.apply("x", 42i64))
 
 }

@@ -674,24 +674,73 @@ object Lowering {
     */
   private def lowerJvmMethod(method: TypedAst.JvmMethod, clazz: Class[?])(implicit ctx: Context, lctx: LocalContext, root: TypedAst.Root, flix: Flix): MonoAst.JvmMethod = method match {
     case TypedAst.JvmMethod(ann, ident, fparams, exp, _, eff, loc) =>
-      val fs = fparams.map(lowerFormalParam)
+      val fs0 = fparams.map(lowerFormalParam)
       val e0 = lowerExp(exp)
       // If this method overrides a Java method whose erased return type is a reference
       // (e.g. `Object` for a generic interface method) but the Flix result is a primitive,
       // box it so the value matches the erased JVM signature. This mirrors the boxing applied
       // to generic Java method *calls* above (see `boxIfNecessary` in InvokeMethod), and the
       // call site unboxes the result symmetrically.
-      val e = overriddenJavaReturnType(clazz, ident.name, fparams.tail.length) match {
+      val e1 = overriddenJavaReturnType(clazz, ident.name, fparams.tail.length) match {
         case Some(javaReturnType) => boxIfNecessary(e0, javaReturnType)
         case None => e0
       }
+      // The parameters need the mirror image of that, for the same reason. The typer requires the
+      // Flix parameter to have the *reified* type -- `Comparator[Int64]` demands `t: Int64` -- while
+      // the generated method is declared with the *erased* one, `Object`. Left alone, the two
+      // disagree about the frame: the body loads a reference slot with `LLOAD`, and a 64-bit type
+      // also desynchronises every later parameter index, since it claims two slots where the frame
+      // allocated one. So a primitive parameter takes the boxed type here and the body unboxes it.
+      val (fs, e) = overriddenJavaParameterTypes(clazz, ident.name, fparams.tail.length) match {
+        case Some(javaParamTypes) => unboxParams(fs0, javaParamTypes, e1)
+        case None => (fs0, e1)
+      }
       MonoAst.JvmMethod(ann, ident, fs, e, e.tpe, eff, loc)
+  }
+
+  /**
+    * Retypes each formal parameter that Java declares as a reference and Flix as a primitive, and
+    * binds the original symbol to the unboxed value around `exp`.
+    *
+    * `fparams` includes the receiver, which Java does not declare, so `javaParamTypes` lines up
+    * with its tail.
+    */
+  private def unboxParams(fparams: List[MonoAst.FormalParam], javaParamTypes: List[Class[?]], exp: MonoAst.Expr)(implicit flix: Flix): (List[MonoAst.FormalParam], MonoAst.Expr) = {
+    val bridged = fparams.tail.zip(javaParamTypes).map {
+      case (fparam, javaTpe) if isPrimType(fparam.tpe) && !javaTpe.isPrimitive =>
+        val boxedSym = mkLetSym("boxedParam", fparam.loc.asSynthetic)
+        val boxedParam = MonoAst.FormalParam(boxedSym, boxedWrapperType(fparam.tpe, fparam.loc), Occur.Unknown, fparam.loc)
+        (boxedParam, Some((fparam, boxedSym)))
+      case (fparam, _) =>
+        (fparam, None)
+    }
+    val newParams = fparams.head :: bridged.map(_._1)
+    // Innermost binding first, so the parameters are unboxed in declaration order.
+    val newExp = bridged.flatMap(_._2).foldRight(exp) {
+      case ((fparam, boxedSym), acc) =>
+        val boxed = MonoAst.Expr.Var(boxedSym, boxedWrapperType(fparam.tpe, fparam.loc), fparam.loc.asSynthetic)
+        val unboxed = MonoAst.Expr.ApplyAtomic(
+          AtomicOp.InvokeMethod(javaUnboxMethod(fparam.tpe)),
+          List(boxed),
+          fparam.tpe,
+          Type.Pure,
+          fparam.loc.asSynthetic
+        )
+        MonoAst.Expr.Let(fparam.sym, unboxed, acc, acc.tpe, acc.eff, Occur.Unknown, fparam.loc.asSynthetic)
+    }
+    (newParams, newExp)
   }
 
   /** Returns the erased return type of the Java method on `clazz` matching `name` and `arity` (excluding the receiver). */
   private def overriddenJavaReturnType(clazz: Class[?], name: String, arity: Int): Option[Class[?]] =
     JvmUtils.getOverridableInstanceMethods(clazz).collectFirst {
       case m if m.getName == name && m.getParameterCount == arity => m.getReturnType
+    }
+
+  /** Returns the erased parameter types of the Java method on `clazz` matching `name` and `arity`. */
+  private def overriddenJavaParameterTypes(clazz: Class[?], name: String, arity: Int): Option[List[Class[?]]] =
+    JvmUtils.getOverridableInstanceMethods(clazz).collectFirst {
+      case m if m.getName == name && m.getParameterCount == arity => m.getParameterTypes.toList
     }
 
   /**
