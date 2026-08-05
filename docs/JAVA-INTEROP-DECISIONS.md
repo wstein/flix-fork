@@ -669,8 +669,14 @@ footing, and it has not.
   issue. It is the exact mirror of what J4 fixes outward.
 - **flix/flix#12972** — argues the same rule generalizes: a bytecode reference
   to a Java member must be emitted at the reflective member's type, with the
-  value bridged on either side. Cited as an **open risk, not a measurement**:
-  it is source-read analysis and its repro shapes have not been executed.
+  value bridged on either side. Recorded here first as an open risk rather than
+  a measurement, since upstream states it as source-read analysis. Running the
+  repro shapes showed the parameter half was worse than described — every
+  primitive instantiation of a generic Java interface with parameters failed
+  verification, and no test covered any of them — and it is now fixed:
+  `Lowering.lowerJvmMethod` gives such a parameter the boxed type and unboxes it
+  in the body, mirroring the boxing it already applied to the return. The
+  `super`-argument half stands.
 - **flix/flix#8618** and **#5172** — unifying a Flix arrow with a Java
   functional interface is sound in one direction only. This is why the claim
   "an export hands Java a value, never a function" is a property of `@Export`

@@ -408,12 +408,15 @@ constrains it. Its open issues bound what this report may be read to claim.
   crossing at the wrong type — and it demonstrates that solving one direction
   says nothing about the other.
 - **flix/flix#12972, *anonymous class parameters and super call arguments are
-  not bridged*** (open). Argues the same rule generalizes: a bytecode reference
-  to a Java member must be emitted at the reflective member's type, with the
-  value bridged on either side, and the backend applies this inconsistently for
-  anonymous-class parameters and `super` arguments. We cite it as an **open
-  risk, not a measurement**: it is source-read analysis whose repro shapes are
-  stated but, at the time of writing, not executed.
+  not bridged***. Argues the same rule generalizes: a bytecode reference to a
+  Java member must be emitted at the reflective member's type, with the value
+  bridged on either side. We first cited this as an open risk rather than a
+  measurement, because upstream states it as source-read analysis with untested
+  repro shapes. Executing them found the parameter half worse than described —
+  *every* primitive instantiation of a generic Java interface with parameters
+  failed verification — and we have since fixed it, in the same place and by
+  the same means as the return direction was already fixed. The `super`-argument
+  half remains as the issue describes it.
 - **flix/flix#8618, *Soundness issue with Java functional interfaces*** (open),
   and **#5172**. Unifying a Flix arrow with a Java functional interface is
   sound in one direction only and can crash in the other. This is why §4's "a

@@ -314,9 +314,20 @@ change that "fixes" the equality will fail nineteen generic-interop tests.
 
 All of this is the *outbound* direction only. Flix calling Java — generic method
 results, anonymous-class overrides, `super` arguments, functional interfaces —
-is a separate mechanism with open soundness defects upstream (flix/flix#12970,
-#12972, #8618, #5172) that `ExportPlan` neither covers nor repairs. Do not cite
-it as evidence about Flix–Java interop generally.
+is a separate mechanism that `ExportPlan` neither covers nor repairs. Do not
+cite it as evidence about Flix–Java interop generally.
+
+That boundary has one recurring defect, and it is worth recognising by shape: a
+bytecode reference to a Java member must be emitted at the *reflective member's*
+type, with the value bridged to or from the Flix type on either side of the
+instruction. The two type lists may not be substituted for one another. A
+generic Java call returning a reference needed a cast on the way back
+(flix/flix#12970); an anonymous class overriding a generic method needed its
+primitive parameters unboxed on the way in (#12972, fixed in
+`Lowering.lowerJvmMethod` beside the boxing already applied to the return).
+`super` arguments (#12972) and Java functional interfaces (#8618, #5172) are
+still open. They keep arriving one at a time because there are four independent
+Java-to-Flix type mappers and no shared bridge — which is what #8592 asks for.
 
 Decisions taken while building this, with their evidence and the alternatives
 rejected, are in `docs/JAVA-INTEROP-DECISIONS.md`; `docs/JAVA-INTEROP-PAPER.md`

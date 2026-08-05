@@ -166,12 +166,12 @@ several genuinely open problems, each larger than it first appears:
   them; the declared type is threaded to the code generator for the return only,
   so the same type as a parameter still exports raw.
 - **The inbound boundary**, which is a separate mechanism with open soundness
-  defects (issues 12972, 8618, 5172) and duplicated conversion logic (issue
-  8592). Nothing in the export work addresses it. Issue 12972 in particular is
-  reachable from ordinary code: every primitive instantiation of a generic Java
-  functional interface with parameters — `Comparator[Int32]`, `Comparator[Int64]`
-  — fails verification, because the method is declared with the erased parameter
-  types and its body loads them at the Flix types.
+  defects (issues 8618 and 5172, on Java functional interfaces) and duplicated
+  conversion logic (issue 8592). Nothing in the export work addresses it. The
+  parameter half of issue 12972 has been fixed — every primitive instantiation
+  of a generic Java interface with parameters used to fail verification — but
+  its `super`-argument half stands, and 8592's four independent Java-to-Flix
+  type mappers remain the reason such defects keep appearing one at a time.
 
 Two problems that were open here have since been settled, and the reasoning is
 worth keeping: **unconstrained polymorphic exports** now work (they are exported
