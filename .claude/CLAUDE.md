@@ -81,6 +81,13 @@ not advertised: laying out a fragment without its enclosing context is a
 standing source of idempotence bugs, so "format selection" does nothing on
 `.flix` and that is the intended behaviour.
 
+The edits are **minimal**: one replacement of the region that differs, and none
+at all for a document already formatted. An editor applies an edit literally, so
+replacing the whole buffer to reindent one line collapses undo, moves the caret
+and resets folding. Keep the property that applying the edits reproduces exactly
+what the printer wrote — a minimal edit that is subtly wrong corrupts a file
+rather than formatting it badly, and that is asserted corpus-wide.
+
 Test the LSP through `FormattingProvider`, not through `PrettyPrinter`. The
 provider was wired to the *default* policy for its whole life, so it handed back
 whatever document it was given and format-on-save did nothing in any editor —
