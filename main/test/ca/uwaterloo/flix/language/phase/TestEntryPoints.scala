@@ -862,11 +862,68 @@ class TestEntryPoints extends AnyFunSuite with TestUtils {
     expectError[EntryPointError.IllegalExportType](result)
   }
 
-  test("Test.IllegalExportFunction.07") {
+  test("Test.ExportPolymorphic.01") {
+    // An unconstrained type variable is exported as `java.lang.Object`. The monomorpher defaults
+    // it to `AnyType`, which is represented as `Object`, so the boundary needs no special case.
     val input =
       """
         |mod Pkg { }
-        |mod Pkg.Mod { @Export pub def id[t](x: t): t = x }
+        |mod Pkg.Mod { @Export pub def id(x: t): t = x }
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibNix)
+    expectSuccess(result)
+  }
+
+  test("Test.ExportPolymorphic.02") {
+    // Several occurrences of one variable, and a variable beside a concrete type.
+    val input =
+      """
+        |mod Pkg { }
+        |mod Pkg.Mod {
+        |    @Export pub def firstOf(x: t, _y: t): t = x
+        |    @Export pub def countOf(_x: t, n: Int32): Int32 = n
+        |}
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibNix)
+    expectSuccess(result)
+  }
+
+  test("Test.ExportPolymorphic.03") {
+    // A constrained variable has no `Object` instantiation: Flix picks a trait implementation from
+    // the concrete type while compiling, and no instance exists for the defaulted `AnyType`. Left
+    // unchecked this crashes the monomorpher rather than failing, so the error is the thing that
+    // keeps that unreachable.
+    val input =
+      """
+        |mod Pkg { }
+        |mod Pkg.Mod { @Export pub def describe(x: t): String with ToString[t] = ToString.toString(x) }
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibAll)
+    expectError[EntryPointError.IllegalExportConstrainedTypeVariable](result)
+  }
+
+  test("Test.ExportPolymorphic.04") {
+    // A variable that is not itself the boundary type. Defaulting the region of `S[Int32, r]`
+    // would pick a representation the exported signature never mentions.
+    val input =
+      """
+        |struct S[t, r] {
+        |    v: t
+        |}
+        |mod Pkg { }
+        |mod Pkg.Mod { @Export pub def id(x: t): S[Int32, r] = ??? }
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibNix)
+    expectError[EntryPointError.IllegalEntryPointTypeVariables](result)
+  }
+
+  test("Test.ExportPolymorphic.05") {
+    // An effect variable is not a boundary type either, and defaulting it to pure would silently
+    // change what the function is allowed to do.
+    val input =
+      """
+        |mod Pkg { }
+        |mod Pkg.Mod { @Export pub def apply1(f: Int32 -> Int32 \ ef, x: Int32): Int32 \ ef = f(x) }
         |""".stripMargin
     val result = check(input, Options.TestWithLibNix)
     expectError[EntryPointError.IllegalEntryPointTypeVariables](result)

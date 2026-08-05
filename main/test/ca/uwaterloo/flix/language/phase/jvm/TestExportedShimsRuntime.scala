@@ -154,6 +154,28 @@ class TestExportedShimsRuntime extends AnyFunSuite {
     }
   }
 
+  test("an exported polymorphic def round-trips any reference") {
+    // The monomorpher defaults the unconstrained variable to `AnyType`, which is represented as
+    // `Object`. The point of calling it rather than reading the descriptor is that the def is
+    // specialized only because it is exported -- nothing in the Flix program calls it -- so a
+    // seeding mistake produces a class that is missing or empty rather than one that is wrong.
+    withFacade(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    @Export
+        |    pub def id(x: t): t = x
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin, "Pkg.Mod") { facade =>
+      val id = facade.getMethod("id", classOf[Object])
+      assertResult(classOf[Object])(id.getReturnType)
+      assertResult("string")(id.invoke(null, "string"))
+      assertResult(42)(id.invoke(null, Integer.valueOf(42)))
+      assertResult(null)(id.invoke(null, null))
+    }
+  }
+
   test("a nested module's shim links under its sibling name") {
     // `mod A.B.C` is the class `A.B$C`, not `C` in a package named after the class `A.B`. The
     // names are pinned by TestNamespaceClasses; this checks the class that name refers to is

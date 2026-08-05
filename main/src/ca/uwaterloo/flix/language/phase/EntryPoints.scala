@@ -258,10 +258,10 @@ object EntryPoints {
     *   - Has types that are valid in Java (not Flix types like `List[Int32]`).
     */
   private def visitExport(defn: TypedAst.Def)(implicit sctx: SharedContext, root: TypedAst.Root, flix: Flix): TypedAst.Def = {
-    val errs = (checkNoTypeVariables(defn) match {
+    val errs = (checkExportedTypeVariables(defn) match {
       case Some(err) => List(err)
       case None =>
-        // Only run these on functions without type variables.
+        // Only run these on functions whose type variables are ones the boundary can represent.
         // An exported function should have:
         //  - Only valid Java types
         //  - An effect set containing only primitive effects or effects that have default handlers
@@ -302,6 +302,43 @@ object EntryPoints {
     val monomorphic = defn.spec.tparams.isEmpty && typesOf(defn).forall(_.typeVars.isEmpty)
     if (monomorphic) None
     else Some(EntryPointError.IllegalEntryPointTypeVariables(defn.sym.loc))
+  }
+
+  /**
+    * Returns an error if `defn` has a type variable the export boundary cannot represent.
+    *
+    * A variable is allowed only where it *is* the whole type of a parameter or of the return
+    * value, and only if nothing constrains it. Such a variable is exported as `java.lang.Object`:
+    * the monomorpher defaults an unconstrained `Kind.Star` variable to `AnyType`, which the
+    * backend represents exactly as `Object`, so the shim needs no special case at all.
+    *
+    * Everything else stays an error, for two different reasons:
+    *
+    *   - A *constrained* variable has no such instantiation. Flix resolves a trait to an instance
+    *     while compiling, keyed on the concrete type constructor, and no instance exists -- or can
+    *     be declared -- for `AnyType`. Reaching the monomorpher with one crashes it rather than
+    *     failing, so this check is what keeps that unreachable. See [[IllegalExportConstrainedTypeVariable]].
+    *   - A variable *nested* inside another type, such as the region of `S[Int32, r]`, is not the
+    *     whole boundary type, so defaulting it would silently pick a representation the signature
+    *     never mentions.
+    */
+  private def checkExportedTypeVariables(defn: TypedAst.Def): Option[EntryPointError] = {
+    if (defn.spec.tconstrs.nonEmpty || defn.spec.econstrs.nonEmpty)
+      Some(EntryPointError.IllegalExportConstrainedTypeVariable(defn.sym.loc))
+    else {
+      val boundaryTypes = defn.spec.fparams.map(_.tpe) :+ defn.spec.retTpe
+      val leftover = boundaryTypes.filterNot(isBareTypeVariable).flatMap(_.typeVars) ++ defn.spec.eff.typeVars
+      if (leftover.isEmpty) None
+      else Some(EntryPointError.IllegalEntryPointTypeVariables(defn.sym.loc))
+    }
+  }
+
+  /** Returns `true` if `tpe` is a type variable of kind `Star`, and so is represented as `Object`. */
+  @tailrec
+  private def isBareTypeVariable(tpe: Type): Boolean = tpe match {
+    case Type.Var(sym, _) => sym.kind == Kind.Star
+    case Type.Alias(_, _, t, _) => isBareTypeVariable(t)
+    case _ => false
   }
 
   /** Returns all the types in the signature of `defn`. */
@@ -520,6 +557,13 @@ object EntryPoints {
       // enum and stays unexportable.
       case Type.Apply(t, _, _) => isExportableType(t)
       case Type.Alias(_, _, t, _) => isExportableType(t)
+      // An unconstrained type variable is exported as `java.lang.Object`, which is exactly what
+      // the monomorpher's `AnyType` default is represented as. Reported as exportable rather than
+      // as malformed: `checkJavaTypes` discards a malformed result without an error, so relying on
+      // that would admit a type variable by accident instead of by decision.
+      // `checkExportedTypeVariables` has already rejected any variable that is constrained or that
+      // is nested inside another type, so only the boundary-shaped case reaches here.
+      case Type.Var(sym, _) if sym.kind == Kind.Star => Result.Ok(true)
       case Type.Var(_, _) => Result.Err(ErrorOrMalformed)
       case Type.AssocType(_, _, _, _) => Result.Err(ErrorOrMalformed)
       case Type.JvmToType(_, _) => Result.Err(ErrorOrMalformed)

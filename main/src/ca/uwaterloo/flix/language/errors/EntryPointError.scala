@@ -110,6 +110,38 @@ object EntryPointError {
   }
 
   /**
+    * An error raised to indicate that an exported function constrains a type variable.
+    *
+    * @param loc the location of the function symbol.
+    */
+  case class IllegalExportConstrainedTypeVariable(loc: SourceLocation) extends EntryPointError {
+    def code: ErrorCode = ErrorCode.E1970
+
+    def summary: String = s"Constrained type variable in exported function."
+
+    def message(fmt: Formatter)(implicit root: Option[TypedAst.Root]): String = {
+      import fmt.*
+      s""">> Exported function constrains a type variable.
+         |
+         |${highlight(loc, "constraint not allowed here", fmt)}
+         |
+         |${underline("Explanation:")} An unconstrained type variable is exported as
+         |'java.lang.Object', because that is what every reference type is represented as. A
+         |constrained one has no such representation: Flix resolves a trait to an instance while
+         |compiling, choosing the implementation from the concrete type, so there is nothing for a
+         |Java caller to supply and no instance to select.
+         |
+         |Export a wrapper at each type you need instead:
+         |
+         |    pub def describe(x: a): String with ToString[a] = ToString.toString(x)
+         |
+         |    ${magenta("@Export")}
+         |    pub def describeInt(x: Int32): String = describe(x)
+         |""".stripMargin
+    }
+  }
+
+  /**
     * An error raised to indicate that an exported function has an unexpected name.
     *
     * @param loc the location of the defn.

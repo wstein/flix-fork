@@ -322,9 +322,18 @@ object Specialization {
     implicit val is: Map[(Symbol.TraitSym, TypeConstructor), Instance] = mkInstanceMap(root.instances)
     implicit val ctx: Context = new Context()
 
-    // Collect all non-parametric function definitions.
+    // Collect all non-parametric function definitions, and the exported parametric ones.
+    //
+    // An exported def is a root of the program whether or not Flix calls it, so a parametric one
+    // has to be specialized here or it is never created at all -- nothing else will ask for it.
+    // The empty substitution is what makes this work: `StrictSubstitution` defaults an unbound
+    // `Kind.Star` variable to `AnyType`, which the backend represents as `Object`, so seeding the
+    // def here specializes it at exactly the erased-reference instantiation its shim needs.
+    // `EntryPoints.checkExportedTypeVariables` has already rejected the variables this cannot
+    // represent -- notably the trait-constrained ones, which reach `resolveSigSym` below with
+    // `AnyType` and find no instance.
     val nonParametricDefns = root.defs.filter {
-      case (_, defn) => defn.spec.tparams.isEmpty
+      case (_, defn) => defn.spec.tparams.isEmpty || defn.spec.ann.isExport
     }
 
     // Perform specialization of all non-parametric function definitions.
@@ -332,7 +341,8 @@ object Specialization {
     // This will enqueue additional functions for specialization.
     ParOps.parMap(nonParametricDefns) {
       case (sym, defn) => flix.profile(defn.sym, defn.loc) {
-        // We use an empty substitution because the defs are non-parametric.
+        // We use an empty substitution because the defs are non-parametric, or exported and so
+        // specialized at the default instantiation.
         // It's important that non-parametric functions keep their symbol to not
         // invalidate the set of entryPoints functions.
         val specializedDefn = specializeDef(sym, defn, StrictSubstitution.empty)
