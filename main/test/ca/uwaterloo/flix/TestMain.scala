@@ -16,11 +16,13 @@
 
 package ca.uwaterloo.flix
 
+import ca.uwaterloo.flix.api.Bootstrap
+import ca.uwaterloo.flix.tools.pkg.ManifestParser
 import ca.uwaterloo.flix.util.{DocFormat, LibLevel}
 import org.scalatest.funsuite.AnyFunSuite
 
 import java.io.File
-import java.nio.file.Path
+import java.nio.file.{Files, Path}
 
 class TestMain extends AnyFunSuite {
 
@@ -61,6 +63,31 @@ class TestMain extends AnyFunSuite {
     assert(Main.defaultInitAuthor(completeIdentity.get) == "Ada Lovelace <ada@example.com>")
     assert(Main.defaultInitAuthor(_ => None) == "TODO")
     assert(Main.defaultInitAuthor(key => completeIdentity.get(key).filter(_ => key == "user.name")) == "TODO")
+  }
+
+  test("init accepts supported license choices") {
+    assert(Main.parseInitLicense("apache2").contains(Bootstrap.InitLicense.Apache2))
+    assert(Main.parseInitLicense("MIT").contains(Bootstrap.InitLicense.Mit))
+    assert(Main.parseInitLicense("bsd3").contains(Bootstrap.InitLicense.Bsd3))
+    assert(Main.parseInitLicense("gpl3").contains(Bootstrap.InitLicense.Gpl3))
+    assert(Main.parseInitLicense("none").contains(Bootstrap.InitLicense.NoLicense))
+    assert(Main.parseInitLicense("ISC").isEmpty)
+  }
+
+  test("init writes the selected license and description") {
+    val project = Files.createTempDirectory("flix-init-test")
+    val options = Bootstrap.InitOptions(
+      description = "A package with a useful description.",
+      author = "Ada Lovelace <ada@example.com>",
+      license = Bootstrap.InitLicense.Mit
+    )
+
+    Bootstrap.init(project, options)(System.out).unsafeGet
+
+    val manifest = ManifestParser.parse(project.resolve("flix.toml")).unsafeGet
+    assert(manifest.license.contains("MIT"))
+    assert(Files.readString(project.resolve("README.md")).contains(options.description))
+    assert(Files.readString(project.resolve("LICENSE.md")).contains("# MIT"))
   }
 
   test("build") {

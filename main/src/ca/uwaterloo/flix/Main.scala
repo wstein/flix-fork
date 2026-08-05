@@ -846,8 +846,32 @@ object Main {
 
     Bootstrap.InitOptions(
       description = promptWithDefault("Project description", defaults.description),
-      author = promptWithDefault("Author", defaults.author)
+      author = promptWithDefault("Author", defaults.author),
+      license = promptForLicense()
     )
+  }
+
+  /** Prompts for one of the supported SPDX license identifiers. */
+  private def promptForLicense(): Bootstrap.InitLicense = {
+    val console = System.console()
+    while (true) {
+      val answer = console.readLine("License [none, apache2, mit, bsd3, gpl3] [none]: ")
+      parseInitLicense(Option(answer).map(_.trim).getOrElse("")) match {
+        case Some(license) => return license
+        case None => console.printf("Choose none, apache2, mit, bsd3, or gpl3.%n")
+      }
+    }
+    Bootstrap.InitLicense.NoLicense
+  }
+
+  /** Parses case-insensitive wizard license choices and their SPDX identifiers. */
+  private[flix] def parseInitLicense(input: String): Option[Bootstrap.InitLicense] = input.toLowerCase match {
+    case "" | "none" => Some(Bootstrap.InitLicense.NoLicense)
+    case "apache-2.0" | "apache2" | "apache" => Some(Bootstrap.InitLicense.Apache2)
+    case "mit" => Some(Bootstrap.InitLicense.Mit)
+    case "bsd-3-clause" | "bsd3" => Some(Bootstrap.InitLicense.Bsd3)
+    case "gpl-3.0-only" | "gpl3" => Some(Bootstrap.InitLicense.Gpl3)
+    case _ => None
   }
 
   /** Returns the current directory or the single directory supplied to `flix init`. */

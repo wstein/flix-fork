@@ -44,6 +44,7 @@ class TestBootstrap extends AnyFunSuite {
     val manifest = ManifestParser.parse(p.resolve("flix.toml")).unsafeGet
     assert(manifest.description == options.description)
     assert(manifest.authors == List(options.author))
+    assert(Files.readString(p.resolve("README.md")).contains(options.description))
   }
 
   test("init uses explicit TODO metadata by default") {
@@ -53,6 +54,22 @@ class TestBootstrap extends AnyFunSuite {
     val manifest = ManifestParser.parse(p.resolve("flix.toml")).unsafeGet
     assert(manifest.description == Bootstrap.InitOptions.Default.description)
     assert(manifest.authors == List(Bootstrap.InitOptions.Default.author))
+    assert(manifest.license.isEmpty)
+  }
+
+  test("init writes selected license metadata") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    val options = Bootstrap.InitOptions(
+      description = "A licensed project",
+      author = "Ada Lovelace <ada@example.com>",
+      license = Bootstrap.InitLicense.Mit
+    )
+
+    Bootstrap.init(p, options)(System.out).unsafeGet
+
+    val manifest = ManifestParser.parse(p.resolve("flix.toml")).unsafeGet
+    assert(manifest.license.contains("MIT"))
+    assert(Files.readString(p.resolve("LICENSE.md")).contains("# MIT"))
   }
 
   test("init writes an .editorconfig that agrees with Flix layout") {

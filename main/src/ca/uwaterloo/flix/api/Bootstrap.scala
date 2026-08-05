@@ -44,7 +44,34 @@ import scala.util.{Failure, Success, Using}
 object Bootstrap {
 
   /** Metadata collected by the `flix init` wizard. */
-  case class InitOptions(description: String, author: String)
+  case class InitOptions(description: String, author: String, license: InitLicense = InitLicense.NoLicense)
+
+  /** A license choice supported by the `flix init` wizard. */
+  sealed trait InitLicense {
+    def spdxId: Option[String]
+  }
+
+  object InitLicense {
+    case object Apache2 extends InitLicense {
+      val spdxId: Option[String] = Some("Apache-2.0")
+    }
+
+    case object Mit extends InitLicense {
+      val spdxId: Option[String] = Some("MIT")
+    }
+
+    case object Bsd3 extends InitLicense {
+      val spdxId: Option[String] = Some("BSD-3-Clause")
+    }
+
+    case object Gpl3 extends InitLicense {
+      val spdxId: Option[String] = Some("GPL-3.0-only")
+    }
+
+    case object NoLicense extends InitLicense {
+      val spdxId: Option[String] = None
+    }
+  }
 
   object InitOptions {
     val Default: InitOptions = InitOptions(
@@ -111,13 +138,16 @@ object Bootstrap {
     FileOps.newDirectoryIfAbsent(workflowsDirectory)
 
     FileOps.newFileIfAbsent(manifestFile) {
-      s"""[package]
-         |name        = "$packageName"
-         |description = "${escapeTomlString(options.description)}"
-         |version     = "0.1.0"
-         |flix        = "${Version.CurrentVersion}"
-         |authors     = ["${escapeTomlString(options.author)}"]
-         |""".stripMargin
+      val lines = List(
+        "[package]",
+        s"name        = \"$packageName\"",
+        s"description = \"${escapeTomlString(options.description)}\"",
+        "version     = \"0.1.0\"",
+        s"flix        = \"${Version.CurrentVersion}\""
+      ) ++ options.license.spdxId.map(id => s"license     = \"$id\"") ++ List(
+        s"authors     = [\"${escapeTomlString(options.author)}\"]"
+      )
+      lines.mkString("", "\n", "\n")
     }
 
     FileOps.newFileIfAbsent(gitignoreFile) {
@@ -193,14 +223,23 @@ object Bootstrap {
     }
 
     FileOps.newFileIfAbsent(licenseFile) {
-      """Enter license information here.
-        |""".stripMargin
+      options.license.spdxId match {
+        case Some(id) =>
+          s"""# $id
+             |
+             |This project declares `$id` in `flix.toml`. Add the full license text and the
+             |appropriate copyright notice before distributing the project.
+             |""".stripMargin
+        case None =>
+          """No license selected. Add license information here before distributing the project.
+            |""".stripMargin
+      }
     }
 
     FileOps.newFileIfAbsent(readmeFile) {
       s"""# $packageName
          |
-         |Enter some useful information.
+         |${options.description}
          |
          |""".stripMargin
     }
