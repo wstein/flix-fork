@@ -101,8 +101,69 @@ object LayoutPlan {
         alignRecordFields(node, ranges, tokens, plan, policy)
       }
     }
+    spaceMinusSigns(tokens, plan)
     indent(tokens, ranges, plan)
     plan.toVector
+  }
+
+  /**
+    * Spaces a `-` that subtracts, and attaches one that signs a literal.
+    *
+    * The two are indistinguishable from a pair of adjacent tokens, which is why
+    * [[Canonical]] reproduces the source's own spacing for both — and why `3-4`
+    * came out as `3 -4`: the gap on the left was chosen by the operator rule and
+    * the gap on the right by the literal rule, and the two disagreed. The token
+    * *before* the minus settles it, and this pass has the token stream that
+    * `Separators.between` does not.
+    *
+    * The allowlist is deliberately one-sided. Mistaking a sign for an operator
+    * writes `- 9223372036854775808i64`, which is out of range and does not
+    * compile (D18); mistaking an operator for a sign only reproduces spacing the
+    * source already had. So a minus counts as subtraction *only* after a token
+    * that certainly ends an expression, and is left to the policy otherwise.
+    */
+  private def spaceMinusSigns(
+    tokens: Vector[TokenStream.PrintableToken],
+    plan: Array[Gap]
+  ): Unit = {
+    // A gap the author broke is a vertical decision and is not overridden here.
+    def pad(i: Int, spaces: Int): Unit =
+      if (i > 0 && i < tokens.length && !breaksLine(tokens, i)) plan(i) = Gap.Pad(spaces)
+
+    for (i <- tokens.indices) {
+      val signsLiteral = tokens(i).token.kind == TokenKind.Minus &&
+        i + 1 < tokens.length &&
+        Canonical.numericLiteral(tokens(i + 1).token.kind)
+      if (signsLiteral) {
+        if (i > 0 && endsExpression(tokens(i - 1).token.kind)) {
+          pad(i, 1)
+          pad(i + 1, 1)
+        } else {
+          pad(i + 1, 0)
+        }
+      }
+    }
+  }
+
+  /**
+    * Returns `true` if `kind` certainly ends an expression, so that a `-`
+    * following it subtracts rather than signs.
+    *
+    * Certainly, not probably: everything omitted here falls back to reproducing
+    * the source, which is the behaviour that was already shipping.
+    */
+  private def endsExpression(kind: TokenKind): Boolean = kind match {
+    case TokenKind.NameLowercase => true
+    case TokenKind.NameUppercase => true
+    case TokenKind.NameMath => true
+    case TokenKind.ParenR => true
+    case TokenKind.BracketR => true
+    case TokenKind.CurlyR => true
+    case TokenKind.KeywordTrue => true
+    case TokenKind.KeywordFalse => true
+    case TokenKind.LiteralChar => true
+    case TokenKind.LiteralString => true
+    case k => Canonical.numericLiteral(k)
   }
 
   /**

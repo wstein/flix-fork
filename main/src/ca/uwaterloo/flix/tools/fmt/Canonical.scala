@@ -90,7 +90,7 @@ object Canonical extends PrettyPrinter.Separators {
     * `123i64` or `1.5f32` lexes to its own kind, and the least value of each
     * signed width is the case that makes this matter.
     */
-  private def numericLiteral(kind: TokenKind): Boolean = kind match {
+  private[fmt] def numericLiteral(kind: TokenKind): Boolean = kind match {
     case TokenKind.LiteralInt => true
     case TokenKind.LiteralInt8 => true
     case TokenKind.LiteralInt16 => true
