@@ -244,4 +244,48 @@ class TestExportedShims extends AnyFunSuite {
     assert(descriptors.get("add").contains("(II)I"))
   }
 
+  test("no return type the front end accepts leaks the Flix representation") {
+    // `EntryPoints` decides what may be exported and `ExportPlan` decides how, over different type
+    // representations, so a gate widened ahead of a plan compiles into a shim that falls through
+    // and returns the internal tag class. That failure is silent -- a working method with a wrong
+    // type -- so the invariant is asserted here rather than left to review: every return type the
+    // gate admits is compiled, and no generated class may appear in the API it produces.
+    val returnTypes = List(
+      "Bool" -> "true",
+      "Char" -> "'c'",
+      "Int8" -> "1i8",
+      "Int16" -> "1i16",
+      "Int32" -> "1",
+      "Int64" -> "1i64",
+      "Float32" -> "1.0f32",
+      "Float64" -> "1.0f64",
+      "String" -> "\"s\"",
+      "BigInt" -> "1ii",
+      "BigDecimal" -> "1.0ff",
+      "Regex" -> "regex\"a\"",
+      "Option[String]" -> "Some(\"s\")",
+      "Option[Int32]" -> "Some(1)",
+      "Option[Float64]" -> "Some(1.0f64)",
+      "Option[BigInt]" -> "Some(1ii)",
+      "Option[Regex]" -> "Some(regex\"a\")"
+    )
+    val defs = returnTypes.zipWithIndex.map {
+      case ((tpe, value), i) => s"    @Export\n    pub def f$i(): $tpe = $value"
+    }.mkString("\n\n")
+    val (descriptors, signatures) = membersOf(
+      s"""mod Pkg { }
+         |mod Pkg.Mod {
+         |$defs
+         |}
+         |
+         |def main(): Unit \\ IO = println("built")
+         |""".stripMargin, "Pkg/Mod")
+
+    // Every generated class lives under this package, so naming one in a descriptor or a signature
+    // is exactly the leak, whatever the backend happens to have called it.
+    val leaks = (descriptors ++ signatures).filter { case (_, d) => d.contains(JvmName.DevFlixGen.mkString("/")) }
+    assert(leaks.isEmpty, s"exported members name a generated class: $leaks")
+    assert(descriptors.size >= returnTypes.size, s"expected a shim per exported def, got: ${descriptors.keys}")
+  }
+
 }
