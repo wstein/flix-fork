@@ -875,6 +875,24 @@ class Flix {
   }
 
   /**
+    * Runs `f` with the thread pool the compiler phases require, and shuts it down afterwards.
+    *
+    * [[check]] and [[compile]] bracket themselves, so this is for a caller that runs individual
+    * phases instead of a whole pipeline. Every phase goes through `ParOps`, which reads
+    * [[threadPool]] directly, so without this such a caller fails with a null pool rather than with
+    * anything that names the cause.
+    *
+    * There is a real use for running only part of the pipeline: deriving a project's `@Export`
+    * signatures needs the front end as far as the weeder and must work on a program the resolver
+    * would reject, which is exactly the program whose Java counterpart has not been generated yet.
+    * See `ExportStubs`.
+    */
+  def withThreadPool[A](f: => A): A = {
+    initForkJoinPool()
+    try f finally shutdownForkJoinPool()
+  }
+
+  /**
     * Initializes the fork-join thread pool.
     */
   private def initForkJoinPool(): Unit = {

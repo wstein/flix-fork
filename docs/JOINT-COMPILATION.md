@@ -95,6 +95,13 @@ Pass 2   Flix full compile        (Java stubs on classpath)   →  real classes 
 Pass 3   javac full compile       (Flix output on classpath)  →  real Java classes
 ```
 
+**Building it shortened it.** Criterion 1 needs only passes 0, 2 and 3 — javac
+compiling the real Java sources against the facade stub *is* the producer of the
+Java signatures Flix then compiles against, so pass 1 has nothing left to do.
+Pass 1 is required only when a Java *signature* names something that does not
+exist yet, which is criterion 3. Scheduling it unconditionally would double the
+javac invocations on every build for a case most projects do not have.
+
 Pass 0 is cheap: Flix already stops after parse+weed, and `@Export` signatures
 are derivable there. Pass 1 is the technique `kapt` uses for Kotlin — `javac`'s
 `JavacTask.parse()` succeeds on sources whose references do not resolve, because
@@ -156,9 +163,14 @@ that wants joint compilation, and the stub fidelity limits above are permanent.
 These are the tests, and they are the same for both options. A build fixture in
 which:
 
-1. A Java class calls an `@Export`ed Flix def, **and** a Flix def calls a method
-   on that same Java class — in one source set, with no ordering hint from the
-   author.
+1. **Met.** A Java class calls an `@Export`ed Flix def, **and** a Flix def calls a
+   method on that same Java class — in one source set, with no ordering hint from
+   the author. `TestExportStubs`, "criterion 1", runs the whole scheme: pass 0
+   derives the facade, javac compiles `Helper` against it, the stub classes are
+   **deleted**, Flix compiles against the real `Helper`, javac recompiles against
+   the real facade, and both directions are then called. Deleting the stubs is
+   what makes it evidence rather than a demonstration — whatever links afterwards
+   is the real facade.
 2. The mutual reference crosses a generic type (`List<String>`), to catch stubs
    that erase what the resolver needs.
 3. A Java signature names a Flix-exported facade type, which is the case pass 0
@@ -191,6 +203,20 @@ for both and is worth doing on its own merits:
 
 Joint compilation needs the worker anyway: passes 0 and 2 must share one `Flix`
 instance, or pass 0's parse is thrown away.
+
+### Two constraints the implementation ran into
+
+- **`Flix.addJar` takes a jar, never a directory of class files.** So a build tool
+  must package the Java side between passes, which is real per-build cost for no
+  benefit — javac wrote those classes to a directory a moment earlier. Accepting a
+  directory is a small, self-contained upstream improvement.
+- **Nothing stops after the weeder.** `Flix.check` runs the whole pipeline, and
+  the cached parse and weeded roots it exposes are filled in only when the
+  *resolver* succeeded — so in the one case pass 0 exists for, they are empty.
+  `ExportStubs` therefore drives `Reader`/`Lexer`/`Parser2`/`Weeder2` itself. That
+  needs the fork-join pool, which only `check` and `compile` set up, so
+  `Flix.withThreadPool` was added to make the lifecycle available without
+  duplicating it.
 
 ## 6. Open questions
 
