@@ -748,6 +748,83 @@ rule too, and D1 rejects it on the same evidence: a threshold that disagrees wit
 the corpus roughly half the time is not canonicality, it is a preference imposed
 at scale.
 
+## D25 — Canonicality is asserted over reviewed fixtures, not over the corpus
+
+**Status: Settled.** Resolves the open consequence recorded in D8.
+
+D8 recorded that `TestFormatterStability` asserts the corpus is a fixed point of
+the formatter, that its stated justification — the corpus *"is maintained in a
+canonical formatted form"* — is false, and that no canonical formatter can
+therefore pass it. The resolution is to split the property in two rather than to
+weaken either half.
+
+- **Non-destructiveness**, over the whole corpus, with the *default* policy:
+  `f_verbatim(p(l)) = l`. This is what the test was really checking. It is the
+  strongest such statement available, it runs over all 403 files, and it is
+  unchanged.
+- **Canonicality**, over `main/test/resources/fmt/canonical`, with the
+  *canonical* policy. Each fixture is an input and the expected output, and the
+  suite asserts both that the input formats to it and that it is a fixed point.
+
+Four properties make the fixtures a gate rather than a mirror:
+
+1. **Regeneration is a separate task.** `./mill flix.updateCanonicalFixtures`
+   rewrites them; the suite only ever compares. A test that rewrites its own
+   expectation on failure records whatever the formatter currently does.
+2. **A coverage assertion.** Every layout rule must be exercised by some fixture,
+   keyed on what the rule itself keys on. Without it the goldens rot behind the
+   rules: the next rule added gets zero coverage and the suite stays green.
+3. **No fixture may be quarantined.** A fixture that fails to parse is reproduced
+   verbatim, so it would satisfy every property above while asserting nothing.
+   Fixtures need only *parse*, not type check — formatting never required a
+   program to compile, and demanding it would exclude the constructs fixtures are
+   most useful for.
+4. **The seeds are real.** Most inputs are corpus files with their whitespace
+   mangled; `datalog` and `structs` format back to the corpus file byte for byte,
+   which is a stronger statement about the rules than any hand-written expectation.
+
+**The review is the point, and it paid immediately.** Generating the fixtures for
+the first time surfaced two defects that had passed fidelity, idempotence,
+comment anchors and every corpus property: `1+2*3-4` printed as `1 + 2 * 3 -4`
+(D18's sign rule and the operator rule disagreeing about the same `-`), and a
+block comment whose opening line was indented away from its own body (D26). This
+is the fifth and sixth time in this subsystem that a layout defect was visible
+only to a human reading output.
+
+**Rejected:** making `--canonical` the default now that no test forbids it.
+`docs/STYLE.md` still legislates nothing about the layout this mode imposes, so
+by D0 every rule here remains a proposal. It stays opt-in until upstream rules.
+
+## D26 — A block comment's interior is not re-indented, and its first line is
+
+**Status: Open.** Recorded so that it is not rediscovered as a surprise.
+
+D10 says block comments are reproduced verbatim. Indentation is decided per gap,
+and a block comment is a *single token* whose interior newlines are inside the
+token text — so the gap before `/*` is re-indented while the `*` continuation
+lines are not, and a comment moved by one level comes out with its body hanging:
+
+```
+    /*
+   * the opening line moved, this one did not
+   */
+```
+
+The printer emits every token in order and decides only the whitespace *between*
+them (D15), so fixing this properly means rewriting the interior of a token,
+which no operation in this architecture can currently do. Three options, none
+yet taken:
+
+- **Rewrite the comment's interior.** Correct output; breaks D15's restriction,
+  which is the invariant that makes losing or reordering a token impossible.
+- **Leave the whole comment where it was**, indenting `/*` to its original column
+  rather than to its enclosing construct's. Architecture-preserving and
+  self-consistent, but a comment in a re-indented body then sits at the wrong depth.
+- **Accept it**, which is the status quo.
+
+The fixture `comments.flix` freezes the current behaviour deliberately, so that
+whichever option is taken shows up as a reviewed diff rather than as a surprise.
+
 ## Validation against real codebases
 
 `flix format --canonical` was run over nine third-party Flix repositories, in

@@ -215,13 +215,25 @@ matches everything else with a wildcard, so it would accept output in which
 every identifier had been renamed. It constrains the *shape* of the weeded AST
 and nothing else.
 
-`TestFormatterStability` asserts that the standard library and `examples` are
-fixed points of the formatter. Its docstring explains this by calling the corpus
-canonical, which is not true — the corpus mixes inline and broken layouts for
-the same constructs. The assertion is still the right one, because a formatter
-that reproduces its input satisfies it; but a formatter that imposed one layout
-per syntax tree could not, and that conflict has to be settled with the upstream
-maintainers rather than by weakening the test.
+`TestFormatterStability` asserts two different things and the difference matters.
+Over the whole corpus it runs the **default** policy, which is
+non-destructiveness — the formatter puts back exactly what it was given. It does
+not run the canonical policy there and must not: the corpus lays the same
+construct out both ways, so no formatter that imposes one layout per syntax tree
+can fix-point it.
+
+Canonicality is asserted over `main/test/resources/fmt/canonical`, a small set of
+input/expected pairs whose expected output the formatter produced and a human
+read. Regenerate with `./mill flix.updateCanonicalFixtures` and **read the diff**
+— that review is the only thing making them evidence, and it is where a layout
+change is visible as a layout rather than as a passing test. The suite also
+asserts that every layout rule is exercised by some fixture (goldens otherwise rot
+behind the rules) and that no fixture is quarantined (an unparseable fixture is
+reproduced verbatim, so it would satisfy every property while asserting nothing).
+Fixtures need only parse, not compile.
+
+Adding a layout rule therefore means adding a fixture that exercises it, or the
+coverage assertion fails. That is deliberate.
 
 Two invariants hold in the write path (`FormatterLsp`, covered by
 `TestFormatterLsp`): a file is decoded and re-encoded through the **same**

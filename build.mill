@@ -196,6 +196,19 @@ object flix extends ScalaModule {
     runSuite("ca.uwaterloo.flix.tools.fmt.FormatterDiffReport", test.runClasspath(), Task.env)
   }
 
+  /**
+   * Run: ./mill flix.updateCanonicalFixtures
+   *
+   * Regenerates the expected output of the canonical formatter fixtures under
+   * main/test/resources/fmt/canonical, then leaves the diff for a human to read.
+   * It is a separate task rather than a self-healing test on purpose: an
+   * expectation that rewrites itself on failure records whatever the formatter
+   * currently does, which turns the golden corpus into a mirror instead of a gate.
+   */
+  def updateCanonicalFixtures = Task {
+    runSuite("ca.uwaterloo.flix.tools.fmt.CanonicalFixtureUpdate", test.runClasspath(), Task.env)
+  }
+
   /** Run: ./mill flix.vscode */
   def vscode() = Task.Command {
     val envFile = root / ".env"

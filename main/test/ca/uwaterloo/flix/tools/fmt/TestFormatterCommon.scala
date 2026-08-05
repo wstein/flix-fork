@@ -85,6 +85,63 @@ object TestFormatterCommon {
     lazy val original: Parsed = reparse(content)
   }
 
+  /**
+    * A reviewed input/expected pair for canonical formatting.
+    *
+    * The corpus cannot serve as the canonical gate: it lays the same construct
+    * out both ways, so no formatter that imposes one layout per syntax tree can
+    * fix-point it. These fixtures are the material that really is canonical —
+    * `expected` was produced by the formatter and then read by a human, which is
+    * the only step that makes it evidence of anything.
+    *
+    * Both trees are memoised because each parse runs a full compile.
+    */
+  case class Fixture(name: String, input: String, expected: String) {
+
+    lazy val inputTree: SyntaxTree.Tree =
+      parseFixture(s"$CanonicalFixtureDir/input/$name.flix", input)
+
+    lazy val expectedTree: SyntaxTree.Tree =
+      parseFixture(s"$CanonicalFixtureDir/expected/$name.flix", expected)
+  }
+
+  /** Where the canonical fixtures live, relative to the repository root. */
+  val CanonicalFixtureDir: String = "main/test/resources/fmt/canonical"
+
+  /**
+    * Every canonical fixture, by the base name shared by its input and expected file.
+    *
+    * A fixture whose `expected` file is missing is reported as an empty string
+    * rather than skipped, so that adding an input and forgetting to run
+    * `./mill flix.updateCanonicalFixtures` fails the suite instead of passing it.
+    */
+  val CanonicalFixtures: List[Fixture] = {
+    val inputDir = Paths.get(CanonicalFixtureDir, "input")
+    val expectedDir = Paths.get(CanonicalFixtureDir, "expected")
+    FileOps.getFlixFilesIn(inputDir, depth = 1)
+      .map(_.getFileName.toString.stripSuffix(".flix"))
+      .sorted
+      .map { name =>
+        val expectedPath = expectedDir.resolve(s"$name.flix")
+        val expected =
+          if (Files.exists(expectedPath)) Files.readString(expectedPath) else ""
+        Fixture(name, Files.readString(inputDir.resolve(s"$name.flix")), expected)
+      }
+  }
+
+  /**
+    * Parses a fixture, requiring only that it *parse* — not that it type check.
+    *
+    * Formatting never required a program to compile, so demanding it here would
+    * exclude exactly the constructs a fixture is most useful for. The suite
+    * checks separately that no fixture contains an [[SyntaxTree.TreeKind.ErrorTree]]:
+    * a fixture that fails to parse would be quarantined and reproduced verbatim,
+    * which fix-points trivially and would assert nothing at all.
+    */
+  def parseFixture(path: String, src: String): SyntaxTree.Tree =
+    parseTolerantly(exampleFlix, path, src)
+      .getOrElse(throw new AssertionError(s"No syntax tree found for fixture $path"))
+
   /** All stdlib files */
   private val StdlibFiles: List[(String, String)] =
     Library.CoreLibrary ++ Library.StandardLibrary
@@ -298,6 +355,14 @@ trait TestFormatterCommon extends AnyFunSuite {
 
   /** Every `.flix` file in the standard library. */
   protected val StdlibSamples: List[Sample] = TestFormatterCommon.StdlibSamples
+
+  protected type Fixture = TestFormatterCommon.Fixture
+
+  /** Every reviewed input/expected pair for canonical formatting. */
+  protected val CanonicalFixtures: List[Fixture] = TestFormatterCommon.CanonicalFixtures
+
+  /** Where the canonical fixtures live, relative to the repository root. */
+  protected val CanonicalFixtureDir: String = TestFormatterCommon.CanonicalFixtureDir
 
   /** Substitutes `src` for `path` in `flix`, runs `check`, and returns the parse. */
   protected def reparseAt(
