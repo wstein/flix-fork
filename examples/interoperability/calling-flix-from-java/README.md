@@ -102,6 +102,30 @@ Exportable: `Bool`, `Char`, `Int8`, `Int16`, `Int32`, `Int64`, `Float32`,
 return type it becomes `void`, and the `Unit` parameter Flix gives a nullary
 function is dropped, so `def announce(): Unit` is `void announce()` in Java.
 
+`Option[t]` is exportable **as a return type**, where the shim converts it to a
+`java.util.Optional`:
+
+```flix
+@Export
+pub def find(k: String): Option[String] =
+    if (k == "a") Some("alpha") else None
+```
+
+```java
+Optional<String> hit = Acme.Greeter.find("a");   // Optional[alpha]
+Optional<String> miss = Acme.Greeter.find("z");  // Optional.empty
+```
+
+The element type is declared in the method's `Signature`, so Java, Scala and
+Kotlin all see `Optional<String>` rather than a raw `Optional`. An element that
+is a primitive is boxed, since an `Optional` holds references: `Option[Int32]`
+is `Optional<Integer>`. The element must itself be exportable, so a nested
+`Option[Option[t]]` is rejected.
+
+`Option` is *not* exportable as a parameter. That would need the reverse
+conversion, and there is no answer for a Java caller passing `Optional.empty()`
+to a function whose Flix type is not optional.
+
 ## Callbacks
 
 A Java functional interface is an ordinary Java type, so Java can pass a lambda
@@ -117,9 +141,13 @@ String]` is a kind error. Use `UnaryOperator`, `BinaryOperator`, `BiFunction`,
 A Flix closure cannot travel the other way: a function type is not exportable,
 so an exported function cannot return one.
 
-Not exportable: Flix enums, tuples, records, functions, `Array`, and anything
-polymorphic. Their JVM representation is an implementation detail of the
-compiler — a `Some(x)` is a class called `Tag$Obj` distinguished only by an
-`int ordinal` field — so exposing them would freeze names the backend needs to
-stay free to change. To hand such a value to Java, convert it at the boundary:
-return a `String`, a Java collection, or a Java object you construct yourself.
+Not exportable: Flix enums other than `Option`, tuples, records, functions,
+`Array`, and anything polymorphic. Their JVM representation is an implementation
+detail of the compiler — a `Some(x)` is a class called `Tag$Obj` distinguished
+only by an `int ordinal` field — so exposing them would freeze names the backend
+needs to stay free to change.
+
+That is also why `Option` is *converted* rather than exposed: the shim reads the
+tag and builds an `Optional`, so Java never names the tag class. To hand any
+other such value to Java, do the same at the boundary — return a `String`, a
+Java collection, or a Java object you construct yourself.

@@ -1,6 +1,7 @@
 # Changelog
 
 Unreleased:
+- Compiler: `@Export`ed functions may now return `Option[t]`, which is converted to a `java.util.Optional` at the boundary. The element type is declared in the method's `Signature`, so callers see `Optional<String>` rather than a raw `Optional`; a primitive element is boxed.
 - Compiler: Generated classes are now named beside their namespace class (`Acme.Api$Def$get`) instead of beneath it (`Acme.Api.Def$get`), so a namespace never denotes both a class and a package. Exported functions are now reachable from Scala and Kotlin, which rejected the former layout.
 - Compiler: Monomorphized enum-case JVM class names now replace fresh identifiers with XXH3-64/Base58 components.
 
