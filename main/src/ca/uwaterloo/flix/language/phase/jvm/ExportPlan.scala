@@ -211,11 +211,14 @@ object ExportPlan {
         val (nilOrdinal, consTag) = listTags(erased)
         Some(AsList(elementPlan(element, consTag.elms.head), nilOrdinal, consTag))
       case SimpleType.Native(clazz, targs) if targs.nonEmpty =>
-        // Only when every argument can be described. A Flix type argument, say
-        // `ArrayList[SomeEnum]`, has no name a caller may depend on, and writing one would publish
-        // the representation. Falling back to no plan leaves the type raw, which is what it has
-        // always been -- an unsignable argument makes the signature absent, never wrong.
-        traverse(targs)(typeArgumentPlan).map(GenericNative(JvmName.ofClass(clazz), _))
+        // Every argument must be describable, and `EntryPoints.isExportableType` has already
+        // ensured it: a Flix type argument such as `ArrayList[SomeEnum]` is rejected there,
+        // because it would otherwise hand a caller a generated class name. Failing here is
+        // therefore a compiler bug -- the gate and this solver disagreeing about what may cross,
+        // which is the divergence J16 exists to make loud rather than silent.
+        val plans = traverse(targs)(typeArgumentPlan).getOrElse(
+          throw InternalCompilerException(s"Exported Java type has an undescribable argument: '$declared'", SourceLocation.Unknown))
+        Some(GenericNative(JvmName.ofClass(clazz), plans))
       case _ => None
     }
 

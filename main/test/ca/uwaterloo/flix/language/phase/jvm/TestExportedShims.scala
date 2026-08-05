@@ -162,27 +162,26 @@ class TestExportedShims extends AnyFunSuite {
     assert(signatures.get("mapping").contains("()Ljava/util/HashMap<Ljava/lang/String;Ljava/lang/Integer;>;"))
   }
 
-  test("a generic Java type with an undescribable argument stays raw") {
-    // A Flix enum has no name a Java caller may depend on, so naming it in a signature would
-    // publish exactly what the boundary exists to hide. The signature is omitted instead, which
-    // leaves the type as raw as it has always been: an argument that cannot be described makes
-    // the signature absent, never wrong.
-    val (descriptors, signatures) = membersOf(
-      """enum Colour { case Red, case Green }
-        |mod Pkg { }
+  test("a Java type argument keeps its own Java name") {
+    // The way to give a Flix enum a representation that can cross is a real Java enum: it has a
+    // stable Java type of its own, so it needs no conversion and no description beyond its name.
+    // A Flix enum in the same position is rejected by the front end -- see
+    // TestEntryPoints "Test.ExportTypeArgument" -- because naming its generated class in a
+    // signature would publish exactly what the boundary hides.
+    val signatures = signaturesOf(
+      """mod Pkg { }
         |mod Pkg.Mod {
         |    import java.util.ArrayList
+        |    import java.time.DayOfWeek
         |
         |    @Export
-        |    pub def colours(): ArrayList[Colour] \ IO = new ArrayList()
+        |    pub def days(): ArrayList[DayOfWeek] \ IO = new ArrayList()
         |}
         |
         |def main(): Unit \ IO = println("built")
         |""".stripMargin, "Pkg/Mod")
-    assert(descriptors.get("colours").contains("()Ljava/util/ArrayList;"))
-    assert(!signatures.contains("colours"), s"expected no signature, got: ${signatures.get("colours")}")
+    assert(signatures.get("days").contains("()Ljava/util/ArrayList<Ljava/time/DayOfWeek;>;"))
   }
-
   test("an exported def returning Option is presented as Optional") {
     // The Flix representation of `Option` is a tag class the backend is free to rename, so it is
     // converted at the boundary rather than exposed.

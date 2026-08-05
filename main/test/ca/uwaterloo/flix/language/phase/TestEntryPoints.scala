@@ -862,6 +862,76 @@ class TestEntryPoints extends AnyFunSuite with TestUtils {
     expectError[EntryPointError.IllegalExportType](result)
   }
 
+  test("Test.ExportTypeArgument.01") {
+    // A Java container whose element is a Flix enum used to be accepted, because only the *head*
+    // of a type application was checked. Erasure made it look safe -- the descriptor says
+    // `java.util.ArrayList` and mentions nothing of Flix -- while the values crossing were
+    // `dev.flix.gen.Colour$Red`, a generated class the backend renames freely.
+    val input =
+      """
+        |enum Colour { case Red, case Green }
+        |mod Pkg { }
+        |mod Pkg.Mod {
+        |    import java.util.ArrayList
+        |    @Export pub def f(): ArrayList[Colour] \ IO = new ArrayList()
+        |}
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibAll)
+    expectError[EntryPointError.IllegalExportType](result)
+  }
+
+  test("Test.ExportTypeArgument.02") {
+    // Every argument, not just the first.
+    val input =
+      """
+        |enum Colour { case Red, case Green }
+        |mod Pkg { }
+        |mod Pkg.Mod {
+        |    import java.util.HashMap
+        |    @Export pub def f(): HashMap[String, Colour] \ IO = new HashMap()
+        |}
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibAll)
+    expectError[EntryPointError.IllegalExportType](result)
+  }
+
+  test("Test.ExportTypeArgument.03") {
+    // Parameter position too: a Java container is as leaky going in as coming out.
+    val input =
+      """
+        |enum Colour { case Red, case Green }
+        |mod Pkg { }
+        |mod Pkg.Mod {
+        |    import java.util.ArrayList
+        |    @Export pub def f(l: ArrayList[Colour]): Int32 \ IO = l.size()
+        |}
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibAll)
+    expectError[EntryPointError.IllegalExportType](result)
+  }
+
+  test("Test.ExportTypeArgument.04") {
+    // The legitimate cases must be unaffected, including nesting and arity two. A *Java* enum has
+    // a stable Java type of its own and is the way to give a Flix enum a representation that can
+    // cross.
+    val input =
+      """
+        |mod Pkg { }
+        |mod Pkg.Mod {
+        |    import java.util.ArrayList
+        |    import java.util.HashMap
+        |    import java.time.DayOfWeek
+        |
+        |    @Export pub def a(): ArrayList[String] \ IO = new ArrayList()
+        |    @Export pub def b(): HashMap[String, Int32] \ IO = new HashMap()
+        |    @Export pub def c(): ArrayList[ArrayList[String]] \ IO = new ArrayList()
+        |    @Export pub def d(): ArrayList[DayOfWeek] \ IO = new ArrayList()
+        |}
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibAll)
+    expectSuccess(result)
+  }
+
   test("Test.ExportList.01") {
     // `List` in return position is converted to an unmodifiable `java.util.List` by the shim.
     val input =

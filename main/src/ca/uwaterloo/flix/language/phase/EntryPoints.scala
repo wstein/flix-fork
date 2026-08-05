@@ -556,7 +556,6 @@ object EntryPoints {
     *   - `isExportableType(List[String]) = false`
     *   - `isExportableType(java.lang.Object) = true`
     */
-  @tailrec
   private def isExportableType(tpe: Type): Result[Boolean, ErrorOrMalformed.type] = {
     tpe match {
       case Type.Cst(TypeConstructor.Bool, _) => Result.Ok(true)
@@ -576,7 +575,16 @@ object EntryPoints {
       // A type application is exportable exactly when its head is: a generic Java type such as
       // `ArrayList[String]` is erased to the raw class, whereas `List[Int32]` is headed by a Flix
       // enum and stays unexportable.
-      case Type.Apply(t, _, _) => isExportableType(t)
+      // A type application is exportable when its head *and every argument* are. Checking only the
+      // head is not enough, even though the JVM erases the arguments away: `ArrayList[Colour]`
+      // then compiles into a method that hands a Java caller `dev.flix.gen.Colour$Red`, a
+      // generated class the backend renames freely, which is exactly what J0 exists to prevent.
+      // The erasure is what makes it *look* safe -- the descriptor says `java.util.ArrayList` and
+      // nothing in it mentions Flix at all -- so the leak is in the values rather than the types.
+      // Note the asymmetry this removes: `List[Colour]` was already rejected, because a Flix
+      // container is headed by an enum, so only the Java containers had the hole.
+      case Type.Apply(t, arg, _) =>
+        isExportableType(t).flatMap(head => isExportableType(arg).map(head && _))
       case Type.Alias(_, _, t, _) => isExportableType(t)
       // An unconstrained type variable is exported as `java.lang.Object`, which is exactly what
       // the monomorpher's `AnyType` default is represented as. Reported as exportable rather than
