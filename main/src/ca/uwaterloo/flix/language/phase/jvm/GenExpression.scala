@@ -877,10 +877,7 @@ object GenExpression {
         mv.visitTypeInsn(NEW, declaration)
         // Duplicate the reference since the first argument for a constructor call is the reference to the object
         mv.visitInsn(DUP)
-        for ((arg, argType) <- exps.zip(constructor.getParameterTypes)) {
-          compileExpr(arg)
-          if (!argType.isPrimitive) mv.visitTypeInsn(CHECKCAST, asm.Type.getInternalName(argType))
-        }
+        compileJavaCallArgs(exps, constructor.getParameterTypes)
 
         // Call the constructor
         mv.visitMethodInsn(INVOKESPECIAL, declaration, JvmName.ConstructorMethod, descriptor, false)
@@ -900,10 +897,7 @@ object GenExpression {
         val thisType = asm.Type.getInternalName(method.getDeclaringClass)
         mv.visitTypeInsn(CHECKCAST, thisType)
 
-        for ((arg, argType) <- args.zip(method.getParameterTypes)) {
-          compileExpr(arg)
-          if (!argType.isPrimitive) mv.visitTypeInsn(CHECKCAST, asm.Type.getInternalName(argType))
-        }
+        compileJavaCallArgs(args, method.getParameterTypes)
 
         val declaration = asm.Type.getInternalName(method.getDeclaringClass)
         val name = method.getName
@@ -936,10 +930,7 @@ object GenExpression {
         mv.visitTypeInsn(CHECKCAST, anonClassInternalName)
 
         // Evaluate and cast each argument.
-        for ((arg, argType) <- args.zip(method.getParameterTypes)) {
-          compileExpr(arg)
-          if (!argType.isPrimitive) mv.visitTypeInsn(CHECKCAST, asm.Type.getInternalName(argType))
-        }
+        compileJavaCallArgs(args, method.getParameterTypes)
 
         // Call the bridge method super$methodName on the anonymous class.
         val bridgeName = s"super$$${method.getName}"
@@ -956,10 +947,7 @@ object GenExpression {
       case AtomicOp.InvokeStaticMethod(method) =>
         // Add source line number for debugging (can fail when calling unsafe java methods)
         BytecodeInstructions.addLoc(loc)
-        for ((arg, argType) <- exps.zip(method.getParameterTypes)) {
-          compileExpr(arg)
-          if (!argType.isPrimitive) mv.visitTypeInsn(CHECKCAST, asm.Type.getInternalName(argType))
-        }
+        compileJavaCallArgs(exps, method.getParameterTypes)
         val declaration = asm.Type.getInternalName(method.getDeclaringClass)
         val name = method.getName
         val descriptor = asm.Type.getMethodDescriptor(method)
@@ -1666,10 +1654,7 @@ object GenExpression {
           case Expr.ApplyAtomic(AtomicOp.InvokeSuperConstructor(constructor), superArgs, _, _, _) =>
             // Super-only: compile args and call parameterized <init>
             val descriptor = asm.Type.getConstructorDescriptor(constructor)
-            for ((arg, argType) <- superArgs.zip(constructor.getParameterTypes)) {
-              compileExpr(arg)
-              if (!argType.isPrimitive) mv.visitTypeInsn(CHECKCAST, asm.Type.getInternalName(argType))
-            }
+            compileJavaCallArgs(superArgs, constructor.getParameterTypes)
             mv.visitMethodInsn(INVOKESPECIAL, className, JvmName.ConstructorMethod, descriptor, false)
           case _ => throw InternalCompilerException(s"Unexpected non-super constructor body.", constructors.head.loc)
         }
@@ -1684,6 +1669,22 @@ object GenExpression {
         mv.visitFieldInsn(PUTFIELD, className, s"clo$i", JvmOps.getErasedClosureAbstractClassType(e.tpe).toDescriptor)
       }
 
+  }
+
+  /**
+   * Compiles `args` as the arguments of a Java call declaring `paramTypes`, casting each reference
+   * argument to the type its parameter declares.
+   *
+   * This is the inbound counterpart of [[castFromJavaType]]. There, the Java declaration is the
+   * less precise of the two; here it is the more precise one, because a Flix value reaches the call
+   * at whatever type the backend gave it -- frequently `Object`. Without the cast the verifier
+   * rejects the call itself rather than a later use of its result.
+   */
+  private def compileJavaCallArgs(args: List[Expr], paramTypes: Array[Class[?]])(implicit mv: MethodVisitor, ctx: MethodContext, root: Root, flix: Flix): Unit = {
+    for ((arg, argType) <- args.zip(paramTypes)) {
+      compileExpr(arg)
+      if (!argType.isPrimitive) mv.visitTypeInsn(CHECKCAST, asm.Type.getInternalName(argType))
+    }
   }
 
   /**
