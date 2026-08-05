@@ -182,10 +182,24 @@ which:
    compilation rather than on the string assertions beside it. An enhanced `for`
    over a raw `List` binds `Object`, which is what makes the erasure visible; a
    test that only assigned the result would have passed either way.
-3. A Java signature names a Flix-exported facade type, which is the case pass 0
-   exists for.
-4. Deleting the Flix source produces an error naming the *Java* call site, not a
-   `ClassNotFoundException` at run time.
+3. **Met, and it changed the scheme.** A Java signature names a Flix-exported
+   facade type. Criteria 1 and 2 name the facade only in Java *bodies*, and a body
+   is never read when Flix resolves the class — but `Class.getMethods` loads every
+   parameter and return type, so a `Helper` whose *signature* mentions `Acme.Api`
+   cannot be reflected over until that class exists, and at pass 2 the real one
+   does not.
+
+   So the stub is not merely something for javac to compile against and then
+   discard: **it must stay on the Flix compile classpath, and be kept off only the
+   runtime one.** The test asserts both halves — that Flix fails without the stub,
+   and that with it the facade answering at run time is still the real one.
+
+4. **Met.** Deleting an exported def fails the build at the *Java* call site.
+   Pass 0 re-derives the stub from current source on every build, so a def that is
+   gone is absent from the stub and javac reports it against `Helper.java` by name.
+   The failure this rules out is a stub outliving what it stands for: Java
+   compiled against yesterday's facade, discovered as a `NoSuchMethodError` in
+   production.
 5. The `rewrite-fork` case: `Hello.kt`'s helpers and its Flix-calling function in
    one source set, with the `flixBridge` split removed.
 
@@ -226,6 +240,34 @@ instance, or pass 0's parse is thrown away.
   needs the fork-join pool, which only `check` and `compile` set up, so
   `Flix.withThreadPool` was added to make the lifecycle available without
   duplicating it.
+
+### A defect criterion 3 turned up
+
+Reflecting over a Java class whose signature names a type that is not on the
+classpath lets `ClassNotFoundException` escape as an unhandled exception, through
+`MethodUtils.getMethodObject` → `Class.getMethod` and out of
+`TypeReduction2.reduce`. It aborts the compiler rather than producing a
+diagnostic, so the user is shown a stack trace with no source location for a
+condition that is an ordinary missing-dependency mistake.
+
+It is pre-existing and reachable without any of this work — any incomplete Java
+classpath does it — but joint compilation makes it easy to hit, because pass 2 is
+*defined* as compiling against Java classes whose companions may be missing.
+Worth fixing upstream on its own merits. `TestExportStubs` deliberately does not
+pin the current behaviour, which would turn the bug into a specification.
+
+### Interop does not use reflection at run time
+
+Worth stating because the test suite is full of reflection and the two are easy
+to confuse. An exported def is a `public static` method on the facade, and a Java
+caller reaches it with an ordinary `invokestatic` emitted by javac. That is the
+point of `@Export`, and precisely what retires the runtime-reflective bridge in
+§1 — which read `staticApply` and `Value$` fields by name and broke when the
+backend renamed them.
+
+The reflection in `TestExportStubs` is the harness: a suite cannot statically
+reference classes generated during its own run. The fixtures themselves call
+Flix directly.
 
 ## 6. Open questions
 

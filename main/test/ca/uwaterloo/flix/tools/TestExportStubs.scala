@@ -26,6 +26,12 @@ import javax.tools.ToolProvider
   * resolved and monomorphized types. So the central test here compiles a program, reflects over the
   * facade the backend actually produced, and compares it with the stub -- if the two ever disagree,
   * a caller compiles against one and links against the other.
+  *
+  * The reflection is the *harness*, never the mechanism. Exported defs are `public static` methods
+  * and every fixture calls them as ordinary javac-compiled static calls -- which is the whole point
+  * of `@Export`, and what replaced the runtime-reflective bridge this scheme exists to retire. This
+  * suite reflects only because it cannot statically reference classes generated during its own run,
+  * and it loads them in isolated loaders so they never reach its own classpath.
   */
 class TestExportStubs extends AnyFunSuite {
 
@@ -74,8 +80,8 @@ class TestExportStubs extends AnyFunSuite {
     ()
   }
 
-  /** Compiles `sources` against `classpath`, returning the output directory. */
-  private def javac(sources: List[(String, String)], classpath: List[Path]): Path = {
+  /** Compiles `sources` against `classpath`, returning the exit status, the diagnostics, and the output. */
+  private def runJavac(sources: List[(String, String)], classpath: List[Path]): (Int, String, Path) = {
     val compiler = ToolProvider.getSystemJavaCompiler
     assume(compiler != null, "these tests need a JDK, not a JRE")
     val dir = Files.createTempDirectory("flix-export-stubs-javac")
@@ -88,9 +94,40 @@ class TestExportStubs extends AnyFunSuite {
     val classes = Files.createDirectories(dir.resolve("classes"))
     val cp = classpath.map(_.toString).mkString(File.pathSeparator)
     val args = List("-d", classes.toString) ++ (if (cp.isEmpty) Nil else List("-cp", cp)) ++ files
-    val status = compiler.run(null, null, null, args*)
-    assert(status == 0, s"javac rejected the generated sources: ${sources.map(_._1).mkString(", ")}")
+    val diagnostics = new java.io.ByteArrayOutputStream()
+    val status = compiler.run(null, null, diagnostics, args*)
+    (status, diagnostics.toString, classes)
+  }
+
+  /** Compiles `sources` against `classpath`, returning the output directory. */
+  private def javac(sources: List[(String, String)], classpath: List[Path]): Path = {
+    val (status, diagnostics, classes) = runJavac(sources, classpath)
+    assert(status == 0, s"javac rejected the generated sources:\n$diagnostics")
     classes
+  }
+
+  /**
+    * Compiles `src` against `jars` and returns how it failed, if it did.
+    *
+    * A thrown exception counts as a failure here, and today one of the cases below produces one:
+    * reflecting over a Java class whose signature names a missing type lets
+    * `ClassNotFoundException` escape `TypeReduction2` instead of becoming a diagnostic. That is a
+    * defect in its own right -- see `docs/JOINT-COMPILATION.md` -- but it is not what these tests
+    * are about, and pinning it as the expected outcome would turn a bug into a specification.
+    */
+  private def compileErrors(src: String, jars: List[Path]): Option[String] = {
+    val out = Files.createTempDirectory("flix-export-stubs-expected-failure")
+    try {
+      val flix = new Flix().setOptions(Options.DefaultTest.copy(outputJvm = true, outputPath = out))
+      jars.foreach(flix.addJar)
+      flix.addVirtualPath(ModulePath, src)
+      flix.compile().toResult match {
+        case Result.Ok(_) => None
+        case Result.Err(errors) => Some(errors.toString)
+      }
+    } catch {
+      case e: Throwable => Some(s"${e.getClass.getName}: ${e.getMessage}")
+    } finally deleteRecursively(out)
   }
 
   /**
@@ -247,6 +284,98 @@ class TestExportStubs extends AnyFunSuite {
 
     val (facades, _) = stubs(src)
     javac(List("Acme/Api.java" -> ExportStubs.javaSource(facades.head)), Nil)
+  }
+
+  test("criterion 3: a Java signature may name the Flix facade itself") {
+    // Criteria 1 and 2 name the facade only in Java *bodies*, and a body is not read when Flix
+    // resolves the class. A signature is: `Class.getMethods` loads every parameter and return type,
+    // so a `Helper` whose signature mentions `Acme.Api` cannot be reflected over until that class
+    // exists -- and at pass 2 the real one does not.
+    //
+    // This is what makes the stub more than a convenience for javac. It has to stay on the *Flix*
+    // compile classpath too, and only be kept off the runtime one.
+    val flixSrc =
+      """mod Acme.Api {
+        |    import com.example.Helper
+        |
+        |    @Export
+        |    pub def greet(name: String): String = "Hello, ${name}!"
+        |
+        |    @Export
+        |    pub def describe(): String \ IO = Helper.describe()
+        |}
+        |""".stripMargin
+
+    val javaSrc =
+      """package com.example;
+        |
+        |public final class Helper {
+        |    public static String describe() {
+        |        return "helper";
+        |    }
+        |
+        |    // The facade in a signature rather than a body. Nothing calls this; its existence is
+        |    // the whole point, because reflecting over `Helper` now has to resolve `Acme.Api`.
+        |    public static Acme.Api passthrough(Acme.Api facade) {
+        |        return facade;
+        |    }
+        |}
+        |""".stripMargin
+
+    val (facades, unsupported) = stubs(flixSrc)
+    assert(unsupported.isEmpty, s"nothing should be refused, but got: $unsupported")
+    val javaClasses = javac(
+      List("Acme/Api.java" -> ExportStubs.javaSource(facades.head), "com/example/Helper.java" -> javaSrc), Nil)
+
+    // Without the facade on the classpath, Flix cannot read `Helper` at all. Asserted rather than
+    // assumed: it is the reason the stub may not simply be discarded after javac, and if it ever
+    // stops being true the next assertion would pass for the wrong reason.
+    val withoutFacade = Files.createTempDirectory("flix-export-stubs-no-facade")
+    Files.walk(javaClasses.resolve("com")).filter(Files.isRegularFile(_)).forEach { file =>
+      val target = withoutFacade.resolve(javaClasses.relativize(file))
+      Files.createDirectories(target.getParent)
+      Files.copy(file, target)
+    }
+    val errors = compileErrors(flixSrc, List(jarOf(withoutFacade)))
+    assert(errors.isDefined, "Flix should not be able to read a Java class whose signature names a missing type")
+
+    // With it, the whole scheme runs -- and the facade that answers at run time is still the real
+    // one, because the compiler's output precedes the stub jar on the loader.
+    withFacade(flixSrc, jars = List(jarOf(javaClasses))) { facade =>
+      assertResult("helper")(facade.getMethod("describe").invoke(null))
+      assertResult("Hello, Flix!")(facade.getMethod("greet", classOf[String]).invoke(null, "Flix"))
+    }
+  }
+
+  test("criterion 4: removing an exported def fails the build at the Java call site") {
+    // The failure mode this rules out is a stub that outlives what it stands for: Java compiles
+    // against yesterday's facade and the mistake surfaces as a `NoSuchMethodError` in production.
+    // Pass 0 derives the stub from the current source every time, so a def that is gone is gone
+    // from the stub, and javac reports it where it is called.
+    val javaSrc =
+      """package com.example;
+        |
+        |public final class Helper {
+        |    public static String viaFlix(String name) {
+        |        return Acme.Api.greet(name);
+        |    }
+        |}
+        |""".stripMargin
+
+    val withoutGreet =
+      """mod Acme.Api {
+        |    @Export
+        |    pub def farewell(name: String): String = "Bye, ${name}!"
+        |}
+        |""".stripMargin
+
+    val (facades, _) = stubs(withoutGreet)
+    val (status, diagnostics, _) = runJavac(
+      List("Acme/Api.java" -> ExportStubs.javaSource(facades.head), "com/example/Helper.java" -> javaSrc), Nil)
+
+    assert(status != 0, "javac must reject a call to a def that no longer exists")
+    assert(diagnostics.contains("Helper.java"), s"the error must name the Java source, but was:\n$diagnostics")
+    assert(diagnostics.contains("greet"), s"the error must name the missing method, but was:\n$diagnostics")
   }
 
   test("criterion 2: the mutual reference may cross a generic type") {
