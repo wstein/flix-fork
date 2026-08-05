@@ -251,19 +251,10 @@ object TypeReduction2 {
   private def usesBoxing(args: List[Class[?]], params: Array[Class[?]]): Boolean = {
     // This method is checking an existing match, so zip is fine.
     args.zip(params).exists {
-      // Wrapper arg to primitive param (unboxing): not supported.
-      case (clazz, java.lang.Boolean.TYPE) if clazz != java.lang.Boolean.TYPE => true
-      case (clazz, java.lang.Byte.TYPE) if clazz != java.lang.Byte.TYPE => true
-      case (clazz, java.lang.Short.TYPE) if clazz != java.lang.Short.TYPE => true
-      case (clazz, java.lang.Integer.TYPE) if clazz != java.lang.Integer.TYPE => true
-      case (clazz, java.lang.Long.TYPE) if clazz != java.lang.Long.TYPE => true
-      case (clazz, java.lang.Character.TYPE) if clazz != java.lang.Character.TYPE => true
-      case (clazz, java.lang.Float.TYPE) if clazz != java.lang.Float.TYPE => true
-      case (clazz, java.lang.Double.TYPE) if clazz != java.lang.Double.TYPE => true
-      // Primitive arg to non-primitive param (boxing): supported via automatic boxing.
-      // These cases are intentionally NOT rejected.
-      // Otherwise it is not boxing.
-      case _ => false
+      // Anything but that exact primitive reaching a primitive param has to be unboxed, which is
+      // not supported. A primitive arg reaching a reference param is boxing, which is, so it is
+      // intentionally not rejected here.
+      case (arg, param) => param.isPrimitive && arg != param
     }
   }
 

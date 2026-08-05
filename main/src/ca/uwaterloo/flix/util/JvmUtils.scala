@@ -56,6 +56,62 @@ object JvmUtils {
     !isStatic(member)
 
   /**
+    * A Java primitive type together with the wrapper class that boxes it, and the two methods that
+    * move a value between the two.
+    *
+    * Several phases have to agree about boxing at once: the typer decides whether a Java call
+    * resolves at all, and monomorphization inserts the conversions that make the resolved call
+    * verify. Each place that restates the eight primitives is a place the two can drift apart.
+    */
+  case class Primitive(clazz: Class[?], wrapper: Class[?], box: Method, unbox: Method)
+
+  /**
+    * The Java primitive types that Flix boxes.
+    *
+    * `void` is deliberately absent: it is a primitive to [[Class.isPrimitive]], but `java.lang.Void`
+    * boxes nothing, so a caller asking for its boxing has a bug rather than a special case.
+    */
+  val Primitives: List[Primitive] = List(
+    mkPrimitive(java.lang.Boolean.TYPE, classOf[java.lang.Boolean]),
+    mkPrimitive(java.lang.Character.TYPE, classOf[java.lang.Character]),
+    mkPrimitive(java.lang.Byte.TYPE, classOf[java.lang.Byte]),
+    mkPrimitive(java.lang.Short.TYPE, classOf[java.lang.Short]),
+    mkPrimitive(java.lang.Integer.TYPE, classOf[java.lang.Integer]),
+    mkPrimitive(java.lang.Long.TYPE, classOf[java.lang.Long]),
+    mkPrimitive(java.lang.Float.TYPE, classOf[java.lang.Float]),
+    mkPrimitive(java.lang.Double.TYPE, classOf[java.lang.Double]),
+  )
+
+  /**
+    * Builds the row for `prim`, which `wrapper` boxes.
+    *
+    * Neither method name has to be listed: boxing is always `valueOf`, and unboxing is always the
+    * primitive's own name followed by `Value` -- `int` is read back with `intValue`, `char` with
+    * `charValue`. Looking both up here rather than at each use turns a reflective call that can
+    * throw into a table lookup that cannot.
+    */
+  private def mkPrimitive(prim: Class[?], wrapper: Class[?]): Primitive =
+    Primitive(prim, wrapper, wrapper.getMethod("valueOf", prim), wrapper.getMethod(prim.getName + "Value"))
+
+  private val primitivesByClass: Map[Class[?], Primitive] =
+    Primitives.map(prim => prim.clazz -> prim).toMap
+
+  private val unboxMethodNames: Set[String] = Primitives.map(_.unbox.getName).toSet
+
+  /** Returns the boxing of `clazz`, if it is a primitive Flix boxes. */
+  def primitiveOf(clazz: Class[?]): Option[Primitive] = primitivesByClass.get(clazz)
+
+  /**
+    * Returns `true` if `method` reads a primitive back out of its wrapper (e.g. `intValue`).
+    *
+    * Matched on name and arity alone, so an unrelated class declaring `intValue()` also matches.
+    * That is intentional: the callers use this to recognize their own synthesized unboxing, and
+    * narrowing it to the wrapper classes would be a behavioral change rather than a cleanup.
+    */
+  def isUnboxMethod(method: Method): Boolean =
+    method.getParameterCount == 0 && unboxMethodNames.contains(method.getName)
+
+  /**
     * Returns the methods of the class.
     *
     * If the given class is an array, the method `clone` is not included (see Class.getMethods).

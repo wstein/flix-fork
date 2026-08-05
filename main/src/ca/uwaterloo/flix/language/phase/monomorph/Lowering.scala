@@ -1052,15 +1052,9 @@ object Lowering {
     * N.B.: `tpe` must be normalized.
     */
   private def isPrimType(tpe: Type): Boolean = tpe match {
-    case Type.Char => true
-    case Type.Bool => true
-    case Type.Int8 => true
-    case Type.Int16 => true
-    case Type.Int32 => true
-    case Type.Int64 => true
-    case Type.Float32 => true
-    case Type.Float64 => true
-    case Type.Cst(_, _) => false
+    // A Flix type is primitive exactly when the Java class it stands for is, so ask that once
+    // rather than restating the eight primitives here.
+    case Type.Cst(_, _) => Type.classFromFlixType(tpe).flatMap(JvmUtils.primitiveOf).isDefined
     case Type.Apply(_, _, _) => false
     case Type.Var(_, _) => throw InternalCompilerException(s"Unexpected type '$tpe'", tpe.loc)
     case Type.Alias(_, _, _, _) => throw InternalCompilerException(s"Unexpected type '$tpe'", tpe.loc)
@@ -1095,52 +1089,35 @@ object Lowering {
   }
 
   /**
+    * Returns the boxing of `tpe`, which must be a Flix primitive type.
+    *
+    * The boxing itself is stated once, in [[JvmUtils.Primitives]]; this only gets from a Flix type
+    * to the Java primitive that names the row.
+    */
+  private def boxingOf(tpe: Type): JvmUtils.Primitive =
+    Type.classFromFlixType(tpe).flatMap(JvmUtils.primitiveOf) match {
+      case Some(prim) => prim
+      case None => throw InternalCompilerException(s"Unexpected non-primitive type '$tpe'", tpe.loc)
+    }
+
+  /**
     * Returns the `valueOf` boxing method for a Flix primitive type.
     * This is the same mechanism javac uses to implement autoboxing.
     */
-  private def javaBoxMethod(tpe: Type): java.lang.reflect.Method = tpe match {
-    case Type.Bool => classOf[java.lang.Boolean].getMethod("valueOf", java.lang.Boolean.TYPE)
-    case Type.Char => classOf[java.lang.Character].getMethod("valueOf", java.lang.Character.TYPE)
-    case Type.Int8 => classOf[java.lang.Byte].getMethod("valueOf", java.lang.Byte.TYPE)
-    case Type.Int16 => classOf[java.lang.Short].getMethod("valueOf", java.lang.Short.TYPE)
-    case Type.Int32 => classOf[java.lang.Integer].getMethod("valueOf", java.lang.Integer.TYPE)
-    case Type.Int64 => classOf[java.lang.Long].getMethod("valueOf", java.lang.Long.TYPE)
-    case Type.Float32 => classOf[java.lang.Float].getMethod("valueOf", java.lang.Float.TYPE)
-    case Type.Float64 => classOf[java.lang.Double].getMethod("valueOf", java.lang.Double.TYPE)
-    case _ => throw InternalCompilerException(s"Unexpected non-primitive type '$tpe'", tpe.loc)
-  }
+  private def javaBoxMethod(tpe: Type): java.lang.reflect.Method = boxingOf(tpe).box
 
   /**
     * Returns the unboxing method (e.g., `intValue`) for a Flix primitive type.
     * This is the same mechanism javac uses to implement auto-unboxing.
     */
-  private def javaUnboxMethod(tpe: Type): java.lang.reflect.Method = tpe match {
-    case Type.Bool => classOf[java.lang.Boolean].getMethod("booleanValue")
-    case Type.Char => classOf[java.lang.Character].getMethod("charValue")
-    case Type.Int8 => classOf[java.lang.Byte].getMethod("byteValue")
-    case Type.Int16 => classOf[java.lang.Short].getMethod("shortValue")
-    case Type.Int32 => classOf[java.lang.Integer].getMethod("intValue")
-    case Type.Int64 => classOf[java.lang.Long].getMethod("longValue")
-    case Type.Float32 => classOf[java.lang.Float].getMethod("floatValue")
-    case Type.Float64 => classOf[java.lang.Double].getMethod("doubleValue")
-    case _ => throw InternalCompilerException(s"Unexpected non-primitive type '$tpe'", tpe.loc)
-  }
+  private def javaUnboxMethod(tpe: Type): java.lang.reflect.Method = boxingOf(tpe).unbox
 
   /**
     * Returns the Flix Type for the Java wrapper class of a primitive type.
     * E.g., `Bool` -> `Native(java.lang.Boolean)`, `Int32` -> `Native(java.lang.Integer)`.
     */
-  private def boxedWrapperType(tpe: Type, loc: SourceLocation): Type = tpe match {
-    case Type.Bool => Type.Cst(TypeConstructor.Native(classOf[java.lang.Boolean]), loc)
-    case Type.Char => Type.Cst(TypeConstructor.Native(classOf[java.lang.Character]), loc)
-    case Type.Int8 => Type.Cst(TypeConstructor.Native(classOf[java.lang.Byte]), loc)
-    case Type.Int16 => Type.Cst(TypeConstructor.Native(classOf[java.lang.Short]), loc)
-    case Type.Int32 => Type.Cst(TypeConstructor.Native(classOf[java.lang.Integer]), loc)
-    case Type.Int64 => Type.Cst(TypeConstructor.Native(classOf[java.lang.Long]), loc)
-    case Type.Float32 => Type.Cst(TypeConstructor.Native(classOf[java.lang.Float]), loc)
-    case Type.Float64 => Type.Cst(TypeConstructor.Native(classOf[java.lang.Double]), loc)
-    case _ => throw InternalCompilerException(s"Unexpected non-primitive type '$tpe'", tpe.loc)
-  }
+  private def boxedWrapperType(tpe: Type, loc: SourceLocation): Type =
+    Type.Cst(TypeConstructor.Native(boxingOf(tpe).wrapper), loc)
 
   /**
     * Boxes `arg` if the actual arg type (Flix primitive) mismatches the expected param type (Object).
@@ -1182,17 +1159,8 @@ object Lowering {
     */
   private def stripAutoUnbox(expr: MonoAst.Expr): MonoAst.Expr = expr match {
     case MonoAst.Expr.ApplyAtomic(AtomicOp.InvokeMethod(method), List(inner), _, _, _)
-      if isAutoUnboxMethod(method) => inner
+      if JvmUtils.isUnboxMethod(method) => inner
     case _ => expr
-  }
-
-  /** Returns `true` if `method` is a Java auto-unboxing method (e.g., `intValue`, `booleanValue`). */
-  private def isAutoUnboxMethod(method: java.lang.reflect.Method): Boolean = {
-    method.getParameterCount == 0 && (method.getName match {
-      case "booleanValue" | "charValue" | "byteValue" | "shortValue" |
-           "intValue" | "longValue" | "floatValue" | "doubleValue" => true
-      case _ => false
-    })
   }
 
   /**

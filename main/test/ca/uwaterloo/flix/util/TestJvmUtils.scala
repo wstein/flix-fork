@@ -104,4 +104,84 @@ class TestJvmUtils extends AnyFunSuite {
     assert(result == Map.empty)
   }
 
+  // --- Primitives ---
+
+  test("Primitives.CoversTheEightBoxedPrimitives") {
+    val expected = Set(
+      java.lang.Boolean.TYPE, java.lang.Character.TYPE, java.lang.Byte.TYPE, java.lang.Short.TYPE,
+      java.lang.Integer.TYPE, java.lang.Long.TYPE, java.lang.Float.TYPE, java.lang.Double.TYPE
+    )
+    assert(JvmUtils.Primitives.map(_.clazz).toSet == expected)
+  }
+
+  test("Primitives.BoxTakesThePrimitiveAndReturnsTheWrapper") {
+    // The rows are built by naming convention rather than by listing method names, so check that
+    // each one really resolved to the wrapper's own `valueOf`.
+    for (prim <- JvmUtils.Primitives) {
+      assert(prim.box.getName == "valueOf")
+      assert(prim.box.getDeclaringClass == prim.wrapper)
+      assert(prim.box.getParameterTypes.toList == List(prim.clazz))
+      assert(prim.box.getReturnType == prim.wrapper)
+    }
+  }
+
+  test("Primitives.UnboxTakesNothingAndReturnsThePrimitive") {
+    for (prim <- JvmUtils.Primitives) {
+      assert(prim.unbox.getDeclaringClass == prim.wrapper)
+      assert(prim.unbox.getParameterCount == 0)
+      assert(prim.unbox.getReturnType == prim.clazz)
+    }
+  }
+
+  test("Primitives.UnboxIsNamedAfterThePrimitive") {
+    // Named separately because the derivation `int` -> `intValue` is what lets the table omit the
+    // method names, and `char` -> `charValue` is the row where a wrapper-derived guess would fail.
+    val names = JvmUtils.Primitives.map(prim => prim.clazz.getName -> prim.unbox.getName).toMap
+    assert(names("int") == "intValue")
+    assert(names("char") == "charValue")
+    assert(names("boolean") == "booleanValue")
+  }
+
+  test("primitiveOf.FindsAPrimitive") {
+    assert(JvmUtils.primitiveOf(java.lang.Integer.TYPE).map(_.wrapper).contains(classOf[java.lang.Integer]))
+  }
+
+  test("primitiveOf.RejectsAWrapper") {
+    // The table is keyed on the primitive, not the wrapper: `Integer` is already boxed.
+    assert(JvmUtils.primitiveOf(classOf[java.lang.Integer]).isEmpty)
+  }
+
+  test("primitiveOf.RejectsVoid") {
+    // `void` reports `isPrimitive`, so a caller that tests that instead of asking here would get a
+    // row that does not exist.
+    assert(java.lang.Void.TYPE.isPrimitive)
+    assert(JvmUtils.primitiveOf(java.lang.Void.TYPE).isEmpty)
+  }
+
+  test("primitiveOf.RejectsAReferenceType") {
+    assert(JvmUtils.primitiveOf(classOf[String]).isEmpty)
+  }
+
+  test("isUnboxMethod.AcceptsEveryUnboxing") {
+    for (prim <- JvmUtils.Primitives) {
+      assert(JvmUtils.isUnboxMethod(prim.unbox))
+    }
+  }
+
+  test("isUnboxMethod.RejectsBoxing") {
+    for (prim <- JvmUtils.Primitives) {
+      assert(!JvmUtils.isUnboxMethod(prim.box))
+    }
+  }
+
+  test("isUnboxMethod.RejectsAnUnrelatedMethod") {
+    assert(!JvmUtils.isUnboxMethod(classOf[String].getMethod("length")))
+  }
+
+  test("isUnboxMethod.RejectsAnUnboxingNameThatTakesArguments") {
+    // Arity is part of the test, so `Integer.intValue` matching does not make every `intValue`
+    // overload match.
+    assert(!JvmUtils.isUnboxMethod(classOf[java.lang.Integer].getMethod("compareTo", classOf[java.lang.Integer])))
+  }
+
 }
