@@ -165,10 +165,11 @@ several genuinely open problems, each larger than it first appears:
 - **The inbound boundary**, which is a separate mechanism with open soundness
   defects (issues 8618 and 5172, on Java functional interfaces) and duplicated
   conversion logic (issue 8592). Nothing in the export work addresses it. The
-  parameter half of issue 12972 has been fixed — every primitive instantiation
-  of a generic Java interface with parameters used to fail verification — but
-  its `super`-argument half stands, and 8592's four independent Java-to-Flix
-  type mappers remain the reason such defects keep appearing one at a time.
+  whole of issue 12972 has been fixed — every primitive instantiation of a
+  generic Java interface with parameters used to fail verification, and
+  extending a generic class at a primitive failed the type verifier — but
+  8592's four independent Java-to-Flix type mappers remain the reason such
+  defects keep appearing one at a time.
 
 Two problems that were open here have since been settled, and the reasoning is
 worth keeping: **unconstrained polymorphic exports** now work (they are exported

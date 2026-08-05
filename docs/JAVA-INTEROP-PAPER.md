@@ -426,7 +426,8 @@ constrains it. Its open issues bound what this report may be read to claim.
   *every* primitive instantiation of a generic Java interface with parameters
   failed verification — and we have since fixed it, in the same place and by
   the same means as the return direction was already fixed. The `super`-argument
-  half remains as the issue describes it.
+  half is fixed too: `InvokeSuperConstructor` and `InvokeSuperMethod` were the
+  only two invoke forms doing no bridging at all.
 - **flix/flix#8618, *Soundness issue with Java functional interfaces*** (open),
   and **#5172**. Unifying a Flix arrow with a Java functional interface is
   sound in one direction only and can crash in the other. This is why §4's "a

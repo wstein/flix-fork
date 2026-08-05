@@ -772,7 +772,13 @@ footing, and it has not.
   verification, and no test covered any of them — and it is now fixed:
   `Lowering.lowerJvmMethod` gives such a parameter the boxed type and unboxes it
   in the body, mirroring the boxing it already applied to the return. The
-  `super`-argument half stands.
+  `super`-argument half is now fixed as well, in the same place and by the same
+  means: `InvokeSuperConstructor` and `InvokeSuperMethod` were the only two
+  invoke forms in `Lowering` doing no boxing at all, so extending a generic
+  class at a primitive -- `new TestGenericAbstractClass[Int32] { def new() =
+  super(1) }` -- failed the type verifier outright. Every existing super test
+  instantiated at `String` or `JInteger`, where the Flix type and the erased
+  Java type are both references and agree by accident.
 - **flix/flix#8618** and **#5172** — unifying a Flix arrow with a Java
   functional interface is sound in one direction only. This is why the claim
   "an export hands Java a value, never a function" is a property of `@Export`
