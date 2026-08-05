@@ -282,8 +282,9 @@ part of the same PR."*
 
 `@Export` makes a Flix def reachable as a `public static` method from Java and
 every other JVM language. The compiler emits a shim on a facade class named
-after the module, and converts any value whose Flix representation is private —
-today `Option`, which crosses as `java.util.Optional`.
+after the module, and converts any value whose Flix representation is private:
+`Option` crosses as `java.util.Optional` and `List` as an unmodifiable
+`java.util.List` (`ExportPlan.AsOptional` and `ExportPlan.AsList`).
 
 `ExportPlan` is the single description of that boundary: the shim's return type,
 its generic `Signature`, and the conversion bytecode are all projections of one

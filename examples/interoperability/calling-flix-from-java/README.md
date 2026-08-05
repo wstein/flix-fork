@@ -90,6 +90,10 @@ import scala.jdk.OptionConverters.*
 Acme.Greeter.find("a").toScala        // scala.Option
 ```
 
+`calling-flix-from-scala` is the worked version of that, including the one place
+the bridge misleads: `.asScala` on an exported `List` gives a mutable view over
+an unmodifiable list, which type checks and throws.
+
 ```ruby
 java_import "Acme.Greeter"            # JRuby lowercases a bare Java::Acme
 ```

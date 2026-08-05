@@ -40,3 +40,6 @@ packages/**/artifact/
 # langcensus commit cache (kept outside build/, which build-jar wipes)
 examples/apps/langcensus/report.md
 .GITHUB_TOKEN
+
+# scala-cli build cache, created by the calling-flix-from-scala example
+.scala-build/
