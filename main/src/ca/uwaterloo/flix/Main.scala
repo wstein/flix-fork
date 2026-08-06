@@ -20,7 +20,7 @@ import ca.uwaterloo.flix.api.lsp.{LspServer, VSCodeLspServer, FormatterLsp as Ls
 import ca.uwaterloo.flix.tools.fmt.{Canonical, PrettyPrinter}
 import ca.uwaterloo.flix.api.{Bootstrap, BootstrapError, Flix, Version}
 import ca.uwaterloo.flix.language.CompilationMessage
-import ca.uwaterloo.flix.language.ast.shared.SecurityContext
+import ca.uwaterloo.flix.language.ast.shared.{Input, SecurityContext}
 import ca.uwaterloo.flix.language.ast.{Symbol, TypedAst}
 import ca.uwaterloo.flix.language.phase.Documentor
 import ca.uwaterloo.flix.language.phase.unification.zhegalkin.ZhegalkinPerf
@@ -216,17 +216,46 @@ object Main {
             }
           }
 
+        case Command.Stubs =>
+          // Pass 0 of joint compilation. It exists to run *before* anything is compiled, on a
+          // program that cannot yet compile: a Flix module calling a Java class that does not
+          // exist because that class calls back into this module. So it must not bootstrap the
+          // project or resolve dependencies -- it reads sources and nothing else.
+          val destination = Paths.get(cmdOpts.stubsOut.getOrElse("build/stubs"))
+          val sources =
+            if (cmdOpts.files.nonEmpty) cmdOpts.files.toList.map(_.toPath)
+            else FileOps.getFilesWithExtIn(cwd.resolve("src"), "flix", Int.MaxValue)
+
+          implicit val sctx: SecurityContext = SecurityContext.Unrestricted
+          implicit val flix: Flix = new Flix().setFormatter(formatter).setOptions(options)
+          val (facades, unsupported) = ExportStubs.run(sources.map(Input.RealFile(_, sctx)))
+
+          if (unsupported.nonEmpty) {
+            // Refusing is the conservative outcome, not the convenient one: a wrong stub compiles,
+            // and the caller meets the mistake as a linkage error at run time.
+            Console.err.println("Cannot describe these exported defs in Java:")
+            for (u <- unsupported) Console.err.println(s"  ${u.loc.format}: ${u.name} -- ${u.reason}")
+            Console.err.println("Import the Java types they name, or give them a type that can cross the boundary.")
+            System.exit(1)
+          }
+
+          ExportStubs.write(facades, destination)
+          println(s"Wrote ${facades.length} stub(s) to $destination")
+          System.exit(0)
+
         case Command.Check =>
           if (cmdOpts.files.isEmpty) {
             exitOnResult {
               Bootstrap.bootstrap(cwd, options.githubToken).flatMap { bootstrap =>
                 val flix = new Flix().setFormatter(formatter)
                 flix.setOptions(options)
+                addLibs(flix, cmdOpts.libs)
                 bootstrap.check(flix)
               }
             }
           } else {
             val flix = mkFlixWithFiles(cmdOpts.files, options)
+            addLibs(flix, cmdOpts.libs)
             val (optRoot, errors) = flix.check()
             if (errors.isEmpty) System.exit(0)
             else exitWithErrors(flix, errors, optRoot)
@@ -241,6 +270,7 @@ object Main {
             Bootstrap.bootstrap(cwd, options.githubToken).flatMap { bootstrap =>
               val flix = new Flix().setFormatter(formatter)
               flix.setOptions(options.copy(loadClassFiles = false))
+              addLibs(flix, cmdOpts.libs)
               bootstrap.build(flix)
             }
           }
@@ -516,6 +546,8 @@ object Main {
     */
   case class CmdOpts(
     command: Command = Command.None,
+                     stubsOut: Option[String] = None,
+                     libs: Seq[String] = Seq.empty,
     args: List[String] = Nil,
     coverage: Boolean = false,
     coverageOutput: Option[String] = None,
@@ -575,6 +607,8 @@ object Main {
     case object Doc extends Command
 
     case object Format extends Command
+
+    case object Stubs extends Command
 
     case object Run extends Command
 
@@ -655,9 +689,20 @@ object Main {
           text("rewrites the generated agent guide for this version of Flix. An edited guide is left alone."),
       )
 
-      cmd("check").action((_, c) => c.copy(command = Command.Check)).text("  checks the current project for errors.")
+      cmd("check").action((_, c) => c.copy(command = Command.Check)).text("  checks the current project for errors.").children(
+        opt[String]("lib").unbounded().action((arg, c) => c.copy(libs = c.libs :+ arg)).
+          text("adds a jar to the classpath. Repeatable."),
+      )
 
-      cmd("build").action((_, c) => c.copy(command = Command.Build)).text("  builds (i.e. compiles) the current project.")
+      cmd("stubs").action((_, c) => c.copy(command = Command.Stubs)).text("  writes compile-only Java stubs for the @Export-ed defs.").children(
+        opt[String]("out").action((arg, c) => c.copy(stubsOut = Some(arg))).
+          text("where to write the stubs. Defaults to 'build/stubs'."),
+      )
+
+      cmd("build").action((_, c) => c.copy(command = Command.Build)).text("  builds (i.e. compiles) the current project.").children(
+        opt[String]("lib").unbounded().action((arg, c) => c.copy(libs = c.libs :+ arg)).
+          text("adds a jar to the classpath. Repeatable."),
+      )
 
       cmd("build-jar").action((_, c) => c.copy(command = Command.BuildJar)).text("  builds a jar-file from the current project (full, clean build).")
 
@@ -917,6 +962,32 @@ object Main {
   /**
     * Creates a fresh Flix instance configured with the given options and source files.
     */
+  /**
+    * Adds each `--lib` jar to `flix`, or exits naming the one that could not be used.
+    *
+    * A project's own dependencies are declared in `flix.toml` and land under `lib/cache` and
+    * `lib/external`, which the package managers own. That leaves no way to compile against a jar
+    * the *build* just produced -- which is the ordinary case once Java and Flix are built together,
+    * since the Java classes exist only as build output. This is that seam: the caller names the
+    * classpath instead of the compiler inferring it from a directory it manages.
+    *
+    * Failures are reported rather than thrown. `addJar` raises `IllegalArgumentException` for a
+    * path that is missing, unreadable, or not a zip, and a stack trace is a poor way to say that a
+    * build tool passed a path that does not exist yet.
+    */
+  private def addLibs(flix: Flix, libs: Seq[String]): Unit = {
+    for (lib <- libs) {
+      try {
+        flix.addJar(Paths.get(lib))
+        ()
+      } catch {
+        case e: IllegalArgumentException =>
+          Console.err.println(s"Cannot use '--lib $lib': ${e.getMessage}")
+          System.exit(1)
+      }
+    }
+  }
+
   private def mkFlixWithFiles(files: Seq[File], options: Options)(implicit formatter: Formatter): Flix = {
     val flix = new Flix().setFormatter(formatter)
     flix.setOptions(options)

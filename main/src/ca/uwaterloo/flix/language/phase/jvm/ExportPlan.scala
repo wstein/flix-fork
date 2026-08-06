@@ -30,6 +30,11 @@ import org.objectweb.asm.MethodVisitor
   * instructions that perform the conversion -- so the descriptor a caller compiles against and the
   * bytecode it ends up calling cannot drift apart.
   *
+  * The naming half is an [[ExportSignature]], which a plan derives rather than holds. It is
+  * separable because it needs nothing from the compilation in progress, and it is separate because
+  * a build tool describing the boundary before codegen has run cannot build a plan at all. See
+  * that file for why the split is where it is.
+  *
   * A type that needs no conversion has no plan. Those already have an exact Java representation and
   * are passed through untouched, which is why [[Identity]] appears only inside another plan.
   */
@@ -45,8 +50,17 @@ sealed trait ExportPlan {
     */
   def flixType: BackendType
 
+  /**
+    * How the produced value is named to a Java caller.
+    *
+    * Derived, never held: a plan that carried its signature could be constructed with one that
+    * contradicts the tags it emits against, and the drift this structure exists to prevent would
+    * be reachable through its own constructor.
+    */
+  def signature: ExportSignature
+
   /** The Java type the conversion produces. */
-  def javaType: BackendType
+  final def javaType: BackendType = signature.javaType
 
   /**
     * The descriptor this plan contributes as a type argument.
@@ -54,7 +68,7 @@ sealed trait ExportPlan {
     * Type arguments are references, so a primitive appears boxed: the element of an
     * `Option[Int32]` is `Ljava/lang/Integer;`, not `I`.
     */
-  def typeArgument: String
+  final def typeArgument: String = signature.typeArgument
 
   /**
     * Emits the conversion.
@@ -80,10 +94,10 @@ sealed trait ExportPlan {
 object ExportPlan {
 
   /** A value that already has the Java type it is declared with. */
-  case class Identity(javaType: BackendType) extends ExportPlan {
-    def flixType: BackendType = javaType
+  case class Identity(tpe: BackendType) extends ExportPlan {
+    def flixType: BackendType = tpe
 
-    def typeArgument: String = javaType.toDescriptor
+    def signature: ExportSignature = ExportSignature.Exact(tpe)
 
     def emit(loc: SourceLocation, nextLocal: Int)(implicit root: JvmAst.Root, mv: MethodVisitor): Unit = ()
   }
@@ -98,9 +112,7 @@ object ExportPlan {
   case class GenericNative(clazz: JvmName, targs: List[ExportPlan]) extends ExportPlan {
     def flixType: BackendType = javaType
 
-    def javaType: BackendType = BackendObjType.Native(clazz).toTpe
-
-    def typeArgument: String = s"L${clazz.toInternalName}<${targs.map(_.typeArgument).mkString}>;"
+    def signature: ExportSignature = ExportSignature.Applied(clazz, targs.map(_.signature))
 
     def emit(loc: SourceLocation, nextLocal: Int)(implicit root: JvmAst.Root, mv: MethodVisitor): Unit = ()
 
@@ -111,9 +123,7 @@ object ExportPlan {
   case class Boxed(primitive: BackendType, boxed: JvmName) extends ExportPlan {
     def flixType: BackendType = primitive
 
-    def javaType: BackendType = boxed.toTpe
-
-    def typeArgument: String = boxed.toDescriptor
+    def signature: ExportSignature = ExportSignature.Boxed(primitive, boxed)
 
     def emit(loc: SourceLocation, nextLocal: Int)(implicit root: JvmAst.Root, mv: MethodVisitor): Unit =
       INVOKESTATIC(boxed, "valueOf", mkDescriptor(primitive)(boxed.toTpe))
@@ -128,9 +138,7 @@ object ExportPlan {
   case class AsOptional(element: ExportPlan, noneOrdinal: Int, someTag: BackendObjType.Tag) extends ExportPlan {
     def flixType: BackendType = BackendObjType.Tagged.toTpe
 
-    def javaType: BackendType = BackendObjType.Native(JvmName.Optional).toTpe
-
-    def typeArgument: String = s"L${JvmName.Optional.toInternalName}<${element.typeArgument}>;"
+    def signature: ExportSignature = ExportSignature.Applied(JvmName.Optional, List(element.signature))
 
     def emit(loc: SourceLocation, nextLocal: Int)(implicit root: JvmAst.Root, mv: MethodVisitor): Unit = {
       DUP()
@@ -233,9 +241,7 @@ object ExportPlan {
   case class AsList(element: ExportPlan, view: BackendObjType.ListView) extends ExportPlan {
     def flixType: BackendType = BackendObjType.Tagged.toTpe
 
-    def javaType: BackendType = BackendObjType.Native(JvmName.JavaList).toTpe
-
-    def typeArgument: String = s"L${JvmName.JavaList.toInternalName}<${element.typeArgument}>;"
+    def signature: ExportSignature = ExportSignature.Applied(JvmName.JavaList, List(element.signature))
 
     def emit(loc: SourceLocation, nextLocal: Int)(implicit root: JvmAst.Root, mv: MethodVisitor): Unit =
       withName(nextLocal, BackendObjType.Tagged.toTpe) { chain =>
