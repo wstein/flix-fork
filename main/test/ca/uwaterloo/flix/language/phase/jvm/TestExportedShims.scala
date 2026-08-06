@@ -519,6 +519,24 @@ class TestExportedShims extends AnyFunSuite {
     assert(signatures.get("numbers").contains("()Ljava/util/List<Ljava/lang/Integer;>;"))
   }
 
+  test("an exported Chain is presented as a java.util.Collection") {
+    val (descriptors, signatures) = membersOf(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    @Export
+        |    pub def names(): Chain[String] = Chain.cons("a", Chain.empty())
+        |
+        |    @Export
+        |    pub def numbers(): Chain[Int32] = Chain.cons(1, Chain.empty())
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin, "Pkg/Mod")
+    assert(descriptors.get("names").contains("()Ljava/util/Collection;"))
+    assert(signatures.get("names").contains("()Ljava/util/Collection<Ljava/lang/String;>;"))
+    assert(signatures.get("numbers").contains("()Ljava/util/Collection<Ljava/lang/Integer;>;"))
+  }
+
   test("an exported Set is presented as a java.util.Set") {
     // The interface, not the generated view class behind it. A caller must never be able to name
     // the view: it is keyed on the erased element, so `Set[String]` and `Set[Regex]` share one,
@@ -867,7 +885,9 @@ class TestExportedShims extends AnyFunSuite {
       "Colour" -> "Colour.Red",
       "Shape" -> "Shape.Square(1)",
       "Vector[String]" -> "Vector#{\"s\"}",
-      "Vector[Int32]" -> "Vector#{1}"
+      "Vector[Int32]" -> "Vector#{1}",
+      "Chain[String]" -> "Chain.cons(\"s\", Chain.empty())",
+      "Chain[Int32]" -> "Chain.cons(1, Chain.empty())"
     )
     val defs = returnTypes.zipWithIndex.map {
       case ((tpe, value), i) => s"    @Export\n    pub def f$i(): $tpe = $value"

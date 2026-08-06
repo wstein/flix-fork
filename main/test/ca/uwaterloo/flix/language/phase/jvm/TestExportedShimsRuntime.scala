@@ -452,6 +452,126 @@ class TestExportedShimsRuntime extends AnyFunSuite {
     }
   }
 
+  test("an exported Chain iterates left-to-right, matching Chain.toList") {
+    // Built with a mix of `cons`, `snoc` and `append` -- exactly the shapes a program would
+    // actually produce -- rather than through the case constructors directly, which the next test
+    // covers on its own.
+    withFacade(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    @Export
+        |    pub def names(): Chain[String] =
+        |        Chain.append(Chain.cons("a", Chain.empty()), Chain.snoc(Chain.cons("b", Chain.empty()), "c"))
+        |
+        |    @Export
+        |    pub def none(): Chain[String] = Chain.empty()
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin, "Pkg.Mod") { facade =>
+      val names = invoke(facade, "names").asInstanceOf[java.util.Collection[?]]
+      assertResult(java.util.List.of("a", "b", "c"))(new java.util.ArrayList(names))
+      val none = invoke(facade, "none").asInstanceOf[java.util.Collection[?]]
+      assert(none.isEmpty)
+      assertResult(0)(none.size())
+    }
+  }
+
+  test("an adversarially-shaped Chain still iterates correctly") {
+    // Built by direct case construction rather than through `cons`/`snoc`/`append`, so the tree
+    // has `Empty` subtrees in positions the library's own combinators would never leave one and is
+    // unbalanced in a way a program using only the public API could not produce. Nothing in
+    // `Chain`'s type stops a value shaped like this, so the exported view has to walk it exactly as
+    // correctly as it would walk one `cons`/`snoc` actually built.
+    withFacade(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    @Export
+        |    pub def names(): Chain[String] =
+        |        Chain.Chain(
+        |            Chain.Empty,
+        |            Chain.Chain(
+        |                Chain.Chain(Chain.Empty, Chain.One("a")),
+        |                Chain.Chain(Chain.One("b"), Chain.Empty)
+        |            )
+        |        )
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin, "Pkg.Mod") { facade =>
+      val names = invoke(facade, "names").asInstanceOf[java.util.Collection[?]]
+      assertResult(java.util.List.of("a", "b"))(new java.util.ArrayList(names))
+      assertResult(2)(names.size())
+    }
+  }
+
+  test("an exported Chain cannot be written to") {
+    withFacade(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    @Export
+        |    pub def names(): Chain[String] = Chain.cons("a", Chain.empty())
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin, "Pkg.Mod") { facade =>
+      val names = invoke(facade, "names").asInstanceOf[java.util.Collection[Any]]
+      assertThrows[UnsupportedOperationException](names.add("b"))
+      assertThrows[UnsupportedOperationException](names.iterator().remove())
+    }
+  }
+
+  test("an exported Chain of a primitive arrives boxed") {
+    withFacade(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    @Export
+        |    pub def numbers(): Chain[Int32] = Chain.cons(1, Chain.cons(2, Chain.empty()))
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin, "Pkg.Mod") { facade =>
+      val numbers = invoke(facade, "numbers").asInstanceOf[java.util.Collection[?]]
+      assertResult(java.util.List.of(1, 2))(new java.util.ArrayList(numbers))
+      assertResult(classOf[java.lang.Integer])(numbers.iterator().next().getClass)
+    }
+  }
+
+  test("an exported Chain reports the same size on every call") {
+    withFacade(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    @Export
+        |    pub def names(): Chain[String] = Chain.cons("a", Chain.cons("b", Chain.empty()))
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin, "Pkg.Mod") { facade =>
+      val names = invoke(facade, "names").asInstanceOf[java.util.Collection[Any]]
+      assertResult(2)(names.size())
+      assertResult(2)(names.size())
+      // Size does not consume the iterator it counts with -- a fresh traversal still works.
+      assertResult(java.util.List.of("a", "b"))(new java.util.ArrayList(names))
+    }
+  }
+
+  test("two exported Chains of the same erased element type share one view class") {
+    withFacade(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    @Export
+        |    pub def names(): Chain[String] = Chain.cons("a", Chain.empty())
+        |
+        |    @Export
+        |    pub def other(): Chain[String] = Chain.cons("b", Chain.empty())
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin, "Pkg.Mod") { facade =>
+      assertResult(invoke(facade, "other").getClass)(invoke(facade, "names").getClass)
+    }
+  }
+
   test("an exported polymorphic def round-trips any reference") {
     // The monomorpher defaults the unconstrained variable to `AnyType`, which is represented as
     // `Object`. The point of calling it rather than reading the descriptor is that the def is

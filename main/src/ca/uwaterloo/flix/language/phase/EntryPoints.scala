@@ -573,8 +573,19 @@ object EntryPoints {
       .orElse(unapplySet(tpe).map(List(_)))
       .orElse(unapplyMap(tpe))
       .orElse(unapplyVector(tpe).map(List(_)))
+      .orElse(unapplyChain(tpe).map(List(_)))
       .orElse(unapplyTuple(tpe))
       .orElse(unapplyEnum(tpe))
+
+  /**
+    * Returns the element type of `tpe` if it is the standard library's `Chain[t]`.
+    *
+    * `Chain` follows the same `pub mod Chain { pub enum Chain[t] { ... } }` declaration idiom
+    * `List`/`Set`/`Map`/`Option` already use, so [[unapplyStdEnum]] recognizes it exactly the way
+    * it recognizes those four -- this has to agree with `ExportPlan`'s own `isStdEnum(sym,
+    * "Chain")`, which asks the same question of the backend type.
+    */
+  private def unapplyChain(tpe: Type): Option[Type] = unapplyStdEnum(tpe, "Chain")
 
   /**
     * Returns the element type of `tpe` if it is `Vector[t]`.

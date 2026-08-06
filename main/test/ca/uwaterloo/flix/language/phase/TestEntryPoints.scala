@@ -1443,6 +1443,44 @@ class TestEntryPoints extends AnyFunSuite with TestUtils {
     expectError[EntryPointError.IllegalExportType](result)
   }
 
+  test("Test.ExportChain.01") {
+    val input =
+      """
+        |mod Pkg { }
+        |mod Pkg.Mod {
+        |    @Export pub def f(): Chain[Int32] = Chain.cons(1, Chain.empty())
+        |}
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibAll)
+    expectSuccess(result)
+  }
+
+  test("Test.ExportChain.02") {
+    // Return position only, like every other converted type.
+    val input =
+      """
+        |mod Pkg { }
+        |mod Pkg.Mod {
+        |    @Export pub def f(c: Chain[Int32]): Int32 = Chain.length(c)
+        |}
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibAll)
+    expectError[EntryPointError.IllegalExportType](result)
+  }
+
+  test("Test.ExportChain.03") {
+    // And not nested, per J17.
+    val input =
+      """
+        |mod Pkg { }
+        |mod Pkg.Mod {
+        |    @Export pub def f(): List[Chain[Int32]] = Chain.empty() :: Nil
+        |}
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibAll)
+    expectError[EntryPointError.IllegalExportType](result)
+  }
+
   test("Test.ExportPolymorphic.01") {
     // An unconstrained type variable is exported as `java.lang.Object`. The monomorpher defaults
     // it to `AnyType`, which is represented as `Object`, so the boundary needs no special case.

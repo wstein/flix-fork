@@ -74,6 +74,10 @@ sealed trait BackendObjType {
     case BackendObjType.ListView(element) => JvmName(DevFlixGen, mkClassName("ListView", element.flixType))
     case BackendObjType.VectorView(element) => JvmName(DevFlixGen, mkClassName("VectorView", element.flixType))
     case BackendObjType.ChainIterator(element) => JvmName(DevFlixGen, mkClassName("ChainIterator", element.flixType))
+    // Not `ChainIterator` above, which is List's own cons-chain walker and has nothing to do with
+    // the stdlib `Chain[t]` type -- named `ExportedChain*` throughout to keep the two unconfusable.
+    case BackendObjType.ExportedChainView(element, _, _, _, _) => JvmName(DevFlixGen, mkClassName("ExportedChainView", element.flixType))
+    case BackendObjType.ExportedChainIterator(element, _, _, _, _) => JvmName(DevFlixGen, mkClassName("ExportedChainIterator", element.flixType))
     // A caller writes this name in its own source, so unlike the views above it is not mangled and
     // does not live in the package of things the backend is free to rename. Only the arity varies:
     // the element types are its type *parameters*, supplied by the shim's signature.
@@ -2477,6 +2481,303 @@ object BackendObjType {
       GETFIELD(ArrayField)
       ARRAYLENGTH()
       xReturn(BackendType.Int32)
+    }
+  }
+
+  /**
+    * A Flix `Chain` presented to Java as an unmodifiable `java.util.Collection`, without copying
+    * it.
+    *
+    * Not `java.util.List`: a chain has no efficient indexed access any more than a `Set` or `Map`
+    * does, so presenting it as `List` would advertise a positional-access contract the value
+    * cannot honor any better than those two -- correctly presented as `Set`/`Map`, not `List`.
+    * `AbstractCollection` needs only `iterator()` and `size()`, the same base contract
+    * `TreeSetView` builds on.
+    *
+    * `Chain`'s own `Empty | One(t) | Chain(l, r)` shape is a genuine binary tree, distinct from
+    * both precedents this backend already has: `List`'s cons chain is linear, and `Set`/`Map`'s
+    * red-black tree carries a value at every internal node and is balanced by construction. A
+    * `Chain` is neither -- only `One` leaves carry a value, `Chain` nodes carry none, and nothing
+    * in the type stops a directly-constructed, arbitrarily unbalanced or degenerate value (the
+    * doc comment on `Chain`'s own cases warns they "should not be used directly", which is a
+    * convention, not an enforced restriction). The walk below is therefore a new algorithm rather
+    * than a reuse of [[TreeIterator]]'s left-spine push, and iterative rather than recursive for
+    * the same reason [[ListView]]'s own count is: a chain can be as deep as it has elements, so
+    * recursion could overflow a stack a Flix-level traversal would not.
+    *
+    * Unlike `Set`/`Map`, this *is* the type being exported directly -- `sym` in `ExportPlan.of` is
+    * `Chain`'s own `EnumSym` -- so unlike [[TreeIterator.nodeTag]], which has to state its shape
+    * because the tree it walks is erased away before this code runs, the ordinals and tag shapes
+    * here are read from `root.enums(sym)` at plan-construction time, the same way [[AsSealedEnum]]
+    * reads a case's own ordinal rather than assuming a declaration order.
+    */
+  case class ExportedChainView(element: ExportPlan, emptyOrdinal: Int, oneOrdinal: Int, oneTag: Tag, chainTag: Tag) extends ExportClass {
+
+    def genByteCode()(implicit root: JvmAst.Root, flix: Flix): Array[Byte] = {
+      val cm = ClassMaker.mkClass(this.jvmName, IsFinal, superClass = JvmName.AbstractCollection)
+
+      cm.mkConstructor(Constructor, IsPublic, constructorIns(_))
+      cm.mkField(ChainField, IsPrivate, IsFinal, NotVolatile)
+      cm.mkField(SizeField, IsPrivate, NotFinal, NotVolatile)
+      cm.mkMethod(Nil, IteratorMethod, IsPublic, IsFinal, iteratorIns(root, _))
+      cm.mkMethod(Nil, SizeMethod, IsPublic, IsFinal, sizeIns(_))
+      cm.mkMethod(Nil, IsEmptyMethod, IsPublic, IsFinal, isEmptyIns(_))
+      cm.mkMethod(Nil, CountMethod, IsPrivate, IsFinal, countIns(root, _))
+
+      cm.closeClassMaker()
+    }
+
+    /** The iterator this view hands out. Derived rather than stored, so the two cannot disagree. */
+    def iteratorType: ExportedChainIterator = ExportedChainIterator(element, emptyOrdinal, oneOrdinal, oneTag, chainTag)
+
+    private def ChainField: InstanceField = InstanceField(this.jvmName, "chain", Tagged.toTpe)
+
+    /** The cached size, or `-1` before it has been computed. See [[TreeSetView.SizeField]]. */
+    private def SizeField: InstanceField = InstanceField(this.jvmName, "size", BackendType.Int32)
+
+    def Constructor: ConstructorMethod = ConstructorMethod(this.jvmName, List(Tagged.toTpe))
+
+    /** `[] --> return` */
+    private def constructorIns(implicit mv: MethodVisitor): Unit =
+      withName(1, Tagged.toTpe) { chain =>
+        thisLoad()
+        INVOKESPECIAL(JvmName.AbstractCollection, JvmName.ConstructorMethod, mkDescriptor()(VoidableType.Void))
+        thisLoad()
+        chain.load()
+        PUTFIELD(ChainField)
+        thisLoad()
+        pushInt(-1)
+        PUTFIELD(SizeField)
+        RETURN()
+      }
+
+    def IteratorMethod: InstanceMethod =
+      InstanceMethod(this.jvmName, "iterator", mkDescriptor()(BackendObjType.Native(JvmName.Iterator).toTpe))
+
+    /** `[] --> return Iterator` */
+    private def iteratorIns(implicit root: JvmAst.Root, mv: MethodVisitor): Unit = {
+      NEW(iteratorType.jvmName)
+      DUP()
+      thisLoad()
+      GETFIELD(ChainField)
+      INVOKESPECIAL(iteratorType.Constructor)
+      ARETURN()
+    }
+
+    def SizeMethod: InstanceMethod = InstanceMethod(this.jvmName, "size", mkDescriptor()(BackendType.Int32))
+
+    /** `[] --> return int` */
+    private def sizeIns(implicit mv: MethodVisitor): Unit = {
+      thisLoad()
+      GETFIELD(SizeField)
+      ifCondition(Condition.LT) {
+        thisLoad()
+        thisLoad()
+        INVOKESPECIAL(this.jvmName, CountMethod.name, CountMethod.d)
+        PUTFIELD(SizeField)
+      }
+      thisLoad()
+      GETFIELD(SizeField)
+      xReturn(BackendType.Int32)
+    }
+
+    def IsEmptyMethod: InstanceMethod = InstanceMethod(this.jvmName, "isEmpty", mkDescriptor()(BackendType.Bool))
+
+    /** `[] --> return boolean`, from the root's own ordinal alone, in O(1). */
+    private def isEmptyIns(implicit mv: MethodVisitor): Unit = {
+      thisLoad()
+      GETFIELD(ChainField)
+      GETFIELD(Tagged.OrdinalField)
+      pushInt(emptyOrdinal)
+      ifConditionElse(Condition.ICMPEQ)(pushBool(true))(pushBool(false))
+      xReturn(BackendType.Bool)
+    }
+
+    private def CountMethod: InstanceMethod = InstanceMethod(this.jvmName, "count", mkDescriptor()(BackendType.Int32))
+
+    /**
+      * `[] --> return int`
+      *
+      * Counted by running a fresh iterator to exhaustion rather than by a second, independent walk
+      * of the tree: the traversal below is the one place this class earns its keep over copying
+      * `TreeSetView`'s own recursive count, and giving `size` its own separate version of the same
+      * walk would be a second chance for the two to disagree about what an "element" is.
+      */
+    private def countIns(implicit root: JvmAst.Root, mv: MethodVisitor): Unit =
+      withName(1, BackendObjType.Native(JvmName.Iterator).toTpe) { it =>
+        withName(2, BackendType.Int32) { count =>
+          NEW(iteratorType.jvmName)
+          DUP()
+          thisLoad()
+          GETFIELD(ChainField)
+          INVOKESPECIAL(iteratorType.Constructor)
+          it.store()
+          pushInt(0)
+          count.store()
+          whileLoop(Condition.NE) {
+            it.load()
+            INVOKEINTERFACE(ClassConstants.Iterator.HasNextMethod)
+          } {
+            it.load()
+            INVOKEINTERFACE(ClassConstants.Iterator.NextMethod)
+            POP()
+            count.load()
+            pushInt(1)
+            IADD()
+            count.store()
+          }
+          count.load()
+          xReturn(BackendType.Int32)
+        }
+      }
+  }
+
+  /**
+    * The walk behind an [[ExportedChainView]].
+    *
+    * `stack` holds raw, not-yet-classified subtrees -- unlike [[TreeIterator]]'s stack, which
+    * holds only nodes already known to contribute a value, because a `Chain` node contributes
+    * nothing and an `Empty` one may hide arbitrarily more structure beneath it (see the class
+    * comment on [[ExportedChainView]]). `normalize` is what brings the top of the stack to a
+    * "leaf or exhausted" state before every read; `hasNext` and `next` both start by calling it,
+    * which is one redundant call on the common path (the top is already a leaf) rather than two
+    * divergent ideas of when the stack is ready.
+    *
+    * Exhaustion is not checked in `next` for the same reason [[TreeIterator]]'s is not: after
+    * `normalize`, `stack.pop()` either returns the one-case value that is there or throws
+    * `NoSuchElementException` on an empty deque, which is exactly what `Iterator.next` must throw.
+    */
+  case class ExportedChainIterator(element: ExportPlan, emptyOrdinal: Int, oneOrdinal: Int, oneTag: Tag, chainTag: Tag) extends ExportClass {
+
+    def genByteCode()(implicit root: JvmAst.Root, flix: Flix): Array[Byte] = {
+      val cm = ClassMaker.mkClass(this.jvmName, IsFinal, interfaces = List(JvmName.Iterator))
+
+      cm.mkConstructor(Constructor, IsPublic, constructorIns(_))
+      cm.mkField(StackField, IsPrivate, IsFinal, NotVolatile)
+      cm.mkMethod(Nil, HasNextMethod, IsPublic, IsFinal, hasNextIns(_))
+      cm.mkMethod(Nil, NextMethod, IsPublic, IsFinal, nextIns(root, _))
+      cm.mkMethod(Nil, NormalizeMethod, IsPrivate, IsFinal, normalizeIns(_))
+
+      cm.closeClassMaker()
+    }
+
+    private def StackField: InstanceField =
+      InstanceField(this.jvmName, "stack", BackendObjType.Native(JvmName.ArrayDeque).toTpe)
+
+    def Constructor: ConstructorMethod = ConstructorMethod(this.jvmName, List(Tagged.toTpe))
+
+    /** `[] --> return`, seeding the stack with the root alone. */
+    private def constructorIns(implicit mv: MethodVisitor): Unit =
+      withName(1, Tagged.toTpe) { chain =>
+        thisLoad()
+        INVOKESPECIAL(ClassConstants.Object.Constructor)
+        thisLoad()
+        NEW(JvmName.ArrayDeque)
+        DUP()
+        INVOKESPECIAL(JvmName.ArrayDeque, JvmName.ConstructorMethod, mkDescriptor()(VoidableType.Void))
+        PUTFIELD(StackField)
+        thisLoad()
+        GETFIELD(StackField)
+        chain.load()
+        INVOKEVIRTUAL(JvmName.ArrayDeque, "push", mkDescriptor(BackendType.Object)(VoidableType.Void))
+        RETURN()
+      }
+
+    def HasNextMethod: InstanceMethod = InstanceMethod(this.jvmName, "hasNext", mkDescriptor()(BackendType.Bool))
+
+    /** `[] --> return boolean` */
+    private def hasNextIns(implicit mv: MethodVisitor): Unit = {
+      thisLoad()
+      INVOKESPECIAL(this.jvmName, NormalizeMethod.name, NormalizeMethod.d)
+      thisLoad()
+      GETFIELD(StackField)
+      INVOKEVIRTUAL(JvmName.ArrayDeque, "isEmpty", mkDescriptor()(BackendType.Bool))
+      ifConditionElse(Condition.EQ)(pushBool(true))(pushBool(false))
+      xReturn(BackendType.Bool)
+    }
+
+    def NextMethod: InstanceMethod = InstanceMethod(this.jvmName, "next", mkDescriptor()(BackendType.Object))
+
+    /** `[] --> return Object` */
+    private def nextIns(implicit root: JvmAst.Root, mv: MethodVisitor): Unit = {
+      thisLoad()
+      INVOKESPECIAL(this.jvmName, NormalizeMethod.name, NormalizeMethod.d)
+      thisLoad()
+      GETFIELD(StackField)
+      INVOKEVIRTUAL(JvmName.ArrayDeque, "pop", mkDescriptor()(BackendType.Object))
+      CHECKCAST(oneTag.jvmName)
+      GETFIELD(oneTag.IndexField(0))
+      element.emit(SourceLocation.Unknown, 1)
+      ARETURN()
+    }
+
+    private def NormalizeMethod: InstanceMethod = InstanceMethod(this.jvmName, "normalize", mkDescriptor()(VoidableType.Void))
+
+    /**
+      * `[] --> return`
+      *
+      * Repeatedly pops the top of the stack and reacts to what it is: an `Empty` is discarded, a
+      * `Chain` is replaced by its two children (right pushed first, so left is popped next), and a
+      * `One` -- the only case with a value to yield -- is pushed straight back and the loop stops.
+      * A stack that started empty stays empty and the loop never runs its body, which is what
+      * makes an exhausted iterator's `hasNext`/`next` behave correctly with no separate check.
+      */
+    private def normalizeIns(implicit mv: MethodVisitor): Unit = {
+      whileLoop(Condition.NE) {
+        thisLoad()
+        GETFIELD(StackField)
+        INVOKEVIRTUAL(JvmName.ArrayDeque, "isEmpty", mkDescriptor()(BackendType.Bool))
+        ifConditionElse(Condition.NE) {
+          // The stack is empty: nothing left to normalize, stop.
+          pushBool(false)
+        } {
+          thisLoad()
+          GETFIELD(StackField)
+          INVOKEVIRTUAL(JvmName.ArrayDeque, "pop", mkDescriptor()(BackendType.Object))
+          CHECKCAST(Tagged.jvmName)
+          storeWithName(1, Tagged.toTpe) { node =>
+            node.load()
+            GETFIELD(Tagged.OrdinalField)
+            pushInt(oneOrdinal)
+            ifConditionElse(Condition.ICMPEQ) {
+              // A leaf: push it back so `next` can read it, and stop.
+              thisLoad()
+              GETFIELD(StackField)
+              node.load()
+              INVOKEVIRTUAL(JvmName.ArrayDeque, "push", mkDescriptor(BackendType.Object)(VoidableType.Void))
+              pushBool(false)
+            } {
+              node.load()
+              GETFIELD(Tagged.OrdinalField)
+              pushInt(emptyOrdinal)
+              ifConditionElse(Condition.ICMPEQ) {
+                // Already discarded by the pop above; keep looking.
+                pushBool(true)
+              } {
+                // A branch: push what it owes, right first so left is popped next.
+                thisLoad()
+                GETFIELD(StackField)
+                node.load()
+                CHECKCAST(chainTag.jvmName)
+                GETFIELD(chainTag.IndexField(1))
+                CHECKCAST(Tagged.jvmName)
+                INVOKEVIRTUAL(JvmName.ArrayDeque, "push", mkDescriptor(BackendType.Object)(VoidableType.Void))
+                thisLoad()
+                GETFIELD(StackField)
+                node.load()
+                CHECKCAST(chainTag.jvmName)
+                GETFIELD(chainTag.IndexField(0))
+                CHECKCAST(Tagged.jvmName)
+                INVOKEVIRTUAL(JvmName.ArrayDeque, "push", mkDescriptor(BackendType.Object)(VoidableType.Void))
+                pushBool(true)
+              }
+            }
+          }
+        }
+      } {
+        // The test above does all the work; there is nothing left to run per iteration.
+      }
+      RETURN()
     }
   }
 

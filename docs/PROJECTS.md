@@ -155,19 +155,23 @@ and the generated classes are named so that a jar is consumable from Scala,
 Kotlin, Groovy, Clojure and JRuby rather than Java alone. What that leaves is
 several genuinely open problems, each larger than it first appears:
 
-- **Collections.** `List`, `Set`, `Map` and now `Vector` all cross as
+- **Collections.** `List`, `Set`, `Map`, `Vector` and now `Chain` all cross as
   unmodifiable views that are *not* copied, trading O(n) allocation for O(1).
   `Set` and `Map` share one view over the red-black tree — a `Map`'s entry set
   is a set view handing out `Map.Entry` instead of a key — and iterate in
   ascending key order. `List` walks the cons chain through an
   `AbstractSequentialList`, so iteration stays linear. `Vector` is simplest of
   the four: it already *is* a Java array, so its view is `AbstractList` over
-  `get`/`size` alone, with no iterator class of its own. `Array` deliberately
-  stays unexportable — mutable, and region-scoped in a way a view could
-  outlive. What is left open is `Chain`, which is neither array- nor
-  tree-shaped and has no export machinery yet, and whether any collection
-  should be exportable as a *parameter*, which needs a conversion in the other
-  direction that does not exist for any of them.
+  `get`/`size` alone, with no iterator class of its own. `Chain` is the most
+  involved: neither array- nor tree-shaped in the sense `Set`/`Map` are (only
+  its `One` leaves carry a value, and nothing stops an arbitrarily unbalanced
+  or directly-constructed value), so its walk is a new algorithm rather than a
+  reuse of the red-black tree's left-spine push, tested against a value built
+  by direct case construction rather than only the shapes `cons`/`snoc`/
+  `append` would produce. `Array` deliberately stays unexportable — mutable,
+  and region-scoped in a way a view could outlive. What is left open is
+  whether any collection should be exportable as a *parameter*, which needs a
+  conversion in the other direction that does not exist for any of them.
 - **Immutable data.** Tuples now cross as `dev.flix.runtime.TupleN`, a generated
   generic record with one class per arity — copied rather than viewed, since a
   tuple's fields are fixed in number and already in hand. It is the first

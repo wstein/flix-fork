@@ -282,6 +282,31 @@ object ExportPlan {
   }
 
   /**
+    * A Flix `Chain` presented as an unmodifiable `java.util.Collection`, without copying it.
+    *
+    * `Chain`'s value directly *is* one of its three cases -- there is no wrapper tag to unwrap, the
+    * same shape [[AsList]] has and unlike [[AsSet]]/[[AsMap]]'s tree-behind-a-tag. See
+    * [[BackendObjType.ExportedChainView]] for why `Collection` rather than `List`, and for the walk.
+    */
+  case class AsChain(element: ExportPlan, view: BackendObjType.ExportedChainView) extends ExportPlan {
+    def flixType: BackendType = BackendObjType.Tagged.toTpe
+
+    def signature: ExportSignature = ExportSignature.Applied(JvmName.JavaCollection, List(element.signature))
+
+    def emit(loc: SourceLocation, nextLocal: Int)(implicit root: JvmAst.Root, mv: MethodVisitor): Unit =
+      withName(nextLocal, BackendObjType.Tagged.toTpe) { chain =>
+        chain.store()
+        NEW(view.jvmName)
+        DUP()
+        chain.load()
+        INVOKESPECIAL(view.Constructor)
+      }
+
+    override def generatedClasses: List[BackendObjType.ExportClass] =
+      view :: view.iteratorType :: element.generatedClasses
+  }
+
+  /**
     * A Flix tuple presented as a `dev.flix.runtime.TupleN` record.
     *
     * A copy rather than a view, which is the one place this differs from every other container
@@ -460,6 +485,17 @@ object ExportPlan {
         val erasedValue = BackendType.toErasedBackendType(v)
         val view = BackendObjType.MapView(viewElementPlan(erasedKey), viewElementPlan(erasedValue))
         Some(AsMap(elementPlan(k, erasedKey), elementPlan(v, erasedValue), treeTag(erased, "Map"), view))
+      case SimpleType.Enum(sym, List(element)) if isStdEnum(sym, "Chain") =>
+        // `sym` (from `declared`) is not read here, the same way `treeTag` does not read one: a
+        // generic stdlib enum is specialized per erasure class, so only `erased`'s own symbol is
+        // guaranteed to be a live key in `root.enums` -- `declared`'s may be the unspecialized
+        // symbol that was never retained on its own once monomorphization ran.
+        val erasedElement = BackendType.toErasedBackendType(element)
+        val chainSym = enumSymOf(erased, "Chain")
+        val emptyOrdinal = caseSymOf(chainSym, "Empty").ordinal
+        val oneOrdinal = caseSymOf(chainSym, "One").ordinal
+        val view = BackendObjType.ExportedChainView(viewElementPlan(erasedElement), emptyOrdinal, oneOrdinal, tagOf(chainSym, "One"), tagOf(chainSym, "Chain"))
+        Some(AsChain(elementPlan(element, erasedElement), view))
       // Unguarded: by the time `SimpleType` exists, `Simplifier` has already erased `Vector[t]` and
       // `Array[t, r]` to the identical `SimpleType.Array(t)`, so this solver cannot itself tell them
       // apart. Soundness rests entirely on `EntryPoints`'s gate, which can (it still sees the

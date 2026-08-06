@@ -305,6 +305,28 @@ throws too.
 Both the key and the value must be exportable, and both are declared in the
 `Signature`, so `Map[Int32, String]` is `Map<Integer, String>`.
 
+## Chains
+
+`Chain[t]` is exportable **as a return type**, where the shim presents it as
+an unmodifiable `java.util.Collection`:
+
+```flix
+@Export
+pub def names(): Chain[String] = Chain.cons("a", Chain.snoc(Chain.empty(), "b"))
+```
+
+```java
+Collection<String> xs = Acme.Greeter.names();   // [a, b]
+new ArrayList<>(xs);                            // materialize it, if you need indexing
+xs.add("c");                                    // UnsupportedOperationException
+```
+
+`Collection`, not `List`: a `Chain` has no efficient indexed access, so this
+does not advertise the positional-access contract `List` implies, any more
+than `Set` or `Map` do. Iteration is left-to-right, the same order
+`Chain.toList` would produce. Not copied, the element must itself be
+exportable, a primitive element is boxed, and the type is return-only.
+
 ## Tuples
 
 A tuple is exportable **as a return type**, where the shim presents it as a

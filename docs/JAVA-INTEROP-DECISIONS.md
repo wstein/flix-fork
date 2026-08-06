@@ -1343,3 +1343,71 @@ already excluded what it cannot itself tell apart. A regression test pins the
 `Array` rejection specifically so a future widening of `isExportableType`
 toward `Array` cannot silently start compiling working-but-wrong shims through
 this arm.
+
+---
+
+## J24 — `Chain` crosses as a lazy `java.util.Collection` view
+
+**Status: Settled.** `Chain[t]` is exportable in return position, presented as
+an unmodifiable `java.util.Collection`.
+
+**`Collection`, not `List`.** A `Chain` has no efficient indexed access any
+more than a `Set` or a `Map` does, so presenting it as `List` would advertise
+a positional-access contract the value cannot honor any better than those two
+— correctly presented as `Set`/`Map`, not `List`. `java.util.AbstractCollection`
+needs only `iterator()` and `size()`, the same base contract `TreeSetView`
+already builds on.
+
+**The walk is a new algorithm, not a reuse of `TreeIterator`'s left-spine
+push, and this is a design decision rather than an oversight.** `Chain`'s
+`Empty | One(t) | Chain(l, r)` shape is a genuine binary tree, but neither of
+this backend's two existing precedents: `List`'s cons chain is linear, and
+`Set`/`Map`'s red-black tree carries a value at every internal node and is
+balanced by construction, so a left-spine push is exact for it. A `Chain`
+node carries no value at all — only a `One` leaf does — and nothing in the
+type stops a directly-constructed, arbitrarily unbalanced or degenerate value:
+`Chain`'s own case constructors carry a doc comment warning they "should not
+be used directly," which is a convention aimed at Flix programmers, not an
+enforced restriction the exported boundary can rely on. The iterator's
+`normalize` method therefore treats the top of its stack as raw, unclassified
+structure — `Empty` discarded, `Chain` expanded into its two children, `One`
+left in place as the next value — and is tested against a value built by
+direct case construction with `Empty` subtrees in positions no
+`cons`/`snoc`/`append` combination would ever leave one, to prove it handles
+the type's full range rather than only the shapes the library's own
+combinators produce.
+
+**Iterative, not recursive, for the reason `ListView`'s own count already
+is:** a chain can be as deep as it has elements, and a hand-emitted recursive
+walk gets none of the tail-call elimination Flix's own compiled `Chain.
+viewLeft` benefits from, so it could overflow a stack the Flix-level
+equivalent would not.
+
+**`size()` is counted by running a fresh iterator to exhaustion, not by a
+second, independent walk of the tree.** Every other cached-size view
+(`TreeSetView`, `ListView`) has its own dedicated structural count, walking
+the collection directly rather than through its own iterator. `Chain`'s own
+walk is intricate enough — the one place in this feature that earns its keep
+over copying an existing precedent — that giving `size` a second, independent
+version of the same traversal would be a second chance for the two to
+disagree about what counts as an element, for no benefit `size`'s own
+correctness needs. `count` is `private`, not `static`: it constructs its own
+throwaway `ExportedChainIterator` from the view's own stored chain, which is
+instance state a static structural walk (as every other view's count is)
+would not have needed.
+
+**Unlike `Set`/`Map`, this is the type being exported directly.** `sym` inside
+`ExportPlan.of`'s `Chain` arm is `erased`'s own `EnumSym`, not `declared`'s: a
+generic stdlib enum is specialized per erasure class by the monomorphizer, so
+only the erased type's symbol is guaranteed to be a live key in
+`root.enums` — this is exactly the same reason `AsOptional`'s `optionTags`
+and `treeTag` both read their symbol off `erased` rather than `declared`, and
+using `declared`'s instead is a mistake that compiles cleanly and crashes the
+compiler the first time a program actually exports a `Chain`, since nothing
+about it is visible until `ExportPlan.of` actually runs for a real def. Given
+the right symbol, this is what lets the ordinals and tag shapes here be read
+from `root.enums(chainSym)` at plan-construction time — the same way
+`AsSealedEnum` reads a case's own ordinal rather than assuming a declaration
+order — where `TreeIterator.nodeTag` has to state its shape by hand, because
+the tree it walks is an implementation detail erased away before this code
+runs and was never itself the type being converted.
