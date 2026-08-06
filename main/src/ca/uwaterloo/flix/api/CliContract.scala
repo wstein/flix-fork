@@ -21,30 +21,45 @@ import org.json4s.JsonAST.JValue
 import org.json4s.JsonDSL.*
 
 /**
-  * What a build tool reads instead of the compiler's console output.
+  * The machine-readable contract of the command line: what a build tool reads instead of console
+  * output.
   *
-  * A build tool has to place a problem in a file at a line, decide whether to fail, and hand the
-  * result to a UI it owns. Recovering that from rendered text means matching on prose and on
-  * decorations that exist to be read by people -- so it breaks whenever a message is reworded, and
-  * it cannot be right for a message it has not seen before.
+  * ==What this is not==
   *
-  * This is deliberately a *protocol* rather than an API. A build plugin that links against the
-  * compiler is pinned to its binary version, which is the problem `zinc` solves by compiling a
-  * bridge per Scala version. A plugin that reads this is pinned to [[Version]] instead, which is a
-  * contract we choose rather than one the JVM imposes.
+  * It is **not** the Build Server Protocol, and not a peer of it. BSP standardises the boundary
+  * between an editor and a build tool -- there the IDE is the *client* and sbt, Gradle or Bazel is
+  * the *server*. This contract sits one layer below that, between a build tool and the compiler,
+  * which BSP does not describe and where the Scala ecosystem uses `zinc` instead.
   *
-  * ==Positions are LSP's, not the console's==
+  * {{{
+  *   editor  --BSP-->  build tool  --this contract-->  flix.jar
+  * }}}
   *
-  * Ranges come from [[Diagnostic]], which is the same conversion the language server uses, so they
-  * are **zero-based** -- while the text the compiler prints is one-based, as a person expects. The
-  * two therefore disagree by one on purpose. Producing a second convention here would have been the
-  * worse trade: the requests that follow this one are language-server requests, and a build client
-  * that converted twice would be converting in opposite directions.
+  * It is also not an LSP extension. Build requests do not belong in a language server: that the
+  * server already holds a warm compiler is a fact about implementation, not an argument about where
+  * the boundary goes.
+  *
+  * ==Why a contract rather than a linked API==
+  *
+  * A plugin compiled against the compiler is pinned to its binary version, which is the problem
+  * `zinc` solves by building a `compiler-bridge` per Scala version. A plugin that reads this is
+  * pinned to a version number instead -- one we choose and can negotiate. It also lets a published
+  * plugin exist at all, since Flix publishes no Maven artifact to compile against.
+  *
+  * The cost lands elsewhere and is real: once a released plugin reads this, changing it breaks
+  * builds this repository cannot see.
+  *
+  * ==Positions are LSP's==
+  *
+  * Ranges come from [[Diagnostic]], the same conversion the language server uses, so they are
+  * **zero-based** while the text the compiler prints is one-based as a person expects. They
+  * disagree by one deliberately: BSP's `build/publishDiagnostics` carries LSP `Diagnostic` values,
+  * so anything downstream that ever speaks BSP passes these through untranslated.
   */
-object BuildProtocol {
+object CliContract {
 
   /**
-    * The version of this document's shape.
+    * The version of this contract's shape.
     *
     * Bumped when a consumer that understands the current shape would misread the new one. Adding a
     * field is not that; removing one, renaming one, or changing what a value means is.
@@ -63,32 +78,33 @@ object BuildProtocol {
   /**
     * How a request identifies what to build.
     *
-    * `"project-directory"`: a request names a project directory, plus explicit libraries, output
-    * locations, and options. It does not enumerate sources or resolved dependencies.
+    * `"project-directory"`: an invocation names a project directory, plus explicit libraries,
+    * output locations, and options. It does not enumerate sources or resolved dependencies.
     *
     * The alternative -- a request that names every input -- was rejected. A client would have to
     * resolve `flix.toml`, Maven coordinates, and `.fpkg` files for itself, which is a second
     * dependency resolver that has to agree with `Bootstrap`'s forever. The property that buys, for
     * a build tool, is knowing what to declare as an input so its cache is sound.
     *
-    * That property is provided instead by the *response* reporting what was actually consumed. A
-    * client compares it against what it declared and fails when its declaration was too narrow --
-    * which catches under-declaration rather than assuming it away, and is the failure that makes
-    * caching unsafe. See `docs/BUILD-PROTOCOL.md`.
+    * Nothing here reports what was consumed, so a caller cannot currently verify that what it
+    * declared as an input covered what the compiler read. BSP answers this with
+    * `buildTarget/sources` and `buildTarget/dependencyModules` -- as *queries*, rather than as a
+    * report attached to every build -- and a query subcommand is the shape to copy if this is ever
+    * needed. See `docs/TOOLING-CONTRACT.md`.
     */
   val InputModel: String = "project-directory"
 
   /**
     * Returns what this compiler offers a build client, or why it cannot serve one.
     *
-    * `clientVersion` is the version the client speaks. Refusing an incompatible one here, by
-    * number, is the point of the handshake: the alternative is a client discovering the mismatch
-    * as a missing field halfway through a build, and reporting it as a compiler error.
+    * `clientVersion` is the contract version the caller speaks. Refusing an incompatible one here,
+    * by number, is the point: the alternative is a caller discovering the mismatch as a missing
+    * field halfway through a build, and reporting it as a compiler error.
     *
     * Capabilities are named rather than inferred from the version, because they will not arrive in
     * lockstep -- a daemon exists or it does not, independently of what else changed.
     */
-  def initialize(clientVersion: Option[Int]): (Boolean, JValue) = {
+  def describe(clientVersion: Option[Int]): (Boolean, JValue) = {
     val incompatible = clientVersion.filter(v => v > ProtocolVersion || v < MinimumClientVersion)
     incompatible match {
       case Some(v) =>
