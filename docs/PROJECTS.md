@@ -184,8 +184,14 @@ several genuinely open problems, each larger than it first appears:
   unlike a tuple's this class is never shared across element-type
   instantiations. Generic enums and case elements that are themselves
   containers stay unexportable, one level deep, for the same reason a tuple's
-  own elements are. What is left is records — where the open question is API
-  naming rather than representation.
+  own elements are. Structural records cross too, as a generated record shared
+  by shape — one class per distinct sorted `(label, type)` list, in
+  `dev.flix.runtime` like a tuple's, but concretely typed like a case's,
+  since a field's type participates in the sharing key alongside its label.
+  Accessors are named after their Flix label, not by position, and a label
+  Java cannot name as a method is rejected rather than mangled. This was the
+  one place left open on naming rather than representation, and is now
+  settled the same way.
 - **The inbound boundary**, which is a separate mechanism with open soundness
   defects (issues 8618 and 5172, on Java functional interfaces) and duplicated
   conversion logic (issue 8592). Nothing in the export work addresses it. The

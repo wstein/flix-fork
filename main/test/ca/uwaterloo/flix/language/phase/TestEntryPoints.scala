@@ -1481,6 +1481,88 @@ class TestEntryPoints extends AnyFunSuite with TestUtils {
     expectError[EntryPointError.IllegalExportType](result)
   }
 
+  test("Test.ExportRecord.01") {
+    val input =
+      """
+        |mod Pkg { }
+        |mod Pkg.Mod {
+        |    @Export pub def f(): { age = Int32, name = String } = { age = 1, name = "x" }
+        |}
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibAll)
+    expectSuccess(result)
+  }
+
+  test("Test.ExportRecord.03") {
+    // An open row is rejected before `checkJavaTypes` -- and therefore before this record's own
+    // gate arm -- even runs: `checkExportedTypeVariables` runs first and rejects any leftover row
+    // variable outright.
+    val input =
+      """
+        |mod Pkg { }
+        |mod Pkg.Mod {
+        |    @Export pub def f(r: { | r }): { age = Int32 | r } = { +age = 1 | r }
+        |}
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibAll)
+    expectError[EntryPointError.IllegalEntryPointTypeVariables](result)
+  }
+
+  test("Test.ExportRecord.04") {
+    // Return position only, like every other converted type.
+    val input =
+      """
+        |mod Pkg { }
+        |mod Pkg.Mod {
+        |    @Export pub def f(r: { age = Int32 }): Int32 = r#age
+        |}
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibAll)
+    expectError[EntryPointError.IllegalExportType](result)
+  }
+
+  test("Test.ExportRecord.05") {
+    // And not nested, per J17.
+    val input =
+      """
+        |mod Pkg { }
+        |mod Pkg.Mod {
+        |    @Export pub def f(): List[{ age = Int32 }] = { age = 1 } :: Nil
+        |}
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibAll)
+    expectError[EntryPointError.IllegalExportType](result)
+  }
+
+  test("Test.ExportRecord.06") {
+    // A field type that is not itself exportable is rejected, the same way a tuple's own element
+    // is: the error points at the field, not at the whole record.
+    val input =
+      """
+        |mod Pkg { }
+        |mod Pkg.Mod {
+        |    pub enum Colour { case Red, case Green }
+        |    @Export pub def f(): { colour = Colour } = { colour = Colour.Red }
+        |}
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibAll)
+    expectError[EntryPointError.IllegalExportType](result)
+  }
+
+  test("Test.ExportRecord.07") {
+    // A label Flix accepts but Java cannot name as a method -- `!` is a legal character in a Flix
+    // name but not in a Java identifier -- is rejected rather than mangled.
+    val input =
+      """
+        |mod Pkg { }
+        |mod Pkg.Mod {
+        |    @Export pub def f(): { isEmpty! = Bool } = { isEmpty! = true }
+        |}
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibAll)
+    expectError[EntryPointError.IllegalExportType](result)
+  }
+
   test("Test.ExportPolymorphic.01") {
     // An unconstrained type variable is exported as `java.lang.Object`. The monomorpher defaults
     // it to `AnyType`, which is represented as `Object`, so the boundary needs no special case.

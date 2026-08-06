@@ -190,6 +190,15 @@ class TestExportedShims extends AnyFunSuite {
     }
   }
 
+  /**
+    * Returns `true` if `name` is a generated `dev.flix.runtime.Record$...` export class.
+    *
+    * Not just `startsWith("Record$")`: the internal `dev.flix.gen.Record` marker interface every
+    * `RecordExtend`/`RecordEmpty` implements has the exact simple name `Record$` (no fields to
+    * append), which `classNamesOf`'s package-stripped names cannot otherwise be told apart from.
+    */
+  private def isGeneratedRecordClass(name: String): Boolean = name.startsWith("Record$") && name != "Record$"
+
   /** Returns the descriptors and signatures of the methods of the class file at `path`. */
   private def read(path: Path): (Map[String, String], Map[String, String]) = {
     assert(Files.exists(path), s"expected a generated class at $path")
@@ -843,6 +852,97 @@ class TestExportedShims extends AnyFunSuite {
     assert(names.exists(n => n.startsWith("Tag$")), s"expected the internal tag classes to remain, got: $names")
   }
 
+  test("an exported record is presented as a generated dev.flix.runtime record") {
+    // Accessors are named after the Flix label directly, not `_1`/`_2`: unlike a tuple's or a
+    // case's position, a record field has a name the programmer chose to keep.
+    val (descriptors, signatures) = membersOf(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    @Export
+        |    pub def person(): { age = Int32, name = String } = { age = 1, name = "x" }
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin, "Pkg/Mod")
+    assert(descriptors.get("person").exists(_.matches("\\(\\)Ldev/flix/runtime/Record\\$[a-zA-Z0-9$]+;")),
+      s"expected a generated dev.flix.runtime record, got: ${descriptors.get("person")}")
+    assert(!signatures.contains("person"), s"a concretely-typed record needs no signature, got: ${signatures.get("person")}")
+  }
+
+  test("a record's accessors are named after its labels, concretely typed") {
+    val names = classNamesOf(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    @Export
+        |    pub def person(): { age = Int32, name = String } = { age = 1, name = "x" }
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin)
+    val recordClass = names.find(isGeneratedRecordClass).getOrElse(fail(s"expected a generated record class, got: $names"))
+    val components = recordComponentsOf(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    @Export
+        |    pub def person(): { age = Int32, name = String } = { age = 1, name = "x" }
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin, s"dev/flix/runtime/$recordClass")
+    assertResult(List("age" -> "I", "name" -> "Ljava/lang/String;"))(components)
+  }
+
+  test("two records with the same labels and types share one class, whatever order they were declared in") {
+    val names = classNamesOf(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    @Export
+        |    pub def a(): { age = Int32, name = String } = { age = 1, name = "x" }
+        |
+        |    @Export
+        |    pub def b(): { name = String, age = Int32 } = { name = "y", age = 2 }
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin)
+    assertResult(1)(names.count(isGeneratedRecordClass))
+  }
+
+  test("two records with the same labels but a different field type get different classes") {
+    val names = classNamesOf(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    @Export
+        |    pub def a(): { x = Int32 } = { x = 1 }
+        |
+        |    @Export
+        |    pub def b(): { x = String } = { x = "y" }
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin)
+    assertResult(2)(names.count(isGeneratedRecordClass))
+  }
+
+  test("an exported record's fields must themselves be exportable, one level deep") {
+    // Pins the same leak-prevention invariant every other container's elements are held to: an
+    // element the front end accepts without a plan compiles into a shim leaking the internal
+    // representation. Checked here on the class-name side rather than the gate side, since
+    // `TestEntryPoints` already pins the rejection itself.
+    val names = classNamesOf(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    import java.util.ArrayList
+        |
+        |    @Export
+        |    pub def ok(): { xs = ArrayList[String] } \ IO = { xs = new ArrayList() }
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin)
+    assert(names.exists(isGeneratedRecordClass), s"expected a generated record class, got: $names")
+  }
+
   test("no return type the front end accepts leaks the Flix representation") {
     // `EntryPoints` decides what may be exported and `ExportPlan` decides how, over different type
     // representations, so a gate widened ahead of a plan compiles into a shim that falls through
@@ -887,7 +987,8 @@ class TestExportedShims extends AnyFunSuite {
       "Vector[String]" -> "Vector#{\"s\"}",
       "Vector[Int32]" -> "Vector#{1}",
       "Chain[String]" -> "Chain.cons(\"s\", Chain.empty())",
-      "Chain[Int32]" -> "Chain.cons(1, Chain.empty())"
+      "Chain[Int32]" -> "Chain.cons(1, Chain.empty())",
+      "{ age = Int32, name = String }" -> "{ age = 1, name = \"s\" }"
     )
     val defs = returnTypes.zipWithIndex.map {
       case ((tpe, value), i) => s"    @Export\n    pub def f$i(): $tpe = $value"

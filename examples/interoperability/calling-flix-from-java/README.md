@@ -449,6 +449,36 @@ and every case's elements must themselves be directly exportable, one level
 deep — a case holding another container (`Circle(List[Int32])`) or another
 enum is rejected, the same way a tuple's own elements are.
 
+## Records
+
+A Flix structural record is exportable **as a return type**, where the shim
+presents it as a generated Java `record`:
+
+```flix
+@Export
+pub def person(): { age = Int32, name = String } = { age = 30, name = "Ada" }
+```
+
+```java
+var p = Greeter.person();
+p.age();     // 30
+p.name();    // "Ada"
+```
+
+Unlike a tuple's record, accessors are named after the Flix label directly —
+`.age()`, not `_1()` — since a record field has a name the programmer chose to
+keep. Unlike a tuple's record, the generated class is shared by *shape*: two
+defs returning `{ age = Int32, name = String }` and
+`{ name = String, age = Int32 }` are the same Flix type and get the same
+class, whichever order they were written in, and every field is concretely
+typed rather than boxed. A label Flix accepts but Java cannot name as a method
+is rejected rather than mangled.
+
+Every field must itself be exportable, one level deep, the same rule a
+tuple's own elements are held to, and the record itself must be **closed** —
+`{ age = Int32 | r }`, with an open row variable, is not exportable, since
+what the row `r` might still hold is not known until a caller supplies it.
+
 ## Why some conversions are return-only
 
 `Option` is *not* exportable as a parameter. Mapping `Optional.empty()` to
@@ -501,11 +531,11 @@ String]` is a kind error. Use `UnaryOperator`, `BinaryOperator`, `BiFunction`,
 A Flix closure cannot travel the other way: a function type is not exportable,
 so an exported function cannot return one.
 
-Not exportable: Flix records, functions, and `Array`, plus a generic enum or a
-case whose own elements are containers. Their JVM representation is an
-implementation detail of the compiler — a `Some(x)` is a class called
-`Tag$Obj` distinguished only by an `int ordinal` field — so exposing them would
-freeze names the backend needs to stay free to change.
+Not exportable: Flix functions and `Array`, plus a generic enum, a case whose
+own elements are containers, or a record with an open row. Their JVM
+representation is an implementation detail of the compiler — a `Some(x)` is a
+class called `Tag$Obj` distinguished only by an `int ordinal` field — so
+exposing them would freeze names the backend needs to stay free to change.
 
 That is also why the types above are *converted* rather than exposed: the shim
 reads the tag and builds an `Optional`, a collection view, or a tuple record, so

@@ -307,6 +307,56 @@ object ExportPlan {
   }
 
   /**
+    * A Flix structural record presented as a generated `dev.flix.runtime` record.
+    *
+    * Its identity is its shape -- `EntryPoints.checkExportedTypeVariables` already guarantees a
+    * closed row by the time any record type reaches export at all, so every field is statically
+    * known here, the same guarantee a tuple's fixed arity gives [[AsTuple]]. Unlike a tuple's
+    * record, components are named after their Flix labels rather than by position (a record field
+    * has a name the programmer chose; a tuple field never did), and unlike a tuple's record,
+    * components are concretely typed rather than boxed and generic (see
+    * [[BackendObjType.ExportRecord]] for why the two records differ there).
+    */
+  case class AsRecord(fields: List[AsRecord.Field], record: BackendObjType.ExportRecord) extends ExportPlan {
+    def flixType: BackendType = BackendObjType.Record.toTpe
+
+    def signature: ExportSignature = ExportSignature.Exact(record.toTpe)
+
+    def emit(loc: SourceLocation, nextLocal: Int)(implicit root: JvmAst.Root, mv: MethodVisitor): Unit =
+      withName(nextLocal, BackendObjType.Record.toTpe) { rec =>
+        rec.store()
+        NEW(record.jvmName)
+        DUP()
+        for (field <- fields) {
+          val internal = BackendObjType.RecordExtend(field.erasedType)
+          rec.load()
+          pushString(field.label)
+          INVOKEINTERFACE(BackendObjType.Record.LookupFieldMethod)
+          CHECKCAST(internal.jvmName)
+          GETFIELD(internal.ValueField)
+          field.plan.emit(loc, nextLocal + rec.tpe.stackSlots)
+          castIfNotPrim(field.plan.javaType)
+        }
+        INVOKESPECIAL(record.Constructor)
+      }
+
+    override def generatedClasses: List[BackendObjType.ExportClass] =
+      record :: fields.flatMap(_.plan.generatedClasses)
+  }
+
+  object AsRecord {
+    /**
+      * One field of a record conversion.
+      *
+      * `erasedType` is what the internal `RecordExtend` node this field is read off of is keyed
+      * on -- reference-typed values are erased to `Object` there, the same as a data-carrying
+      * case's `Tag` -- so it names the class to `CHECKCAST` to and the field to read, independent
+      * of `plan`, which describes what the *declared* type is and how it is presented to Java.
+      */
+    case class Field(label: String, erasedType: BackendType, plan: ExportPlan)
+  }
+
+  /**
     * A Flix tuple presented as a `dev.flix.runtime.TupleN` record.
     *
     * A copy rather than a view, which is the one place this differs from every other container
@@ -517,6 +567,16 @@ object ExportPlan {
         val erasedElms = elms.map(BackendType.toErasedBackendType)
         val plans = elms.zip(erasedElms).map { case (elm, erasedElm) => elementPlan(elm, erasedElm) }
         Some(AsTuple(plans, BackendObjType.Tuple(erasedElms), BackendObjType.ExportTuple(elms.length)))
+      case SimpleType.RecordExtend(_, _, _) | SimpleType.RecordEmpty =>
+        // Sorted by label: two defs returning `{ age = 1, name = "x" }` and `{ name = "x", age = 1
+        // }` are the same Flix row type and must share one generated class, in one field order --
+        // the order this list is built in is also the order `AsRecord.emit` populates the
+        // constructor with, so sorting here is what keeps every call site agreeing with it.
+        val fields = recordFields(declared).sortBy(_._1).map { case (label, tpe) =>
+          AsRecord.Field(label, BackendType.toErasedBackendType(tpe), directPlan(tpe))
+        }
+        val record = BackendObjType.ExportRecord(fields.map(f => (f.label, f.plan)))
+        Some(AsRecord(fields, record))
       case SimpleType.Native(clazz, targs) if targs.nonEmpty =>
         // Every argument must be describable, and `EntryPoints.isExportableType` has already
         // ensured it: a Flix type argument such as `ArrayList[SomeEnum]` is rejected there,
@@ -609,15 +669,29 @@ object ExportPlan {
     }
 
   /**
+    * Returns the labels and field types of `tpe`, in declaration order.
+    *
+    * `tpe` is closed by construction: `EntryPoints.checkExportedTypeVariables` rejects any def
+    * whose boundary types have a leftover row variable before `ExportPlan.of` ever runs, so this
+    * always reaches `RecordEmpty` rather than an open row.
+    */
+  private def recordFields(tpe: SimpleType): List[(String, SimpleType)] = tpe match {
+    case SimpleType.RecordExtend(label, value, rest) => (label, value) :: recordFields(rest)
+    case SimpleType.RecordEmpty => Nil
+    case other => throw InternalCompilerException(s"Exported record has an unexpected row: '$other'", SourceLocation.Unknown)
+  }
+
+  /**
     * Returns the plan for a value that needs no conversion, only possibly a signature.
     *
     * Nothing here is converted, in the sense [[ofParameter]] already uses for a shim's own
-    * parameters: the value is copied straight out of the case's internal `Tag` field where it is
-    * erased to `Object`, and the caller is what casts the copy back to its declared type afterward
-    * (`castToDeclaredType`). Only a generic Java type has something to say beyond its own identity,
-    * exactly as at a parameter -- which is also why this never boxes a primitive: unlike a
-    * container's element, a case record's component is not shared across element-type
-    * instantiations, so nothing forces it into a reference slot.
+    * parameters: the value is copied straight out of wherever it is erased to `Object` -- a data-
+    * carrying case's internal `Tag` field, or a record's internal `RecordExtend` field -- and the
+    * caller is what casts the copy back to its declared type afterward (`castIfNotPrim`). Only a
+    * generic Java type has something to say beyond its own identity, exactly as at a parameter --
+    * which is also why this never boxes a primitive: unlike a container's element, neither a case
+    * record's component nor a structural record's field is shared across element-type
+    * instantiations, so nothing forces either into a reference slot.
     */
   private def directPlan(declared: SimpleType)(implicit root: JvmAst.Root): ExportPlan = declared match {
     case SimpleType.Native(clazz, targs) if targs.nonEmpty =>

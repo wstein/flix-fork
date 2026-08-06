@@ -572,6 +572,90 @@ class TestExportedShimsRuntime extends AnyFunSuite {
     }
   }
 
+  test("an exported record arrives with its labels as accessors") {
+    // A reference-typed field is what proves the narrowing cast: the internal `RecordExtend` node
+    // is erased to `Object`, so without `castIfNotPrim` this would fail the class verifier at load
+    // time rather than merely returning the wrong value -- the same reasoning as a sealed enum's
+    // case record.
+    withFacade(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    @Export
+        |    pub def person(): { age = Int32, name = String } = { age = 30, name = "Ada" }
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin, "Pkg.Mod") { facade =>
+      val value = invoke(facade, "person")
+      assertResult(java.lang.Integer.valueOf(30))(value.getClass.getMethod("age").invoke(value))
+      assertResult("Ada")(value.getClass.getMethod("name").invoke(value))
+    }
+  }
+
+  test("an exported record has value semantics") {
+    withFacade(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    @Export
+        |    pub def person(): { age = Int32, name = String } = { age = 30, name = "Ada" }
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin, "Pkg.Mod") { facade =>
+      val one = invoke(facade, "person")
+      val other = invoke(facade, "person")
+      assert(one ne other)
+      assertResult(other)(one)
+      assertResult(other.hashCode)(one.hashCode)
+    }
+  }
+
+  test("two records with the same labels and types in a different declaration order are equal and share a class") {
+    // The row's own canonicalization already tends to make this hold, but the export side sorts
+    // independently of whatever the type checker happens to do, so this is checked at the value
+    // level rather than assumed from it.
+    withFacade(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    @Export
+        |    pub def a(): { age = Int32, name = String } = { age = 30, name = "Ada" }
+        |
+        |    @Export
+        |    pub def b(): { name = String, age = Int32 } = { name = "Ada", age = 30 }
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin, "Pkg.Mod") { facade =>
+      val a = invoke(facade, "a")
+      val b = invoke(facade, "b")
+      assertResult(a.getClass)(b.getClass)
+      assertResult(a)(b)
+    }
+  }
+
+  test("an exported record field that is a generic Java type is described and narrowed correctly") {
+    withFacade(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    import java.util.ArrayList
+        |
+        |    @Export
+        |    pub def bag(): { xs = ArrayList[String] } \ IO = {
+        |        let l = new ArrayList();
+        |        l.add("x");
+        |        { xs = l }
+        |    }
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin, "Pkg.Mod") { facade =>
+      val value = invoke(facade, "bag")
+      val list = value.getClass.getMethod("xs").invoke(value).asInstanceOf[java.util.ArrayList[?]]
+      assertResult(1)(list.size())
+      assertResult("x")(list.get(0))
+    }
+  }
+
   test("an exported polymorphic def round-trips any reference") {
     // The monomorpher defaults the unconstrained variable to `AnyType`, which is represented as
     // `Object`. The point of calling it rather than reading the descriptor is that the def is

@@ -575,6 +575,7 @@ object EntryPoints {
       .orElse(unapplyVector(tpe).map(List(_)))
       .orElse(unapplyChain(tpe).map(List(_)))
       .orElse(unapplyTuple(tpe))
+      .orElse(unapplyRecord(tpe))
       .orElse(unapplyEnum(tpe))
 
   /**
@@ -586,6 +587,37 @@ object EntryPoints {
     * "Chain")`, which asks the same question of the backend type.
     */
   private def unapplyChain(tpe: Type): Option[Type] = unapplyStdEnum(tpe, "Chain")
+
+  /**
+    * Returns the field types of `tpe`, in declaration order, if it is a Flix structural record.
+    *
+    * The row is not checked for openness here: `checkExportedTypeVariables` runs before
+    * `checkJavaTypes` ever does (see `visitExport`) and already rejects any def with a leftover
+    * row variable, so every record type this function is asked about is already closed. What is
+    * checked is each label's own validity as a Java identifier, since a record's accessor is named
+    * after its label directly (unlike a tuple's `_1` or a case's own generated name) -- a label
+    * Flix accepts but Java cannot name as a method would still compile a real accessor, just one no
+    * Java caller could write a call to.
+    */
+  @tailrec
+  private def unapplyRecord(tpe: Type): Option[List[Type]] = tpe match {
+    case Type.Alias(_, _, t, _) => unapplyRecord(t)
+    case Type.Apply(Type.Cst(TypeConstructor.Record, _), row, _) => unapplyRecordRow(row)
+    case _ => None
+  }
+
+  @tailrec
+  private def unapplyRecordRow(row: Type, fieldTypes: List[Type] = Nil): Option[List[Type]] = row match {
+    case Type.Cst(TypeConstructor.RecordRowEmpty, _) => Some(fieldTypes.reverse)
+    case Type.Apply(Type.Apply(Type.Cst(TypeConstructor.RecordRowExtend(label), _), fieldType, _), rest, _) =>
+      if (isValidJavaIdentifier(label.name)) unapplyRecordRow(rest, fieldType :: fieldTypes)
+      else None
+    case _ => None
+  }
+
+  /** Returns `true` if `name` is a valid Java identifier -- what a record label must be to become an accessor. */
+  private def isValidJavaIdentifier(name: String): Boolean =
+    name.nonEmpty && Character.isJavaIdentifierStart(name.head) && name.tail.forall(Character.isJavaIdentifierPart)
 
   /**
     * Returns the element type of `tpe` if it is `Vector[t]`.

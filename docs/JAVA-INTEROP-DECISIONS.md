@@ -1411,3 +1411,84 @@ from `root.enums(chainSym)` at plan-construction time — the same way
 order — where `TreeIterator.nodeTag` has to state its shape by hand, because
 the tree it walks is an implementation detail erased away before this code
 runs and was never itself the type being converted.
+
+---
+
+## J25 — A structural record crosses as a generated record, shared by shape
+
+**Status: Settled**, both halves. `docs/PROJECTS.md` had left this open on
+naming specifically ("the open question is API naming rather than
+representation"); this entry closes it.
+
+**Representation was never actually open.** `EntryPoints.
+checkExportedTypeVariables` already guarantees a closed row before
+`checkJavaTypes` -- and therefore before a record's own gate arm --
+ever runs: it rejects any def with a leftover row variable outright, so every
+record type reaching export already has a fully closed, statically-known
+field set, the same guarantee a tuple's fixed arity gives `AsTuple`. What was
+missing was only the arm that reads that guarantee and a class to generate
+from it.
+
+**One generated record class per distinct sorted `(label, type)` shape,
+shared program-wide, in `dev.flix.runtime` -- structurally `ExportTuple`'s own
+answer, not `ExportCaseRecord`'s.** A record's identity is its shape, not a
+declaration site: two defs returning `{ age = 1, name = "x" }` and
+`{ name = "x", age = 1 }` are the same Flix row type and get the same class,
+the same way two tuples of the same arity do. Components are nonetheless
+**concretely typed, not boxed and generic** -- the one place this differs
+from `ExportTuple`'s own sharing: the field's *type* participates in the
+sharing key alongside its label, so `{ x = Int32 }` and `{ x = String }`
+already get separate classes before boxing could buy anything, unlike
+`Tuple2`, where the same class must serve every element-type instantiation of
+that arity and boxing is the only way to declare it once. This is
+`ExportCaseRecord`'s reasoning (J22), reapplied on a different sharing axis:
+what disqualifies boxing there is a class never shared at all; what
+disqualifies it here is that type-dependent sharing already limits how much
+one class has to describe.
+
+**Accessors are named after the Flix label directly** (`.age()`, not `_1`),
+because unlike a tuple's position or an enum case's position, a record field
+has a name the programmer chose to keep. A label Flix accepts but Java cannot
+name as a method -- `!` is legal in a Flix name and not in a Java identifier
+-- is rejected at the gate rather than mangled, checked with
+`Character.isJavaIdentifierStart`/`isJavaIdentifierPart` rather than a
+narrower hand-written pattern, since a record label (unlike an exported def's
+own name) has no separate stylistic convention of its own to also enforce.
+
+**Reads go through the same erase-then-narrow pattern `AsSealedEnum` already
+established (J22), not the erase-then-widen pattern `AsVector`/`AsChain` use
+(J23).** A record field is read off the internal `RecordExtend` node the same
+way `GenExpression.compileRecordSelect` already reads one for ordinary,
+non-exported Flix code: `lookupField(label)`, `CHECKCAST` to
+`RecordExtend(erasedType)`, `GETFIELD` its value. Every reference-typed field
+is erased to `Object` there (`BackendType.toErasedBackendType`), so building a
+concretely-typed component needs the same narrowing `castIfNotPrim` a
+case's own conversion needs -- this backend's general-purpose helper for it,
+reused directly here rather than duplicated a third time. A naming
+consequence follows from reusing this precedent instead of `getRecordExtendsOf`'s
+own, more literal `BackendType.toBackendType`: two internal `RecordExtend`
+nodes for different concrete reference types share one erasure-keyed name
+already (`RecordExtend$Obj`), which is exactly what makes `castIfNotPrim`
+necessary on the way out and is unrelated to -- and must not be confused
+with -- this class's own naming, which deliberately does *not* erase.
+
+**Naming safety needed its own small fix.** A raw descriptor is not usable
+directly as a naming argument: `Ljava/lang/String;` embeds `;`, a character
+`JvmName.mangle` has no replacement for, because `mangle` exists to mangle
+Flix *operator* names (`+`, `<`, …), not arbitrary bytecode descriptors, and a
+class file whose own name contains `;` is rejected outright. The fix
+(`BackendObjType.concreteTypeName`) drops the `L`/`;` wrapper for a reference
+type before naming with it, leaving only `/`, which `mangle` already handles
+-- a primitive's descriptor is a single letter and needed no such care. This
+was caught by a runtime test attempting to load the generated facade, not by
+a static one reading its descriptors, which is the same category of gap
+`TestExportedShimsRuntime`'s own header comment describes: a descriptor can
+be right while the class behind it fails to link.
+
+**Rejected: leaving the naming question open and shipping representation
+alone.** The representation-only half was buildable the moment this session's
+research confirmed the closed-row guarantee already existed; deferring it
+further would have meant maintaining a fifth `ExportPlan` case with no way to
+reach it from `EntryPoints`, which is exactly the gate-behind-the-plan
+direction J17 does not forbid but which serves nothing here, since nothing
+else depends on `AsRecord` existing without also being reachable.

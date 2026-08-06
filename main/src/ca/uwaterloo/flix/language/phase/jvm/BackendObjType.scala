@@ -82,6 +82,11 @@ sealed trait BackendObjType {
     // does not live in the package of things the backend is free to rename. Only the arity varies:
     // the element types are its type *parameters*, supplied by the shim's signature.
     case BackendObjType.ExportTuple(arity) => JvmName(DevFlixRuntime, s"Tuple$arity")
+    // Shared by shape, the same way `ExportTuple` is shared by arity: keyed on every field's label
+    // *and* type, so two records agree on a name exactly when a caller constructing one from either
+    // def would get an identical class either way.
+    case BackendObjType.ExportRecord(fields) =>
+      JvmName(DevFlixRuntime, JvmName.mkClassName("Record", fields.flatMap { case (label, plan) => List(label, BackendObjType.concreteTypeName(plan.javaType)) }))
     // A user type with a name of its own, so it is named beside its namespace like every other
     // class a Java caller writes -- `enum Color` in `mod Acme.Api` is `Acme.Api$Color`. Unlike the
     // views and the tuple record, nothing about it is keyed on a representation.
@@ -146,6 +151,22 @@ object BackendObjType {
 
   private def mkClassName(prefix: String, tpe: BackendType): String = {
     JvmName.mkClassName(prefix, tpe.toErasedString)
+  }
+
+  /**
+    * A name-safe, concrete-type-distinguishing string for `tpe`, for a naming key that (unlike
+    * [[mkClassName]]'s own erased-string form) must tell two different reference types apart.
+    *
+    * A raw descriptor is not name-safe on its own: `Ljava/lang/String;` embeds `;`, a character
+    * `JvmName.mangle` has no replacement for (it exists to mangle Flix operator names, not
+    * arbitrary descriptors), and a class file with a `;` in its own name is rejected outright.
+    * Dropping the `L`/`;` wrapper leaves the internal name (`java/lang/String`), whose only
+    * remaining special character is `/`, which `mangle` already replaces. A primitive's descriptor
+    * is a single letter and needs no such care.
+    */
+  private def concreteTypeName(tpe: BackendType): String = tpe match {
+    case BackendType.Reference(ref) => ref.jvmName.toInternalName
+    case _ => tpe.toDescriptor
   }
 
   private def mkClassName(prefix: String, tpes: List[BackendType]): String = {
@@ -3200,6 +3221,120 @@ object BackendObjType {
     def jvmNameOf(caseSym: Symbol.CaseSym): JvmName = ExportCaseRecord(caseSym, Nil).jvmName
   }
 
+  /**
+    * A Flix structural record presented to Java as a generated record, one class per distinct
+    * sorted `(label, type)` shape.
+    *
+    * Shared program-wide, like [[ExportTuple]] and unlike a data-carrying case's own
+    * [[ExportCaseRecord]]: a record's identity is its shape rather than a user declaration site,
+    * so two defs returning "the same" record type -- same labels, same field types, any
+    * declaration order -- get one class. `fields` is expected sorted by label already (see
+    * `ExportPlan.of`'s record arm), which is what makes that sharing land on one name rather than
+    * one per declaration order, and what keeps this class generating and every call site's
+    * constructor call agreeing on the same argument order.
+    *
+    * Components are concretely typed rather than boxed and generic, unlike `ExportTuple`'s: two
+    * records sharing a label set but differing in even one field's type already get separate
+    * classes, since the type participates in the sharing key below, so nothing is bought by boxing
+    * that a concrete type does not already give -- unlike arity-only tuple sharing, where the same
+    * class serves every element-type instantiation and boxing is the only way to declare it once.
+    *
+    * Accessors are named after their Flix label directly (`.age()`, not `_1`), since unlike a
+    * tuple's position or a case's position, a record field has a name the programmer chose to keep.
+    */
+  case class ExportRecord(fields: List[(String, ExportPlan)]) extends ExportClass {
+
+    def genByteCode()(implicit root: JvmAst.Root, flix: Flix): Array[Byte] = {
+      val cm = ClassMaker.mkRecordClass(this.jvmName)
+
+      for ((label, plan) <- fields) {
+        cm.mkField(ComponentField(label, plan), IsPrivate, IsFinal, NotVolatile, componentSignature(plan))
+        cm.mkRecordComponent(ComponentField(label, plan), componentSignature(plan))
+      }
+      cm.mkConstructor(Constructor, IsPublic, constructorIns(_))
+      for ((label, plan) <- fields) {
+        cm.mkMethod(Nil, AccessorMethod(label, plan), IsPublic, NotFinal, accessorIns(label, plan)(_), componentSignature(plan).map(_ => accessorSignature(plan)))
+      }
+      cm.mkMethod(Nil, ToStringMethod, IsPublic, IsFinal, derivedIns("toString", Nil, BackendType.String)(_))
+      cm.mkMethod(Nil, HashCodeMethod, IsPublic, IsFinal, derivedIns("hashCode", Nil, BackendType.Int32)(_))
+      cm.mkMethod(Nil, EqualsMethod, IsPublic, IsFinal, derivedIns("equals", List(BackendType.Object), BackendType.Bool)(_))
+
+      cm.closeClassMaker()
+    }
+
+    /**
+      * The generic signature of a field's component, when its own type has arguments to declare
+      * -- e.g. a field that is itself a generic Java type such as `ArrayList[String]`. `None` for
+      * every primitive and every plain reference type, exactly as at a def's own shim signature.
+      */
+    private def componentSignature(plan: ExportPlan): Option[String] =
+      Option.when(plan.typeArgument != plan.javaType.toDescriptor)(plan.typeArgument)
+
+    def ComponentField(label: String, plan: ExportPlan): InstanceField =
+      InstanceField(this.jvmName, label, plan.javaType)
+
+    def AccessorMethod(label: String, plan: ExportPlan): InstanceMethod =
+      InstanceMethod(this.jvmName, label, mkDescriptor()(plan.javaType))
+
+    def Constructor: ConstructorMethod =
+      ConstructorMethod(this.jvmName, fields.map(_._2.javaType))
+
+    private def ToStringMethod: InstanceMethod =
+      InstanceMethod(this.jvmName, "toString", mkDescriptor()(BackendType.String))
+
+    private def HashCodeMethod: InstanceMethod =
+      InstanceMethod(this.jvmName, "hashCode", mkDescriptor()(BackendType.Int32))
+
+    private def EqualsMethod: InstanceMethod =
+      InstanceMethod(this.jvmName, "equals", mkDescriptor(BackendType.Object)(BackendType.Bool))
+
+    /** `()<signature of this field's component>` */
+    private def accessorSignature(plan: ExportPlan): String = s"()${componentSignature(plan).get}"
+
+    /** `[] --> return`, storing each argument in its component. */
+    private def constructorIns(implicit mv: MethodVisitor): Unit =
+      withNames(1, fields.map(_._2.javaType)) {
+        case (_, variables) =>
+          thisLoad()
+          // `java.lang.Record`, not `java.lang.Object`: a record's superclass is what makes the
+          // `Record` attribute meaningful, and its constructor is the one that must be called.
+          INVOKESPECIAL(ConstructorMethod(JvmName.Record, Nil))
+          for ((variable, (label, plan)) <- variables.zip(fields)) {
+            thisLoad()
+            variable.load()
+            PUTFIELD(ComponentField(label, plan))
+          }
+          RETURN()
+      }
+
+    /** `[] --> [component]` */
+    private def accessorIns(label: String, plan: ExportPlan)(implicit mv: MethodVisitor): Unit = {
+      thisLoad()
+      GETFIELD(ComponentField(label, plan))
+      xReturn(plan.javaType)
+    }
+
+    /**
+      * `[] --> [result]` for one of the three methods the runtime derives from the components.
+      *
+      * The same bootstrap [[ExportTuple]] and [[ExportCaseRecord]] use -- see `ExportTuple`'s own
+      * `derivedIns` for why this is an `invokedynamic` rather than three hand-written method
+      * bodies.
+      */
+    private def derivedIns(name: String, arguments: List[BackendType], result: BackendType)(implicit mv: MethodVisitor): Unit = {
+      val components = fields.map { case (label, plan) => ComponentField(label, plan).name }.mkString(";")
+      val getters = fields.map { case (label, plan) => mkGetFieldHandle(ComponentField(label, plan)).handle }
+      thisLoad()
+      for ((argument, slot) <- arguments.zipWithIndex) xLoad(argument, slot + 1)
+      mv.visitInvokeDynamicInstruction(
+        name,
+        mkDescriptor((this.toTpe :: arguments) *)(result),
+        mkStaticHandle(ClassConstants.ObjectMethods.BootstrapMethod),
+        (this.toTpe.toAsmType :: components :: getters.toList) *
+      )
+      xReturn(result)
+    }
+  }
 
   //
   // Java Types
