@@ -831,6 +831,131 @@ class TestExportedShimsRuntime extends AnyFunSuite {
     }
   }
 
+  test("an exported sealed enum case arrives as its own record type") {
+    // A reference-typed element is what proves the narrowing cast: the internal `Tag` field is
+    // erased to `Object`, so without an explicit `CHECKCAST` back to `String` this would fail the
+    // class verifier at load time rather than merely returning the wrong value.
+    withFacade(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    pub enum Shape { case Circle(Int32, String), case Square(Int32) }
+        |
+        |    @Export
+        |    pub def circle(): Shape = Shape.Circle(3, "red")
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin, "Pkg.Mod") { facade =>
+      val value = invoke(facade, "circle")
+      assertResult("Pkg.Mod$Shape$Circle")(value.getClass.getName)
+      assertResult(java.lang.Integer.valueOf(3))(component(value, 1))
+      assertResult("red")(component(value, 2))
+    }
+  }
+
+  test("an exported sealed enum dispatches to the record matching the case, not merely one of them") {
+    // The same identity-of-shape check `AsEnum`'s own tests make for a real Java enum, adapted for
+    // a value that carries data: a switch that fell through to one branch would still return
+    // *something*, so each case is asked for by its own def and the resulting class checked.
+    withFacade(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    pub enum Shape { case Circle(Int32), case Square(Int32), case Point }
+        |
+        |    @Export
+        |    pub def circle(): Shape = Shape.Circle(1)
+        |
+        |    @Export
+        |    pub def square(): Shape = Shape.Square(1)
+        |
+        |    @Export
+        |    pub def point(): Shape = Shape.Point
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin, "Pkg.Mod") { facade =>
+      assertResult("Pkg.Mod$Shape$Circle")(invoke(facade, "circle").getClass.getName)
+      assertResult("Pkg.Mod$Shape$Square")(invoke(facade, "square").getClass.getName)
+      assertResult("Pkg.Mod$Shape$Point")(invoke(facade, "point").getClass.getName)
+    }
+  }
+
+  test("a nullary case inside a mixed enum arrives as a zero-component record") {
+    withFacade(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    pub enum Shape { case Circle(Int32), case Point }
+        |
+        |    @Export
+        |    pub def point(): Shape = Shape.Point
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin, "Pkg.Mod") { facade =>
+      val value = invoke(facade, "point")
+      assertResult("Pkg.Mod$Shape$Point")(value.getClass.getName)
+      assert(value.getClass.isRecord)
+      assertResult(0)(value.getClass.getRecordComponents.length)
+    }
+  }
+
+  test("an exported sealed enum case has value semantics") {
+    // Mirrors the tuple record's own value-semantics test: two calls build two objects, so
+    // identity would tell them apart and equality must not.
+    withFacade(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    pub enum Shape { case Circle(Int32, String) }
+        |
+        |    @Export
+        |    pub def circle(): Shape = Shape.Circle(3, "red")
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin, "Pkg.Mod") { facade =>
+      val one = invoke(facade, "circle")
+      val other = invoke(facade, "circle")
+      assert(one ne other)
+      assertResult(other)(one)
+      assertResult(other.hashCode)(one.hashCode)
+      // `getSimpleName` strips the package but not the `$` nesting -- there is no `InnerClasses`
+      // attribute linking this class to its enum, consistent with how every other namespace-nested
+      // class in this backend is named (J1): the `$` is an ordinary character in a flat class name
+      // to the JVM, not source-level nesting syntax.
+      assertResult("Mod$Shape$Circle[_1=3, _2=red]")(one.toString)
+    }
+  }
+
+  test("a case element that is a generic Java type is described and narrowed correctly") {
+    // The one component shape the other sealed-enum tests do not exercise: a `GenericNative`
+    // element goes through the same narrowing `CHECKCAST` as a plain reference, but also has a
+    // signature to get right (`componentSignature`), which this asserts by reading the value back
+    // through the accessor and by round-tripping an element through it.
+    withFacade(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    import java.util.ArrayList
+        |
+        |    pub enum Shape { case Bag(ArrayList[String]), case Square(Int32) }
+        |
+        |    @Export
+        |    pub def bag(): Shape \ IO = {
+        |        let l = new ArrayList();
+        |        l.add("x");
+        |        Shape.Bag(l)
+        |    }
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin, "Pkg.Mod") { facade =>
+      val value = invoke(facade, "bag")
+      assertResult("Pkg.Mod$Shape$Bag")(value.getClass.getName)
+      val list = component(value, 1).asInstanceOf[java.util.ArrayList[?]]
+      assertResult(1)(list.size())
+      assertResult("x")(list.get(0))
+    }
+  }
+
   /**
     * Returns the constants of an enum class, in ordinal order.
     *

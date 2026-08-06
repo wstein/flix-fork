@@ -112,6 +112,84 @@ class TestExportedShims extends AnyFunSuite {
     }
   }
 
+  /** Compiles `input` and returns the binary names of the interfaces `className` declares. */
+  private def interfacesOf(input: String, className: String): List[String] = {
+    val out = Files.createTempDirectory("flix-export-test")
+    try {
+      val opts = Options.DefaultTest.copy(outputJvm = true, outputPath = out)
+      val flix = new Flix().setOptions(opts)
+      flix.addVirtualPath(CompilerConstants.VirtualTestFile, input)
+      flix.compile().toResult match {
+        case Result.Ok(_) => ()
+        case Result.Err(errors) => fail(s"the test program must compile, but got: $errors")
+      }
+      val path = out.resolve("class").resolve(s"$className.class")
+      assert(Files.exists(path), s"expected a generated class at $path")
+      var interfaces = List.empty[String]
+      new ClassReader(Files.readAllBytes(path)).accept(new ClassVisitor(Opcodes.ASM9) {
+        override def visit(version: Int, access: Int, name: String, sig: String, superName: String, ifaces: Array[String]): Unit =
+          interfaces = ifaces.toList
+      }, 0)
+      interfaces
+    } finally {
+      deleteRecursively(out)
+    }
+  }
+
+  /**
+    * Compiles `input` and returns the binary names of the permitted subclasses `className`
+    * declares -- the `PermittedSubclasses` attribute a sealed interface or class carries.
+    */
+  private def permittedSubclassesOf(input: String, className: String): List[String] = {
+    val out = Files.createTempDirectory("flix-export-test")
+    try {
+      val opts = Options.DefaultTest.copy(outputJvm = true, outputPath = out)
+      val flix = new Flix().setOptions(opts)
+      flix.addVirtualPath(CompilerConstants.VirtualTestFile, input)
+      flix.compile().toResult match {
+        case Result.Ok(_) => ()
+        case Result.Err(errors) => fail(s"the test program must compile, but got: $errors")
+      }
+      val path = out.resolve("class").resolve(s"$className.class")
+      assert(Files.exists(path), s"expected a generated class at $path")
+      val permitted = mutable.ListBuffer.empty[String]
+      new ClassReader(Files.readAllBytes(path)).accept(new ClassVisitor(Opcodes.ASM9) {
+        override def visitPermittedSubclass(permittedSubclass: String): Unit = {
+          permitted += permittedSubclass
+        }
+      }, 0)
+      permitted.toList
+    } finally {
+      deleteRecursively(out)
+    }
+  }
+
+  /** Compiles `input` and returns the name and descriptor of every record component of `className`. */
+  private def recordComponentsOf(input: String, className: String): List[(String, String)] = {
+    val out = Files.createTempDirectory("flix-export-test")
+    try {
+      val opts = Options.DefaultTest.copy(outputJvm = true, outputPath = out)
+      val flix = new Flix().setOptions(opts)
+      flix.addVirtualPath(CompilerConstants.VirtualTestFile, input)
+      flix.compile().toResult match {
+        case Result.Ok(_) => ()
+        case Result.Err(errors) => fail(s"the test program must compile, but got: $errors")
+      }
+      val path = out.resolve("class").resolve(s"$className.class")
+      assert(Files.exists(path), s"expected a generated class at $path")
+      val components = mutable.ListBuffer.empty[(String, String)]
+      new ClassReader(Files.readAllBytes(path)).accept(new ClassVisitor(Opcodes.ASM9) {
+        override def visitRecordComponent(name: String, descriptor: String, signature: String): org.objectweb.asm.RecordComponentVisitor = {
+          components += (name -> descriptor)
+          null
+        }
+      }, 0)
+      components.toList
+    } finally {
+      deleteRecursively(out)
+    }
+  }
+
   /** Returns the descriptors and signatures of the methods of the class file at `path`. */
   private def read(path: Path): (Map[String, String], Map[String, String]) = {
     assert(Files.exists(path), s"expected a generated class at $path")
@@ -609,6 +687,126 @@ class TestExportedShims extends AnyFunSuite {
     assert(names.contains("Pkg$dotMod$dotColour$Red"), s"expected the tag classes to remain, got: $names")
   }
 
+  test("an exported sealed enum's interface is presented beside its namespace") {
+    // Named the same way `ExportEnum` is: `mod Pkg.Mod` gives `Pkg.Mod$Shape`, not a name under
+    // `dev.flix.gen`. No signature, same reason as a nullary enum: it takes no type arguments.
+    val (descriptors, signatures) = membersOf(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    pub enum Shape { case Circle(Int32, Int32), case Square(Int32) }
+        |
+        |    @Export
+        |    pub def default(): Shape = Shape.Square(1)
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin, "Pkg/Mod")
+    assert(descriptors.get("default").contains("()LPkg/Mod$Shape;"))
+    assert(!signatures.contains("default"), s"a sealed enum needs no signature, got: ${signatures.get("default")}")
+  }
+
+  test("an exported sealed enum's cases are presented as records beside the interface") {
+    // Nested one level further than the interface, under the case's own name -- matching what
+    // `javac` itself emits for the equivalent hand-written nested record.
+    val names = classNamesOf(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    pub enum Shape { case Circle(Int32, Int32), case Square(Int32) }
+        |
+        |    @Export
+        |    pub def default(): Shape = Shape.Square(1)
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin)
+    assert(names.contains("Mod$Shape"), s"expected the sealed interface, got: $names")
+    assert(names.contains("Mod$Shape$Circle"), s"expected the Circle record, got: $names")
+    assert(names.contains("Mod$Shape$Square"), s"expected the Square record, got: $names")
+  }
+
+  test("the sealed interface declares its permitted subclasses") {
+    // This is the entire mechanism `sealed` compiles to, and the whole point of sealing it: it is
+    // what lets a Java `switch` over the interface be exhaustive without a `default` branch.
+    val permitted = permittedSubclassesOf(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    pub enum Shape { case Circle(Int32, Int32), case Square(Int32), case Point }
+        |
+        |    @Export
+        |    pub def default(): Shape = Shape.Point
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin, "Pkg/Mod$Shape")
+    assertResult(List("Pkg/Mod$Shape$Circle", "Pkg/Mod$Shape$Square", "Pkg/Mod$Shape$Point"))(permitted)
+  }
+
+  test("a case record implements the sealed interface") {
+    val interfaces = interfacesOf(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    pub enum Shape { case Circle(Int32, Int32), case Square(Int32) }
+        |
+        |    @Export
+        |    pub def default(): Shape = Shape.Square(1)
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin, "Pkg/Mod$Shape$Circle")
+    assertResult(List("Pkg/Mod$Shape"))(interfaces)
+  }
+
+  test("a case record is a genuine record with concretely typed, named components") {
+    // Named `_1`/`_2`, matching `ExportTuple`'s own convention, and typed concretely -- `I`, not
+    // boxed `Ljava/lang/Integer;` -- because unlike a tuple's component this class is never shared
+    // across two different element-type instantiations.
+    val components = recordComponentsOf(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    pub enum Shape { case Circle(Int32, Int32), case Square(Int32) }
+        |
+        |    @Export
+        |    pub def default(): Shape = Shape.Square(1)
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin, "Pkg/Mod$Shape$Circle")
+    assertResult(List("_1" -> "I", "_2" -> "I"))(components)
+  }
+
+  test("a nullary case inside a mixed enum is a zero-component record") {
+    val components = recordComponentsOf(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    pub enum Shape { case Circle(Int32, Int32), case Point }
+        |
+        |    @Export
+        |    pub def default(): Shape = Shape.Point
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin, "Pkg/Mod$Shape$Point")
+    assertResult(List.empty)(components)
+  }
+
+  test("an exported sealed enum's private tag classes stay private") {
+    // The internal representation -- one `Tag` class per case shape -- is not what crosses; the
+    // sealed interface and its records are separate classes, generated in addition to it.
+    val names = classNamesOf(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    pub enum Shape { case Circle(Int32, Int32), case Square(Int32) }
+        |
+        |    @Export
+        |    pub def default(): Shape = Shape.Square(1)
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin)
+    assert(names.contains("Mod$Shape"), s"expected the generated sealed interface, got: $names")
+    assert(names.exists(n => n.startsWith("Tag$")), s"expected the internal tag classes to remain, got: $names")
+  }
+
   test("no return type the front end accepts leaks the Flix representation") {
     // `EntryPoints` decides what may be exported and `ExportPlan` decides how, over different type
     // representations, so a gate widened ahead of a plan compiles into a shim that falls through
@@ -648,7 +846,8 @@ class TestExportedShims extends AnyFunSuite {
       "(Int32, String)" -> "(1, \"s\")",
       "(String, Regex)" -> "(\"s\", regex\"a\")",
       "(Bool, Float64, BigInt)" -> "(true, 1.0f64, 1ii)",
-      "Colour" -> "Colour.Red"
+      "Colour" -> "Colour.Red",
+      "Shape" -> "Shape.Square(1)"
     )
     val defs = returnTypes.zipWithIndex.map {
       case ((tpe, value), i) => s"    @Export\n    pub def f$i(): $tpe = $value"
@@ -657,6 +856,7 @@ class TestExportedShims extends AnyFunSuite {
       s"""mod Pkg { }
          |mod Pkg.Mod {
          |    pub enum Colour { case Red, case Green }
+         |    pub enum Shape { case Circle(Int32, Int32), case Square(Int32) }
          |
          |$defs
          |}

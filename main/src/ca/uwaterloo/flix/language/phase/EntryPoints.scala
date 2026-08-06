@@ -483,12 +483,13 @@ object EntryPoints {
       case List(tpe) if isUnitType(tpe) == Result.Ok(true) => Nil
       case tpes => tpes
     }
-    // `Option[t]`, `List[t]`, `Set[t]`, `Map[k, v]`, tuples and data-free enums are exportable in
-    // return position, where the shim marshals them into `java.util.Optional`, an unmodifiable
+    // `Option[t]`, `List[t]`, `Set[t]`, `Map[k, v]`, tuples and enums are exportable in return
+    // position, where the shim marshals them into `java.util.Optional`, an unmodifiable
     // `java.util.List`, unmodifiable `java.util.Set` and `java.util.Map` views, a
-    // `dev.flix.runtime.TupleN` record, and a real Java enum. None is exportable as a parameter,
-    // which would need the reverse conversion. What must be exportable is what they contain, so
-    // that is what is checked, and an error points at it rather than at the container.
+    // `dev.flix.runtime.TupleN` record, and either a real Java enum or a sealed interface with one
+    // record per case, depending on whether every case is data-free. None is exportable as a
+    // parameter, which would need the reverse conversion. What must be exportable is what they
+    // contain, so that is what is checked, and an error points at it rather than at the container.
     //
     // Only the element, and only one level: an element that is itself a container has no plan, so
     // admitting `List[Option[t]]` here would produce a shim returning the internal tag class. The
@@ -572,34 +573,35 @@ object EntryPoints {
       .orElse(unapplySet(tpe).map(List(_)))
       .orElse(unapplyMap(tpe))
       .orElse(unapplyTuple(tpe))
-      .orElse(unapplyNullaryEnum(tpe))
+      .orElse(unapplyEnum(tpe))
 
   /**
-    * Returns an empty list if `tpe` is a Flix enum the shim can present as a Java enum.
+    * Returns the types inside the cases of `tpe`, if `tpe` is a Flix enum the shim can present at
+    * the boundary -- either as a real Java enum, when every case is data-free, or as a sealed
+    * interface with one record per case otherwise.
     *
-    * Empty rather than absent, and the difference carries the meaning: a data-free case holds no
-    * types, so there is nothing inside to check, but the enum is still a type whose representation
-    * the boundary replaces. Returning `None` would send it to `isExportableType`, which rejects
-    * every enum.
+    * A data-free case holds no types, so a wholly nullary enum returns `Nil`: there is nothing
+    * inside to check, but the enum is still a type whose representation the boundary replaces.
+    * Returning `None` would send it to `isExportableType`, which rejects every enum. A
+    * data-carrying case's elements are checked exactly as a tuple's are -- one level deep, never
+    * recursively -- because `ExportPlan.of`'s solver has no plan for a nested container yet.
     */
   @tailrec
-  private def unapplyNullaryEnum(tpe: Type)(implicit root: TypedAst.Root): Option[List[Type]] = tpe match {
-    case Type.Alias(_, _, t, _) => unapplyNullaryEnum(t)
+  private def unapplyEnum(tpe: Type)(implicit root: TypedAst.Root): Option[List[Type]] = tpe match {
+    case Type.Alias(_, _, t, _) => unapplyEnum(t)
     // Unapplied: a generic enum reaches here as a `Type.Apply` and so does not match, which is the
     // rejection `isExportableEnum`'s type-parameter test then states in its own right.
     case Type.Cst(TypeConstructor.Enum(sym, _), _) =>
-      root.enums.get(sym).filter(isExportableEnum).map(_ => Nil)
+      root.enums.get(sym).filter(isExportableEnum).map(_.cases.values.flatMap(_.tpes).toList)
     case _ => None
   }
 
   /**
-    * Returns `true` if `enm` has a Java enum form.
+    * Returns `true` if `enm` has an exportable form at the boundary.
     *
-    * Four conditions, each of which is a way the mapping would otherwise be wrong rather than
+    * Three conditions, each of which is a way the mapping would otherwise be wrong rather than
     * merely unimplemented:
     *
-    *   - Every case carries data nowhere. A case holding a value has no constant to be, and needs
-    *     the sealed-interface-and-record shape that does not exist yet.
     *   - There is at least one case. An enum with none has no values, so nothing can be returned.
     *   - No type parameters. `Color[Int32]` and `Color[String]` erase to one JVM class, so a
     *     generic enum could only cross raw, losing the argument the caller asked about.
@@ -607,10 +609,13 @@ object EntryPoints {
     *     meets. The class is named beside its namespace, so `mod Acme.Api` gives `Acme.Api$Color`
     *     while one segment or none give a name in `dev.flix.gen` -- the package J0 keeps private,
     *     and one Java cannot import from in the unnamed-package case.
+    *
+    * Whether every case is data-free is not one of these: it decides *which* form the enum takes
+    * (`ExportPlan.of` builds a real `java.lang.Enum` when it is, a sealed interface with one
+    * record per case otherwise), not whether it has one at all.
     */
   private def isExportableEnum(enm: TypedAst.Enum): Boolean =
     enm.cases.nonEmpty &&
-      enm.cases.values.forall(_.tpes.isEmpty) &&
       enm.tparams.isEmpty &&
       enm.sym.namespace.lengthIs >= 2
 

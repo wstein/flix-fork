@@ -87,6 +87,19 @@ sealed trait ClassMaker {
   def mkRecordComponent(field: InstanceField, signature: Option[String] = None): Unit =
     visitor.visitRecordComponent(field.name, field.tpe.toDescriptor, signature.orNull).visitEnd()
 
+  /**
+    * Declares `permittedSubclass` as a permitted subclass of this sealed interface or class.
+    *
+    * This is the entire mechanism `sealed` compiles to: the JVM has no access flag for it, only
+    * the `PermittedSubclasses` attribute this writes (JVMS SS4.7.31). A class loaded that claims to
+    * implement or extend a type carrying this attribute must have its own binary name listed here,
+    * which is what makes a Java `switch` over the type exhaustive without a `default` branch -- the
+    * compiler can see every class it is legal to be. The permitted subclass itself needs no
+    * attribute or flag of its own beyond being effectively final, which a Java `record` already is.
+    */
+  def mkPermittedSubclass(permittedSubclass: JvmName): Unit =
+    visitor.visitPermittedSubclass(permittedSubclass.toInternalName)
+
   protected def makeMethod(ann: List[JvmAnnotation], i: Option[MethodVisitor => Unit], methodName: String, d: MethodDescriptor, v: Visibility, f: Final, s: Static, a: Abstract, signature: Option[String] = None): Unit = {
     val m = v.toInt + f.toInt + s.toInt + a.toInt
     // The signature is the descriptor plus the type arguments the descriptor erases. Java only
@@ -174,6 +187,19 @@ object ClassMaker {
 
   def mkAbstractClass(className: JvmName, superClass: JvmName = JvmName.Object, interfaces: List[JvmName] = Nil, signature: Option[String] = None)(implicit flix: Flix): AbstractClassMaker = {
     new AbstractClassMaker(mkClassWriter(className, IsPublic, NotFinal, IsAbstract, NotInterface, superClass, interfaces, signature))
+  }
+
+  /**
+    * Writes a record class, i.e. a final subclass of `java.lang.Record` carrying `ACC_RECORD`.
+    *
+    * The flag is what makes `Class.isRecord` true even for a record with no components: ASM's own
+    * `ClassWriter` writes the `Record` attribute only when this flag is set, or when at least one
+    * component was declared through `mkRecordComponent` -- and a case with no elements declares
+    * none. A record built through plain `mkClass` (as `ExportTuple` is) never needed this, because
+    * every arity it generates has at least one component; a zero-argument case's record does.
+    */
+  def mkRecordClass(className: JvmName, interfaces: List[JvmName] = Nil, signature: Option[String] = None)(implicit flix: Flix): InstanceClassMaker = {
+    new InstanceClassMaker(mkClassWriter(className, IsPublic, IsFinal, NotAbstract, NotInterface, JvmName.Record, interfaces, signature, Opcodes.ACC_RECORD))
   }
 
   /**

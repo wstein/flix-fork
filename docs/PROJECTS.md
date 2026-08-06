@@ -170,9 +170,14 @@ several genuinely open problems, each larger than it first appears:
   generated class to declare type *parameters* rather than merely consume
   arguments. Enums whose cases all carry no data cross as real `java.lang.Enum`
   classes, named beside their module and keeping their Flix case names verbatim.
-  What is left is enums with data-carrying cases, which need a sealed interface
-  and a record per case, and records — where the open question is API naming
-  rather than representation.
+  Enums with data-carrying cases now cross too, as a sealed interface with one
+  generated record per case, named one level further under the enum's own
+  name — a case's components are concretely typed rather than boxed, since
+  unlike a tuple's this class is never shared across element-type
+  instantiations. Generic enums and case elements that are themselves
+  containers stay unexportable, one level deep, for the same reason a tuple's
+  own elements are. What is left is records — where the open question is API
+  naming rather than representation.
 - **The inbound boundary**, which is a separate mechanism with open soundness
   defects (issues 8618 and 5172, on Java functional interfaces) and duplicated
   conversion logic (issue 8592). Nothing in the export work addresses it. The

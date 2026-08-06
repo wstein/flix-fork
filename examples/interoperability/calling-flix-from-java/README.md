@@ -358,8 +358,51 @@ not `mod Acme` and not the top level — which is the same requirement an export
 function itself has, and for the same reason: the first segment becomes the Java
 package.
 
-A case that *carries* data is not exportable yet. Such a case has no constant to
-be, and needs a different Java shape.
+A case that *carries* data has no constant to be, so it crosses a different
+way: as a sealed interface, with one generated record per case.
+
+```flix
+pub mod Acme.Greeter {
+    pub enum Shape {
+        case Circle(Int32, Int32),
+        case Square(Int32),
+        case Point
+    }
+
+    @Export
+    pub def bigCircle(): Shape = Shape.Circle(10, 10)
+}
+```
+
+```java
+Greeter$Shape s = Greeter.bigCircle();
+switch (s) {
+    case Greeter$Shape$Circle c -> c.radius();    // exhaustive, no `default`
+    case Greeter$Shape$Square q -> q.side();
+    case Greeter$Shape$Point p -> 0;
+}
+```
+
+Each case is a genuine Java `record`, named one level further under the enum's
+own name — `Acme.Greeter$Shape$Circle` — with one accessor per element, `_1`,
+`_2`, and so on, since Flix case fields have no names of their own to keep. A
+nullary case in a mix like `Point` above is a zero-component record. Every
+component keeps its own concrete Java type — `int`, not `Integer` — because
+unlike a tuple's record this one is never shared across two different
+element-type instantiations. The interface itself is `sealed`: a `switch` over
+it is exhaustive without a `default` branch, and adding a case to the Flix enum
+without also handling it in Java is a compile error at the call site, not a
+silently-missed branch.
+
+An enum whose cases *all* carry no data still crosses as a real `java.lang.Enum`
+(above), not a sealed interface of zero-component records — one Flix type keeps
+one Java shape, whichever cases it happens to have.
+
+The same restrictions apply as everywhere else in this boundary: the enum must
+have no type parameters and must live in a module with at least two segments,
+and every case's elements must themselves be directly exportable, one level
+deep — a case holding another container (`Circle(List[Int32])`) or another
+enum is rejected, the same way a tuple's own elements are.
 
 ## Why some conversions are return-only
 
@@ -413,11 +456,11 @@ String]` is a kind error. Use `UnaryOperator`, `BinaryOperator`, `BiFunction`,
 A Flix closure cannot travel the other way: a function type is not exportable,
 so an exported function cannot return one.
 
-Not exportable: Flix enums with data-carrying cases, plus records, functions,
-and `Array`. Their JVM representation is an implementation
-detail of the compiler — a `Some(x)` is a class called `Tag$Obj` distinguished
-only by an `int ordinal` field — so exposing them would freeze names the backend
-needs to stay free to change.
+Not exportable: Flix records, functions, and `Array`, plus a generic enum or a
+case whose own elements are containers. Their JVM representation is an
+implementation detail of the compiler — a `Some(x)` is a class called
+`Tag$Obj` distinguished only by an `int ordinal` field — so exposing them would
+freeze names the backend needs to stay free to change.
 
 That is also why the types above are *converted* rather than exposed: the shim
 reads the tag and builds an `Optional`, a collection view, or a tuple record, so

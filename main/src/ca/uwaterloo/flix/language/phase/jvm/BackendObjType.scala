@@ -82,6 +82,15 @@ sealed trait BackendObjType {
     // views and the tuple record, nothing about it is keyed on a representation.
     case BackendObjType.ExportEnum(sym) =>
       JvmName(JvmName.packageOfNamespace(sym.namespace), JvmName.classPrefixOfNamespace(sym.namespace) + sym.name)
+    // A sealed interface is a user type with a name, exactly like `ExportEnum`, so it is named the
+    // same way. A case's own record is a user type too, nested one level further under its enum's
+    // own name -- `enum Shape { case Circle(...) }` in `mod Acme.Api` gives the interface
+    // `Acme.Api$Shape` and the record `Acme.Api$Shape$Circle`, matching what `javac` itself emits
+    // for the equivalent hand-written nested record.
+    case BackendObjType.ExportSealedEnum(sym) =>
+      BackendObjType.namespacedClassName(sym.namespace, sym.name)
+    case BackendObjType.ExportCaseRecord(caseSym, _) =>
+      BackendObjType.namespacedClassName(caseSym.enumSym.namespace, caseSym.enumSym.name + Flix.Delimiter + caseSym.name)
     // Java classes
     case BackendObjType.Native(className) => className
     // Effects Runtime
@@ -141,6 +150,10 @@ object BackendObjType {
   private def mkClassName(prefix: String): String = {
     JvmName.mkClassName(prefix)
   }
+
+  /** The JVM name of a user-declared class named `name`, sitting beside the facade of `ns` per J1. */
+  private def namespacedClassName(ns: List[String], name: String): JvmName =
+    JvmName(JvmName.packageOfNamespace(ns), JvmName.classPrefixOfNamespace(ns) + name)
 
   case object Unit extends BackendObjType {
     def genByteCode()(implicit flix: Flix): Array[Byte] = {
@@ -2646,6 +2659,171 @@ object BackendObjType {
       RETURN()
     }
   }
+
+  /**
+    * A Flix enum with at least one data-carrying case, presented to Java as a sealed interface --
+    * one generated record per case, see [[ExportCaseRecord]].
+    *
+    * Nothing about it is keyed on a representation. Like [[ExportEnum]], and unlike [[ExportTuple]],
+    * it is a *user* type with a name, so J1 names it beside its namespace: `enum Shape` in
+    * `mod Acme.Api` is the interface `Acme.Api$Shape`, sitting next to the `Acme.Api` facade.
+    *
+    * It declares no methods. A caller reaches a case's own accessors by pattern-matching down to
+    * a specific record, so there is no contract every case needs to share -- this is a marker
+    * interface, sealed only so a Java `switch` over it can be exhaustive without a `default`
+    * branch, which is the entire reason to seal it.
+    *
+    * A pure-nullary enum keeps its existing, unrelated form -- a real `java.lang.Enum`, built by
+    * [[ExportEnum]] -- rather than crossing through here as a sealed interface of zero-component
+    * records. Two representations for the shape every case-free enum has always had would be the
+    * drift J4 exists to prevent; this class exists only for the shape no plan could build before.
+    */
+  case class ExportSealedEnum(sym: Symbol.EnumSym) extends ExportClass {
+
+    def genByteCode()(implicit root: JvmAst.Root, flix: Flix): Array[Byte] = {
+      val cm = ClassMaker.mkInterface(this.jvmName)
+      caseSyms.foreach(c => cm.mkPermittedSubclass(ExportCaseRecord.jvmNameOf(c)))
+      cm.closeClassMaker()
+    }
+
+    /** The symbols of the cases of `sym`, in ordinal order. */
+    private def caseSyms(implicit root: JvmAst.Root): List[Symbol.CaseSym] =
+      root.enums(sym).cases.keys.toList.sortBy(_.ordinal)
+  }
+
+  /**
+    * A data-carrying case of an exported enum, presented to Java as a record implementing the
+    * enum's sealed interface.
+    *
+    * Unlike [[ExportTuple]] this is not shared: a case is a user-declared shape with a name of its
+    * own, so like [[ExportEnum]] it is named beside its namespace -- nested one level further,
+    * under its enum's own name -- rather than kept in `dev.flix.runtime` under one class per arity.
+    *
+    * Unlike [[ExportTuple]] its components are neither boxed nor generic: nothing about this class
+    * is ever shared across two different element-type instantiations -- one case has exactly one
+    * shape -- so there is no erasure pressure forcing every component to `Object`. A component
+    * keeps its element's own declared Java type, e.g. `Circle(int, int)`, not
+    * `Circle(Integer, Integer)`. A nullary case inside a mixed enum is a zero-component record,
+    * `record Square() implements Shape {}` -- Java permits this, and the bootstrap this class
+    * shares with [[ExportTuple]] is defined for an empty component list, so nothing here needs to
+    * special-case it.
+    */
+  case class ExportCaseRecord(caseSym: Symbol.CaseSym, elements: List[ExportPlan]) extends ExportClass {
+
+    def genByteCode()(implicit root: JvmAst.Root, flix: Flix): Array[Byte] = {
+      val cm = ClassMaker.mkRecordClass(this.jvmName, interfaces = List(ExportSealedEnum(caseSym.enumSym).jvmName))
+
+      for (i <- indices) {
+        cm.mkField(ComponentField(i), IsPrivate, IsFinal, NotVolatile, componentSignature(i))
+        cm.mkRecordComponent(ComponentField(i), componentSignature(i))
+      }
+      cm.mkConstructor(Constructor, IsPublic, constructorIns(_))
+      for (i <- indices) {
+        cm.mkMethod(Nil, AccessorMethod(i), IsPublic, NotFinal, accessorIns(i)(_), componentSignature(i).map(_ => accessorSignature(i)))
+      }
+      // Final, as javac makes them: a record's three derived methods are not meant to be
+      // overridden, and nothing can extend this class to try -- it is already `IsFinal` above.
+      cm.mkMethod(Nil, ToStringMethod, IsPublic, IsFinal, derivedIns("toString", Nil, BackendType.String)(_))
+      cm.mkMethod(Nil, HashCodeMethod, IsPublic, IsFinal, derivedIns("hashCode", Nil, BackendType.Int32)(_))
+      cm.mkMethod(Nil, EqualsMethod, IsPublic, IsFinal, derivedIns("equals", List(BackendType.Object), BackendType.Bool)(_))
+
+      cm.closeClassMaker()
+    }
+
+    /** The component indices, 1-based, matching `ExportTuple`'s own accessor convention. */
+    private def indices: Range = 1 to elements.length
+
+    /** The declared Java type of component `i`. */
+    private def componentType(i: Int): BackendType = elements(i - 1).javaType
+
+    /**
+      * The generic signature of component `i`, when its own type has arguments to declare -- e.g.
+      * an element that is itself a generic Java type such as `ArrayList[String]`. `None` for every
+      * primitive and every plain reference type, exactly as at a def's own shim signature: a plan
+      * whose type argument does not differ from its descriptor has nothing a signature would add.
+      */
+    private def componentSignature(i: Int): Option[String] = {
+      val plan = elements(i - 1)
+      Option.when(plan.typeArgument != plan.javaType.toDescriptor)(plan.typeArgument)
+    }
+
+    def ComponentField(i: Int): InstanceField =
+      InstanceField(this.jvmName, s"_$i", componentType(i))
+
+    def AccessorMethod(i: Int): InstanceMethod =
+      InstanceMethod(this.jvmName, s"_$i", mkDescriptor()(componentType(i)))
+
+    def Constructor: ConstructorMethod =
+      ConstructorMethod(this.jvmName, indices.map(componentType).toList)
+
+    private def ToStringMethod: InstanceMethod =
+      InstanceMethod(this.jvmName, "toString", mkDescriptor()(BackendType.String))
+
+    private def HashCodeMethod: InstanceMethod =
+      InstanceMethod(this.jvmName, "hashCode", mkDescriptor()(BackendType.Int32))
+
+    private def EqualsMethod: InstanceMethod =
+      InstanceMethod(this.jvmName, "equals", mkDescriptor(BackendType.Object)(BackendType.Bool))
+
+    /** `()<signature of component i>` */
+    private def accessorSignature(i: Int): String = s"()${componentSignature(i).get}"
+
+    /** `[] --> return`, storing each argument in its component. */
+    private def constructorIns(implicit mv: MethodVisitor): Unit =
+      withNames(1, indices.map(componentType).toList) {
+        case (_, variables) =>
+          thisLoad()
+          // `java.lang.Record`, not `java.lang.Object`: a record's superclass is what makes the
+          // `Record` attribute meaningful, and its constructor is the one that must be called.
+          INVOKESPECIAL(ConstructorMethod(JvmName.Record, Nil))
+          for ((variable, i) <- variables.zip(indices)) {
+            thisLoad()
+            variable.load()
+            PUTFIELD(ComponentField(i))
+          }
+          RETURN()
+      }
+
+    /** `[] --> [component i]` */
+    private def accessorIns(i: Int)(implicit mv: MethodVisitor): Unit = {
+      thisLoad()
+      GETFIELD(ComponentField(i))
+      xReturn(componentType(i))
+    }
+
+    /**
+      * `[] --> [result]` for one of the three methods the runtime derives from the components.
+      *
+      * The same bootstrap [[ExportTuple]] uses -- see its own `derivedIns` for why this is an
+      * `invokedynamic` rather than three hand-written method bodies.
+      */
+    private def derivedIns(name: String, arguments: List[BackendType], result: BackendType)(implicit mv: MethodVisitor): Unit = {
+      val components = indices.map(i => ComponentField(i).name).mkString(";")
+      val getters = indices.map(i => mkGetFieldHandle(ComponentField(i)).handle)
+      thisLoad()
+      for ((argument, slot) <- arguments.zipWithIndex) xLoad(argument, slot + 1)
+      mv.visitInvokeDynamicInstruction(
+        name,
+        mkDescriptor((this.toTpe :: arguments) *)(result),
+        mkStaticHandle(ClassConstants.ObjectMethods.BootstrapMethod),
+        (this.toTpe.toAsmType :: components :: getters.toList) *
+      )
+      xReturn(result)
+    }
+  }
+
+  object ExportCaseRecord {
+    /**
+      * The JVM name of the record generated for case `caseSym`.
+      *
+      * Naming never reads `elements` (see the `jvmName` dispatcher), so `Nil` here is a valid stand-in
+      * whenever only the name is needed -- as [[ExportSealedEnum]] does to list its permitted
+      * subclasses without building the full per-element plans of a case it may not even be
+      * generating a plan for.
+      */
+    def jvmNameOf(caseSym: Symbol.CaseSym): JvmName = ExportCaseRecord(caseSym, Nil).jvmName
+  }
+
 
   //
   // Java Types

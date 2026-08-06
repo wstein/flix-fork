@@ -1214,14 +1214,104 @@ class TestEntryPoints extends AnyFunSuite with TestUtils {
   }
 
   test("Test.ExportEnum.02") {
-    // A case carrying data has no constant to be. This is the sealed-interface shape, which does
-    // not exist yet, so admitting it would compile a shim handing back the internal tag class.
+    // A case carrying data has no constant to be, so it crosses as a sealed interface with one
+    // record per case instead of a real Java enum -- but it does now have a form.
     val input =
       """
         |mod Pkg { }
         |mod Pkg.Mod {
         |    pub enum Shape { case Circle(Int32), case Square }
         |    @Export pub def f(): Shape = Shape.Square
+        |}
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibAll)
+    expectSuccess(result)
+  }
+
+  test("Test.ExportEnum.08") {
+    // A mix of nullary and data-carrying cases crosses uniformly: every case is a record, a
+    // nullary one just has zero components.
+    val input =
+      """
+        |mod Pkg { }
+        |mod Pkg.Mod {
+        |    pub enum Shape { case Circle(Int32, Int32), case Square(Int32), case Point }
+        |    @Export pub def f(): Shape = Shape.Point
+        |}
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibAll)
+    expectSuccess(result)
+  }
+
+  test("Test.ExportEnum.09") {
+    // A case element that is itself a container has no plan of its own yet, per J17 -- the same
+    // one-level-deep rule a tuple's elements are held to.
+    val input =
+      """
+        |mod Pkg { }
+        |mod Pkg.Mod {
+        |    pub enum Shape { case Circle(List[Int32]), case Square }
+        |    @Export pub def f(): Shape = Shape.Square
+        |}
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibAll)
+    expectError[EntryPointError.IllegalExportType](result)
+  }
+
+  test("Test.ExportEnum.10") {
+    // A case element that is itself an enum is rejected the same way: the element must be
+    // directly Java-representable, not another type the boundary would have to convert first.
+    val input =
+      """
+        |mod Pkg { }
+        |mod Pkg.Mod {
+        |    pub enum Colour { case Red, case Green }
+        |    pub enum Shape { case Circle(Colour), case Square }
+        |    @Export pub def f(): Shape = Shape.Square
+        |}
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibAll)
+    expectError[EntryPointError.IllegalExportType](result)
+  }
+
+  test("Test.ExportEnum.11") {
+    // A generic enum with a data-carrying case is still rejected raw, for the same erasure reason
+    // as a generic nullary one: `Box[Int32]` and `Box[String]` would erase to one JVM class.
+    val input =
+      """
+        |mod Pkg { }
+        |mod Pkg.Mod {
+        |    pub enum Box[t] { case Full(t), case Empty }
+        |    @Export pub def f(): Box[Int32] = Box.Full(1)
+        |}
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibAll)
+    expectError[EntryPointError.IllegalExportType](result)
+  }
+
+  test("Test.ExportEnum.12") {
+    // Return position only, same as a nullary enum: a parameter would need the reverse
+    // conversion, from a Java record back onto a Flix tag.
+    val input =
+      """
+        |mod Pkg { }
+        |mod Pkg.Mod {
+        |    pub enum Shape { case Circle(Int32), case Square }
+        |    @Export pub def f(s: Shape): Int32 = match s { case Shape.Circle(r) => r, case Shape.Square => 0 }
+        |}
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibAll)
+    expectError[EntryPointError.IllegalExportType](result)
+  }
+
+  test("Test.ExportEnum.13") {
+    // And not nested, per J17, same as a nullary enum.
+    val input =
+      """
+        |mod Pkg { }
+        |mod Pkg.Mod {
+        |    pub enum Shape { case Circle(Int32), case Square }
+        |    @Export pub def f(): List[Shape] = Shape.Square :: Nil
         |}
         |""".stripMargin
     val result = check(input, Options.TestWithLibAll)

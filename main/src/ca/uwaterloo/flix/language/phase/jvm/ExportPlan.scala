@@ -323,6 +323,91 @@ object ExportPlan {
   }
 
   /**
+    * A Flix enum with at least one data-carrying case, presented as a sealed interface with one
+    * generated record per case.
+    *
+    * `cases` is in ordinal order, matching the order [[AsEnum.constants]] uses for the same
+    * reason: the value's `ordinal` is what a `tableSwitch` dispatches on.
+    *
+    * A pure-nullary enum never reaches here -- [[isNullaryEnum]] claims it first, in [[of]]'s own
+    * match order, so this exists only for the shape that solver could not build.
+    */
+  case class AsSealedEnum(enum0: BackendObjType.ExportSealedEnum, cases: List[AsSealedEnum.Case]) extends ExportPlan {
+    def flixType: BackendType = BackendObjType.Tagged.toTpe
+
+    def signature: ExportSignature = ExportSignature.Exact(enum0.toTpe)
+
+    def emit(loc: SourceLocation, nextLocal: Int)(implicit root: JvmAst.Root, mv: MethodVisitor): Unit = {
+      // Duplicated because the ordinal is read from one copy while the other is kept around for
+      // whichever branch needs to read the value's own fields.
+      DUP()
+      storeWithName(nextLocal, BackendObjType.Tagged.toTpe) { tagged =>
+        GETFIELD(BackendObjType.Tagged.OrdinalField)
+        tableSwitch(cases.map(c => (mv: MethodVisitor) => emitCase(loc, c, tagged, nextLocal + tagged.tpe.stackSlots)(root, mv))) { implicit mv =>
+          // Unreachable for the same reason it is in `AsEnum`: every ordinal the value can have has
+          // a branch, and a switch must still have a default.
+          throwWithMessage(JvmName.IllegalStateException, s"Unknown ordinal for '${enum0.jvmName.toBinaryName}'")
+        }
+      }
+    }
+
+    /**
+      * `[..., tagged value] --> [..., record]` for one case.
+      *
+      * A nullary case reads nothing -- there is nothing on its record to fill in -- and a
+      * data-carrying one reads each element the same way [[AsTuple.emit]] reads a tuple's: off a
+      * local holding the checked-cast internal value, one field at a time.
+      */
+    private def emitCase(loc: SourceLocation, c: AsSealedEnum.Case, tagged: Variable, nextLocal: Int)(implicit root: JvmAst.Root, mv: MethodVisitor): Unit =
+      c.tag match {
+        case None =>
+          NEW(c.record.jvmName)
+          DUP()
+          INVOKESPECIAL(c.record.Constructor)
+        case Some(tag) =>
+          tagged.load()
+          CHECKCAST(tag.jvmName)
+          storeWithName(nextLocal, tag.toTpe) { value =>
+            NEW(c.record.jvmName)
+            DUP()
+            for ((element, i) <- c.elements.zipWithIndex) {
+              value.load()
+              GETFIELD(tag.IndexField(i))
+              element.emit(loc, nextLocal + value.tpe.stackSlots)
+              castToDeclaredType(element)
+            }
+            INVOKESPECIAL(c.record.Constructor)
+          }
+      }
+
+    /**
+      * Narrows a converted element back to its declared type, when it needs narrowing.
+      *
+      * A reference-typed element is read off a field the internal `Tag` erases to `Object` (see
+      * `BackendType.toErasedBackendType`), and every plan [[directPlan]] builds converts
+      * nothing -- unlike a tuple's component, a case record's component keeps its own concrete
+      * type rather than `Object`, so what a tuple never needed, this does.
+      */
+    private def castToDeclaredType(element: ExportPlan)(implicit mv: MethodVisitor): Unit = element.javaType match {
+      case BackendType.Reference(ref) if ref.jvmName != JvmName.Object => CHECKCAST(ref.jvmName)
+      case _ => ()
+    }
+
+    override def generatedClasses: List[BackendObjType.ExportClass] =
+      enum0 :: cases.flatMap(c => c.record :: c.elements.flatMap(_.generatedClasses))
+  }
+
+  object AsSealedEnum {
+    /**
+      * One case of a sealed-enum conversion.
+      *
+      * `tag` is `None` for a nullary case -- there is nothing to read, and its record has no
+      * components -- and the internal `Tag` class to read `elements` off of otherwise.
+      */
+    case class Case(tag: Option[BackendObjType.Tag], elements: List[ExportPlan], record: BackendObjType.ExportCaseRecord)
+  }
+
+  /**
     * Returns how `declared` is converted, or `None` if it needs no conversion.
     *
     * `declared` is the type as the programmer wrote it. The erased type cannot be used: it has
@@ -348,6 +433,8 @@ object ExportPlan {
         Some(AsMap(elementPlan(k, erasedKey), elementPlan(v, erasedValue), treeTag(erased, "Map"), view))
       case SimpleType.Enum(sym, Nil) if isNullaryEnum(sym) =>
         Some(AsEnum(BackendObjType.ExportEnum(sym), constantNames(sym)))
+      case SimpleType.Enum(sym, Nil) if isSealedEnum(sym) =>
+        Some(AsSealedEnum(BackendObjType.ExportSealedEnum(sym), sealedEnumCases(sym)))
       case SimpleType.Tuple(elms) =>
         // The erased element types are both what the backend named its tuple class after and what
         // decides whether each element needs boxing, so one list serves both.
@@ -425,6 +512,44 @@ object ExportPlan {
   /** Returns the names of the cases of `sym`, in ordinal order. */
   private def constantNames(sym: Symbol.EnumSym)(implicit root: JvmAst.Root): List[String] =
     root.enums(sym).cases.keys.toList.sortBy(_.ordinal).map(_.name)
+
+  /**
+    * Returns `true` if `sym` has at least one case.
+    *
+    * The only condition this solver's own view of the enum needs to re-check for the
+    * sealed-interface conversion: every other condition (no type parameters, namespace depth, and
+    * each case's own elements) is `EntryPoints.isExportableEnum`'s, and this arm in [[of]] runs
+    * only for a def the front end has already accepted (J17).
+    */
+  private def isSealedEnum(sym: Symbol.EnumSym)(implicit root: JvmAst.Root): Boolean =
+    root.enums.get(sym).exists(_.cases.nonEmpty)
+
+  /** Returns the per-case description of `sym`'s cases, in ordinal order, for [[AsSealedEnum]]. */
+  private def sealedEnumCases(sym: Symbol.EnumSym)(implicit root: JvmAst.Root): List[AsSealedEnum.Case] =
+    root.enums(sym).cases.values.toList.sortBy(_.sym.ordinal).map { c =>
+      val elements = c.tpes.map(directPlan)
+      val tag = if (c.tpes.isEmpty) None else Some(BackendObjType.Tag(c.tpes.map(BackendType.toErasedBackendType)))
+      AsSealedEnum.Case(tag, elements, BackendObjType.ExportCaseRecord(c.sym, elements))
+    }
+
+  /**
+    * Returns the plan for a value that needs no conversion, only possibly a signature.
+    *
+    * Nothing here is converted, in the sense [[ofParameter]] already uses for a shim's own
+    * parameters: the value is copied straight out of the case's internal `Tag` field where it is
+    * erased to `Object`, and the caller is what casts the copy back to its declared type afterward
+    * (`castToDeclaredType`). Only a generic Java type has something to say beyond its own identity,
+    * exactly as at a parameter -- which is also why this never boxes a primitive: unlike a
+    * container's element, a case record's component is not shared across element-type
+    * instantiations, so nothing forces it into a reference slot.
+    */
+  private def directPlan(declared: SimpleType)(implicit root: JvmAst.Root): ExportPlan = declared match {
+    case SimpleType.Native(clazz, targs) if targs.nonEmpty =>
+      val plans = traverse(targs)(typeArgumentPlan).getOrElse(
+        throw InternalCompilerException(s"Exported value has an undescribable argument: '$declared'", SourceLocation.Unknown))
+      GenericNative(JvmName.ofClass(clazz), plans)
+    case _ => Identity(BackendType.toBackendType(declared))
+  }
 
   /** Returns `true` if `sym` is the standard library's `Option`. */
   private def isOption(sym: Symbol.EnumSym): Boolean = isStdEnum(sym, "Option")
