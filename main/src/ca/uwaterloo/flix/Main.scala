@@ -249,11 +249,13 @@ object Main {
               Bootstrap.bootstrap(cwd, options.githubToken).flatMap { bootstrap =>
                 val flix = new Flix().setFormatter(formatter)
                 flix.setOptions(options)
+                addLibs(flix, cmdOpts.libs)
                 bootstrap.check(flix)
               }
             }
           } else {
             val flix = mkFlixWithFiles(cmdOpts.files, options)
+            addLibs(flix, cmdOpts.libs)
             val (optRoot, errors) = flix.check()
             if (errors.isEmpty) System.exit(0)
             else exitWithErrors(flix, errors, optRoot)
@@ -268,6 +270,7 @@ object Main {
             Bootstrap.bootstrap(cwd, options.githubToken).flatMap { bootstrap =>
               val flix = new Flix().setFormatter(formatter)
               flix.setOptions(options.copy(loadClassFiles = false))
+              addLibs(flix, cmdOpts.libs)
               bootstrap.build(flix)
             }
           }
@@ -544,6 +547,7 @@ object Main {
   case class CmdOpts(
     command: Command = Command.None,
                      stubsOut: Option[String] = None,
+                     libs: Seq[String] = Seq.empty,
     args: List[String] = Nil,
     coverage: Boolean = false,
     coverageOutput: Option[String] = None,
@@ -685,14 +689,20 @@ object Main {
           text("rewrites the generated agent guide for this version of Flix. An edited guide is left alone."),
       )
 
-      cmd("check").action((_, c) => c.copy(command = Command.Check)).text("  checks the current project for errors.")
+      cmd("check").action((_, c) => c.copy(command = Command.Check)).text("  checks the current project for errors.").children(
+        opt[String]("lib").unbounded().action((arg, c) => c.copy(libs = c.libs :+ arg)).
+          text("adds a jar to the classpath. Repeatable."),
+      )
 
       cmd("stubs").action((_, c) => c.copy(command = Command.Stubs)).text("  writes compile-only Java stubs for the @Export-ed defs.").children(
         opt[String]("out").action((arg, c) => c.copy(stubsOut = Some(arg))).
           text("where to write the stubs. Defaults to 'build/stubs'."),
       )
 
-      cmd("build").action((_, c) => c.copy(command = Command.Build)).text("  builds (i.e. compiles) the current project.")
+      cmd("build").action((_, c) => c.copy(command = Command.Build)).text("  builds (i.e. compiles) the current project.").children(
+        opt[String]("lib").unbounded().action((arg, c) => c.copy(libs = c.libs :+ arg)).
+          text("adds a jar to the classpath. Repeatable."),
+      )
 
       cmd("build-jar").action((_, c) => c.copy(command = Command.BuildJar)).text("  builds a jar-file from the current project (full, clean build).")
 
@@ -952,6 +962,32 @@ object Main {
   /**
     * Creates a fresh Flix instance configured with the given options and source files.
     */
+  /**
+    * Adds each `--lib` jar to `flix`, or exits naming the one that could not be used.
+    *
+    * A project's own dependencies are declared in `flix.toml` and land under `lib/cache` and
+    * `lib/external`, which the package managers own. That leaves no way to compile against a jar
+    * the *build* just produced -- which is the ordinary case once Java and Flix are built together,
+    * since the Java classes exist only as build output. This is that seam: the caller names the
+    * classpath instead of the compiler inferring it from a directory it manages.
+    *
+    * Failures are reported rather than thrown. `addJar` raises `IllegalArgumentException` for a
+    * path that is missing, unreadable, or not a zip, and a stack trace is a poor way to say that a
+    * build tool passed a path that does not exist yet.
+    */
+  private def addLibs(flix: Flix, libs: Seq[String]): Unit = {
+    for (lib <- libs) {
+      try {
+        flix.addJar(Paths.get(lib))
+        ()
+      } catch {
+        case e: IllegalArgumentException =>
+          Console.err.println(s"Cannot use '--lib $lib': ${e.getMessage}")
+          System.exit(1)
+      }
+    }
+  }
+
   private def mkFlixWithFiles(files: Seq[File], options: Options)(implicit formatter: Formatter): Flix = {
     val flix = new Flix().setFormatter(formatter)
     flix.setOptions(options)
