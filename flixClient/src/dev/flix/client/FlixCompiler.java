@@ -49,9 +49,13 @@ public interface FlixCompiler {
     /**
      * Writes compile-only Java stubs for the project's {@code @Export}ed defs.
      *
-     * <p>Returns the defs it could not describe, as diagnostics. It refuses rather than guesses: a
-     * missing stub is a build error, while a wrong one compiles and becomes a linkage error in a
-     * caller that did nothing wrong.
+     * <p>A def whose type cannot be described makes this fail, and the compiler names it on stderr.
+     * It refuses rather than guesses: a missing stub is a build error, while a wrong one compiles
+     * and becomes a linkage error in a caller that did nothing wrong.
+     *
+     * <p>The refusals are reported as text rather than as a document, so the result carries the
+     * outcome and no diagnostics. That is the one place this interface is narrower than the others,
+     * and it is the compiler's shape rather than a choice made here.
      */
     FlixResult stubs(Path projectDirectory, Path destination);
 }
