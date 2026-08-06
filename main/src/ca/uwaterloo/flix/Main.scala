@@ -20,7 +20,7 @@ import ca.uwaterloo.flix.api.lsp.{LspServer, VSCodeLspServer, FormatterLsp as Ls
 import ca.uwaterloo.flix.tools.fmt.{Canonical, PrettyPrinter}
 import ca.uwaterloo.flix.api.{Bootstrap, BootstrapError, Flix, Version}
 import ca.uwaterloo.flix.language.CompilationMessage
-import ca.uwaterloo.flix.language.ast.shared.SecurityContext
+import ca.uwaterloo.flix.language.ast.shared.{Input, SecurityContext}
 import ca.uwaterloo.flix.language.ast.{Symbol, TypedAst}
 import ca.uwaterloo.flix.language.phase.Documentor
 import ca.uwaterloo.flix.language.phase.unification.zhegalkin.ZhegalkinPerf
@@ -215,6 +215,33 @@ object Main {
               if (cmdOpts.refresh) Bootstrap.refreshAgentGuide(projectPath) else Result.Ok(())
             }
           }
+
+        case Command.Stubs =>
+          // Pass 0 of joint compilation. It exists to run *before* anything is compiled, on a
+          // program that cannot yet compile: a Flix module calling a Java class that does not
+          // exist because that class calls back into this module. So it must not bootstrap the
+          // project or resolve dependencies -- it reads sources and nothing else.
+          val destination = Paths.get(cmdOpts.stubsOut.getOrElse("build/stubs"))
+          val sources =
+            if (cmdOpts.files.nonEmpty) cmdOpts.files.toList.map(_.toPath)
+            else FileOps.getFilesWithExtIn(cwd.resolve("src"), "flix", Int.MaxValue)
+
+          implicit val sctx: SecurityContext = SecurityContext.Unrestricted
+          implicit val flix: Flix = new Flix().setFormatter(formatter).setOptions(options)
+          val (facades, unsupported) = ExportStubs.run(sources.map(Input.RealFile(_, sctx)))
+
+          if (unsupported.nonEmpty) {
+            // Refusing is the conservative outcome, not the convenient one: a wrong stub compiles,
+            // and the caller meets the mistake as a linkage error at run time.
+            Console.err.println("Cannot describe these exported defs in Java:")
+            for (u <- unsupported) Console.err.println(s"  ${u.loc.format}: ${u.name} -- ${u.reason}")
+            Console.err.println("Import the Java types they name, or give them a type that can cross the boundary.")
+            System.exit(1)
+          }
+
+          ExportStubs.write(facades, destination)
+          println(s"Wrote ${facades.length} stub(s) to $destination")
+          System.exit(0)
 
         case Command.Check =>
           if (cmdOpts.files.isEmpty) {
@@ -516,6 +543,7 @@ object Main {
     */
   case class CmdOpts(
     command: Command = Command.None,
+                     stubsOut: Option[String] = None,
     args: List[String] = Nil,
     coverage: Boolean = false,
     coverageOutput: Option[String] = None,
@@ -575,6 +603,8 @@ object Main {
     case object Doc extends Command
 
     case object Format extends Command
+
+    case object Stubs extends Command
 
     case object Run extends Command
 
@@ -656,6 +686,11 @@ object Main {
       )
 
       cmd("check").action((_, c) => c.copy(command = Command.Check)).text("  checks the current project for errors.")
+
+      cmd("stubs").action((_, c) => c.copy(command = Command.Stubs)).text("  writes compile-only Java stubs for the @Export-ed defs.").children(
+        opt[String]("out").action((arg, c) => c.copy(stubsOut = Some(arg))).
+          text("where to write the stubs. Defaults to 'build/stubs'."),
+      )
 
       cmd("build").action((_, c) => c.copy(command = Command.Build)).text("  builds (i.e. compiles) the current project.")
 
