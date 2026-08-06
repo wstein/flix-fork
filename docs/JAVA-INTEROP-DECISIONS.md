@@ -858,6 +858,35 @@ interface list, since it is one positional argument among several on
 declare can rely on it; it was implemented on request, with this entry recording
 that no such generator exists yet.
 
+### The views shipped, and the first bullet held
+
+J10's three views are now built, and the measurement above is what happened:
+they declare no class-level signature and no caller can tell. The shim returns
+`java.util.Set`, `Map` or `List` with a *method* signature naming the arguments,
+and the view class is never named by anyone.
+
+The related question — why the views are not one **generic class** each, rather
+than one per erased element — has the same answer from the other side, and it is
+worth stating because "generate `SetView<E>`" looks like the obvious design:
+
+**They already are as generic as erasure permits.** Measured: five exported
+`Set`s over `String`, `Regex`, `DayOfWeek`, `Int32` and `Float64` generate
+**three** view classes, not five. Every reference element shares one, which is
+exactly what an erased `SetView<E>` would give.
+
+The per-primitive classes are not a missed generalization. A view reads the tree
+node's key field, and for `Set[Int32]` that field *is* an `int` — the tag class
+is `Tag$Obj$Obj$Int32$Obj$Obj` and its `v2` has descriptor `I`. A field
+reference carries its descriptor and the verifier checks it, so no single class
+can read both an `int` and an `Object` there. **Java generics erase to `Object`;
+Flix's specialization does not.** Those two erasures disagree exactly on the
+primitives, and the extra classes are precisely where a generic view would have
+needed `Set<int>` — which Java cannot express either.
+
+So the choice is not "generics or generated classes". It is that the generic
+part is already shared, and the remaining classes stand in for the generics Java
+does not have.
+
 ---
 
 ## J17 — The front-end gate may not outrun the backend plan

@@ -65,6 +65,29 @@ class TestExportedShims extends AnyFunSuite {
     }
   }
 
+  /** Compiles `input` and returns the simple names of every class it generated. */
+  private def classNamesOf(input: String): Set[String] = {
+    val out = Files.createTempDirectory("flix-export-test")
+    try {
+      val opts = Options.DefaultTest.copy(outputJvm = true, outputPath = out)
+      val flix = new Flix().setOptions(opts)
+      flix.addVirtualPath(CompilerConstants.VirtualTestFile, input)
+      flix.compile().toResult match {
+        case Result.Ok(_) => ()
+        case Result.Err(errors) => fail(s"the test program must compile, but got: $errors")
+      }
+      val classes = out.resolve("class")
+      val names = mutable.Set.empty[String]
+      Files.walk(classes).forEach { p =>
+        val name = p.getFileName.toString
+        if (name.endsWith(".class")) names += name.dropRight(".class".length)
+      }
+      names.toSet
+    } finally {
+      deleteRecursively(out)
+    }
+  }
+
   /** Returns the descriptors and signatures of the methods of the class file at `path`. */
   private def read(path: Path): (Map[String, String], Map[String, String]) = {
     assert(Files.exists(path), s"expected a generated class at $path")
@@ -395,6 +418,46 @@ class TestExportedShims extends AnyFunSuite {
     assert(descriptors.get("names").contains("()Ljava/util/Set;"))
     assert(signatures.get("names").contains("()Ljava/util/Set<Ljava/lang/String;>;"))
     assert(signatures.get("numbers").contains("()Ljava/util/Set<Ljava/lang/Integer;>;"))
+  }
+
+  test("one view class serves every reference element") {
+    // A view is keyed on the *erased* element, which is as generic as the JVM lets it be: every
+    // reference element shares one class, exactly as an erased `SetView<E>` would.
+    //
+    // A primitive element gets its own class, and that is not a missed generalization. The view
+    // reads the tree node's key field, and for `Set[Int32]` that field really is an `int` -- the
+    // tag class is `Tag$Obj$Obj$Int32$Obj$Obj` and its `v2` has descriptor `I`. A field reference
+    // carries its descriptor, so no single class can read both an `int` and an `Object` there.
+    // Java generics erase to `Object`; Flix's specialization does not. These extra classes are
+    // precisely where a generic view would have needed `Set<int>`, which Java cannot express
+    // either.
+    val names = classNamesOf(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    import java.time.DayOfWeek
+        |
+        |    @Export
+        |    pub def a(): Set[String] = Set#{"x"}
+        |
+        |    @Export
+        |    pub def b(): Set[Regex] = Set#{}
+        |
+        |    @Export
+        |    pub def c(): Set[DayOfWeek] = Set#{}
+        |
+        |    @Export
+        |    pub def d(): Set[Int32] = Set#{1}
+        |
+        |    @Export
+        |    pub def e(): Set[Float64] = Set#{1.0f64}
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin)
+    val views = names.filter(_.startsWith("SetView"))
+    // Three reference elements, two primitives -- three classes, not five.
+    assertResult(3)(views.size)
+    assert(views.exists(_.endsWith("Obj")), s"expected a shared reference view, got: $views")
   }
 
   test("an exported Map is presented as a java.util.Map") {
