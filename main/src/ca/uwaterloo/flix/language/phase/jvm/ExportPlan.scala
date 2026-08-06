@@ -166,16 +166,14 @@ object ExportPlan {
     * Unlike [[AsList]] this converts nothing here: it unwraps the red-black tree and hands it to a
     * generated view that walks it on demand. `element` describes the element for the *signature*;
     * the conversion the view emits per element lives in the view class, which is keyed on the
-    * erased element instead (see [[BackendObjType.SetView]]).
+    * erased element instead (see [[BackendObjType.TreeSetView]]).
     *
     * The set value is a single-case tag holding the tree, so the tree is one field read away.
     */
   case class AsSet(element: ExportPlan, setTag: BackendObjType.Tag, view: BackendObjType.TreeSetView) extends ExportPlan {
     def flixType: BackendType = BackendObjType.Tagged.toTpe
 
-    def javaType: BackendType = BackendObjType.Native(JvmName.JavaSet).toTpe
-
-    def typeArgument: String = s"L${JvmName.JavaSet.toInternalName}<${element.typeArgument}>;"
+    def signature: ExportSignature = ExportSignature.Applied(JvmName.JavaSet, List(element.signature))
 
     def emit(loc: SourceLocation, nextLocal: Int)(implicit root: JvmAst.Root, mv: MethodVisitor): Unit =
       emitTreeView(setTag, view.jvmName, view.Constructor, nextLocal)
@@ -193,10 +191,8 @@ object ExportPlan {
   case class AsMap(key: ExportPlan, value: ExportPlan, mapTag: BackendObjType.Tag, view: BackendObjType.MapView) extends ExportPlan {
     def flixType: BackendType = BackendObjType.Tagged.toTpe
 
-    def javaType: BackendType = BackendObjType.Native(JvmName.JavaMap).toTpe
-
-    def typeArgument: String =
-      s"L${JvmName.JavaMap.toInternalName}<${key.typeArgument}${value.typeArgument}>;"
+    def signature: ExportSignature =
+      ExportSignature.Applied(JvmName.JavaMap, List(key.signature, value.signature))
 
     def emit(loc: SourceLocation, nextLocal: Int)(implicit root: JvmAst.Root, mv: MethodVisitor): Unit =
       emitTreeView(mapTag, view.jvmName, view.Constructor, nextLocal)
