@@ -4,6 +4,19 @@ import mill.*
 import mill.scalalib.*
 import mill.scalalib.Assembly.*
 
+/** The narrow client a build tool compiles against, rather than the compiler itself.
+  *
+  * Java, with no Scala on its classpath: a Scala client would drag the Scala runtime into every
+  * consumer's plugin classpath. Deliberately a separate module from `flix` so it cannot acquire a
+  * dependency on the compiler by accident -- the value here is the surface it does *not* expose.
+  */
+object flixClient extends JavaModule {
+
+  def javacOptions = Seq("--release", "21")
+
+  def mvnDeps = Seq(mvn"com.google.code.gson:gson:2.11.0")
+}
+
 object flix extends ScalaModule {
 
   def scalaVersion = "2.13.18"
