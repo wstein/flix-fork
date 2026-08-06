@@ -51,9 +51,22 @@ public final class CliFlixCompiler implements FlixCompiler {
         this(javaExecutable, compilerJar, FlixProcessRunner.DEFAULT);
     }
 
+    /** Uses the JVM running this code, starting processes with {@code runner}. */
+    public CliFlixCompiler(Path compilerJar, FlixProcessRunner runner) {
+        this(currentJavaExecutable(), compilerJar, runner);
+    }
+
     /** Uses the JVM running this code. */
     public CliFlixCompiler(Path compilerJar) {
-        this(Path.of(System.getProperty("java.home"), "bin", "java"), compilerJar);
+        this(compilerJar, FlixProcessRunner.DEFAULT);
+    }
+
+    /** The {@code java} binary of the JVM running this code. */
+    private static Path currentJavaExecutable() {
+        String name = System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT).contains("win")
+                ? "java.exe"
+                : "java";
+        return Path.of(System.getProperty("java.home"), "bin", name);
     }
 
     @Override

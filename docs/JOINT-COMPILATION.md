@@ -107,3 +107,4 @@ dependency; `CliFlixCompiler` is one subprocess transport behind that stable sur
 their own process lifecycle, logging, cancellation, and sandbox integration while sharing the
 contract parser. The default runner uses `ProcessBuilder`, inherits stderr, and reads stdout before
 waiting so a full pipe cannot deadlock the compiler process.
+The convenience constructor locates `java` below the running JVM and uses `java.exe` on Windows.

@@ -186,4 +186,19 @@ class CliFlixCompilerTest {
                 List.of("java", "-jar", "flix.jar", "stubs", "--out", "/w/build/stubs"),
                 runner.seen().get(0));
     }
+
+    @Test
+    void defaultLauncherUsesThePlatformJavaExecutable() {
+        Canned runner = new Canned(0, """
+                {"protocolVersion": 1, "minimumClientVersion": 1,
+                 "capabilities": {}}""");
+        new CliFlixCompiler(Path.of("flix.jar"), runner).capabilities();
+
+        String expected = System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT).contains("win")
+                ? "java.exe"
+                : "java";
+        Path executable = Path.of(runner.seen().get(0).get(0));
+        assertEquals(expected, executable.getFileName().toString());
+        assertEquals(Path.of(System.getProperty("java.home"), "bin"), executable.getParent());
+    }
 }
