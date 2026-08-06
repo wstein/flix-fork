@@ -747,7 +747,7 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
     if (errors.isEmpty) {
       Ok(optRoot.get)
     } else {
-      Err(BootstrapError.GeneralError(CompilationMessage.formatAll(errors)(flix.getFormatter, optRoot)))
+      Err(BootstrapError.CompilationErrors(errors, optRoot))
     }
   }
 
@@ -853,7 +853,7 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
     if (errors.isEmpty) {
       Ok(flix.codeGen(optRoot.get))
     } else {
-      Err(BootstrapError.GeneralError(CompilationMessage.formatAll(errors)(flix.getFormatter, optRoot)))
+      Err(BootstrapError.CompilationErrors(errors, optRoot))
     }
   }
 

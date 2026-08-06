@@ -281,4 +281,9 @@ class TestMain extends AnyFunSuite {
     assert(opts.libs == Seq("generated.jar"))
   }
 
+  test("check and build accept structured diagnostics") {
+    assert(Main.parseCmdOpts(Array("check", "--diagnostics-json")).get.jsonDiagnostics)
+    assert(Main.parseCmdOpts(Array("build", "--diagnostics-json")).get.jsonDiagnostics)
+  }
+
 }

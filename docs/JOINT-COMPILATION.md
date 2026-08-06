@@ -91,3 +91,9 @@ not be claimed by this branch until the real generated facades support them.
 writing build output into package-manager-owned cache directories. Dependencies are fixed when a
 `Flix` instance is constructed, so project builds combine these paths with the bootstrapped project
 jars before compilation begins.
+
+Build tools should add `--diagnostics-json` to `check` or `build`. The command then writes one
+versioned JSON document to standard output containing success, the compiler version, and structured
+diagnostics. Source ranges use the same zero-based convention as LSP. Compiler errors remain
+structured inside `BootstrapError` until the caller chooses human or machine rendering; they are
+not reconstructed from console text.
