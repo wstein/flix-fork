@@ -77,6 +77,24 @@ object ClassConstants {
 
   }
 
+  object Enum {
+
+    /**
+      * The constructor every enum constant calls.
+      *
+      * Its two arguments are the constant's own name and ordinal, which `java.lang.Enum` stores
+      * and which `name()`, `ordinal()`, `toString` and `compareTo` are all defined in terms of.
+      * They are not derivable from anything else, which is why an enum class has to pass them
+      * explicitly rather than inherit behaviour.
+      */
+    val Constructor: ConstructorMethod =
+      ConstructorMethod(JvmName.Enum, List(BackendType.String, BackendType.Int32))
+
+    val ValueOfMethod: StaticMethod =
+      StaticMethod(JvmName.Enum, "valueOf", mkDescriptor(JvmName.Class.toTpe, BackendType.String)(JvmName.Enum.toTpe))
+
+  }
+
   object LambdaMetafactory {
     val MetafactoryMethod: StaticMethod =
       StaticMethod(JvmName.LambdaMetafactory, "metafactory", mkDescriptor(JvmName.MethodHandles$Lookup.toTpe, BackendType.String, JvmName.MethodType.toTpe, JvmName.MethodType.toTpe, JvmName.MethodHandle.toTpe, JvmName.MethodType.toTpe)(JvmName.CallSite.toTpe))

@@ -741,6 +741,110 @@ class TestExportedShimsRuntime extends AnyFunSuite {
     }
   }
 
+  test("an exported enum arrives as a real Java enum constant") {
+    withFacade(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    pub enum Colour { case Red, case Green, case Blue }
+        |
+        |    @Export
+        |    pub def favourite(): Colour = Colour.Green
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin, "Pkg.Mod") { facade =>
+      val colour = invoke(facade, "favourite")
+      assertResult("Pkg.Mod$Colour")(colour.getClass.getName)
+      // Not merely a class with constants: `isEnum` is the runtime's own test, and `EnumSet`,
+      // `EnumMap` and `Enum.valueOf` all refuse anything that fails it.
+      assert(colour.getClass.isEnum)
+      assertResult("Green")(constantName(colour))
+      assertResult(1)(colour.getClass.getMethod("ordinal").invoke(colour))
+    }
+  }
+
+  test("an exported enum keeps its cases in declaration order") {
+    // The Java ordinals must be the Flix ones, because the conversion switches on the Flix ordinal
+    // to pick the constant. Reordering either side alone would silently return the wrong case.
+    withFacade(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    pub enum Colour { case Red, case Green, case Blue }
+        |
+        |    @Export
+        |    pub def favourite(): Colour = Colour.Green
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin, "Pkg.Mod") { facade =>
+      assertResult(List("Red", "Green", "Blue"))(
+        constantsOf(invoke(facade, "favourite").getClass).map(constantName))
+    }
+  }
+
+  test("an exported enum returns the constant matching the case, not merely one of them") {
+    // A switch that fell through to a single branch would pass every test that only checks the
+    // type, so each case is asked for by name and compared by identity.
+    withFacade(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    pub enum Colour { case Red, case Green, case Blue }
+        |
+        |    @Export
+        |    pub def red(): Colour = Colour.Red
+        |
+        |    @Export
+        |    pub def green(): Colour = Colour.Green
+        |
+        |    @Export
+        |    pub def blue(): Colour = Colour.Blue
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin, "Pkg.Mod") { facade =>
+      val constants = constantsOf(invoke(facade, "red").getClass)
+      // Identity, because an enum constant is a singleton -- equality would also hold for a copy.
+      assert(invoke(facade, "red") eq constants(0))
+      assert(invoke(facade, "green") eq constants(1))
+      assert(invoke(facade, "blue") eq constants(2))
+    }
+  }
+
+  test("an exported enum supports valueOf and a defensive values copy") {
+    withFacade(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    pub enum Colour { case Red, case Green, case Blue }
+        |
+        |    @Export
+        |    pub def favourite(): Colour = Colour.Green
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin, "Pkg.Mod") { facade =>
+      val clazz = invoke(facade, "favourite").getClass
+      assert(clazz.getMethod("valueOf", classOf[String]).invoke(null, "Blue") eq constantsOf(clazz)(2))
+      // `values()` hands out a copy, so one caller cannot corrupt what the next one sees.
+      val first = clazz.getMethod("values").invoke(null)
+      val second = clazz.getMethod("values").invoke(null)
+      assert(first ne second)
+    }
+  }
+
+  /**
+    * Returns the constants of an enum class, in ordinal order.
+    *
+    * Read reflectively rather than by casting: `java.lang.Enum` is F-bounded, so there is no
+    * wildcard instantiation of it to cast to, and the fixture's own class is deliberately not on
+    * this suite's classpath to name directly.
+    */
+  private def constantsOf(clazz: Class[?]): List[AnyRef] =
+    clazz.getEnumConstants.toList.map(_.asInstanceOf[AnyRef])
+
+  /** Returns the declared name of an enum constant. */
+  private def constantName(constant: AnyRef): String =
+    constant.getClass.getMethod("name").invoke(constant).asInstanceOf[String]
+
   /** Reads component `i` of a tuple record through its accessor, which is named `_i`. */
   private def component(tuple: AnyRef, i: Int): AnyRef =
     tuple.getClass.getMethod(s"_$i").invoke(tuple)

@@ -474,7 +474,7 @@ object EntryPoints {
   }
 
   /** Returns an error for each type in `defn` that is not valid in Java. */
-  private def checkJavaTypes(defn: TypedAst.Def)(implicit flix: Flix): List[EntryPointError] = {
+  private def checkJavaTypes(defn: TypedAst.Def)(implicit root: TypedAst.Root, flix: Flix): List[EntryPointError] = {
     // `Unit` has no Java type of its own, but it is exportable in the two positions where the
     // shim method can render it away: a `Unit` return type becomes `void`, and the lone `Unit`
     // parameter that Flix gives a nullary function is dropped. A `Unit` anywhere else -- say the
@@ -483,12 +483,12 @@ object EntryPoints {
       case List(tpe) if isUnitType(tpe) == Result.Ok(true) => Nil
       case tpes => tpes
     }
-    // `Option[t]`, `List[t]`, `Set[t]`, `Map[k, v]` and tuples are exportable in return position,
-    // where the shim marshals them into `java.util.Optional`, an unmodifiable `java.util.List`,
-    // unmodifiable `java.util.Set` and `java.util.Map` views, and a `dev.flix.runtime.TupleN`
-    // record. None is exportable as a parameter, which would need the reverse conversion. What
-    // must be exportable is what they contain, so that is what is checked, and an error points at
-    // it rather than at the container.
+    // `Option[t]`, `List[t]`, `Set[t]`, `Map[k, v]`, tuples and data-free enums are exportable in
+    // return position, where the shim marshals them into `java.util.Optional`, an unmodifiable
+    // `java.util.List`, unmodifiable `java.util.Set` and `java.util.Map` views, a
+    // `dev.flix.runtime.TupleN` record, and a real Java enum. None is exportable as a parameter,
+    // which would need the reverse conversion. What must be exportable is what they contain, so
+    // that is what is checked, and an error points at it rather than at the container.
     //
     // Only the element, and only one level: an element that is itself a container has no plan, so
     // admitting `List[Option[t]]` here would produce a shim returning the internal tag class. The
@@ -566,12 +566,53 @@ object EntryPoints {
     * This must admit exactly what `ExportPlan.of` can build, no more: a type accepted here without
     * a plan compiles into a shim that returns the internal tag class instead of failing.
     */
-  private def unapplyContainer(tpe: Type): Option[List[Type]] =
+  private def unapplyContainer(tpe: Type)(implicit root: TypedAst.Root): Option[List[Type]] =
     unapplyOption(tpe).map(List(_))
       .orElse(unapplyList(tpe).map(List(_)))
       .orElse(unapplySet(tpe).map(List(_)))
       .orElse(unapplyMap(tpe))
       .orElse(unapplyTuple(tpe))
+      .orElse(unapplyNullaryEnum(tpe))
+
+  /**
+    * Returns an empty list if `tpe` is a Flix enum the shim can present as a Java enum.
+    *
+    * Empty rather than absent, and the difference carries the meaning: a data-free case holds no
+    * types, so there is nothing inside to check, but the enum is still a type whose representation
+    * the boundary replaces. Returning `None` would send it to `isExportableType`, which rejects
+    * every enum.
+    */
+  @tailrec
+  private def unapplyNullaryEnum(tpe: Type)(implicit root: TypedAst.Root): Option[List[Type]] = tpe match {
+    case Type.Alias(_, _, t, _) => unapplyNullaryEnum(t)
+    // Unapplied: a generic enum reaches here as a `Type.Apply` and so does not match, which is the
+    // rejection `isExportableEnum`'s type-parameter test then states in its own right.
+    case Type.Cst(TypeConstructor.Enum(sym, _), _) =>
+      root.enums.get(sym).filter(isExportableEnum).map(_ => Nil)
+    case _ => None
+  }
+
+  /**
+    * Returns `true` if `enm` has a Java enum form.
+    *
+    * Four conditions, each of which is a way the mapping would otherwise be wrong rather than
+    * merely unimplemented:
+    *
+    *   - Every case carries data nowhere. A case holding a value has no constant to be, and needs
+    *     the sealed-interface-and-record shape that does not exist yet.
+    *   - There is at least one case. An enum with none has no values, so nothing can be returned.
+    *   - No type parameters. `Color[Int32]` and `Color[String]` erase to one JVM class, so a
+    *     generic enum could only cross raw, losing the argument the caller asked about.
+    *   - At least two namespace segments, the same requirement an exported *function* already
+    *     meets. The class is named beside its namespace, so `mod Acme.Api` gives `Acme.Api$Color`
+    *     while one segment or none give a name in `dev.flix.gen` -- the package J0 keeps private,
+    *     and one Java cannot import from in the unnamed-package case.
+    */
+  private def isExportableEnum(enm: TypedAst.Enum): Boolean =
+    enm.cases.nonEmpty &&
+      enm.cases.values.forall(_.tpes.isEmpty) &&
+      enm.tparams.isEmpty &&
+      enm.sym.namespace.lengthIs >= 2
 
   /**
     * Returns the element types of `tpe` if it is a tuple.

@@ -1199,6 +1199,106 @@ class TestEntryPoints extends AnyFunSuite with TestUtils {
     expectError[EntryPointError.IllegalExportType](result)
   }
 
+  test("Test.ExportEnum.01") {
+    // An enum whose cases all carry no data is presented as a real Java enum.
+    val input =
+      """
+        |mod Pkg { }
+        |mod Pkg.Mod {
+        |    pub enum Colour { case Red, case Green }
+        |    @Export pub def f(): Colour = Colour.Red
+        |}
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibAll)
+    expectSuccess(result)
+  }
+
+  test("Test.ExportEnum.02") {
+    // A case carrying data has no constant to be. This is the sealed-interface shape, which does
+    // not exist yet, so admitting it would compile a shim handing back the internal tag class.
+    val input =
+      """
+        |mod Pkg { }
+        |mod Pkg.Mod {
+        |    pub enum Shape { case Circle(Int32), case Square }
+        |    @Export pub def f(): Shape = Shape.Square
+        |}
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibAll)
+    expectError[EntryPointError.IllegalExportType](result)
+  }
+
+  test("Test.ExportEnum.03") {
+    // A generic enum erases to one JVM class whatever it is applied to, so it could only cross
+    // raw -- losing exactly the argument the caller asked about.
+    val input =
+      """
+        |mod Pkg { }
+        |mod Pkg.Mod {
+        |    pub enum Box[t] { case Empty }
+        |    @Export pub def f(): Box[Int32] = Box.Empty
+        |}
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibAll)
+    expectError[EntryPointError.IllegalExportType](result)
+  }
+
+  test("Test.ExportEnum.04") {
+    // Declared in the root namespace, so the generated class would land in `dev.flix.gen` -- the
+    // package J0 keeps private. The same requirement the exported function itself already meets.
+    val input =
+      """
+        |pub enum Colour { case Red, case Green }
+        |mod Pkg { }
+        |mod Pkg.Mod { @Export pub def f(): Colour = Colour.Red }
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibAll)
+    expectError[EntryPointError.IllegalExportType](result)
+  }
+
+  test("Test.ExportEnum.05") {
+    // One namespace segment is not enough either: it leaves the class in `dev.flix.gen` just as
+    // the root namespace does, because the first segment is what becomes the Java package.
+    val input =
+      """
+        |mod Pkg {
+        |    pub enum Colour { case Red, case Green }
+        |}
+        |mod Pkg.Mod { @Export pub def f(): Pkg.Colour = Pkg.Colour.Red }
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibAll)
+    expectError[EntryPointError.IllegalExportType](result)
+  }
+
+  test("Test.ExportEnum.06") {
+    // Return position only, like every other converted type: a parameter needs the reverse
+    // conversion, which would have to map a Java constant back onto a Flix tag singleton.
+    val input =
+      """
+        |mod Pkg { }
+        |mod Pkg.Mod {
+        |    pub enum Colour { case Red, case Green }
+        |    @Export pub def f(c: Colour): Int32 = match c { case Colour.Red => 0, case Colour.Green => 1 }
+        |}
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibAll)
+    expectError[EntryPointError.IllegalExportType](result)
+  }
+
+  test("Test.ExportEnum.07") {
+    // And not nested, per J17: the element of a container has no plan of its own yet.
+    val input =
+      """
+        |mod Pkg { }
+        |mod Pkg.Mod {
+        |    pub enum Colour { case Red, case Green }
+        |    @Export pub def f(): List[Colour] = Colour.Red :: Nil
+        |}
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibAll)
+    expectError[EntryPointError.IllegalExportType](result)
+  }
+
   test("Test.ExportPolymorphic.01") {
     // An unconstrained type variable is exported as `java.lang.Object`. The monomorpher defaults
     // it to `AnyType`, which is represented as `Object`, so the boundary needs no special case.

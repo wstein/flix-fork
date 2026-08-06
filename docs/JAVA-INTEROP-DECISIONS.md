@@ -1114,3 +1114,72 @@ either function runs the elements are already primitive-or-`Object` and the two
 cannot disagree. A program containing both tuples compiles, where a real
 collision would trip `CodeGen`'s duplicate-name check. This is also what fixes
 the descriptor `AsTuple` reads fields at: `Object` for every reference element.
+
+---
+
+## J21 — A data-free enum crosses as a real Java enum
+
+**Status: Settled**, for the outbound direction and for enums whose cases all
+carry no data. A case carrying a value is still rejected; that needs the
+sealed-interface-and-record shape, which does not exist yet.
+
+The Flix representation is one singleton `NullaryTag` class per case,
+distinguished by the `ordinal` they inherit from `Tagged` and named
+`Pkg$dotMod$dotColour$Red` in `dev.flix.gen`. That is exactly what J0 keeps
+private, so what crosses is a class generated for the boundary: a genuine
+`java.lang.Enum` subclass with `ACC_ENUM`, its constants, `values()`,
+`valueOf(String)` and the private `(String, int)` constructor javac would emit.
+
+**Being a real enum is the whole point, and it is checkable.** `Class.isEnum`
+is defined as carrying `ACC_ENUM` *and* extending `java.lang.Enum`, and
+`EnumSet`, `EnumMap` and `Enum.valueOf` all refuse anything that fails it. A
+final class with public static constants would look like an enum to a reader
+and not be one to the runtime — and `switch` over it would not compile, because
+a Java compiler reads `ACC_ENUM` on the *fields* to decide whether they may be
+case labels. Both were verified by compiling and running a Java caller that
+switches over the result and builds an `EnumSet` from it.
+
+**Named beside its namespace, per J1.** Unlike `TupleN`, which varies only in
+arity and is therefore a runtime fixture, an enum is a *user* type with a name:
+`enum Colour` in `mod Pkg.Mod` is the class `Pkg.Mod$Colour` in package `Pkg`,
+sitting next to the `Pkg.Mod` facade. Nothing about it is keyed on a
+representation, so nothing about it is mangled.
+
+**The constants keep their Flix names** — `Red`, not `RED`. Java convention
+prefers the latter, but converting needs a heuristic that is lossy (`IPv4`
+becomes `IPV4`) and can make two distinct cases collide, where the identity
+mapping cannot. Exported *function* names are already used verbatim, checked
+rather than mangled, for the same reason.
+
+**By ordinal, not by `INSTANCEOF`.** This looks like a reversal of the `Option`
+conversion, which had its ordinal comparison replaced by a type test. It is
+not: `Option` asks a two-way question — is this the case carrying a value —
+where one type test beats reading a field and comparing it. Here the question
+is which of `n` cases this is, and a dense `tableswitch` answers it in one step
+where a chain of type tests would take `n`. The two are different questions,
+not two answers to one.
+
+Four conditions gate it, each a way the mapping would be *wrong* rather than
+merely unimplemented: every case data-free, at least one case, no type
+parameters (`Colour[Int32]` and `Colour[String]` erase to one class, so a
+generic enum could only cross raw), and at least two namespace segments. The
+last is the same requirement an exported function already meets, and for the
+same reason: the first segment becomes the Java package, so one segment or none
+leaves the class in `dev.flix.gen`.
+
+**Rejected: `values()[ordinal]` in the shim.** Three instructions instead of a
+switch, but `values()` clones the array on every call — an allocation per
+boundary crossing to avoid handing out a mutable shared array. The switch has
+no such cost. Handing out `$VALUES` directly was rejected for the reason javac
+rejects it: one caller could overwrite what every later caller sees.
+
+**Rejected: adding a `fromOrdinal` to the generated enum** so the shim could
+call it. It would be public API on a user-facing type, invented by the compiler
+and present in every exported enum, to save a switch the shim can emit itself.
+
+This also uncovered that a `Signature` attribute was being written whenever a
+def had a conversion plan, whether or not the plan had type arguments to
+declare. An exported enum is converted but named by a plain class, so its
+signature repeated its descriptor exactly — legal, and empty. The condition is
+now that the signature *differs* from the descriptor, which is what J6 meant by
+a signature being load-bearing.

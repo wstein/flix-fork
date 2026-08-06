@@ -316,6 +316,51 @@ declared in the `Signature`, so `(Int32, String)` and `(String, Bool)` are both
 `Tuple2` — and a primitive element is boxed, because a type argument is a
 reference. Every element must itself be exportable, and the type is return-only.
 
+## Enums
+
+An enum whose cases all carry no data is exportable **as a return type**, where
+the shim presents it as a real Java enum:
+
+```flix
+pub mod Acme.Greeter {
+    pub enum Colour { case Red, case Green, case Blue }
+
+    @Export
+    pub def favourite(): Colour = Colour.Green
+}
+```
+
+```java
+Greeter$Colour c = Greeter.favourite();   // Green
+c.ordinal();                              // 1
+Greeter$Colour.valueOf("Blue");           // Blue
+```
+
+The class is named beside its module, exactly as the facade is: `enum Colour` in
+`mod Acme.Greeter` is the class `Acme.Greeter$Colour`. The constants keep their
+Flix names — `Red`, not `RED` — because uppercasing needs a lossy guess that can
+make two cases collide.
+
+It is a genuine `java.lang.Enum`, not a class that resembles one, so it works
+everywhere the language expects an enum:
+
+```java
+switch (Greeter.favourite()) {
+    case Red -> ...;
+    case Green -> ...;
+    case Blue -> ...;
+}
+EnumSet.of(Greeter.favourite(), Greeter$Colour.Red);
+```
+
+The enum must live in a module with at least two segments — `mod Acme.Greeter`,
+not `mod Acme` and not the top level — which is the same requirement an exported
+function itself has, and for the same reason: the first segment becomes the Java
+package.
+
+A case that *carries* data is not exportable yet. Such a case has no constant to
+be, and needs a different Java shape.
+
 ## Why some conversions are return-only
 
 `Option` is *not* exportable as a parameter. Mapping `Optional.empty()` to
@@ -368,8 +413,8 @@ String]` is a kind error. Use `UnaryOperator`, `BinaryOperator`, `BiFunction`,
 A Flix closure cannot travel the other way: a function type is not exportable,
 so an exported function cannot return one.
 
-Not exportable: Flix enums other than `Option`, `List`, `Set` and `Map`, plus
-records, functions, and `Array`. Their JVM representation is an implementation
+Not exportable: Flix enums with data-carrying cases, plus records, functions,
+and `Array`. Their JVM representation is an implementation
 detail of the compiler — a `Some(x)` is a class called `Tag$Obj` distinguished
 only by an `int ordinal` field — so exposing them would freeze names the backend
 needs to stay free to change.

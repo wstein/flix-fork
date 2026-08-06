@@ -46,8 +46,8 @@ sealed trait ClassMaker {
 
   protected val visitor: ClassWriter
 
-  protected def makeField(fieldName: String, fieldType: BackendType, v: Visibility, f: Final, vol: Volatility, s: Static, signature: Option[String]): Unit = {
-    val m = v.toInt + f.toInt + s.toInt + vol.toInt
+  protected def makeField(fieldName: String, fieldType: BackendType, v: Visibility, f: Final, vol: Volatility, s: Static, signature: Option[String], extraFlags: Int = 0): Unit = {
+    val m = v.toInt + f.toInt + s.toInt + vol.toInt + extraFlags
     val field = visitor.visitField(m, fieldName, fieldType.toDescriptor, signature.orNull, null)
     field.visitEnd()
   }
@@ -55,6 +55,24 @@ sealed trait ClassMaker {
   def mkField(field: Field, v: Visibility, f: Final, vol: Volatility, signature: Option[String] = None): Unit = field match {
     case InstanceField(_, name, tpe) => makeField(name, tpe, v, f, vol, NotStatic, signature)
     case StaticField(_, name, tpe) => makeField(name, tpe, v, f, vol, IsStatic, signature)
+  }
+
+  /**
+    * Declares `field` to be one of the constants of an enum class.
+    *
+    * `ACC_ENUM` is what tells reflection that this field is a constant rather than an ordinary
+    * static of the same type -- `Field.isEnumConstant` reads it, and so does a Java compiler
+    * deciding whether the field may appear as a `switch` label. The constant is otherwise an
+    * ordinary `public static final`, so omitting the flag produces a class that works until
+    * someone reflects over it or switches on it.
+    */
+  def mkEnumConstant(field: StaticField): Unit =
+    makeField(field.name, field.tpe, IsPublic, IsFinal, NotVolatile, IsStatic, None, Opcodes.ACC_ENUM)
+
+  /** Declares a field the compiler generated rather than the source named, such as an enum's `$VALUES`. */
+  def mkSyntheticField(field: Field, v: Visibility, f: Final): Unit = field match {
+    case InstanceField(_, name, tpe) => makeField(name, tpe, v, f, NotVolatile, NotStatic, None, Opcodes.ACC_SYNTHETIC)
+    case StaticField(_, name, tpe) => makeField(name, tpe, v, f, NotVolatile, IsStatic, None, Opcodes.ACC_SYNTHETIC)
   }
 
   /**
@@ -158,6 +176,21 @@ object ClassMaker {
     new AbstractClassMaker(mkClassWriter(className, IsPublic, NotFinal, IsAbstract, NotInterface, superClass, interfaces, signature))
   }
 
+  /**
+    * Writes an enum class, i.e. a final subclass of `java.lang.Enum` carrying `ACC_ENUM`.
+    *
+    * The flag is not decoration. `Class.isEnum` is defined as having it *and* extending
+    * `java.lang.Enum`, and `Enum.valueOf`, `EnumSet` and `EnumMap` all refuse a class that fails
+    * that test. Writing the constants and the `values()` method without it produces a class that
+    * looks like an enum to a reader and is not one to the runtime.
+    *
+    * `signature` is where the self-referential type argument goes: an enum `Color` extends
+    * `Enum<Color>`, which the descriptor cannot say.
+    */
+  def mkEnumClass(className: JvmName, signature: Option[String])(implicit flix: Flix): InstanceClassMaker = {
+    new InstanceClassMaker(mkClassWriter(className, IsPublic, IsFinal, NotAbstract, NotInterface, JvmName.Enum, Nil, signature, Opcodes.ACC_ENUM))
+  }
+
   def mkInterface(interfaceName: JvmName, interfaces: List[JvmName] = Nil, signature: Option[String] = None)(implicit flix: Flix): InterfaceMaker = {
     new InterfaceMaker(mkClassWriter(interfaceName, IsPublic, NotFinal, IsAbstract, IsInterface, JvmName.Object, interfaces, signature))
   }
@@ -181,9 +214,9 @@ object ClassMaker {
     * The rule is therefore not "after erasure, never" but "wherever an argument is still known" --
     * which is here and in the method signature of an exported shim.
     */
-  private def mkClassWriter(name: JvmName, v: Visibility, f: Final, a: Abstract, i: Interface, superClass: JvmName, interfaces: List[JvmName], signature: Option[String])(implicit flix: Flix): ClassWriter = {
+  private def mkClassWriter(name: JvmName, v: Visibility, f: Final, a: Abstract, i: Interface, superClass: JvmName, interfaces: List[JvmName], signature: Option[String], extraFlags: Int = 0)(implicit flix: Flix): ClassWriter = {
     val cw = AsmOps.mkClassWriter()
-    val m = v.toInt + f.toInt + a.toInt + i.toInt
+    val m = v.toInt + f.toInt + a.toInt + i.toInt + extraFlags
     cw.visit(CompilerConstants.JvmTargetVersion, m, name.toInternalName, signature.orNull, superClass.toInternalName, interfaces.map(_.toInternalName).toArray)
     cw.visitSource(name.toInternalName, null)
     cw

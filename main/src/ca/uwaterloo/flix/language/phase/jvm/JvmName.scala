@@ -191,6 +191,7 @@ object JvmName {
   val Class: JvmName = JvmName(JavaLang, "Class")
   val ConcurrentLinkedQueue: JvmName = JvmName(JavaUtilConcurrent, "ConcurrentLinkedQueue")
   val Double: JvmName = JvmName(JavaLang, "Double")
+  val Enum: JvmName = JvmName(JavaLang, "Enum")
   val DoubleConsumer: JvmName = JvmName(JavaUtilFunction, "DoubleConsumer")
   val DoubleFunction: JvmName = JvmName(JavaUtilFunction, "DoubleFunction")
   val DoublePredicate: JvmName = JvmName(JavaUtilFunction, "DoublePredicate")
@@ -220,6 +221,7 @@ object JvmName {
   val AbstractMap: JvmName = JvmName(JavaUtil, "AbstractMap")
   /** `java.util.AbstractMap.SimpleImmutableEntry`, which saves generating an entry class. */
   val SimpleImmutableEntry: JvmName = JvmName(JavaUtil, "AbstractMap$SimpleImmutableEntry")
+  val IllegalStateException: JvmName = JvmName(JavaLang, "IllegalStateException")
   val Long: JvmName = JvmName(JavaLang, "Long")
   val LongConsumer: JvmName = JvmName(JavaUtilFunction, "LongConsumer")
   val LongFunction: JvmName = JvmName(JavaUtilFunction, "LongFunction")

@@ -168,9 +168,11 @@ several genuinely open problems, each larger than it first appears:
   generic record with one class per arity — copied rather than viewed, since a
   tuple's fields are fixed in number and already in hand. It is the first
   generated class to declare type *parameters* rather than merely consume
-  arguments. Enums and records are the rest of this shape and are still
-  rejected; the naming question they raise is real API commitment rather than a
-  representation problem, which is what makes them larger than tuples were.
+  arguments. Enums whose cases all carry no data cross as real `java.lang.Enum`
+  classes, named beside their module and keeping their Flix case names verbatim.
+  What is left is enums with data-carrying cases, which need a sealed interface
+  and a record per case, and records — where the open question is API naming
+  rather than representation.
 - **The inbound boundary**, which is a separate mechanism with open soundness
   defects (issues 8618 and 5172, on Java functional interfaces) and duplicated
   conversion logic (issue 8592). Nothing in the export work addresses it. The

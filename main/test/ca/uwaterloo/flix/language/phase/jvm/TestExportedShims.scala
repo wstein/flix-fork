@@ -569,6 +569,46 @@ class TestExportedShims extends AnyFunSuite {
     assertResult(Some("<T1:Ljava/lang/Object;T2:Ljava/lang/Object;>Ljava/lang/Record;"))(signature)
   }
 
+  test("an exported enum is presented as a class beside its namespace") {
+    // Named as J1 names every other class a Java caller writes, so `mod Pkg.Mod` gives
+    // `Pkg.Mod$Colour` rather than a name under `dev.flix.gen`. No signature: the class takes no
+    // type arguments, so the descriptor already says everything about it.
+    val (descriptors, signatures) = membersOf(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    pub enum Colour { case Red, case Green }
+        |
+        |    @Export
+        |    pub def favourite(): Colour = Colour.Red
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin, "Pkg/Mod")
+    assert(descriptors.get("favourite").contains("()LPkg/Mod$Colour;"))
+    assert(!signatures.contains("favourite"), s"an enum needs no signature, got: ${signatures.get("favourite")}")
+  }
+
+  test("an exported enum's private tag classes stay private") {
+    // The Flix representation is one singleton class per case. Those keep their `dev.flix.gen`
+    // names and are *not* what crosses -- the generated Java enum is a separate class, and both
+    // exist in the same output.
+    val names = classNamesOf(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    pub enum Colour { case Red, case Green }
+        |
+        |    @Export
+        |    pub def favourite(): Colour = Colour.Red
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin)
+    // Simple names, so the `Pkg` package does not appear; the point is that the Java enum sits
+    // beside the `Mod` facade while the tag classes keep their mangled `dev.flix.gen` names.
+    assert(names.contains("Mod$Colour"), s"expected a generated Java enum, got: $names")
+    assert(names.contains("Pkg$dotMod$dotColour$Red"), s"expected the tag classes to remain, got: $names")
+  }
+
   test("no return type the front end accepts leaks the Flix representation") {
     // `EntryPoints` decides what may be exported and `ExportPlan` decides how, over different type
     // representations, so a gate widened ahead of a plan compiles into a shim that falls through
@@ -607,7 +647,8 @@ class TestExportedShims extends AnyFunSuite {
       "Map[BigInt, BigInt]" -> "Map#{1ii => 1ii}",
       "(Int32, String)" -> "(1, \"s\")",
       "(String, Regex)" -> "(\"s\", regex\"a\")",
-      "(Bool, Float64, BigInt)" -> "(true, 1.0f64, 1ii)"
+      "(Bool, Float64, BigInt)" -> "(true, 1.0f64, 1ii)",
+      "Colour" -> "Colour.Red"
     )
     val defs = returnTypes.zipWithIndex.map {
       case ((tpe, value), i) => s"    @Export\n    pub def f$i(): $tpe = $value"
@@ -615,6 +656,8 @@ class TestExportedShims extends AnyFunSuite {
     val (descriptors, signatures) = membersOf(
       s"""mod Pkg { }
          |mod Pkg.Mod {
+         |    pub enum Colour { case Red, case Green }
+         |
          |$defs
          |}
          |

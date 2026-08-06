@@ -68,6 +68,9 @@ object BytecodeInstructions {
 
     def visitTryCatchBlock(beforeTry: Label, afterTry: Label, handlerStart: Label): Unit =
       visitor.visitTryCatchBlock(beforeTry, afterTry, handlerStart, null)
+
+    def visitTableSwitchInstruction(min: Int, max: Int, default: Label, labels: List[Label]): Unit =
+      visitor.visitTableSwitchInsn(min, max, default, labels *)
   }
 
   sealed case class Handle(handle: asm.Handle)
@@ -78,6 +81,30 @@ object BytecodeInstructions {
 
   def mkStaticHandle(m: StaticInterfaceMethod): Handle = {
     Handle(new asm.Handle(Opcodes.H_INVOKESTATIC, m.clazz.toInternalName, m.name, m.d.toDescriptor, true))
+  }
+
+  /**
+    * Switches on the int on top of the stack, which must be in `0` until `branches.length`.
+    *
+    * `[..., int] --> [..., whatever the taken branch leaves]`
+    *
+    * Every branch must leave the stack in the same shape, since they merge afterwards. `default`
+    * runs when the value is out of range and is expected not to fall through -- it has no value to
+    * leave, so returning or throwing is the only thing it can correctly do.
+    */
+  def tableSwitch(branches: List[MethodVisitor => Unit])(default: MethodVisitor => Unit)(implicit mv: MethodVisitor): Unit = {
+    val labels = branches.map(_ => new Label())
+    val defaultLabel = new Label()
+    val endLabel = new Label()
+    mv.visitTableSwitchInstruction(0, branches.length - 1, defaultLabel, labels)
+    for ((branch, label) <- branches.zip(labels)) {
+      mv.visitLabel(label)
+      branch(mv)
+      mv.visitJumpInstruction(Opcodes.GOTO, endLabel)
+    }
+    mv.visitLabel(defaultLabel)
+    default(mv)
+    mv.visitLabel(endLabel)
   }
 
   /** A handle that reads `field`, for passing a component accessor to a bootstrap method. */

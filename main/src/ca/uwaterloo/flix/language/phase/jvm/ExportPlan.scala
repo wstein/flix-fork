@@ -292,6 +292,37 @@ object ExportPlan {
   }
 
   /**
+    * A Flix enum whose cases all carry no data, presented as a real Java enum.
+    *
+    * The value is one of a fixed set of singletons distinguished by the `ordinal` they inherit
+    * from `Tagged`, and the generated enum's constants are created in that same order, so the
+    * conversion is a switch from one to the other.
+    *
+    * By ordinal rather than by `INSTANCEOF` on each tag class, which is what an `Option` uses.
+    * That is not an inconsistency: `Option` asks a two-way question -- is this the case that
+    * carries a value -- where one type test is simpler than reading a field and comparing it.
+    * Here the question is which of `n` cases this is, and a dense switch answers it in one step
+    * where a chain of type tests would take `n`.
+    */
+  case class AsEnum(enum0: BackendObjType.ExportEnum, constants: List[String]) extends ExportPlan {
+    def flixType: BackendType = BackendObjType.Tagged.toTpe
+
+    def signature: ExportSignature = ExportSignature.Exact(enum0.toTpe)
+
+    def emit(loc: SourceLocation, nextLocal: Int)(implicit root: JvmAst.Root, mv: MethodVisitor): Unit = {
+      GETFIELD(BackendObjType.Tagged.OrdinalField)
+      tableSwitch(constants.map(name => (mv: MethodVisitor) => GETSTATIC(enum0.ConstantField(name))(mv))) { implicit mv =>
+        // Unreachable: the ordinals of an enum are exactly `0` until the number of its cases, and
+        // this switch has a branch for each. It is written rather than omitted because a switch
+        // must have a default, and throwing says which invariant broke if one ever does.
+        throwWithMessage(JvmName.IllegalStateException, s"Unknown ordinal for '${enum0.jvmName.toBinaryName}'")
+      }
+    }
+
+    override def generatedClasses: List[BackendObjType.ExportClass] = List(enum0)
+  }
+
+  /**
     * Returns how `declared` is converted, or `None` if it needs no conversion.
     *
     * `declared` is the type as the programmer wrote it. The erased type cannot be used: it has
@@ -315,6 +346,8 @@ object ExportPlan {
         val erasedValue = BackendType.toErasedBackendType(v)
         val view = BackendObjType.MapView(viewElementPlan(erasedKey), viewElementPlan(erasedValue))
         Some(AsMap(elementPlan(k, erasedKey), elementPlan(v, erasedValue), treeTag(erased, "Map"), view))
+      case SimpleType.Enum(sym, Nil) if isNullaryEnum(sym) =>
+        Some(AsEnum(BackendObjType.ExportEnum(sym), constantNames(sym)))
       case SimpleType.Tuple(elms) =>
         // The erased element types are both what the backend named its tuple class after and what
         // decides whether each element needs boxing, so one list serves both.
@@ -378,6 +411,20 @@ object ExportPlan {
     xs.foldRight(Option(List.empty[ExportPlan])) {
       case (x, acc) => for (plans <- acc; plan <- f(x)) yield plan :: plans
     }
+
+  /**
+    * Returns `true` if every case of `sym` carries no data.
+    *
+    * Such an enum has a constant to be on the Java side; one whose cases carry values does not,
+    * and is rejected by `EntryPoints` until the sealed-interface shape exists. Asked of the
+    * backend's own view of the enum, so it cannot disagree with what the conversion will read.
+    */
+  private def isNullaryEnum(sym: Symbol.EnumSym)(implicit root: JvmAst.Root): Boolean =
+    root.enums.get(sym).exists(e => e.cases.nonEmpty && e.cases.values.forall(_.tpes.isEmpty))
+
+  /** Returns the names of the cases of `sym`, in ordinal order. */
+  private def constantNames(sym: Symbol.EnumSym)(implicit root: JvmAst.Root): List[String] =
+    root.enums(sym).cases.keys.toList.sortBy(_.ordinal).map(_.name)
 
   /** Returns `true` if `sym` is the standard library's `Option`. */
   private def isOption(sym: Symbol.EnumSym): Boolean = isStdEnum(sym, "Option")

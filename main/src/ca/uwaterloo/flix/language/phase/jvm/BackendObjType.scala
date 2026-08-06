@@ -77,6 +77,11 @@ sealed trait BackendObjType {
     // does not live in the package of things the backend is free to rename. Only the arity varies:
     // the element types are its type *parameters*, supplied by the shim's signature.
     case BackendObjType.ExportTuple(arity) => JvmName(DevFlixRuntime, s"Tuple$arity")
+    // A user type with a name of its own, so it is named beside its namespace like every other
+    // class a Java caller writes -- `enum Color` in `mod Acme.Api` is `Acme.Api$Color`. Unlike the
+    // views and the tuple record, nothing about it is keyed on a representation.
+    case BackendObjType.ExportEnum(sym) =>
+      JvmName(JvmName.packageOfNamespace(sym.namespace), JvmName.classPrefixOfNamespace(sym.namespace) + sym.name)
     // Java classes
     case BackendObjType.Native(className) => className
     // Effects Runtime
@@ -1505,14 +1510,17 @@ object BackendObjType {
     private def shimSignature(defn: JvmAst.Def)(implicit root: JvmAst.Root): Option[String] = {
       val paramPlans = shimParamSimpleTypes(defn).map(ExportPlan.ofParameter)
       val resultPlan = exportPlan(defn)
-      Option.when(resultPlan.isDefined || paramPlans.exists(_.isDefined)) {
-        val params = shimParamTypes(defn).zip(paramPlans).map {
-          case (_, Some(plan)) => plan.typeArgument
-          case (tpe, None) => tpe.toDescriptor
-        }.mkString
-        val result = resultPlan.map(_.typeArgument).getOrElse(shimResultType(defn).toDescriptor)
-        s"($params)$result"
-      }
+      val params = shimParamTypes(defn).zip(paramPlans).map {
+        case (_, Some(plan)) => plan.typeArgument
+        case (tpe, None) => tpe.toDescriptor
+      }.mkString
+      val result = resultPlan.map(_.typeArgument).getOrElse(shimResultType(defn).toDescriptor)
+      val signature = s"($params)$result"
+      // Emitted only when it says something the descriptor does not. Having a plan is not the same
+      // as having type arguments: an exported enum is converted but is named by a plain class, so
+      // its signature would repeat its descriptor exactly -- a legal but empty attribute, and one
+      // that invites a reader to look for an argument that was never there.
+      Option.when(signature != ShimMethod(defn).d.toDescriptor)(signature)
     }
 
     /** The declared types of the shim method's parameters, in the same order as [[shimParamTypes]]. */
@@ -2516,6 +2524,126 @@ object BackendObjType {
         (this.toTpe.toAsmType :: components :: getters.toList) *
       )
       xReturn(result)
+    }
+  }
+
+  /**
+    * A Flix enum whose cases all carry no data, presented to Java as a real `java.lang.Enum`.
+    *
+    * The Flix representation is one singleton [[NullaryTag]] class per case, distinguished by the
+    * `ordinal` field they inherit from [[Tagged]]. Those classes are named `Color$Red` in
+    * `dev.flix.gen` and are exactly what J0 keeps private, so what crosses is a separate class
+    * generated for the boundary.
+    *
+    * Unlike [[ExportTuple]], which varies only in arity, this one is a *user* type with a name, so
+    * it is named beside its namespace as J1 requires: `enum Color` in `mod Acme.Api` is the class
+    * `Acme.Api$Color` in the package `Acme`, sitting next to the `Acme.Api` facade rather than
+    * inside a package named after it.
+    *
+    * The constants keep their Flix names -- `Red`, not `RED`. Java convention would prefer the
+    * latter, but converting needs a heuristic that is lossy (`IPv4` becomes `IPV4`) and can make
+    * two distinct cases collide, whereas the identity mapping cannot. Exported def names are
+    * already used verbatim for the same reason.
+    *
+    * Only data-free enums are handled here. A case carrying a value has no constant to be, and
+    * needs the sealed-interface-and-record shape instead.
+    */
+  case class ExportEnum(sym: Symbol.EnumSym) extends ExportClass {
+
+    def genByteCode()(implicit root: JvmAst.Root, flix: Flix): Array[Byte] = {
+      val names = constantNames(root)
+      val cm = ClassMaker.mkEnumClass(this.jvmName, Some(classSignature))
+
+      names.foreach(name => cm.mkEnumConstant(ConstantField(name)))
+      cm.mkSyntheticField(ValuesField, IsPrivate, IsFinal)
+      // Private, as javac makes it: an enum's constants are exactly those the class initializer
+      // creates, and a reachable constructor would let a caller make a value that is none of them.
+      cm.mkConstructor(Constructor, IsPrivate, constructorIns(_))
+      cm.mkStaticMethod(ValuesMethod, IsPublic, NotFinal, valuesIns(_))
+      cm.mkStaticMethod(ValueOfMethod, IsPublic, NotFinal, valueOfIns(_))
+      cm.mkStaticConstructor(StaticConstructorMethod(this.jvmName), staticConstructorIns(names)(_))
+
+      cm.closeClassMaker()
+    }
+
+    /** The names of the cases, in ordinal order, which is the order the constants are created in. */
+    private def constantNames(root: JvmAst.Root): List[String] =
+      root.enums(sym).cases.keys.toList.sortBy(_.ordinal).map(_.name)
+
+    /** `Ljava/lang/Enum<LAcme/Api$Color;>;` -- an enum is always `Enum` of itself. */
+    private def classSignature: String =
+      s"L${JvmName.Enum.toInternalName}<${this.toTpe.toDescriptor}>;"
+
+    def ConstantField(name: String): StaticField = StaticField(this.jvmName, name, this.toTpe)
+
+    /** Holds the constants in ordinal order, so `values()` need not rebuild them. */
+    private def ValuesField: StaticField =
+      StaticField(this.jvmName, "$VALUES", BackendType.Array(this.toTpe))
+
+    private def Constructor: ConstructorMethod =
+      ConstructorMethod(this.jvmName, List(BackendType.String, BackendType.Int32))
+
+    private def ValuesMethod: StaticMethod =
+      StaticMethod(this.jvmName, "values", mkDescriptor()(BackendType.Array(this.toTpe)))
+
+    private def ValueOfMethod: StaticMethod =
+      StaticMethod(this.jvmName, "valueOf", mkDescriptor(BackendType.String)(this.toTpe))
+
+    /** `[] --> return`, passing the name and ordinal on to `java.lang.Enum`. */
+    private def constructorIns(implicit mv: MethodVisitor): Unit = {
+      thisLoad()
+      ALOAD(1)
+      ILOAD(2)
+      INVOKESPECIAL(ClassConstants.Enum.Constructor)
+      RETURN()
+    }
+
+    /**
+      * `[] --> [constants]`
+      *
+      * A copy, because the array is mutable and shared: handing out `$VALUES` itself would let one
+      * caller overwrite what every later caller sees. This is what javac emits for the same reason.
+      */
+    private def valuesIns(implicit mv: MethodVisitor): Unit = {
+      // An array type is its own descriptor where a class name is expected, and it is also the
+      // owner of `clone`: `Object.clone` is protected, so invoking it there would not pass access
+      // control. The public override lives on the array class, which is what javac targets too.
+      val arrayType = BackendType.Array(this.toTpe).toDescriptor
+      GETSTATIC(ValuesField)
+      mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, arrayType, "clone", mkDescriptor()(BackendType.Object).toDescriptor, false)
+      mv.visitTypeInstructionDirect(Opcodes.CHECKCAST, arrayType)
+      ARETURN()
+    }
+
+    /** `[] --> [constant]`, delegating the name lookup and the error message to `java.lang.Enum`. */
+    private def valueOfIns(implicit mv: MethodVisitor): Unit = {
+      mv.visitLoadConstantInstruction(this.toTpe.toAsmType)
+      ALOAD(0)
+      INVOKESTATIC(ClassConstants.Enum.ValueOfMethod)
+      CHECKCAST(this.jvmName)
+      ARETURN()
+    }
+
+    /** `[] --> return`, creating each constant and then the array that holds them. */
+    private def staticConstructorIns(names: List[String])(implicit mv: MethodVisitor): Unit = {
+      for ((name, ordinal) <- names.zipWithIndex) {
+        NEW(this.jvmName)
+        DUP()
+        pushString(name)
+        pushInt(ordinal)
+        INVOKESPECIAL(Constructor)
+        PUTSTATIC(ConstantField(name))
+      }
+      pushInt(names.length)
+      ANEWARRAY(this.jvmName)
+      for ((name, ordinal) <- names.zipWithIndex) {
+        DUP()
+        pushInt(ordinal)
+        GETSTATIC(ConstantField(name))
+        xArrayStore(this.toTpe)
+      }
+      PUTSTATIC(ValuesField)
+      RETURN()
     }
   }
 

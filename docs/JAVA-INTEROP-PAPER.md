@@ -80,8 +80,8 @@ public final class Acme.Api {
 
 Exportability is restricted to types with an exact JVM representation, or to
 types this work gives one. Anything whose encoding remains an implementation
-detail — records, closures, and until this work all enums and tuples — is
-rejected rather than exposed.
+detail — records, closures, tuples and enums until this work, and enums with
+data-carrying cases still — is rejected rather than exposed.
 
 ### 2.2 What erasure costs a signature
 
@@ -483,6 +483,7 @@ how three of the claims in the first draft of this report came to be false.
 | Six-language matrix (§5) | Java in CI; Scala/Kotlin re-measured per B.3–B.4 but not yet in CI; Groovy, Clojure, JRuby hand-run only |
 | `List`, `Set`, `Map` → `java.util.List`/`Set`/`Map` (§7) | Implemented as lazy views; `Set` and `Map` in ascending key order. The eager `List` copy is deleted |
 | Tuple → `dev.flix.runtime.TupleN` | Implemented as a generated generic record, one class per arity; copied rather than viewed |
+| Data-free enum → a real `java.lang.Enum` | Implemented; named beside its namespace, constants verbatim. Data-carrying cases still rejected |
 | Polymorphic exports (§4.1) | Implemented for unconstrained variables; constrained ones rejected |
 | Java generic type arguments (§7) | Implemented for returns and parameters |
 | Inbound Flix → Java boundary (§7.2) | Out of scope; unsound today, tracked upstream |
