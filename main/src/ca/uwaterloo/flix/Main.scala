@@ -268,12 +268,12 @@ object Main {
           if (cmdOpts.files.isEmpty) {
             exitOnResult {
               Bootstrap.bootstrap(cwd, options.githubToken).flatMap { bootstrap =>
-                val flix = bootstrap.mkFlix(options, formatter)
+                val flix = bootstrap.mkFlix(options, formatter, libPaths(cmdOpts.libs))
                 bootstrap.check(flix)
               }
             }
           } else {
-            val flix = mkFlixWithFiles(cmdOpts.files, options)
+            val flix = mkFlixWithFiles(cmdOpts.files, options, libPaths(cmdOpts.libs))
             val (optRoot, errors) = flix.check()
             if (errors.isEmpty) System.exit(0)
             else exitWithErrors(flix, errors, optRoot)
@@ -286,7 +286,7 @@ object Main {
           }
           exitOnResult {
             Bootstrap.bootstrap(cwd, options.githubToken).flatMap { bootstrap =>
-              val flix = bootstrap.mkFlix(options, formatter)
+              val flix = bootstrap.mkFlix(options, formatter, libPaths(cmdOpts.libs))
               bootstrap.buildIfNeeded(flix)
             }
           }
@@ -567,6 +567,7 @@ object Main {
   case class CmdOpts(
     command: Command = Command.None,
                      stubsOut: Option[String] = None,
+                     libs: Seq[String] = Seq.empty,
     args: List[String] = Nil,
     testFilters: List[String] = Nil,
     testEventsJson: Boolean = false,
@@ -697,14 +698,20 @@ object Main {
       // Command
       cmd("init").action((_, c) => c.copy(command = Command.Init)).text("  creates a new project in the current directory.")
 
-      cmd("check").action((_, c) => c.copy(command = Command.Check)).text("  checks the current project for errors.")
+      cmd("check").action((_, c) => c.copy(command = Command.Check)).text("  checks the current project for errors.").children(
+        opt[String]("lib").unbounded().action((arg, c) => c.copy(libs = c.libs :+ arg)).
+          text("adds a jar to the classpath. Repeatable."),
+      )
 
       cmd("stubs").action((_, c) => c.copy(command = Command.Stubs)).text("  writes compile-only Java stubs for the @Export-ed defs.").children(
         opt[String]("out").action((arg, c) => c.copy(stubsOut = Some(arg))).
           text("where to write the stubs. Defaults to 'build/stubs'."),
       )
 
-      cmd("build").action((_, c) => c.copy(command = Command.Build)).text("  builds (i.e. compiles) the current project.")
+      cmd("build").action((_, c) => c.copy(command = Command.Build)).text("  builds (i.e. compiles) the current project.").children(
+        opt[String]("lib").unbounded().action((arg, c) => c.copy(libs = c.libs :+ arg)).
+          text("adds a jar to the classpath. Repeatable."),
+      )
 
       cmd("build-classes").action((_, c) => c.copy(command = Command.BuildClasses)).text("  builds the current project and writes the class files to the build directory.")
 
@@ -921,8 +928,21 @@ object Main {
   /**
     * Creates a fresh Flix instance configured with the given options and source files.
     */
-  private def mkFlixWithFiles(files: Seq[File], options: Options)(implicit formatter: Formatter): Flix = {
-    val flix = new Flix().setFormatter(formatter)
+  /**
+    * Adds each `--lib` jar to `flix`, or exits naming the one that could not be used.
+    *
+    * A project's own dependencies are declared in `flix.toml` and land under `lib/cache` and
+    * `lib/external`, which the package managers own. That leaves no way to compile against a jar
+    * the *build* just produced -- which is the ordinary case once Java and Flix are built together,
+    * since the Java classes exist only as build output. This is that seam: the caller names the
+    * classpath instead of the compiler inferring it from a directory it manages.
+    *
+    * The immutable dependency list must be supplied when the compiler instance is constructed.
+    */
+  private def libPaths(libs: Seq[String]): List[Path] = libs.map(Paths.get(_)).toList
+
+  private def mkFlixWithFiles(files: Seq[File], options: Options, jars: List[Path] = Nil)(implicit formatter: Formatter): Flix = {
+    val flix = new Flix(jars = jars).setFormatter(formatter)
     flix.setOptions(options)
     val sctx: SecurityContext = SecurityContext.Unrestricted
     for (file <- files) {

@@ -271,4 +271,14 @@ class TestMain extends AnyFunSuite {
     assert(opts.xnodeprecated)
   }
 
+  test("check accepts repeatable --lib paths") {
+    val opts = Main.parseCmdOpts(Array("check", "--lib", "one.jar", "--lib", "two.jar")).get
+    assert(opts.libs == Seq("one.jar", "two.jar"))
+  }
+
+  test("build accepts repeatable --lib paths") {
+    val opts = Main.parseCmdOpts(Array("build", "--lib", "generated.jar")).get
+    assert(opts.libs == Seq("generated.jar"))
+  }
+
 }

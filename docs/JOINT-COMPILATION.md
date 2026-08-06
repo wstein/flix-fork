@@ -19,7 +19,8 @@ Neither language can be compiled first. The supported build schedule is:
 
 1. Derive Java facade stubs from Flix syntax.
 2. Compile the Java sources against those stubs.
-3. Compile Flix against the Java classes (and the facade stubs when Java signatures name them).
+3. Package the Java classes as a jar and compile Flix with `build --lib <java.jar>` (and include
+   the facade stubs when Java signatures name them).
 4. Compile Java against the real Flix output.
 5. Put only the real Java and Flix classes on the runtime classpath.
 
@@ -85,3 +86,8 @@ location instead of surviving until runtime.
 
 Generic and converted-container acceptance tests belong to a future export-ABI expansion; they must
 not be claimed by this branch until the real generated facades support them.
+
+`--lib` is repeatable on `check` and `build`. It supplements dependencies from `flix.toml` without
+writing build output into package-manager-owned cache directories. Dependencies are fixed when a
+`Flix` instance is constructed, so project builds combine these paths with the bootstrapped project
+jars before compilation begins.
