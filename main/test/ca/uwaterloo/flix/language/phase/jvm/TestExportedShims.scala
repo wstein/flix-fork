@@ -88,6 +88,30 @@ class TestExportedShims extends AnyFunSuite {
     }
   }
 
+  /** Compiles `input` and returns the generic signature of `className`, if it declares one. */
+  private def classSignatureOf(input: String, className: String): Option[String] = {
+    val out = Files.createTempDirectory("flix-export-test")
+    try {
+      val opts = Options.DefaultTest.copy(outputJvm = true, outputPath = out)
+      val flix = new Flix().setOptions(opts)
+      flix.addVirtualPath(CompilerConstants.VirtualTestFile, input)
+      flix.compile().toResult match {
+        case Result.Ok(_) => ()
+        case Result.Err(errors) => fail(s"the test program must compile, but got: $errors")
+      }
+      val path = out.resolve("class").resolve(s"$className.class")
+      assert(Files.exists(path), s"expected a generated class at $path")
+      var signature = Option.empty[String]
+      new ClassReader(Files.readAllBytes(path)).accept(new ClassVisitor(Opcodes.ASM9) {
+        override def visit(version: Int, access: Int, name: String, sig: String, superName: String, interfaces: Array[String]): Unit =
+          signature = Option(sig)
+      }, 0)
+      signature
+    } finally {
+      deleteRecursively(out)
+    }
+  }
+
   /** Returns the descriptors and signatures of the methods of the class file at `path`. */
   private def read(path: Path): (Map[String, String], Map[String, String]) = {
     assert(Files.exists(path), s"expected a generated class at $path")
@@ -480,6 +504,71 @@ class TestExportedShims extends AnyFunSuite {
     assert(signatures.get("codes").contains("()Ljava/util/Map<Ljava/lang/Integer;Ljava/lang/String;>;"))
   }
 
+  test("an exported tuple is presented as a dev.flix.runtime record") {
+    // The element types survive only in the signature: the class is generic, so its descriptor
+    // says `Tuple2` and nothing about what is in it. A primitive element appears boxed there for
+    // the same reason it does inside an `Optional` -- a type argument is a reference.
+    val (descriptors, signatures) = membersOf(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    @Export
+        |    pub def pair(): (Int32, String) = (1, "s")
+        |
+        |    @Export
+        |    pub def triple(): (Bool, Float64, String) = (true, 1.0f64, "s")
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin, "Pkg/Mod")
+    assert(descriptors.get("pair").contains("()Ldev/flix/runtime/Tuple2;"))
+    assert(signatures.get("pair").contains("()Ldev/flix/runtime/Tuple2<Ljava/lang/Integer;Ljava/lang/String;>;"))
+    assert(descriptors.get("triple").contains("()Ldev/flix/runtime/Tuple3;"))
+    assert(signatures.get("triple").contains(
+      "()Ldev/flix/runtime/Tuple3<Ljava/lang/Boolean;Ljava/lang/Double;Ljava/lang/String;>;"))
+  }
+
+  test("one tuple class serves every arity-2 tuple") {
+    // Unlike a view, which is keyed on the erased element and so multiplies with the primitives,
+    // this class is keyed on arity alone. Nothing about the element types reaches its bytecode:
+    // they are its type parameters, and a parameter erases to `Object` whatever it is bound to.
+    val names = classNamesOf(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    @Export
+        |    pub def a(): (Int32, String) = (1, "s")
+        |
+        |    @Export
+        |    pub def b(): (String, Bool) = ("s", true)
+        |
+        |    @Export
+        |    pub def c(): (Regex, Float64) = (regex"a", 1.0f64)
+        |
+        |    @Export
+        |    pub def d(): (Int32, String, Bool) = (1, "s", true)
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin)
+    assertResult(Set("Tuple2", "Tuple3"))(names.filter(_.matches("Tuple\\d+")))
+  }
+
+  test("a tuple class declares the type parameters its shim supplies") {
+    // A shim's signature applies `Tuple2` to two arguments, which is only well-formed if the class
+    // itself declares two parameters. Without the class signature the arguments name nothing and
+    // Scala and Kotlin reject the raw type -- the same failure the method signatures exist to
+    // prevent, one level up.
+    val signature = classSignatureOf(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    @Export
+        |    pub def pair(): (Int32, String) = (1, "s")
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin, "dev/flix/runtime/Tuple2")
+    assertResult(Some("<T1:Ljava/lang/Object;T2:Ljava/lang/Object;>Ljava/lang/Record;"))(signature)
+  }
+
   test("no return type the front end accepts leaks the Flix representation") {
     // `EntryPoints` decides what may be exported and `ExportPlan` decides how, over different type
     // representations, so a gate widened ahead of a plan compiles into a shim that falls through
@@ -515,7 +604,10 @@ class TestExportedShims extends AnyFunSuite {
       "Map[String, Int32]" -> "Map#{\"s\" => 1}",
       "Map[Int32, String]" -> "Map#{1 => \"s\"}",
       "Map[String, Float64]" -> "Map#{\"s\" => 1.0f64}",
-      "Map[BigInt, BigInt]" -> "Map#{1ii => 1ii}"
+      "Map[BigInt, BigInt]" -> "Map#{1ii => 1ii}",
+      "(Int32, String)" -> "(1, \"s\")",
+      "(String, Regex)" -> "(\"s\", regex\"a\")",
+      "(Bool, Float64, BigInt)" -> "(true, 1.0f64, 1ii)"
     )
     val defs = returnTypes.zipWithIndex.map {
       case ((tpe, value), i) => s"    @Export\n    pub def f$i(): $tpe = $value"

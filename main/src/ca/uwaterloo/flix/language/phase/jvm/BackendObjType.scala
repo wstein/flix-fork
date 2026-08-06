@@ -73,6 +73,10 @@ sealed trait BackendObjType {
     case BackendObjType.MapView(key, value) => JvmName(DevFlixGen, mkClassName("MapView", List(key.flixType, value.flixType)))
     case BackendObjType.ListView(element) => JvmName(DevFlixGen, mkClassName("ListView", element.flixType))
     case BackendObjType.ChainIterator(element) => JvmName(DevFlixGen, mkClassName("ChainIterator", element.flixType))
+    // A caller writes this name in its own source, so unlike the views above it is not mangled and
+    // does not live in the package of things the backend is free to rename. Only the arity varies:
+    // the element types are its type *parameters*, supplied by the shim's signature.
+    case BackendObjType.ExportTuple(arity) => JvmName(DevFlixRuntime, s"Tuple$arity")
     // Java classes
     case BackendObjType.Native(className) => className
     // Effects Runtime
@@ -1568,13 +1572,18 @@ object BackendObjType {
   }
 
   /**
-    * A class that exists to present a Flix value to Java without copying it.
+    * A class that exists to give a Flix value a Java form at the export boundary.
+    *
+    * Most of these are views, which present the value without copying it. [[ExportTuple]] is not:
+    * a tuple has a fixed, small number of fields that are already materialized, so a view would
+    * save no traversal and would re-convert each field on every access. The trait is what the two
+    * have in common, which is where the class comes from rather than what it does.
     *
     * These are the only generated classes keyed on an [[ExportPlan]] rather than on a type in
     * `root.types`, so `CodeGen` collects them by walking the exported defs. The trait exists so it
     * can generate them without knowing which kind each one is.
     */
-  sealed trait ExportView extends BackendObjType {
+  sealed trait ExportClass extends BackendObjType {
     def genByteCode()(implicit root: JvmAst.Root, flix: Flix): Array[Byte]
   }
 
@@ -1598,7 +1607,7 @@ object BackendObjType {
     *
     * See J10 for the contract this promises a caller and the cost it accepts.
     */
-  case class TreeSetView(key: ExportPlan, value: Option[ExportPlan]) extends ExportView {
+  case class TreeSetView(key: ExportPlan, value: Option[ExportPlan]) extends ExportClass {
 
     private def nodeTag: Tag = TreeIterator.nodeTag(key, value)
 
@@ -1780,7 +1789,7 @@ object BackendObjType {
     * `remove` is not overridden, so `Iterator`'s default implementation throws, which is what
     * makes every inherited mutator on the view throw as well.
     */
-  case class TreeIterator(key: ExportPlan, value: Option[ExportPlan]) extends ExportView {
+  case class TreeIterator(key: ExportPlan, value: Option[ExportPlan]) extends ExportClass {
 
     private def nodeTag: Tag = TreeIterator.nodeTag(key, value)
 
@@ -1908,7 +1917,7 @@ object BackendObjType {
     * `keySet` and `values` but not `entrySet`, so a fresh one per call would also mean a fresh
     * size cache per call, and `size()` would walk the tree every time it was asked.
     */
-  case class MapView(key: ExportPlan, value: ExportPlan) extends ExportView {
+  case class MapView(key: ExportPlan, value: ExportPlan) extends ExportClass {
 
     def genByteCode()(implicit root: JvmAst.Root, flix: Flix): Array[Byte] = {
       val cm = ClassMaker.mkClass(this.jvmName, IsFinal, superClass = JvmName.AbstractMap)
@@ -2008,7 +2017,7 @@ object BackendObjType {
     * Every mutator throws, as on the other two views, and here `AbstractList.add` and `set` throw
     * because they are written in terms of the list iterator's own mutators.
     */
-  case class ListView(element: ExportPlan) extends ExportView {
+  case class ListView(element: ExportPlan) extends ExportClass {
 
     private def consTag: Tag = ChainIterator.consTag(element.flixType)
 
@@ -2145,7 +2154,7 @@ object BackendObjType {
     * abstract -- there are no defaults to inherit as there are on `Iterator` -- so unlike the tree
     * iterator, immutability here is written rather than inherited.
     */
-  case class ChainIterator(element: ExportPlan) extends ExportView {
+  case class ChainIterator(element: ExportPlan) extends ExportClass {
 
     private def consTag: Tag = ChainIterator.consTag(element.flixType)
 
@@ -2373,6 +2382,141 @@ object BackendObjType {
     /** `[] --> throw`, for the three mutators there is nothing to write through to. */
     private def refuse(implicit mv: MethodVisitor): Unit =
       throwUnsupportedOperationException("Flix lists are immutable")
+  }
+
+  /**
+    * A Flix tuple presented to Java as a generic record, one class per arity.
+    *
+    * The backend's own [[Tuple]] cannot be handed over: it is named after its *erased* element
+    * types, so `(Int32, String)` is `Tuple$Int32$Obj` -- a name that says `Obj` where the caller
+    * needs `String`, that changes shape when the element types do, and that lives in the package
+    * the backend is free to rename. This class instead varies only in arity and takes the element
+    * types as type parameters, so `(Int32, String)` and `(Bool, Regex)` are both `Tuple2`, told
+    * apart by the shim's signature exactly as `Set[String]` and `Set[Regex]` are.
+    *
+    * That is also why every component is `Object`: a type parameter erases to `Object`, so a
+    * primitive element is boxed on the way in by the element's own plan. A `Tuple2<Integer, String>`
+    * is the only form Java can name.
+    *
+    * It is a *record* rather than a final class with getters. `equals`, `hashCode` and `toString`
+    * are then three `invokedynamic` instructions derived from the components -- so they cannot
+    * disagree with the fields -- instead of three hand-written method bodies. A tuple is value
+    * data, and identity semantics on it would be a defect a Java caller could not work around.
+    * Being a real record also lets Java 21 deconstruct it: `case Tuple2(var a, var b)`.
+    */
+  case class ExportTuple(arity: Int) extends ExportClass {
+
+    def genByteCode()(implicit root: JvmAst.Root, flix: Flix): Array[Byte] = {
+      val cm = ClassMaker.mkClass(this.jvmName, IsFinal, superClass = JvmName.Record, signature = Some(classSignature))
+
+      // The fields and the record components are separate declarations of the same thing: the
+      // former is the storage, the latter is what makes this a record class at all.
+      for (i <- indices) {
+        cm.mkField(ComponentField(i), IsPrivate, IsFinal, NotVolatile, Some(typeVariable(i)))
+        cm.mkRecordComponent(ComponentField(i), Some(typeVariable(i)))
+      }
+      cm.mkConstructor(Constructor, IsPublic, constructorIns(_), Some(constructorSignature))
+      for (i <- indices) {
+        cm.mkMethod(Nil, AccessorMethod(i), IsPublic, NotFinal, accessorIns(i)(_), Some(accessorSignature(i)))
+      }
+      // Final, as javac makes them: a record's three derived methods are not meant to be overridden,
+      // and nothing can extend this class to try.
+      cm.mkMethod(Nil, ToStringMethod, IsPublic, IsFinal, derivedIns("toString", Nil, BackendType.String)(_))
+      cm.mkMethod(Nil, HashCodeMethod, IsPublic, IsFinal, derivedIns("hashCode", Nil, BackendType.Int32)(_))
+      cm.mkMethod(Nil, EqualsMethod, IsPublic, IsFinal, derivedIns("equals", List(BackendType.Object), BackendType.Bool)(_))
+
+      cm.closeClassMaker()
+    }
+
+    /** The component indices, 1-based, because the accessors are named `_1` upwards. */
+    private def indices: Range = 1 to arity
+
+    /** The name of the type parameter of component `i`, e.g. `T1`. */
+    private def typeParameter(i: Int): String = s"T$i"
+
+    /** The type parameter of component `i` as it appears in a signature, e.g. `TT1;`. */
+    private def typeVariable(i: Int): String = s"T${typeParameter(i)};"
+
+    /** `<T1:Ljava/lang/Object;T2:Ljava/lang/Object;>Ljava/lang/Record;` */
+    private def classSignature: String = {
+      val params = indices.map(i => s"${typeParameter(i)}:${BackendType.Object.toDescriptor}").mkString
+      s"<$params>${JvmName.Record.toTpe.toDescriptor}"
+    }
+
+    /** `(TT1;TT2;)V` */
+    private def constructorSignature: String = s"(${indices.map(typeVariable).mkString})V"
+
+    /** `()TT1;` */
+    private def accessorSignature(i: Int): String = s"()${typeVariable(i)}"
+
+    /**
+      * The storage of component `i`.
+      *
+      * Named as the component is, because a record's accessor must be named after its component and
+      * this is the name the bootstrap is handed a getter for.
+      */
+    def ComponentField(i: Int): InstanceField =
+      InstanceField(this.jvmName, s"_$i", BackendType.Object)
+
+    def AccessorMethod(i: Int): InstanceMethod =
+      InstanceMethod(this.jvmName, s"_$i", mkDescriptor()(BackendType.Object))
+
+    def Constructor: ConstructorMethod =
+      ConstructorMethod(this.jvmName, List.fill(arity)(BackendType.Object))
+
+    private def ToStringMethod: InstanceMethod =
+      InstanceMethod(this.jvmName, "toString", mkDescriptor()(BackendType.String))
+
+    private def HashCodeMethod: InstanceMethod =
+      InstanceMethod(this.jvmName, "hashCode", mkDescriptor()(BackendType.Int32))
+
+    private def EqualsMethod: InstanceMethod =
+      InstanceMethod(this.jvmName, "equals", mkDescriptor(BackendType.Object)(BackendType.Bool))
+
+    /** `[] --> return`, storing each argument in its component. */
+    private def constructorIns(implicit mv: MethodVisitor): Unit =
+      withNames(1, List.fill(arity)(BackendType.Object)) {
+        case (_, variables) =>
+          thisLoad()
+          // `java.lang.Record`, not `java.lang.Object`: a record's superclass is what makes the
+          // `Record` attribute meaningful, and its constructor is the one that must be called.
+          INVOKESPECIAL(ConstructorMethod(JvmName.Record, Nil))
+          for ((variable, i) <- variables.zip(indices)) {
+            thisLoad()
+            variable.load()
+            PUTFIELD(ComponentField(i))
+          }
+          RETURN()
+      }
+
+    /** `[] --> [component i]` */
+    private def accessorIns(i: Int)(implicit mv: MethodVisitor): Unit = {
+      thisLoad()
+      GETFIELD(ComponentField(i))
+      ARETURN()
+    }
+
+    /**
+      * `[] --> [result]` for one of the three methods the runtime derives from the components.
+      *
+      * The bootstrap receives this class, its component names joined by `;`, and a getter handle
+      * per component, and returns an implementation of the method named `name`. The call passes
+      * `this` -- and, for `equals`, the other object -- so its descriptor is the method's with the
+      * receiver made explicit, which is why it is built here rather than taken from the declaration.
+      */
+    private def derivedIns(name: String, arguments: List[BackendType], result: BackendType)(implicit mv: MethodVisitor): Unit = {
+      val components = indices.map(i => ComponentField(i).name).mkString(";")
+      val getters = indices.map(i => mkGetFieldHandle(ComponentField(i)).handle)
+      thisLoad()
+      for ((argument, slot) <- arguments.zipWithIndex) xLoad(argument, slot + 1)
+      mv.visitInvokeDynamicInstruction(
+        name,
+        mkDescriptor((this.toTpe :: arguments) *)(result),
+        mkStaticHandle(ClassConstants.ObjectMethods.BootstrapMethod),
+        (this.toTpe.toAsmType :: components :: getters.toList) *
+      )
+      xReturn(result)
+    }
   }
 
   //

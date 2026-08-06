@@ -104,6 +104,32 @@ object ClassConstants {
 
   }
 
+  object ObjectMethods {
+
+    /**
+      * The bootstrap that supplies a record class its `equals`, `hashCode` and `toString`.
+      *
+      * A record gets these three from the runtime rather than from bytecode: the class file holds
+      * one `invokedynamic` per method, and this linked once per method per class produces the
+      * implementation. The static arguments say what to derive it from -- the record class, its
+      * component names joined by `;`, and a getter handle per component -- which is why the
+      * generated methods cannot disagree with the components they are derived from.
+      *
+      * `TypeDescriptor` rather than `MethodType` in the third parameter is what the JDK declares;
+      * the two are related by interface, and a descriptor naming the wrong one does not link.
+      */
+    val BootstrapMethod: StaticMethod =
+      StaticMethod(JvmName.ObjectMethods, "bootstrap", mkDescriptor(
+        JvmName.MethodHandles$Lookup.toTpe,
+        BackendType.String,
+        JvmName.TypeDescriptor.toTpe,
+        JvmName.Class.toTpe,
+        BackendType.String,
+        BackendType.Array(JvmName.MethodHandle.toTpe),
+      )(BackendType.Object))
+
+  }
+
   object ReentrantLock {
 
     val Constructor: ConstructorMethod = ConstructorMethod(JvmName.ReentrantLock, Nil)

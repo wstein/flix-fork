@@ -258,8 +258,14 @@ object EntryPointError {
          |  Bool, Char, Int8, Int16, Int32, Int64, Float32, Float64,
          |  String, BigInt, BigDecimal, Regex, or any Java type.
          |
-         |Flix types such as enums, tuples, records, and functions are not exportable, because
-         |their representation is an implementation detail of the compiler.
+         |A return type may also be an Option, List, Set, Map, or a tuple. Those are
+         |converted -- to Optional, to unmodifiable java.util views, and to a
+         |dev.flix.runtime.Tuple record -- but only one level deep, so what they hold
+         |must itself be one of the types above.
+         |
+         |Other Flix types, such as enums, records, structs, functions, and Array, are
+         |not exportable, because their representation is an implementation detail of
+         |the compiler.
          |""".stripMargin
     }
   }

@@ -643,6 +643,108 @@ class TestExportedShimsRuntime extends AnyFunSuite {
     }
   }
 
+  test("an exported tuple arrives as a record with its components") {
+    withFacade(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    @Export
+        |    pub def pair(): (Int32, String) = (42, "hi")
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin, "Pkg.Mod") { facade =>
+      val pair = invoke(facade, "pair")
+      assertResult("dev.flix.runtime.Tuple2")(pair.getClass.getName)
+      // The primitive is boxed, because a type parameter erases to `Object` and there is nowhere
+      // else for an `Int32` to go.
+      assertResult(java.lang.Integer.valueOf(42))(component(pair, 1))
+      assertResult("hi")(component(pair, 2))
+    }
+  }
+
+  test("an exported tuple is a record class with named components") {
+    // Not decoration: `ObjectMethods.bootstrap` refuses to derive anything for a class that only
+    // looks like a record, so without the `Record` attribute the three methods below throw on
+    // first call rather than failing to load.
+    withFacade(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    @Export
+        |    pub def pair(): (Int32, String) = (42, "hi")
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin, "Pkg.Mod") { facade =>
+      val clazz = invoke(facade, "pair").getClass
+      assert(clazz.isRecord)
+      assertResult(List("_1", "_2"))(clazz.getRecordComponents.map(_.getName).toList)
+    }
+  }
+
+  test("an exported tuple has value semantics") {
+    // Two calls build two objects, so identity would tell them apart and equality must not. This
+    // is what the derived `equals` and `hashCode` are for, and it is the whole reason the class is
+    // a record rather than a carrier with public fields.
+    withFacade(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    @Export
+        |    pub def pair(): (Int32, String) = (42, "hi")
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin, "Pkg.Mod") { facade =>
+      val one = invoke(facade, "pair")
+      val other = invoke(facade, "pair")
+      assert(one ne other)
+      assertResult(other)(one)
+      assertResult(other.hashCode)(one.hashCode)
+      assertResult("Tuple2[_1=42, _2=hi]")(one.toString)
+    }
+  }
+
+  test("an exported tuple of another arity gets its own class") {
+    withFacade(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    @Export
+        |    pub def triple(): (Bool, Float64, String) = (true, 1.5, "z")
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin, "Pkg.Mod") { facade =>
+      val triple = invoke(facade, "triple")
+      assertResult("dev.flix.runtime.Tuple3")(triple.getClass.getName)
+      assertResult(java.lang.Boolean.TRUE)(component(triple, 1))
+      assertResult(java.lang.Double.valueOf(1.5))(component(triple, 2))
+      assertResult("z")(component(triple, 3))
+    }
+  }
+
+  test("two exported tuples of the same arity share one class") {
+    // The class varies in arity alone; the element types are its type parameters and appear only
+    // in each shim's signature. A class per element-type combination would be the backend's own
+    // tuple naming leaking to a caller.
+    withFacade(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    @Export
+        |    pub def pair(): (Int32, String) = (42, "hi")
+        |
+        |    @Export
+        |    pub def other(): (String, Bool) = ("x", false)
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin, "Pkg.Mod") { facade =>
+      assertResult(invoke(facade, "other").getClass)(invoke(facade, "pair").getClass)
+    }
+  }
+
+  /** Reads component `i` of a tuple record through its accessor, which is named `_i`. */
+  private def component(tuple: AnyRef, i: Int): AnyRef =
+    tuple.getClass.getMethod(s"_$i").invoke(tuple)
+
   /** Drains `set` into a list, so a traversal can be compared in order rather than as a set. */
   private def drain(set: java.util.Set[?]): List[Any] = {
     val it = set.iterator()

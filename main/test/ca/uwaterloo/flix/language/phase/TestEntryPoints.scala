@@ -1112,6 +1112,93 @@ class TestEntryPoints extends AnyFunSuite with TestUtils {
     expectError[EntryPointError.IllegalExportType](result)
   }
 
+  test("Test.ExportTuple.01") {
+    // A tuple in return position is presented as a `dev.flix.runtime.TupleN` record, so what has
+    // to be exportable is what it holds rather than the tuple itself.
+    val input =
+      """
+        |mod Pkg { }
+        |mod Pkg.Mod { @Export pub def f(): (Int32, String) = (1, "a") }
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibAll)
+    expectSuccess(result)
+  }
+
+  test("Test.ExportTuple.02") {
+    // Arity is not bounded: the record class is generated per arity, on demand.
+    val input =
+      """
+        |mod Pkg { }
+        |mod Pkg.Mod { @Export pub def f(): (Bool, Float64, String, Int32) = (true, 1.0f64, "a", 1) }
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibAll)
+    expectSuccess(result)
+  }
+
+  test("Test.ExportTuple.03") {
+    // Every element is checked, not just the first.
+    val input =
+      """
+        |mod Pkg { }
+        |mod Pkg.Mod {
+        |    pub enum Colour { case Red, case Green }
+        |    @Export pub def f(): (String, Colour) = ("a", Colour.Red)
+        |}
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibAll)
+    expectError[EntryPointError.IllegalExportType](result)
+  }
+
+  test("Test.ExportTuple.04") {
+    // One level, as for every other container: an element that is itself converted has no plan,
+    // so admitting this would compile a shim that hands back the internal representation.
+    val input =
+      """
+        |mod Pkg { }
+        |mod Pkg.Mod { @Export pub def f(): (Int32, List[String]) = (1, "a" :: Nil) }
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibAll)
+    expectError[EntryPointError.IllegalExportType](result)
+  }
+
+  test("Test.ExportTuple.05") {
+    // Nor a tuple inside a tuple, which is the same rule seen from the other side.
+    val input =
+      """
+        |mod Pkg { }
+        |mod Pkg.Mod { @Export pub def f(): (Int32, (String, Bool)) = (1, ("a", true)) }
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibAll)
+    expectError[EntryPointError.IllegalExportType](result)
+  }
+
+  test("Test.ExportTuple.06") {
+    // Return position only. A parameter would need the reverse conversion, and a Java caller
+    // constructing a `Tuple2` says nothing about which Flix tuple class it should become.
+    val input =
+      """
+        |mod Pkg { }
+        |mod Pkg.Mod { @Export pub def f(t: (Int32, String)): Int32 = fst(t) }
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibAll)
+    expectError[EntryPointError.IllegalExportType](result)
+  }
+
+  test("Test.ExportTuple.07") {
+    // `Unit` is exportable as a whole return type, where it becomes `void`, and as the lone
+    // parameter Flix gives a nullary function, where it is dropped. Neither renders it away here,
+    // and its representation is `dev.flix.runtime.Unit` -- which the leak test in
+    // `TestExportedShims` would *not* catch, because it greps for `dev.flix.gen`. So this is
+    // pinned directly: widening that special case to elements is the mistake it guards.
+    val input =
+      """
+        |mod Pkg { }
+        |mod Pkg.Mod { @Export pub def f(): (Int32, Unit) = (1, ()) }
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibAll)
+    expectError[EntryPointError.IllegalExportType](result)
+  }
+
   test("Test.ExportPolymorphic.01") {
     // An unconstrained type variable is exported as `java.lang.Object`. The monomorpher defaults
     // it to `AnyType`, which is represented as `Object`, so the boundary needs no special case.

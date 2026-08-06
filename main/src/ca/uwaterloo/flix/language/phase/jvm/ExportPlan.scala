@@ -88,7 +88,7 @@ sealed trait ExportPlan {
     * are the only generated classes keyed on a plan rather than on a type in `root.types`, which is
     * why `CodeGen` has to collect them from the exported defs.
     */
-  def generatedClasses: List[BackendObjType.ExportView] = Nil
+  def generatedClasses: List[BackendObjType.ExportClass] = Nil
 }
 
 object ExportPlan {
@@ -116,7 +116,7 @@ object ExportPlan {
 
     def emit(loc: SourceLocation, nextLocal: Int)(implicit root: JvmAst.Root, mv: MethodVisitor): Unit = ()
 
-    override def generatedClasses: List[BackendObjType.ExportView] = targs.flatMap(_.generatedClasses)
+    override def generatedClasses: List[BackendObjType.ExportClass] = targs.flatMap(_.generatedClasses)
   }
 
   /** A primitive that must be boxed, because the value it is being placed into holds references. */
@@ -157,7 +157,7 @@ object ExportPlan {
       }
     }
 
-    override def generatedClasses: List[BackendObjType.ExportView] = element.generatedClasses
+    override def generatedClasses: List[BackendObjType.ExportClass] = element.generatedClasses
   }
 
   /**
@@ -178,7 +178,7 @@ object ExportPlan {
     def emit(loc: SourceLocation, nextLocal: Int)(implicit root: JvmAst.Root, mv: MethodVisitor): Unit =
       emitTreeView(setTag, view.jvmName, view.Constructor, nextLocal)
 
-    override def generatedClasses: List[BackendObjType.ExportView] =
+    override def generatedClasses: List[BackendObjType.ExportClass] =
       view :: view.iteratorType :: element.generatedClasses
   }
 
@@ -197,7 +197,7 @@ object ExportPlan {
     def emit(loc: SourceLocation, nextLocal: Int)(implicit root: JvmAst.Root, mv: MethodVisitor): Unit =
       emitTreeView(mapTag, view.jvmName, view.Constructor, nextLocal)
 
-    override def generatedClasses: List[BackendObjType.ExportView] =
+    override def generatedClasses: List[BackendObjType.ExportClass] =
       view :: view.entrySetType :: view.entrySetType.iteratorType ::
         (key.generatedClasses ::: value.generatedClasses)
   }
@@ -248,8 +248,47 @@ object ExportPlan {
         INVOKESPECIAL(view.Constructor)
       }
 
-    override def generatedClasses: List[BackendObjType.ExportView] =
+    override def generatedClasses: List[BackendObjType.ExportClass] =
       view :: view.iteratorType :: element.generatedClasses
+  }
+
+  /**
+    * A Flix tuple presented as a `dev.flix.runtime.TupleN` record.
+    *
+    * A copy rather than a view, which is the one place this differs from every other container
+    * here. The reasons a view wins elsewhere -- not walking a structure the caller may not read all
+    * of, not boxing what it never asks for -- do not apply to a fixed, small number of already
+    * materialized fields, and a view would instead re-run each element's conversion on every
+    * access. See [[BackendObjType.ExportTuple]] for why the target is a record rather than the
+    * backend's own tuple class.
+    *
+    * `flixTuple` is the backend's representation, rebuilt here from the erased element types. It is
+    * not read from the AST because there is nothing to read: a tuple has no declaration of its own,
+    * so the class the backend generated for it is determined entirely by that erasure.
+    */
+  case class AsTuple(elements: List[ExportPlan], flixTuple: BackendObjType.Tuple, tuple: BackendObjType.ExportTuple) extends ExportPlan {
+    def flixType: BackendType = flixTuple.toTpe
+
+    def signature: ExportSignature =
+      ExportSignature.Applied(tuple.jvmName, elements.map(_.signature))
+
+    def emit(loc: SourceLocation, nextLocal: Int)(implicit root: JvmAst.Root, mv: MethodVisitor): Unit =
+      // The tuple goes through a local for the same reason a view's tree does: `new` has to be on
+      // the stack below its arguments, and the value they are read from is what is already there.
+      withName(nextLocal, flixTuple.toTpe) { value =>
+        value.store()
+        NEW(tuple.jvmName)
+        DUP()
+        for ((element, i) <- elements.zipWithIndex) {
+          value.load()
+          GETFIELD(flixTuple.IndexField(i))
+          element.emit(loc, nextLocal + value.tpe.stackSlots)
+        }
+        INVOKESPECIAL(tuple.Constructor)
+      }
+
+    override def generatedClasses: List[BackendObjType.ExportClass] =
+      tuple :: elements.flatMap(_.generatedClasses)
   }
 
   /**
@@ -276,6 +315,12 @@ object ExportPlan {
         val erasedValue = BackendType.toErasedBackendType(v)
         val view = BackendObjType.MapView(viewElementPlan(erasedKey), viewElementPlan(erasedValue))
         Some(AsMap(elementPlan(k, erasedKey), elementPlan(v, erasedValue), treeTag(erased, "Map"), view))
+      case SimpleType.Tuple(elms) =>
+        // The erased element types are both what the backend named its tuple class after and what
+        // decides whether each element needs boxing, so one list serves both.
+        val erasedElms = elms.map(BackendType.toErasedBackendType)
+        val plans = elms.zip(erasedElms).map { case (elm, erasedElm) => elementPlan(elm, erasedElm) }
+        Some(AsTuple(plans, BackendObjType.Tuple(erasedElms), BackendObjType.ExportTuple(elms.length)))
       case SimpleType.Native(clazz, targs) if targs.nonEmpty =>
         // Every argument must be describable, and `EntryPoints.isExportableType` has already
         // ensured it: a Flix type argument such as `ArrayList[SomeEnum]` is rejected there,
@@ -429,7 +474,7 @@ object ExportPlan {
     else defn.exportedReturnType.flatMap(of(_, defn.unboxedType.tpe))
 
   /** Returns every class the export plans of `root` need generated. */
-  def viewClassesOf(root: JvmAst.Root): List[BackendObjType.ExportView] = {
+  def viewClassesOf(root: JvmAst.Root): List[BackendObjType.ExportClass] = {
     implicit val r: JvmAst.Root = root
     root.defs.values.toList.flatMap(defn => ofDef(defn).toList.flatMap(_.generatedClasses)).distinct
   }

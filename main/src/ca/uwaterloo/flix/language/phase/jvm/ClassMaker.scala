@@ -46,16 +46,28 @@ sealed trait ClassMaker {
 
   protected val visitor: ClassWriter
 
-  protected def makeField(fieldName: String, fieldType: BackendType, v: Visibility, f: Final, vol: Volatility, s: Static): Unit = {
+  protected def makeField(fieldName: String, fieldType: BackendType, v: Visibility, f: Final, vol: Volatility, s: Static, signature: Option[String]): Unit = {
     val m = v.toInt + f.toInt + s.toInt + vol.toInt
-    val field = visitor.visitField(m, fieldName, fieldType.toDescriptor, null, null)
+    val field = visitor.visitField(m, fieldName, fieldType.toDescriptor, signature.orNull, null)
     field.visitEnd()
   }
 
-  def mkField(field: Field, v: Visibility, f: Final, vol: Volatility): Unit = field match {
-    case InstanceField(_, name, tpe) => makeField(name, tpe, v, f, vol, NotStatic)
-    case StaticField(_, name, tpe) => makeField(name, tpe, v, f, vol, IsStatic)
+  def mkField(field: Field, v: Visibility, f: Final, vol: Volatility, signature: Option[String] = None): Unit = field match {
+    case InstanceField(_, name, tpe) => makeField(name, tpe, v, f, vol, NotStatic, signature)
+    case StaticField(_, name, tpe) => makeField(name, tpe, v, f, vol, IsStatic, signature)
   }
+
+  /**
+    * Declares `field` to be a record component of this class.
+    *
+    * A record class is not merely a class with final fields: the `Record` attribute this writes is
+    * what `java.lang.Class.isRecord` reports and what `ObjectMethods.bootstrap` validates before it
+    * will derive `equals`, `hashCode` or `toString`. Without it the three bootstrapped methods fail
+    * to link at first call rather than at class load, so omitting it produces a class that verifies
+    * and then throws.
+    */
+  def mkRecordComponent(field: InstanceField, signature: Option[String] = None): Unit =
+    visitor.visitRecordComponent(field.name, field.tpe.toDescriptor, signature.orNull).visitEnd()
 
   protected def makeMethod(ann: List[JvmAnnotation], i: Option[MethodVisitor => Unit], methodName: String, d: MethodDescriptor, v: Visibility, f: Final, s: Static, a: Abstract, signature: Option[String] = None): Unit = {
     val m = v.toInt + f.toInt + s.toInt + a.toInt
@@ -93,12 +105,12 @@ object ClassMaker {
       makeMethod(Nil, Some(ins), m.name, m.d, v, f, IsStatic, NotAbstract, signature)
     }
 
-    def mkConstructor(c: ConstructorMethod, v: Visibility, ins: MethodVisitor => Unit): Unit = {
-      makeMethod(Nil, Some(ins), JvmName.ConstructorMethod, c.d, v, NotFinal, NotStatic, NotAbstract)
+    def mkConstructor(c: ConstructorMethod, v: Visibility, ins: MethodVisitor => Unit, signature: Option[String] = None): Unit = {
+      makeMethod(Nil, Some(ins), JvmName.ConstructorMethod, c.d, v, NotFinal, NotStatic, NotAbstract, signature)
     }
 
-    def mkMethod(ann: List[JvmAnnotation], m: InstanceMethod, v: Visibility, f: Final, ins: MethodVisitor => Unit): Unit = {
-      makeMethod(ann, Some(ins), m.name, m.d, v, f, NotStatic, NotAbstract)
+    def mkMethod(ann: List[JvmAnnotation], m: InstanceMethod, v: Visibility, f: Final, ins: MethodVisitor => Unit, signature: Option[String] = None): Unit = {
+      makeMethod(ann, Some(ins), m.name, m.d, v, f, NotStatic, NotAbstract, signature)
     }
   }
 
@@ -158,11 +170,16 @@ object ClassMaker {
     * without one implements it *raw*, which is a hard error in Scala 3 and Kotlin rather than a
     * warning. The virtual machine ignores it; compilers and reflection read it.
     *
-    * `None` for every class the backend generates today, and that is not an oversight. These
+    * `None` for almost every class the backend generates, and that is not an oversight. These
     * classes exist *after* erasure, so every type argument they could declare is already `Object`
     * -- `Fn1$Obj$Obj` implements `Function`, and saying `Function<Object, Object>` instead adds
-    * nothing a caller can use. A signature is worth writing only where the argument is still known,
-    * which on this boundary is the *method* signature of an exported shim.
+    * nothing a caller can use.
+    *
+    * The exception is a class that declares type *parameters* rather than consuming arguments:
+    * `dev.flix.runtime.Tuple2<T1, T2>` is generic because the shim returning it supplies the
+    * arguments in its own signature, and a class with no signature cannot be parameterized at all.
+    * The rule is therefore not "after erasure, never" but "wherever an argument is still known" --
+    * which is here and in the method signature of an exported shim.
     */
   private def mkClassWriter(name: JvmName, v: Visibility, f: Final, a: Abstract, i: Interface, superClass: JvmName, interfaces: List[JvmName], signature: Option[String])(implicit flix: Flix): ClassWriter = {
     val cw = AsmOps.mkClassWriter()

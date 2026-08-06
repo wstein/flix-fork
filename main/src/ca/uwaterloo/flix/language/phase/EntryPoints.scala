@@ -483,11 +483,12 @@ object EntryPoints {
       case List(tpe) if isUnitType(tpe) == Result.Ok(true) => Nil
       case tpes => tpes
     }
-    // `Option[t]`, `List[t]`, `Set[t]` and `Map[k, v]` are exportable in return position, where
-    // the shim marshals them into `java.util.Optional`, an unmodifiable `java.util.List`, and
-    // unmodifiable `java.util.Set` and `java.util.Map` views. None is exportable as a parameter,
-    // which would need the reverse conversion. What must be exportable is what they contain, so
-    // that is what is checked, and an error points at it rather than at the container.
+    // `Option[t]`, `List[t]`, `Set[t]`, `Map[k, v]` and tuples are exportable in return position,
+    // where the shim marshals them into `java.util.Optional`, an unmodifiable `java.util.List`,
+    // unmodifiable `java.util.Set` and `java.util.Map` views, and a `dev.flix.runtime.TupleN`
+    // record. None is exportable as a parameter, which would need the reverse conversion. What
+    // must be exportable is what they contain, so that is what is checked, and an error points at
+    // it rather than at the container.
     //
     // Only the element, and only one level: an element that is itself a container has no plan, so
     // admitting `List[Option[t]]` here would produce a shim returning the internal tag class. The
@@ -570,6 +571,27 @@ object EntryPoints {
       .orElse(unapplyList(tpe).map(List(_)))
       .orElse(unapplySet(tpe).map(List(_)))
       .orElse(unapplyMap(tpe))
+      .orElse(unapplyTuple(tpe))
+
+  /**
+    * Returns the element types of `tpe` if it is a tuple.
+    *
+    * A tuple is a container here in the sense that matters: its own representation is replaced at
+    * the boundary -- by `dev.flix.runtime.TupleN` -- and what has to be exportable is therefore
+    * what it holds. Unlike the collections above it is not identified by a symbol, because it has
+    * no declaration to name; a tuple type is a type constructor applied to its elements.
+    *
+    * A one-element tuple does not exist in Flix, and `Unit` is the empty one and is handled as its
+    * own type, so every tuple reaching here has at least two elements.
+    */
+  @tailrec
+  private def unapplyTuple(tpe: Type): Option[List[Type]] = tpe match {
+    case Type.Alias(_, _, t, _) => unapplyTuple(t)
+    case _ => tpe.typeConstructor match {
+      case Some(TypeConstructor.Tuple(_)) => Some(tpe.typeArguments)
+      case _ => None
+    }
+  }
 
   /**
     * Returns `true` if `tpe` is a valid Java type that can be exported.

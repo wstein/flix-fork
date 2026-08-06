@@ -18,6 +18,7 @@ package ca.uwaterloo.flix.language.phase.jvm
 
 import ca.uwaterloo.flix.language.ast.{JvmAst, SimpleType, SourceLocation}
 import ca.uwaterloo.flix.util.InternalCompilerException
+import org.objectweb.asm
 
 import scala.annotation.tailrec
 
@@ -51,6 +52,12 @@ sealed trait BackendType extends VoidableType {
       case BackendType.Reference(ref) => ref.toDescriptor
     }
   }
+
+  /**
+    * Returns this type as ASM models it, for the places a constant pool holds a type rather than a
+    * descriptor -- the static arguments of an `invokedynamic`, for instance.
+    */
+  def toAsmType: asm.Type = asm.Type.getType(toDescriptor)
 
   /**
     * Returns the erased type, either itself if `this` is primitive or `java.lang.Object`

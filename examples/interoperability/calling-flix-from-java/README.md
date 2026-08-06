@@ -282,6 +282,40 @@ throws too.
 Both the key and the value must be exportable, and both are declared in the
 `Signature`, so `Map[Int32, String]` is `Map<Integer, String>`.
 
+## Tuples
+
+A tuple is exportable **as a return type**, where the shim presents it as a
+`dev.flix.runtime.TupleN` record — one class per arity:
+
+```flix
+@Export
+pub def entry(): (Int32, String) = (1, "alpha")
+```
+
+```java
+Tuple2<Integer, String> t = Acme.Greeter.entry();
+t._1();                       // 1
+t._2();                       // "alpha"
+t.toString();                 // Tuple2[_1=1, _2=alpha]
+```
+
+It is a real Java record, so it has value semantics — two calls returning equal
+components are `equals` and share a `hashCode` — and Java 21 can deconstruct
+it:
+
+```java
+if (Acme.Greeter.entry() instanceof Tuple2(Integer n, String name)) { ... }
+```
+
+Unlike a `List` or a `Set`, this one is copied rather than viewed: a tuple has a
+fixed, small number of fields that are already in hand, so there is nothing to
+walk lazily.
+
+The class varies only in arity. The element types are its type *parameters*,
+declared in the `Signature`, so `(Int32, String)` and `(String, Bool)` are both
+`Tuple2` — and a primitive element is boxed, because a type argument is a
+reference. Every element must itself be exportable, and the type is return-only.
+
 ## Why some conversions are return-only
 
 `Option` is *not* exportable as a parameter. Mapping `Optional.empty()` to
@@ -334,13 +368,14 @@ String]` is a kind error. Use `UnaryOperator`, `BinaryOperator`, `BiFunction`,
 A Flix closure cannot travel the other way: a function type is not exportable,
 so an exported function cannot return one.
 
-Not exportable: Flix enums other than `Option`, tuples, records, functions, and
-`Array`. Their JVM representation is an implementation detail of the compiler —
-a `Some(x)` is a class called `Tag$Obj` distinguished only by an `int ordinal`
-field — so exposing them would freeze names the backend needs to stay free to
-change.
+Not exportable: Flix enums other than `Option`, `List`, `Set` and `Map`, plus
+records, functions, and `Array`. Their JVM representation is an implementation
+detail of the compiler — a `Some(x)` is a class called `Tag$Obj` distinguished
+only by an `int ordinal` field — so exposing them would freeze names the backend
+needs to stay free to change.
 
-That is also why `Option` is *converted* rather than exposed: the shim reads the
-tag and builds an `Optional`, so Java never names the tag class. To hand any
+That is also why the types above are *converted* rather than exposed: the shim
+reads the tag and builds an `Optional`, a collection view, or a tuple record, so
+Java never names the tag class. To hand any
 other such value to Java, do the same at the boundary — return a `String`, a
 Java collection, or a Java object you construct yourself.

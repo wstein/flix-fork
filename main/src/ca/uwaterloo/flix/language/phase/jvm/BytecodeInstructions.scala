@@ -80,6 +80,11 @@ object BytecodeInstructions {
     Handle(new asm.Handle(Opcodes.H_INVOKESTATIC, m.clazz.toInternalName, m.name, m.d.toDescriptor, true))
   }
 
+  /** A handle that reads `field`, for passing a component accessor to a bootstrap method. */
+  def mkGetFieldHandle(field: InstanceField): Handle = {
+    Handle(new asm.Handle(Opcodes.H_GETFIELD, field.clazz.toInternalName, field.name, field.tpe.toDescriptor, false))
+  }
+
   //
   // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Structures ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   //
