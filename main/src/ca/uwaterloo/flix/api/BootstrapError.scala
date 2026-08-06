@@ -15,7 +15,8 @@
  */
 package ca.uwaterloo.flix.api
 
-import ca.uwaterloo.flix.language.ast.{Scheme, SourceLocation}
+import ca.uwaterloo.flix.language.CompilationMessage
+import ca.uwaterloo.flix.language.ast.{Scheme, SourceLocation, TypedAst}
 import ca.uwaterloo.flix.tools.pkg
 import ca.uwaterloo.flix.tools.pkg.{ManifestError, PackageError}
 import ca.uwaterloo.flix.util.Formatter
@@ -28,6 +29,21 @@ sealed trait BootstrapError {
 }
 
 object BootstrapError {
+  /**
+    * Errors reported by the compiler itself, kept as they were produced.
+    *
+    * The alternative -- and what this used to be -- is to render them here and return the string.
+    * That reads the same to a person and destroys the only copy of the structure: source locations,
+    * error codes, and the ranges an editor or a build tool needs in order to place a problem. A
+    * caller downstream cannot recover them, because by then they are prose.
+    *
+    * `root` is carried alongside because a full message is rendered against the typed AST when one
+    * exists, and rendering is deferred until something asks for it.
+    */
+  case class CompilationErrors(errors: List[CompilationMessage], root: Option[TypedAst.Root]) extends BootstrapError {
+    override def message(f: Formatter): String = CompilationMessage.formatAll(errors)(f, root)
+  }
+
   case class ManifestParseError(e: ManifestError) extends BootstrapError {
     override def message(f: Formatter): String = e.message(f)
   }

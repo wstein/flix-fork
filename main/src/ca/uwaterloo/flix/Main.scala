@@ -18,7 +18,8 @@ package ca.uwaterloo.flix
 
 import ca.uwaterloo.flix.api.lsp.{LspServer, VSCodeLspServer, FormatterLsp as LspFormatter}
 import ca.uwaterloo.flix.tools.fmt.{Canonical, PrettyPrinter}
-import ca.uwaterloo.flix.api.{Bootstrap, BootstrapError, Flix, Version}
+import ca.uwaterloo.flix.api.{Bootstrap, BootstrapError, BuildProtocol, Flix, Version}
+import org.json4s.native.JsonMethods
 import ca.uwaterloo.flix.language.CompilationMessage
 import ca.uwaterloo.flix.language.ast.shared.{Input, SecurityContext}
 import ca.uwaterloo.flix.language.ast.{Symbol, TypedAst}
@@ -244,7 +245,16 @@ object Main {
           System.exit(0)
 
         case Command.Check =>
-          if (cmdOpts.files.isEmpty) {
+          if (cmdOpts.jsonDiagnostics) {
+            exitWithJson {
+              Bootstrap.bootstrap(cwd, options.githubToken).flatMap { bootstrap =>
+                val flix = new Flix().setFormatter(formatter)
+                flix.setOptions(options)
+                addLibs(flix, cmdOpts.libs)
+                bootstrap.check(flix)
+              }
+            }
+          } else if (cmdOpts.files.isEmpty) {
             exitOnResult {
               Bootstrap.bootstrap(cwd, options.githubToken).flatMap { bootstrap =>
                 val flix = new Flix().setFormatter(formatter)
@@ -266,14 +276,13 @@ object Main {
             println("The 'build' command does not support file arguments.")
             System.exit(1)
           }
-          exitOnResult {
-            Bootstrap.bootstrap(cwd, options.githubToken).flatMap { bootstrap =>
-              val flix = new Flix().setFormatter(formatter)
-              flix.setOptions(options.copy(loadClassFiles = false))
-              addLibs(flix, cmdOpts.libs)
-              bootstrap.build(flix)
-            }
+          val runBuild = () => Bootstrap.bootstrap(cwd, options.githubToken).flatMap { bootstrap =>
+            val flix = new Flix().setFormatter(formatter)
+            flix.setOptions(options.copy(loadClassFiles = false))
+            addLibs(flix, cmdOpts.libs)
+            bootstrap.build(flix)
           }
+          if (cmdOpts.jsonDiagnostics) exitWithJson(runBuild()) else exitOnResult(runBuild())
 
         case Command.BuildJar =>
           if (cmdOpts.files.nonEmpty) {
@@ -548,6 +557,7 @@ object Main {
     command: Command = Command.None,
                      stubsOut: Option[String] = None,
                      libs: Seq[String] = Seq.empty,
+                     jsonDiagnostics: Boolean = false,
     args: List[String] = Nil,
     coverage: Boolean = false,
     coverageOutput: Option[String] = None,
@@ -692,6 +702,8 @@ object Main {
       cmd("check").action((_, c) => c.copy(command = Command.Check)).text("  checks the current project for errors.").children(
         opt[String]("lib").unbounded().action((arg, c) => c.copy(libs = c.libs :+ arg)).
           text("adds a jar to the classpath. Repeatable."),
+        opt[Unit]("diagnostics-json").action((_, c) => c.copy(jsonDiagnostics = true)).
+          text("writes diagnostics to stdout as JSON, for a build tool to read."),
       )
 
       cmd("stubs").action((_, c) => c.copy(command = Command.Stubs)).text("  writes compile-only Java stubs for the @Export-ed defs.").children(
@@ -702,6 +714,8 @@ object Main {
       cmd("build").action((_, c) => c.copy(command = Command.Build)).text("  builds (i.e. compiles) the current project.").children(
         opt[String]("lib").unbounded().action((arg, c) => c.copy(libs = c.libs :+ arg)).
           text("adds a jar to the classpath. Repeatable."),
+        opt[Unit]("diagnostics-json").action((_, c) => c.copy(jsonDiagnostics = true)).
+          text("writes diagnostics to stdout as JSON, for a build tool to read."),
       )
 
       cmd("build-jar").action((_, c) => c.copy(command = Command.BuildJar)).text("  builds a jar-file from the current project (full, clean build).")
@@ -975,6 +989,23 @@ object Main {
     * path that is missing, unreadable, or not a zip, and a stack trace is a poor way to say that a
     * build tool passed a path that does not exist yet.
     */
+  /**
+    * Writes `result` as a build-protocol document on stdout and exits.
+    *
+    * Nothing else may be written there: progress and prompts already go to stderr, and a single
+    * stray `println` turns a parseable document into a parse error for the caller. Exit status is
+    * still the primary signal -- a build tool should not have to parse anything to learn that a
+    * build failed.
+    */
+  private def exitWithJson[T](result: Result[T, BootstrapError]): Unit = {
+    val errors = result match {
+      case Result.Ok(_) => Nil
+      case Result.Err(error) => List(error)
+    }
+    Console.out.println(JsonMethods.pretty(JsonMethods.render(BuildProtocol.result(errors, None))))
+    System.exit(if (errors.isEmpty) 0 else 1)
+  }
+
   private def addLibs(flix: Flix, libs: Seq[String]): Unit = {
     for (lib <- libs) {
       try {
