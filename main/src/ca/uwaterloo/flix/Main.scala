@@ -217,6 +217,15 @@ object Main {
             }
           }
 
+        case Command.InitializeBuild =>
+          // The same document `flix/initializeBuild` will return over a connection. Offering it
+          // one-shot is what lets a build tool negotiate *before* deciding whether a daemon is
+          // available -- and keeps the one-shot path a first-class fallback rather than a
+          // degraded mode that skips the handshake.
+          val (compatible, document) = BuildProtocol.initialize(cmdOpts.clientProtocolVersion)
+          Console.out.println(JsonMethods.pretty(JsonMethods.render(document)))
+          System.exit(if (compatible) 0 else 1)
+
         case Command.Stubs =>
           // Pass 0 of joint compilation. It exists to run *before* anything is compiled, on a
           // program that cannot yet compile: a Flix module calling a Java class that does not
@@ -558,6 +567,7 @@ object Main {
                      stubsOut: Option[String] = None,
                      libs: Seq[String] = Seq.empty,
                      jsonDiagnostics: Boolean = false,
+                     clientProtocolVersion: Option[Int] = None,
     args: List[String] = Nil,
     coverage: Boolean = false,
     coverageOutput: Option[String] = None,
@@ -619,6 +629,8 @@ object Main {
     case object Format extends Command
 
     case object Stubs extends Command
+
+    case object InitializeBuild extends Command
 
     case object Run extends Command
 
@@ -704,6 +716,11 @@ object Main {
           text("adds a jar to the classpath. Repeatable."),
         opt[Unit]("diagnostics-json").action((_, c) => c.copy(jsonDiagnostics = true)).
           text("writes diagnostics to stdout as JSON, for a build tool to read."),
+      )
+
+      cmd("initialize-build").action((_, c) => c.copy(command = Command.InitializeBuild)).text("  reports the build protocol this compiler speaks.").children(
+        opt[Int]("client-version").action((arg, c) => c.copy(clientProtocolVersion = Some(arg))).
+          text("the protocol version the client speaks. Exits non-zero if it cannot be served."),
       )
 
       cmd("stubs").action((_, c) => c.copy(command = Command.Stubs)).text("  writes compile-only Java stubs for the @Export-ed defs.").children(
