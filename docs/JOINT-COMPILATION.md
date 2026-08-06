@@ -102,3 +102,8 @@ Build plugins can depend on the standalone `flixClient` Java module instead of p
 themselves. `FlixCompiler` exposes only capability negotiation, checking, building, and stub
 generation. It deliberately exposes no compiler AST or `Flix` instance and has no Scala runtime
 dependency; `CliFlixCompiler` is one subprocess transport behind that stable surface.
+
+`CliFlixCompiler` accepts a `FlixProcessRunner`. Gradle, Mill, and other hosts can therefore retain
+their own process lifecycle, logging, cancellation, and sandbox integration while sharing the
+contract parser. The default runner uses `ProcessBuilder`, inherits stderr, and reads stdout before
+waiting so a full pipe cannot deadlock the compiler process.

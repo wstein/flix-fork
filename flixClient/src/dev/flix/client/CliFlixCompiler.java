@@ -10,9 +10,6 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
-import java.io.IOException;
-import java.io.UncheckedIOException;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -26,15 +23,32 @@ import java.util.Map;
  * into the caller's log. Output that is not a document is a failure rather than an absence of
  * diagnostics — it means a compiler too old to know the flag, or a crash, and reading either as
  * "nothing to report" would let a broken build pass.
+ *
+ * <p>Starting the process is delegated to a {@link FlixProcessRunner} so that a build tool can keep
+ * its own launcher and still read the contract through this class.
  */
 public final class CliFlixCompiler implements FlixCompiler {
 
     private final Path javaExecutable;
     private final Path compilerJar;
+    private final FlixProcessRunner runner;
 
-    public CliFlixCompiler(Path javaExecutable, Path compilerJar) {
+    /**
+     * Drives {@code compilerJar} with {@code javaExecutable}, starting processes with
+     * {@code runner}.
+     *
+     * <p>Pass a build tool's own runner rather than the default when it has one — see
+     * {@link FlixProcessRunner}.
+     */
+    public CliFlixCompiler(Path javaExecutable, Path compilerJar, FlixProcessRunner runner) {
         this.javaExecutable = javaExecutable;
         this.compilerJar = compilerJar;
+        this.runner = runner;
+    }
+
+    /** Starts processes with {@link ProcessBuilder}. */
+    public CliFlixCompiler(Path javaExecutable, Path compilerJar) {
+        this(javaExecutable, compilerJar, FlixProcessRunner.DEFAULT);
     }
 
     /** Uses the JVM running this code. */
@@ -44,7 +58,7 @@ public final class CliFlixCompiler implements FlixCompiler {
 
     @Override
     public FlixCapabilities capabilities() {
-        Invocation invocation = run(null, List.of("capabilities", "--contract-version", String.valueOf(CONTRACT_VERSION)));
+        FlixProcessRunner.Result invocation = run(null, List.of("capabilities", "--contract-version", String.valueOf(CONTRACT_VERSION)));
         JsonObject document = document(invocation, "capabilities");
         Map<String, Boolean> capabilities = new LinkedHashMap<>();
         if (document.has("capabilities") && document.get("capabilities").isJsonObject()) {
@@ -53,7 +67,7 @@ public final class CliFlixCompiler implements FlixCompiler {
             }
         }
         return new FlixCapabilities(
-                invocation.status == 0,
+                invocation.status() == 0,
                 integer(document, "protocolVersion"),
                 integer(document, "minimumClientVersion"),
                 string(document, "flixVersion"),
@@ -74,10 +88,10 @@ public final class CliFlixCompiler implements FlixCompiler {
 
     @Override
     public FlixResult stubs(Path projectDirectory, Path destination) {
-        Invocation invocation = run(projectDirectory, List.of("stubs", "--out", destination.toString()));
+        FlixProcessRunner.Result invocation = run(projectDirectory, List.of("stubs", "--out", destination.toString()));
         // `stubs` reports refusals on stderr rather than as a document, so there is nothing to
         // parse. The exit status is the whole result.
-        return new FlixResult(invocation.status == 0, List.of());
+        return new FlixResult(invocation.status() == 0, List.of());
     }
 
     private FlixResult compile(Path projectDirectory, String action, List<Path> libraries) {
@@ -89,7 +103,7 @@ public final class CliFlixCompiler implements FlixCompiler {
         }
         arguments.add("--diagnostics-json");
 
-        Invocation invocation = run(projectDirectory, arguments);
+        FlixProcessRunner.Result invocation = run(projectDirectory, arguments);
         JsonObject document = document(invocation, action);
 
         List<FlixDiagnostic> diagnostics = new ArrayList<>();
@@ -98,7 +112,7 @@ public final class CliFlixCompiler implements FlixCompiler {
                 diagnostics.add(diagnostic(element.getAsJsonObject()));
             }
         }
-        return new FlixResult(invocation.status == 0, List.copyOf(diagnostics));
+        return new FlixResult(invocation.status() == 0, List.copyOf(diagnostics));
     }
 
     private static FlixDiagnostic diagnostic(JsonObject entry) {
@@ -123,12 +137,12 @@ public final class CliFlixCompiler implements FlixCompiler {
     }
 
     /** Returns the contract document in {@code invocation}, or fails saying why there is none. */
-    private static JsonObject document(Invocation invocation, String action) {
-        JsonObject document = parse(invocation.stdout);
+    private static JsonObject document(FlixProcessRunner.Result invocation, String action) {
+        JsonObject document = parse(invocation.stdout());
         if (document == null) {
             throw new FlixClientException(
                     "Flix " + action + " produced no readable output. The compiler may predate the "
-                            + "tooling contract.\n" + invocation.stdout);
+                            + "tooling contract.\n" + invocation.stdout());
         }
         return document;
     }
@@ -158,30 +172,12 @@ public final class CliFlixCompiler implements FlixCompiler {
         return element == null || element.isJsonNull() ? 0 : element.getAsInt();
     }
 
-    private Invocation run(Path workingDirectory, List<String> arguments) {
+    private FlixProcessRunner.Result run(Path workingDirectory, List<String> arguments) {
         List<String> command = new ArrayList<>();
         command.add(javaExecutable.toString());
         command.add("-jar");
         command.add(compilerJar.toString());
         command.addAll(arguments);
-
-        ProcessBuilder builder = new ProcessBuilder(command);
-        if (workingDirectory != null) {
-            builder.directory(workingDirectory.toFile());
-        }
-        builder.redirectError(ProcessBuilder.Redirect.INHERIT);
-        try {
-            Process process = builder.start();
-            String stdout = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-            return new Invocation(process.waitFor(), stdout);
-        } catch (IOException e) {
-            throw new UncheckedIOException(e);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new FlixClientException("Interrupted while running the Flix compiler.");
-        }
-    }
-
-    private record Invocation(int status, String stdout) {
+        return runner.run(command, workingDirectory);
     }
 }
