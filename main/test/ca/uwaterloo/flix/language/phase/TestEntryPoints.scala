@@ -1389,6 +1389,60 @@ class TestEntryPoints extends AnyFunSuite with TestUtils {
     expectError[EntryPointError.IllegalExportType](result)
   }
 
+  test("Test.ExportVector.01") {
+    val input =
+      """
+        |mod Pkg { }
+        |mod Pkg.Mod {
+        |    @Export pub def f(): Vector[Int32] = Vector#{1, 2, 3}
+        |}
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibAll)
+    expectSuccess(result)
+  }
+
+  test("Test.ExportVector.02") {
+    // The load-bearing regression this pins: `Simplifier` erases `Vector[t]` and `Array[t, r]` to
+    // the identical `SimpleType.Array(t)`, so only this gate -- not `ExportPlan.of` -- can tell
+    // them apart. `Array` is also mutable and region-scoped, either of which is reason enough to
+    // keep it unexportable.
+    val input =
+      """
+        |mod Pkg { }
+        |mod Pkg.Mod {
+        |    @Export pub def f(): Array[Int32, Static] \ IO = Array#{1, 2, 3} @ Static
+        |}
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibAll)
+    expectError[EntryPointError.IllegalExportType](result)
+  }
+
+  test("Test.ExportVector.03") {
+    // Return position only, like every other converted type.
+    val input =
+      """
+        |mod Pkg { }
+        |mod Pkg.Mod {
+        |    @Export pub def f(v: Vector[Int32]): Int32 = Vector.length(v)
+        |}
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibAll)
+    expectError[EntryPointError.IllegalExportType](result)
+  }
+
+  test("Test.ExportVector.04") {
+    // And not nested, per J17.
+    val input =
+      """
+        |mod Pkg { }
+        |mod Pkg.Mod {
+        |    @Export pub def f(): Vector[Vector[Int32]] = Vector#{Vector#{1}}
+        |}
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibAll)
+    expectError[EntryPointError.IllegalExportType](result)
+  }
+
   test("Test.ExportPolymorphic.01") {
     // An unconstrained type variable is exported as `java.lang.Object`. The monomorpher defaults
     // it to `AnyType`, which is represented as `Object`, so the boundary needs no special case.

@@ -572,8 +572,30 @@ object EntryPoints {
       .orElse(unapplyList(tpe).map(List(_)))
       .orElse(unapplySet(tpe).map(List(_)))
       .orElse(unapplyMap(tpe))
+      .orElse(unapplyVector(tpe).map(List(_)))
       .orElse(unapplyTuple(tpe))
       .orElse(unapplyEnum(tpe))
+
+  /**
+    * Returns the element type of `tpe` if it is `Vector[t]`.
+    *
+    * Deliberately not `Array[t, r]`, which stays unexportable: it is mutable, where every other
+    * converted collection presents an unmodifiable view over data that is itself immutable, and it
+    * is region-scoped, where a view could outlive the region that owns its storage. `Vector` has
+    * neither problem -- `TypeConstructor.Vector` has kind `Star -> Star`, no region argument -- so
+    * nothing here needs to reject it on either ground.
+    *
+    * This is the one place in the gate that matters for `ExportPlan.of`'s own soundness: by the
+    * time a def's type reaches the backend, `Simplifier` has erased `Vector[t]` and `Array[t, r]`
+    * to the identical `SimpleType.Array(t)`, so the solver cannot itself tell them apart and simply
+    * trusts that this function is what kept `Array` from ever reaching it.
+    */
+  @tailrec
+  private def unapplyVector(tpe: Type): Option[Type] = tpe match {
+    case Type.Alias(_, _, t, _) => unapplyVector(t)
+    case Type.Apply(Type.Cst(TypeConstructor.Vector, _), elm, _) => Some(elm)
+    case _ => None
+  }
 
   /**
     * Returns the types inside the cases of `tpe`, if `tpe` is a Flix enum the shim can present at

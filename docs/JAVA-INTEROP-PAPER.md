@@ -485,6 +485,7 @@ how three of the claims in the first draft of this report came to be false.
 | Tuple → `dev.flix.runtime.TupleN` | Implemented as a generated generic record, one class per arity; copied rather than viewed |
 | Data-free enum → a real `java.lang.Enum` | Implemented; named beside its namespace, constants verbatim |
 | Data-carrying enum → a sealed interface, one record per case | Implemented for non-generic cases whose elements are each directly exportable; nested containers and type parameters still rejected |
+| `Vector` → an unmodifiable `java.util.List` view | Implemented, without copying; `Array` stays unexportable (mutable, region-scoped) |
 | Polymorphic exports (§4.1) | Implemented for unconstrained variables; constrained ones rejected |
 | Java generic type arguments (§7) | Implemented for returns and parameters |
 | Inbound Flix → Java boundary (§7.2) | Out of scope; unsound today, tracked upstream |

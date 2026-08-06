@@ -350,6 +350,108 @@ class TestExportedShimsRuntime extends AnyFunSuite {
     }
   }
 
+  test("an exported Vector arrives with its elements, in order") {
+    withFacade(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    @Export
+        |    pub def names(): Vector[String] = Vector#{"a", "b", "c"}
+        |
+        |    @Export
+        |    pub def none(): Vector[String] = Vector#{}
+        |
+        |    @Export
+        |    pub def numbers(): Vector[Int32] = Vector#{1, 2, 3}
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin, "Pkg.Mod") { facade =>
+      val names = invoke(facade, "names").asInstanceOf[java.util.List[?]]
+      assertResult(java.util.List.of("a", "b", "c"))(names)
+      assertResult(java.util.List.of())(invoke(facade, "none"))
+      // A primitive element is boxed on read, since `List.get` returns a reference.
+      val numbers = invoke(facade, "numbers").asInstanceOf[java.util.List[?]]
+      assertResult(java.util.List.of(1, 2, 3))(numbers)
+      assertResult(classOf[java.lang.Integer])(numbers.get(0).getClass)
+    }
+  }
+
+  test("an exported Vector cannot be written to") {
+    withFacade(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    @Export
+        |    pub def names(): Vector[String] = Vector#{"a"}
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin, "Pkg.Mod") { facade =>
+      val names = invoke(facade, "names").asInstanceOf[java.util.List[Any]]
+      assertThrows[UnsupportedOperationException](names.add("b"))
+      assertThrows[UnsupportedOperationException](names.set(0, "z"))
+    }
+  }
+
+  test("an exported Vector rejects an out-of-range index") {
+    // Not checked separately: reading past the array's own bounds already throws
+    // `ArrayIndexOutOfBoundsException`, a subtype of the `IndexOutOfBoundsException`
+    // `java.util.List.get` promises, so nothing here needs its own bounds check.
+    withFacade(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    @Export
+        |    pub def names(): Vector[String] = Vector#{"a", "b"}
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin, "Pkg.Mod") { facade =>
+      val names = invoke(facade, "names").asInstanceOf[java.util.List[Any]]
+      assertThrows[IndexOutOfBoundsException](names.get(2))
+      assertThrows[IndexOutOfBoundsException](names.get(-1))
+    }
+  }
+
+  test("an exported Vector honours the java.util.List contract") {
+    // `AbstractList` writes `iterator`, `listIterator`, `indexOf`, `contains`, `equals` and
+    // `hashCode` in terms of the `get`/`size` this view supplies -- checked together because that
+    // derivation, not any code written here, is what makes them agree with `java.util.List.of`.
+    withFacade(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    @Export
+        |    pub def names(): Vector[String] = Vector#{"a", "b", "c"}
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin, "Pkg.Mod") { facade =>
+      val names = invoke(facade, "names").asInstanceOf[java.util.List[Any]]
+      assertResult(3)(names.size())
+      assertResult(1)(names.indexOf("b"))
+      assertResult(-1)(names.indexOf("z"))
+      assert(names.contains("c"))
+      assertResult(java.util.List.of("a", "b", "c"))(names)
+      assertResult(java.util.List.of("a", "b", "c").hashCode())(names.hashCode())
+      assertResult(List("a", "b", "c"))(names.toArray.toList)
+    }
+  }
+
+  test("two exported Vectors of the same erased element type share one view class") {
+    withFacade(
+      """mod Pkg { }
+        |mod Pkg.Mod {
+        |    @Export
+        |    pub def names(): Vector[String] = Vector#{"a"}
+        |
+        |    @Export
+        |    pub def other(): Vector[String] = Vector#{"b"}
+        |}
+        |
+        |def main(): Unit \ IO = println("built")
+        |""".stripMargin, "Pkg.Mod") { facade =>
+      assertResult(invoke(facade, "other").getClass)(invoke(facade, "names").getClass)
+    }
+  }
+
   test("an exported polymorphic def round-trips any reference") {
     // The monomorpher defaults the unconstrained variable to `AnyType`, which is represented as
     // `Object`. The point of calling it rather than reading the descriptor is that the def is

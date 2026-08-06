@@ -253,6 +253,35 @@ object ExportPlan {
   }
 
   /**
+    * A Flix `Vector` presented as an unmodifiable `java.util.List`, without copying it.
+    *
+    * Unlike [[AsList]] this is not a `Tagged` conversion: a `Vector` value already *is* a Java
+    * array (`Array.toVector` casts one after a defensive copy, rather than wrapping it in a tag),
+    * so `arrayType` -- the type the value genuinely has on the stack -- is concrete, not the shared
+    * `Tagged` every other converted enum uses. `element`, by contrast, is the *erased* plan used
+    * only for the signature, exactly as at every other view: the conversion `view` itself performs
+    * per element is described separately, keyed on the erased type so every reference element
+    * shares one view class. See [[BackendObjType.VectorView]].
+    */
+  case class AsVector(element: ExportPlan, arrayType: BackendType, view: BackendObjType.VectorView) extends ExportPlan {
+    def flixType: BackendType = arrayType
+
+    def signature: ExportSignature = ExportSignature.Applied(JvmName.JavaList, List(element.signature))
+
+    def emit(loc: SourceLocation, nextLocal: Int)(implicit root: JvmAst.Root, mv: MethodVisitor): Unit =
+      withName(nextLocal, arrayType) { arr =>
+        arr.store()
+        NEW(view.jvmName)
+        DUP()
+        arr.load()
+        INVOKESPECIAL(view.Constructor)
+      }
+
+    override def generatedClasses: List[BackendObjType.ExportClass] =
+      view :: element.generatedClasses
+  }
+
+  /**
     * A Flix tuple presented as a `dev.flix.runtime.TupleN` record.
     *
     * A copy rather than a view, which is the one place this differs from every other container
@@ -431,6 +460,17 @@ object ExportPlan {
         val erasedValue = BackendType.toErasedBackendType(v)
         val view = BackendObjType.MapView(viewElementPlan(erasedKey), viewElementPlan(erasedValue))
         Some(AsMap(elementPlan(k, erasedKey), elementPlan(v, erasedValue), treeTag(erased, "Map"), view))
+      // Unguarded: by the time `SimpleType` exists, `Simplifier` has already erased `Vector[t]` and
+      // `Array[t, r]` to the identical `SimpleType.Array(t)`, so this solver cannot itself tell them
+      // apart. Soundness rests entirely on `EntryPoints`'s gate, which can (it still sees the
+      // pre-erasure `Type`, where `Vector` and `Array` are distinct constructors) and does: no def
+      // with a declared `Array[t, r]` return type reaches this function at all. See `Test.
+      // ExportVector` in `TestEntryPoints` for the regression this invariant depends on staying true.
+      case SimpleType.Array(elm) =>
+        val erasedElement = BackendType.toErasedBackendType(elm)
+        val arrayType = BackendType.Array(BackendType.toBackendType(elm))
+        val view = BackendObjType.VectorView(viewElementPlan(erasedElement))
+        Some(AsVector(elementPlan(elm, erasedElement), arrayType, view))
       case SimpleType.Enum(sym, Nil) if isNullaryEnum(sym) =>
         Some(AsEnum(BackendObjType.ExportEnum(sym), constantNames(sym)))
       case SimpleType.Enum(sym, Nil) if isSealedEnum(sym) =>

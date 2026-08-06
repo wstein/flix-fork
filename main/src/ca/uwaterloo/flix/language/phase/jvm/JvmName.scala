@@ -212,6 +212,7 @@ object JvmName {
   val Collections: JvmName = JvmName(JavaUtil, "Collections")
   val JavaSet: JvmName = JvmName(JavaUtil, "Set")
   val AbstractSet: JvmName = JvmName(JavaUtil, "AbstractSet")
+  val AbstractList: JvmName = JvmName(JavaUtil, "AbstractList")
   val ArrayDeque: JvmName = JvmName(JavaUtil, "ArrayDeque")
   val JavaMap: JvmName = JvmName(JavaUtil, "Map")
   val AbstractSequentialList: JvmName = JvmName(JavaUtil, "AbstractSequentialList")

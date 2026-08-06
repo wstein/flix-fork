@@ -72,6 +72,7 @@ sealed trait BackendObjType {
     case BackendObjType.TreeIterator(key, Some(v)) => JvmName(DevFlixGen, mkClassName("EntryIterator", List(key.flixType, v.flixType)))
     case BackendObjType.MapView(key, value) => JvmName(DevFlixGen, mkClassName("MapView", List(key.flixType, value.flixType)))
     case BackendObjType.ListView(element) => JvmName(DevFlixGen, mkClassName("ListView", element.flixType))
+    case BackendObjType.VectorView(element) => JvmName(DevFlixGen, mkClassName("VectorView", element.flixType))
     case BackendObjType.ChainIterator(element) => JvmName(DevFlixGen, mkClassName("ChainIterator", element.flixType))
     // A caller writes this name in its own source, so unlike the views above it is not mangled and
     // does not live in the package of things the backend is free to rename. Only the arity varies:
@@ -2403,6 +2404,80 @@ object BackendObjType {
     /** `[] --> throw`, for the three mutators there is nothing to write through to. */
     private def refuse(implicit mv: MethodVisitor): Unit =
       throwUnsupportedOperationException("Flix lists are immutable")
+  }
+
+  /**
+    * A Flix `Vector` presented to Java as an unmodifiable `java.util.List`, without copying it.
+    *
+    * A `Vector` value already *is* a Java array (`Array.toVector` casts one, after one defensive
+    * copy, rather than wrapping it), so unlike every other collection view this one is
+    * index-addressable in O(1) -- there is no chain or tree to walk. It therefore extends
+    * `java.util.AbstractList` rather than `AbstractSequentialList`: with `get(int)` and `size()`
+    * given, `AbstractList` derives `iterator()`, `listIterator(int)` (bounds-checked), `contains`,
+    * `equals`, `hashCode` and every mutator (which it inherits as throwing, since none is
+    * overridden) with no further code here -- the smallest of the four collection views for
+    * exactly the reason its underlying structure is the simplest.
+    *
+    * An out-of-range `get` is not checked separately: reading past the array's own bounds already
+    * throws `ArrayIndexOutOfBoundsException`, a subtype of the `IndexOutOfBoundsException`
+    * `java.util.List.get` promises, so the JVM's own bounds check is the whole implementation.
+    *
+    * The plan is the *erased* one -- `Identity(Object)`, or the boxing of a primitive -- exactly as
+    * on every other view, so that every `Vector` whose elements are references shares one class.
+    * The constructor's own parameter is therefore the erased array type, e.g. `Object[]`; the
+    * concrete array a caller's `Vector[String]` actually is widens to it with no cast, the same way
+    * passing a `String` where `Object` is expected needs none.
+    */
+  case class VectorView(element: ExportPlan) extends ExportClass {
+
+    def genByteCode()(implicit root: JvmAst.Root, flix: Flix): Array[Byte] = {
+      val cm = ClassMaker.mkClass(this.jvmName, IsFinal, superClass = JvmName.AbstractList)
+
+      cm.mkConstructor(Constructor, IsPublic, constructorIns(_))
+      cm.mkField(ArrayField, IsPrivate, IsFinal, NotVolatile)
+      cm.mkMethod(Nil, GetMethod, IsPublic, IsFinal, getIns(root, _))
+      cm.mkMethod(Nil, SizeMethod, IsPublic, IsFinal, sizeIns(_))
+
+      cm.closeClassMaker()
+    }
+
+    private def ArrayField: InstanceField = InstanceField(this.jvmName, "elements", BackendType.Array(element.flixType))
+
+    def Constructor: ConstructorMethod = ConstructorMethod(this.jvmName, List(BackendType.Array(element.flixType)))
+
+    /** `[] --> return` */
+    private def constructorIns(implicit mv: MethodVisitor): Unit =
+      withName(1, BackendType.Array(element.flixType)) { arr =>
+        thisLoad()
+        INVOKESPECIAL(JvmName.AbstractList, JvmName.ConstructorMethod, mkDescriptor()(VoidableType.Void))
+        thisLoad()
+        arr.load()
+        PUTFIELD(ArrayField)
+        RETURN()
+      }
+
+    def GetMethod: InstanceMethod = InstanceMethod(this.jvmName, "get", mkDescriptor(BackendType.Int32)(BackendType.Object))
+
+    /** `[] --> return Object`, converting the element the same way every other view's read does. */
+    private def getIns(implicit root: JvmAst.Root, mv: MethodVisitor): Unit =
+      withName(1, BackendType.Int32) { index =>
+        thisLoad()
+        GETFIELD(ArrayField)
+        index.load()
+        xArrayLoad(element.flixType)
+        element.emit(SourceLocation.Unknown, 2)
+        ARETURN()
+      }
+
+    def SizeMethod: InstanceMethod = InstanceMethod(this.jvmName, "size", mkDescriptor()(BackendType.Int32))
+
+    /** `[] --> return int` */
+    private def sizeIns(implicit mv: MethodVisitor): Unit = {
+      thisLoad()
+      GETFIELD(ArrayField)
+      ARRAYLENGTH()
+      xReturn(BackendType.Int32)
+    }
   }
 
   /**

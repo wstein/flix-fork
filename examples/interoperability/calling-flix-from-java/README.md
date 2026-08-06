@@ -232,6 +232,29 @@ re-walks from the head and is O(n) per step.
 
 `List` is not exportable as a parameter, for the same reason `Option` is not.
 
+## Vectors
+
+`Vector[t]` is exportable **as a return type**, where the shim presents it as
+an unmodifiable `java.util.List`:
+
+```flix
+@Export
+pub def names(): Vector[String] = Vector#{"a", "b", "c"}
+```
+
+```java
+List<String> xs = Acme.Greeter.names();   // [a, b, c]
+xs.get(1);                                // "b" -- O(1)
+xs.add("d");                              // UnsupportedOperationException
+```
+
+A `Vector` value already *is* a Java array, so unlike `List` this view is O(1)
+random access rather than O(i) -- there is no chain to walk. Everything else
+matches `List`: not copied, the element must itself be exportable, a primitive
+element is boxed, and the type is return-only. `Array[t, r]` is deliberately
+**not** exportable: it is mutable, where every view here presents unmodifiable
+data, and its lifetime is tied to a region a view could outlive.
+
 ## Sets
 
 `Set[t]` is exportable **as a return type**, where the shim presents it as an

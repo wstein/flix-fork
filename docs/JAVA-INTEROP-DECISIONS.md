@@ -1289,3 +1289,57 @@ compileTag` that writes it, immediately after construction, for every
 data-carrying case a program ever builds. This was verified rather than
 assumed: it is what makes reading `ordinal` off a `Tag` instance sound in the
 first place, and it was already true before this feature needed it.
+
+---
+
+## J23 — `Vector` crosses as a lazy `java.util.List` view; `Array` stays unexportable
+
+**Status: Settled.** `Vector[t]` is exportable in return position; `Array[t,
+r]` is not, and this is a decision rather than an omission.
+
+A `Vector` value already *is* a Java array — `Array.toVector` casts one, after
+one defensive copy, rather than wrapping it in a tag — so the view built for it
+is the simplest of the four this backend now has: `java.util.AbstractList`
+needs only `get(int)` and `size()`, both O(1) here since an array is
+index-addressable, where every other view (`List`'s cons chain, `Set`/`Map`'s
+red-black tree) needed a real `Iterator`/`ListIterator` class of its own to
+avoid an O(n²) walk. `AbstractList` then derives `iterator`, `listIterator`,
+`contains`, `equals`, `hashCode` and every mutator (inherited as throwing) from
+those two, so `VectorView` is the one export view with no iterator class beside
+it. An out-of-range `get` needs no explicit check either: reading past the
+array's own bounds already throws `ArrayIndexOutOfBoundsException`, which is a
+subtype of the `IndexOutOfBoundsException` `java.util.List.get` promises — the
+JVM's own bounds check is the entire implementation.
+
+**The element plan is erased, exactly as on every other view**, so that every
+`Vector` whose elements are references shares one `VectorView` class — a
+`Vector[String]`'s constructor parameter is declared `Object[]`, and the
+concrete `String[]` a caller's value actually is widens to it with no cast, the
+same way passing a `String` where `Object` is expected needs none. This is the
+opposite direction from J22's narrowing `CHECKCAST`, and the reason neither is
+needed here: a `Vector` conversion only ever *widens*.
+
+**`Array[t, r]` is excluded on two independent grounds, either sufficient by
+itself.** It is mutable — every other exported collection presents an
+*unmodifiable* view over data that is itself immutable at the Flix level, and a
+view over a live, mutable array would let a caller either observe writes made
+after the shim returned or attempt one through the view's own (inherited,
+throwing) mutators, a weaker and stranger contract than every other exported
+collection promises. It is also region-scoped — a view could outlive the
+region that owns its storage, where `Vector` has no lifetime tied to anything
+(`TypeConstructor.Vector` has kind `Star -> Star`, no region parameter).
+
+**This is the one place in the whole boundary where the front-end gate knows
+something the backend solver structurally cannot.** `Simplifier` erases both
+`Vector[t]` and `Array[t, r]` to the identical `SimpleType.Array(t)` before
+`ExportPlan.of` ever runs, so by the time the solver sees the type, `Vector`
+and `Array` are indistinguishable — the `SimpleType.Array(elm)` arm in `of` is
+therefore *unguarded*, and its soundness rests entirely on `EntryPoints`'s
+gate, which still operates on the pre-erasure `Type` and can (and does) reject
+every `Array`-returning def before it reaches the solver at all. This is
+J17's invariant read in the harder direction: usually gate and plan must agree
+on what to admit; here they agree by the plan trusting the gate to have
+already excluded what it cannot itself tell apart. A regression test pins the
+`Array` rejection specifically so a future widening of `isExportableType`
+toward `Array` cannot silently start compiling working-but-wrong shims through
+this arm.

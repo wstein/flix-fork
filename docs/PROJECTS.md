@@ -155,14 +155,18 @@ and the generated classes are named so that a jar is consumable from Scala,
 Kotlin, Groovy, Clojure and JRuby rather than Java alone. What that leaves is
 several genuinely open problems, each larger than it first appears:
 
-- **Collections.** `List`, `Set` and `Map` all cross as unmodifiable
-  `java.util.List`, `Set` and `Map` views that are *not* copied, trading O(n)
-  allocation for O(1). `Set` and `Map` share one view over the red-black tree —
-  a `Map`'s entry set is a set view handing out `Map.Entry` instead of a key —
-  and iterate in ascending key order. `List` walks the cons chain through an
-  `AbstractSequentialList`, so iteration stays linear. What is left open is
-  which *other* collections should cross at all, and whether any of them should
-  be exportable as a *parameter*, which needs a conversion in the other
+- **Collections.** `List`, `Set`, `Map` and now `Vector` all cross as
+  unmodifiable views that are *not* copied, trading O(n) allocation for O(1).
+  `Set` and `Map` share one view over the red-black tree — a `Map`'s entry set
+  is a set view handing out `Map.Entry` instead of a key — and iterate in
+  ascending key order. `List` walks the cons chain through an
+  `AbstractSequentialList`, so iteration stays linear. `Vector` is simplest of
+  the four: it already *is* a Java array, so its view is `AbstractList` over
+  `get`/`size` alone, with no iterator class of its own. `Array` deliberately
+  stays unexportable — mutable, and region-scoped in a way a view could
+  outlive. What is left open is `Chain`, which is neither array- nor
+  tree-shaped and has no export machinery yet, and whether any collection
+  should be exportable as a *parameter*, which needs a conversion in the other
   direction that does not exist for any of them.
 - **Immutable data.** Tuples now cross as `dev.flix.runtime.TupleN`, a generated
   generic record with one class per arity — copied rather than viewed, since a
