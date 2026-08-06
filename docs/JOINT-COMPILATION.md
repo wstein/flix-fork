@@ -97,3 +97,8 @@ versioned JSON document to standard output containing success, the compiler vers
 diagnostics. Source ranges use the same zero-based convention as LSP. Compiler errors remain
 structured inside `BootstrapError` until the caller chooses human or machine rendering; they are
 not reconstructed from console text.
+
+Build plugins can depend on the standalone `flixClient` Java module instead of parsing that JSON
+themselves. `FlixCompiler` exposes only capability negotiation, checking, building, and stub
+generation. It deliberately exposes no compiler AST or `Flix` instance and has no Scala runtime
+dependency; `CliFlixCompiler` is one subprocess transport behind that stable surface.
