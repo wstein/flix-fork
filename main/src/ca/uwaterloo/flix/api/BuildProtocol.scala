@@ -52,6 +52,71 @@ object BuildProtocol {
   val ProtocolVersion: Int = 1
 
   /**
+    * The oldest client this compiler will serve.
+    *
+    * Separate from [[ProtocolVersion]] because the two move independently: raising the current
+    * version says what we can do, and raising this one says what we have stopped doing. A client
+    * older than this is refused with a message rather than served something it will misread.
+    */
+  val MinimumClientVersion: Int = 1
+
+  /**
+    * How a request identifies what to build.
+    *
+    * `"project-directory"`: a request names a project directory, plus explicit libraries, output
+    * locations, and options. It does not enumerate sources or resolved dependencies.
+    *
+    * The alternative -- a request that names every input -- was rejected. A client would have to
+    * resolve `flix.toml`, Maven coordinates, and `.fpkg` files for itself, which is a second
+    * dependency resolver that has to agree with `Bootstrap`'s forever. The property that buys, for
+    * a build tool, is knowing what to declare as an input so its cache is sound.
+    *
+    * That property is provided instead by the *response* reporting what was actually consumed. A
+    * client compares it against what it declared and fails when its declaration was too narrow --
+    * which catches under-declaration rather than assuming it away, and is the failure that makes
+    * caching unsafe. See `docs/BUILD-PROTOCOL.md`.
+    */
+  val InputModel: String = "project-directory"
+
+  /**
+    * Returns what this compiler offers a build client, or why it cannot serve one.
+    *
+    * `clientVersion` is the version the client speaks. Refusing an incompatible one here, by
+    * number, is the point of the handshake: the alternative is a client discovering the mismatch
+    * as a missing field halfway through a build, and reporting it as a compiler error.
+    *
+    * Capabilities are named rather than inferred from the version, because they will not arrive in
+    * lockstep -- a daemon exists or it does not, independently of what else changed.
+    */
+  def initialize(clientVersion: Option[Int]): (Boolean, JValue) = {
+    val incompatible = clientVersion.filter(v => v > ProtocolVersion || v < MinimumClientVersion)
+    incompatible match {
+      case Some(v) =>
+        (false,
+          ("protocolVersion" -> ProtocolVersion) ~
+            ("minimumClientVersion" -> MinimumClientVersion) ~
+            ("flixVersion" -> Version.CurrentVersion.toString) ~
+            ("success" -> false) ~
+            ("error" -> s"This compiler speaks build protocol $MinimumClientVersion..$ProtocolVersion; the client asked for $v."))
+      case None =>
+        (true,
+          ("protocolVersion" -> ProtocolVersion) ~
+            ("minimumClientVersion" -> MinimumClientVersion) ~
+            ("flixVersion" -> Version.CurrentVersion.toString) ~
+            ("success" -> true) ~
+            ("inputModel" -> InputModel) ~
+            // Only what is implemented. A capability advertised ahead of its implementation is
+            // worse than one absent: a client trusts it and fails at the point of use, where the
+            // handshake exists to have already said no.
+            ("capabilities" ->
+              ("diagnostics" -> true) ~
+                ("exportStubs" -> true) ~
+                ("explicitLibraries" -> true) ~
+                ("daemon" -> false)))
+    }
+  }
+
+  /**
     * Returns the result of a build as a single JSON document.
     *
     * `errors` is empty exactly when the build succeeded, which is what `success` reports -- stated
