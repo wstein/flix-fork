@@ -17,7 +17,7 @@
 package ca.uwaterloo.flix
 
 import ca.uwaterloo.flix.api.lsp.{LspServer, VSCodeLspServer, FormatterLsp as LspFormatter}
-import ca.uwaterloo.flix.api.{Bootstrap, BootstrapError, BuildProtocol, Flix, Version}
+import ca.uwaterloo.flix.api.{Bootstrap, BootstrapError, CliContract, Flix, Version}
 import ca.uwaterloo.flix.language.CompilationMessage
 import ca.uwaterloo.flix.language.ast.shared.{Origin, SecurityContext, Source, SourceName}
 import ca.uwaterloo.flix.language.ast.{Symbol, TypedAst}
@@ -234,12 +234,12 @@ object Main {
           }
           exitOnResult(Bootstrap.init(cwd))
 
-        case Command.InitializeBuild =>
+        case Command.Capabilities =>
           // The same document `flix/initializeBuild` will return over a connection. Offering it
           // one-shot is what lets a build tool negotiate *before* deciding whether a daemon is
           // available -- and keeps the one-shot path a first-class fallback rather than a
           // degraded mode that skips the handshake.
-          val (compatible, document) = BuildProtocol.initialize(cmdOpts.clientProtocolVersion)
+          val (compatible, document) = CliContract.describe(cmdOpts.clientContractVersion)
           Console.out.println(JsonMethods.pretty(JsonMethods.render(document)))
           System.exit(if (compatible) 0 else 1)
 
@@ -586,7 +586,7 @@ object Main {
                      stubsOut: Option[String] = None,
                      libs: Seq[String] = Seq.empty,
                      jsonDiagnostics: Boolean = false,
-                     clientProtocolVersion: Option[Int] = None,
+                     clientContractVersion: Option[Int] = None,
     args: List[String] = Nil,
     testFilters: List[String] = Nil,
     testEventsJson: Boolean = false,
@@ -653,7 +653,7 @@ object Main {
 
     case object Stubs extends Command
 
-    case object InitializeBuild extends Command
+    case object Capabilities extends Command
 
     case object Run extends Command
 
@@ -726,9 +726,9 @@ object Main {
           text("writes diagnostics to stdout as JSON, for a build tool to read."),
       )
 
-      cmd("initialize-build").action((_, c) => c.copy(command = Command.InitializeBuild)).text("  reports the build protocol this compiler speaks.").children(
-        opt[Int]("client-version").action((arg, c) => c.copy(clientProtocolVersion = Some(arg))).
-          text("the protocol version the client speaks. Exits non-zero if it cannot be served."),
+      cmd("capabilities").action((_, c) => c.copy(command = Command.Capabilities)).text("  reports the tooling contract this compiler speaks.").children(
+        opt[Int]("contract-version").action((arg, c) => c.copy(clientContractVersion = Some(arg))).
+          text("the contract version the caller speaks. Exits non-zero if it cannot be served."),
       )
 
       cmd("stubs").action((_, c) => c.copy(command = Command.Stubs)).text("  writes compile-only Java stubs for the @Export-ed defs.").children(
@@ -984,7 +984,7 @@ object Main {
       case Result.Ok(_) => Nil
       case Result.Err(error) => List(error)
     }
-    Console.out.println(JsonMethods.pretty(JsonMethods.render(BuildProtocol.result(errors, None))))
+    Console.out.println(JsonMethods.pretty(JsonMethods.render(CliContract.result(errors, None))))
     System.exit(if (errors.isEmpty) 0 else 1)
   }
 
