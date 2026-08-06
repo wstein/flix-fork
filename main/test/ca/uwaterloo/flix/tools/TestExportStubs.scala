@@ -100,6 +100,24 @@ class TestExportStubs extends AnyFunSuite {
     } finally deleteRecursively(root)
   }
 
+  test("writing stubs replaces stale generated output") {
+    val first = stubs("mod Acme.Api { @Export pub def old(x: Int32): Int32 = x }")._1
+    val second = stubs("mod Acme.Api { @Export pub def fresh(x: Int32): Int32 = x }")._1
+    val root = Files.createTempDirectory("flix-export-stub-write")
+    try {
+      ExportStubs.write(first, root)
+      val file = root.resolve("Acme/Api.java")
+      assert(Files.readString(file).contains(" old("))
+      Files.writeString(root.resolve("stale.java"), "stale")
+
+      ExportStubs.write(second, root)
+      assert(!Files.exists(root.resolve("stale.java")))
+      val updated = Files.readString(file)
+      assert(updated.contains(" fresh("))
+      assert(!updated.contains(" old("))
+    } finally deleteRecursively(root)
+  }
+
   private def stubs(text: String): (List[ExportStubs.Facade], List[ExportStubs.Unsupported]) = {
     implicit val flix: Flix = new Flix().setOptions(Options.DefaultTest)
     val source = Source.fromString(SourceName.PathName(sourcePath), Origin.User, sctx, text)

@@ -23,6 +23,8 @@ import ca.uwaterloo.flix.language.phase.{Lexer, Parser2, Weeder2}
 
 import java.lang.constant.ClassDesc
 
+import java.nio.file.{Files, Path}
+
 /**
   * Derives the Java face of a Flix project's `@Export`ed defs without compiling it.
   *
@@ -101,36 +103,66 @@ object ExportStubs {
     }
   }
 
+  /**
+    * Writes every facade under `destination`, replacing whatever was there.
+    *
+    * Replacing rather than merging is what makes a deleted export a build error. A stub left
+    * behind for a def that no longer exists lets Java keep compiling against it, and the mistake
+    * then arrives as a `NoSuchMethodError` in whoever runs it.
+    */
+  def write(facades: List[Facade], destination: Path): Unit = {
+    if (Files.isDirectory(destination)) deleteRecursively(destination)
+    Files.createDirectories(destination)
+    for (facade <- facades) {
+      val binary = binaryName(facade.name)
+      val segments = binary.split('.').toList
+      val file = segments.init.foldLeft(destination)(_.resolve(_)).resolve(s"${segments.last}.java")
+      Files.createDirectories(file.getParent)
+      Files.writeString(file, javaSource(facade))
+    }
+  }
+
+  /** Deletes `path` and everything below it. */
+  private def deleteRecursively(path: Path): Unit = {
+    if (Files.isDirectory(path)) {
+      val stream = Files.list(path)
+      try stream.forEach(deleteRecursively) finally stream.close()
+    }
+    Files.deleteIfExists(path)
+    ()
+  }
+
   /** Returns `facade` as Java source. */
   def javaSource(facade: Facade): String = {
     val binary = binaryName(facade.name)
     val split = binary.lastIndexOf('.')
-    val pkg = if (split < 0) "" else s"package ${binary.substring(0, split)};\n\n"
+    val pkg = if (split < 0) Nil else List(s"package ${binary.substring(0, split)};", "")
     val className = if (split < 0) binary else binary.substring(split + 1)
-    val body = facade.methods.sortBy(_.name).map(javaMethod).mkString("\n")
+    val body = facade.methods.sortBy(_.name).flatMap(javaMethod)
     // `final` with a private constructor: a facade holds only static methods, and letting a caller
     // extend or instantiate the stub would let it compile code the real facade rejects.
-    s"""$Marker
-       |${pkg}public final class $className {
-       |
-       |    private $className() {
-       |    }
-       |
-       |$body
-       |}
-       |""".stripMargin.replace("\n ", "\n")
+    val lines = List(Marker) ++ pkg ++ List(
+      s"public final class $className {",
+      "",
+      s"    private $className() {",
+      "    }",
+      ""
+    ) ++ body ++ List("}")
+    lines.mkString("", "\n", "\n")
   }
 
-  /** Returns `method` as a Java method declaration. */
-  private def javaMethod(method: Method): String = {
+  /** Returns `method` as the lines of a Java method declaration. */
+  private def javaMethod(method: Method): List[String] = {
     val result = method.result.sourceName
     val params = method.params.zipWithIndex.map { case (p, i) => s"${p.sourceName} arg$i" }.mkString(", ")
     // The body is unreachable by construction, but it has to satisfy definite assignment, and
     // throwing says what has gone wrong if a stub is ever on a runtime classpath.
-    s"""    public static $result ${method.name}($params) {
-       |        throw new UnsupportedOperationException("Flix export stub: not for runtime use.");
-       |    }
-       |""".stripMargin
+    List(
+      s"    public static $result ${method.name}($params) {",
+      """        throw new UnsupportedOperationException("Flix export stub: not for runtime use.");""",
+      "    }",
+      ""
+    )
   }
 
   /**

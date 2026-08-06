@@ -26,6 +26,17 @@ Neither language can be compiled first. The supported build schedule is:
 The generated stubs always throw. They are compile-time scaffolding and must never be packaged or
 placed on a runtime classpath.
 
+Generate them with:
+
+```console
+java -jar flix.jar stubs --out build/flix-stubs
+```
+
+With no positional files, the command reads every `.flix` file below `src/`. Positional `.flix`
+files may be supplied for non-project layouts. The command does not bootstrap or resolve the
+project: that would recreate the dependency cycle it exists to break. It replaces the destination
+directory only after every exported definition has a supported signature.
+
 ## Export ABI boundary
 
 Stub generation follows the export ABI implemented by this branch, not the richer ABI on other
