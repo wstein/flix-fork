@@ -4,6 +4,31 @@ import mill.*
 import mill.scalalib.*
 import mill.scalalib.Assembly.*
 
+/** The narrow client a build tool compiles against, rather than the compiler itself.
+  *
+  * Java, with no Scala on its classpath: a Scala client would drag the Scala runtime into every
+  * consumer's plugin classpath. Deliberately a separate module from `flix` so it cannot acquire a
+  * dependency on the compiler by accident -- the value here is the surface it does *not* expose.
+  */
+object flixClient extends JavaModule {
+
+  def javacOptions = Seq("--release", "21")
+
+  def mvnDeps = Seq(mvn"com.google.code.gson:gson:2.11.0")
+
+  /** Tests that read canned contract documents through a fake process runner.
+    *
+    * No compiler is started. What is under test is the reading of the document -- which positions
+    * mean, and which outputs are refused -- and that is exactly what a compiler run would make slow
+    * and hard to provoke: an empty diagnostics list, a diagnostic with no source location, and the
+    * output of a compiler too old to know the flag are all a nuisance to obtain for real and
+    * trivial to state as text.
+    */
+  object test extends JavaTests, TestModule.Junit5 {
+    def mvnDeps = Seq(mvn"org.junit.jupiter:junit-jupiter:5.11.4")
+  }
+}
+
 object flix extends ScalaModule {
 
   def scalaVersion = "2.13.18"
