@@ -76,6 +76,15 @@ class TestCliContract extends AnyFunSuite {
     assertResult(Some(JString("project-directory")))(field(document, "inputModel"))
   }
 
+  test("a non-compilation failure is still a machine-readable diagnostic") {
+    val document = CliContract.result(List(BootstrapError.FileError("Cannot use '--lib missing.jar': not a zip")), None)
+    val diagnostics = field(document, "diagnostics").collect { case org.json4s.JsonAST.JArray(values) => values }
+      .getOrElse(fail("no diagnostics reported"))
+
+    assertResult(1)(diagnostics.length)
+    assertResult(Some(JString("Cannot use '--lib missing.jar': not a zip")))(field(diagnostics.head, "message"))
+  }
+
   test("the minimum client version never exceeds the current one") {
     // Would refuse every client, including one written against this exact compiler.
     assert(CliContract.MinimumClientVersion <= CliContract.ProtocolVersion)

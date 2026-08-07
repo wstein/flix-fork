@@ -255,12 +255,15 @@ object Main {
 
         case Command.Check =>
           if (cmdOpts.jsonDiagnostics) {
-            exitWithJson {
-              Bootstrap.bootstrap(cwd, options.githubToken).flatMap { bootstrap =>
-                val flix = new Flix().setFormatter(formatter)
-                flix.setOptions(options)
-                addLibs(flix, cmdOpts.libs)
-                bootstrap.check(flix)
+            if (cmdOpts.files.nonEmpty) {
+              exitWithJson(Result.Err(BootstrapError.FileError("The 'check' command does not support file arguments with '--diagnostics-json'.")))
+            } else {
+              exitWithJson {
+                Bootstrap.bootstrap(cwd, options.githubToken).flatMap { bootstrap =>
+                  val flix = new Flix().setFormatter(formatter)
+                  flix.setOptions(options)
+                  addLibs(flix, cmdOpts.libs).flatMap(_ => bootstrap.check(flix))
+                }
               }
             }
           } else if (cmdOpts.files.isEmpty) {
@@ -268,16 +271,18 @@ object Main {
               Bootstrap.bootstrap(cwd, options.githubToken).flatMap { bootstrap =>
                 val flix = new Flix().setFormatter(formatter)
                 flix.setOptions(options)
-                addLibs(flix, cmdOpts.libs)
-                bootstrap.check(flix)
+                addLibs(flix, cmdOpts.libs).flatMap(_ => bootstrap.check(flix))
               }
             }
           } else {
             val flix = mkFlixWithFiles(cmdOpts.files, options)
-            addLibs(flix, cmdOpts.libs)
-            val (optRoot, errors) = flix.check()
-            if (errors.isEmpty) System.exit(0)
-            else exitWithErrors(flix, errors, optRoot)
+            addLibs(flix, cmdOpts.libs) match {
+              case Result.Ok(_) =>
+                val (optRoot, errors) = flix.check()
+                if (errors.isEmpty) System.exit(0)
+                else exitWithErrors(flix, errors, optRoot)
+              case Result.Err(error) => exitOnResult(Result.Err(error))
+            }
           }
 
         case Command.Build =>
@@ -288,8 +293,7 @@ object Main {
           val runBuild = () => Bootstrap.bootstrap(cwd, options.githubToken).flatMap { bootstrap =>
             val flix = new Flix().setFormatter(formatter)
             flix.setOptions(options.copy(loadClassFiles = false))
-            addLibs(flix, cmdOpts.libs)
-            bootstrap.build(flix)
+            addLibs(flix, cmdOpts.libs).flatMap(_ => bootstrap.build(flix))
           }
           if (cmdOpts.jsonDiagnostics) exitWithJson(runBuild()) else exitOnResult(runBuild())
 
@@ -1023,17 +1027,16 @@ object Main {
     System.exit(if (errors.isEmpty) 0 else 1)
   }
 
-  private def addLibs(flix: Flix, libs: Seq[String]): Unit = {
-    for (lib <- libs) {
+  private def addLibs(flix: Flix, libs: Seq[String]): Result[Unit, BootstrapError] = {
+    Result.traverse(libs) { lib =>
       try {
         flix.addJar(Paths.get(lib))
-        ()
+        Result.Ok(())
       } catch {
         case e: IllegalArgumentException =>
-          Console.err.println(s"Cannot use '--lib $lib': ${e.getMessage}")
-          System.exit(1)
+          Result.Err(BootstrapError.FileError(s"Cannot use '--lib $lib': ${e.getMessage}"))
       }
-    }
+    }.map(_ => ())
   }
 
   private def mkFlixWithFiles(files: Seq[File], options: Options)(implicit formatter: Formatter): Flix = {
