@@ -301,7 +301,7 @@ object Documentor {
     * i.e. this should be called before `pairModules`.
     */
   private def filterTrait(trt: Trait): Trait = trt match {
-    case Trait(TypedAst.Trait(doc, ann, mod, sym, tparam, superTraits, assocs, _, laws, loc), signatures, defs, instances, parent, _) =>
+    case Trait(TypedAst.Trait(doc, ann, mod, sym, tparam, superTraits, assocs, _, loc), signatures, defs, instances, parent, _) =>
       Trait(
         TypedAst.Trait(
           doc,
@@ -312,7 +312,6 @@ object Documentor {
           superTraits,
           assocs,
           Nil,
-          laws.filter(l => l.spec.mod.isPublic),
           loc
         ),
         signatures.filter(s => s.spec.mod.isPublic),
