@@ -333,7 +333,7 @@ object GenFunAndClosureClasses {
     }
     val end = new Label()
     m.visitLabel(end)
-    for (p <- params if !p.sym.isWild) {
+    for (p <- params if p.sym.isDebugVisible) {
       val tpe = BackendType.toBackendType(p.tpe)
       m.visitLocalVariable(p.sym.text, tpe.toDescriptor, null, start, end, JvmOps.getIndex(p.offset, localOffset))
     }

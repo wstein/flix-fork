@@ -1471,7 +1471,7 @@ object GenExpression {
       if (flix.options.xdebug) addLoc(exp2.loc)
       // The binding is live for exactly the body it scopes over, which is where a debugger
       // should be able to name it. Wildcards are skipped: they have no name worth reporting.
-      if (flix.options.xdebug && !sym.isWild) {
+      if (flix.options.xdebug && sym.isDebugVisible) {
         val start = new Label()
         mv.visitLabel(start)
         compileExpr(exp2)
