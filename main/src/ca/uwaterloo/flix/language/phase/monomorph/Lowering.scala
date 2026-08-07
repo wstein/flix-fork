@@ -467,7 +467,7 @@ object Lowering {
       // handler sym { rules }
       // is lowered to
       // handlerBody -> try handlerBody() with sym { rules }
-      val bodySym = Symbol.freshVarSym("handlerBody", BoundBy.FormalParam, loc.asSynthetic)(RegionScope.Top, flix)
+      val bodySym = Symbol.freshVarSym("handlerBody", BoundBy.FormalParam, loc.asSynthetic)(RegionScope.Top, flix).asSynthetic
       val rs = rules.map(lowerHandlerRule)
       val bt = lowerType(bodyTpe)
       val t = lowerType(tpe)
@@ -1533,7 +1533,7 @@ object Lowering {
     */
   private def mkLetSym(prefix: String, loc: SourceLocation)(implicit flix: Flix): Symbol.VarSym = {
     val name = prefix + Flix.Delimiter + flix.genSym.freshId()
-    Symbol.freshVarSym(name, BoundBy.Let, loc)(RegionScope.Top, flix)
+    Symbol.freshVarSym(name, BoundBy.Let, loc)(RegionScope.Top, flix).asSynthetic
   }
 
   /**
@@ -1632,7 +1632,7 @@ object Lowering {
     val mergedExp = mergeExps(exps, loc)
     val argExps = mergedExp :: Nil
     val solvedExp = MonoAst.Expr.ApplyDef(defn, argExps, Types.SolveType, Types.Datalog, eff, loc)
-    val tmpVarSym = Symbol.freshVarSym("tmp%", BoundBy.Let, loc)(RegionScope.Top, flix)
+    val tmpVarSym = Symbol.freshVarSym("tmp%", BoundBy.Let, loc)(RegionScope.Top, flix).asSynthetic
     val letBodyExp = optPreds match {
       case Some(preds) =>
         mergeExps(preds.map(pred => {
@@ -2440,8 +2440,8 @@ object Lowering {
     * where `P1, P2, ...` are in `preds` with their respective term types.
     */
   private def mkExtVarLambda(preds: List[(Name.Pred, List[Type])], tpe: Type, loc: SourceLocation)(implicit ctx: Context, lctx: LocalContext, root: TypedAst.Root, flix: Flix): MonoAst.Expr = {
-    val predSymVar = Symbol.freshVarSym("predSym", BoundBy.FormalParam, loc)(RegionScope.Top, flix)
-    val termsVar = Symbol.freshVarSym("terms", BoundBy.FormalParam, loc)(RegionScope.Top, flix)
+    val predSymVar = Symbol.freshVarSym("predSym", BoundBy.FormalParam, loc)(RegionScope.Top, flix).asSynthetic
+    val termsVar = Symbol.freshVarSym("terms", BoundBy.FormalParam, loc)(RegionScope.Top, flix).asSynthetic
     mkLambdaExp(predSymVar, Types.PredSym,
       mkLambdaExp(termsVar, Types.VectorOfBoxed,
         mkExtVarBody(preds, predSymVar, termsVar, tpe, loc),
@@ -2481,7 +2481,7 @@ object Lowering {
     * and `"terms" == termsVar.text`.
     */
   private def mkExtVarBody(preds: List[(Name.Pred, List[Type])], predSymVar: Symbol.VarSym, termsVar: Symbol.VarSym, tpe: Type, loc: SourceLocation)(implicit ctx: Context, lctx: LocalContext, root: TypedAst.Root, flix: Flix): MonoAst.Expr = {
-    val nameVar = Symbol.freshVarSym(Name.Ident("name", loc), BoundBy.Pattern)(RegionScope.Top, flix)
+    val nameVar = Symbol.freshVarSym(Name.Ident("name", loc), BoundBy.Pattern)(RegionScope.Top, flix).asSynthetic
     MonoAst.Expr.Match(
       exp = MonoAst.Expr.Var(predSymVar, Types.PredSym, loc),
       rules = List(

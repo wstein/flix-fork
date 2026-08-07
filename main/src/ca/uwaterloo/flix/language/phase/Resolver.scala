@@ -3691,7 +3691,7 @@ object Resolver {
     * in [[ca.uwaterloo.flix.language.phase.Redundancy]].
     */
   def freshVarSym(name: String, boundBy: BoundBy, loc: SourceLocation)(implicit scope: RegionScope, flix: Flix): Symbol.VarSym =
-    Symbol.freshVarSym(name + Flix.Delimiter + flix.genSym.freshId(), boundBy, loc)
+    Symbol.freshVarSym(name + Flix.Delimiter + flix.genSym.freshId(), boundBy, loc).asSynthetic
 
   /** Returns a [[ResolvedAst.Expr.Lambda]] where the body is ascribed to have no effect. */
   private def mkPureLambda(param: ResolvedAst.FormalParam, exp: ResolvedAst.Expr, loc: SourceLocation): ResolvedAst.Expr = {

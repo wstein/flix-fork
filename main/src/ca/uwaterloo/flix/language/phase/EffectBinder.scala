@@ -384,7 +384,7 @@ object EffectBinder {
     */
   private def letBindExpr(binders: mutable.ArrayBuffer[Binder])(e: ReducedAst.Expr)(implicit flix: Flix): ReducedAst.Expr.Var = {
     val loc = e.loc.asSynthetic
-    val sym = Symbol.freshVarSym("anf", BoundBy.Let, loc)
+    val sym = Symbol.freshVarSym("anf", BoundBy.Let, loc).asSynthetic
     binders.addOne(LetBinder(sym, e, loc))
     ReducedAst.Expr.Var(sym, e.tpe, loc)
   }

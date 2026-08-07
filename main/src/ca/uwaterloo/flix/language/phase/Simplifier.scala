@@ -164,7 +164,7 @@ object Simplifier {
           // argument). We let-bind the closure so that it is created first; the region stays the
           // second argument so codegen can still recognize the `Static` region.
           // See: https://github.com/flix/flix/issues/10707
-          val closureSym = Symbol.freshVarSym("spawnClosure" + Flix.Delimiter, BoundBy.Let, loc)
+          val closureSym = Symbol.freshVarSym("spawnClosure" + Flix.Delimiter, BoundBy.Let, loc).asSynthetic
           val closureVar = SimplifiedAst.Expr.Var(closureSym, lambdaTyp, loc)
           val spawnExp = SimplifiedAst.Expr.ApplyAtomic(AtomicOp.Spawn, List(closureVar, e2), t, Purity.Impure, loc)
           SimplifiedAst.Expr.Let(closureSym, lambdaExp, spawnExp, t, Purity.Impure, loc)
@@ -758,7 +758,7 @@ object Simplifier {
     //
 
     // Generate a fresh variable to hold the result of the match expression.
-    val matchVar = Symbol.freshVarSym("matchVar" + Flix.Delimiter, BoundBy.Let, loc)
+    val matchVar = Symbol.freshVarSym("matchVar" + Flix.Delimiter, BoundBy.Let, loc).asSynthetic
 
     // Translate the match expression.
     val matchExp = visitExp(exp0)
@@ -892,7 +892,7 @@ object Simplifier {
     * }}}
     */
   private def generateSwitch(exp0: MonoAst.Expr, rules: List[MonoAst.MatchRule], tpe: Type, loc: SourceLocation)(implicit universe: Set[Symbol.EffSym], root: MonoAst.Root, flix: Flix): SimplifiedAst.Expr = {
-    val matchVar = Symbol.freshVarSym("matchVar" + Flix.Delimiter, BoundBy.Let, loc)
+    val matchVar = Symbol.freshVarSym("matchVar" + Flix.Delimiter, BoundBy.Let, loc).asSynthetic
     val matchExp = visitExp(exp0)
     val t = visitType(tpe)
 
@@ -1000,7 +1000,7 @@ object Simplifier {
     */
   private def flattenTupleMatch(elms: List[MonoAst.Expr], rules: List[MonoAst.MatchRule], tpe: Type, loc: SourceLocation)(implicit universe: Set[Symbol.EffSym], root: MonoAst.Root, flix: Flix): SimplifiedAst.Expr = {
     // Create a match variable for each tuple element.
-    val matchVars = elms.map(_ => Symbol.freshVarSym("matchVar" + Flix.Delimiter, BoundBy.Let, loc))
+    val matchVars = elms.map(_ => Symbol.freshVarSym("matchVar" + Flix.Delimiter, BoundBy.Let, loc).asSynthetic)
     val matchExps = elms.map(visitExp)
 
     val t = visitType(tpe)
@@ -1123,7 +1123,7 @@ object Simplifier {
     */
   private def flattenTupleMatchWithSwitch(elms: List[MonoAst.Expr], rules: List[MonoAst.MatchRule], switchCol: Int, tpe: Type, loc: SourceLocation)(implicit universe: Set[Symbol.EffSym], root: MonoAst.Root, flix: Flix): SimplifiedAst.Expr = {
     // Create a match variable for each tuple element.
-    val matchVars = elms.map(_ => Symbol.freshVarSym("matchVar" + Flix.Delimiter, BoundBy.Let, loc))
+    val matchVars = elms.map(_ => Symbol.freshVarSym("matchVar" + Flix.Delimiter, BoundBy.Let, loc).asSynthetic)
     val matchExps = elms.map(visitExp)
     val t = visitType(tpe)
 
@@ -1362,7 +1362,7 @@ object Simplifier {
       case (MonoAst.Pattern.Tag(CaseSymUse(sym, _), pats, tpe, loc) :: ps, v :: vs) =>
         val varExp = SimplifiedAst.Expr.Var(v, visitType(tpe), loc)
         val cond = SimplifiedAst.Expr.ApplyAtomic(AtomicOp.Is(sym), List(varExp), SimpleType.Bool, Purity.Pure, loc)
-        val freshVars = pats.map(_ => Symbol.freshVarSym("innerTag" + Flix.Delimiter, BoundBy.Let, loc))
+        val freshVars = pats.map(_ => Symbol.freshVarSym("innerTag" + Flix.Delimiter, BoundBy.Let, loc).asSynthetic)
         val zero = patternMatchList(pats ::: ps, freshVars ::: vs, guard, succ, fail)
         val consequent = ListOps.zip(pats, freshVars).zipWithIndex.foldRight(zero) {
           case (((pat, name), idx), exp) =>
@@ -1381,7 +1381,7 @@ object Simplifier {
         * variables.
         */
       case (MonoAst.Pattern.Tuple(elms, tpe, loc) :: ps, v :: vs) =>
-        val freshVars = elms.map(_ => Symbol.freshVarSym("innerElm" + Flix.Delimiter, BoundBy.Let, loc))
+        val freshVars = elms.map(_ => Symbol.freshVarSym("innerElm" + Flix.Delimiter, BoundBy.Let, loc).asSynthetic)
         val zero = patternMatchList(elms.toList ::: ps, freshVars.toList ::: vs, guard, succ, fail)
         elms.zip(freshVars).zipWithIndex.foldRight(zero) {
           case (((pat, name), idx), exp) =>
@@ -1398,7 +1398,7 @@ object Simplifier {
         * and freshly generated variables.
         */
       case (MonoAst.Pattern.Record(pats, pat, tpe, loc) :: ps, v :: vs) =>
-        val freshVars = pats.map(_ => Symbol.freshVarSym("innerLabel" + Flix.Delimiter, BoundBy.Let, loc))
+        val freshVars = pats.map(_ => Symbol.freshVarSym("innerLabel" + Flix.Delimiter, BoundBy.Let, loc).asSynthetic)
         val labelPats = pats.map(_.pat)
         val varExp = SimplifiedAst.Expr.Var(v, visitType(tpe), loc)
         val zero = patternMatchList(labelPats ::: ps, freshVars ::: vs, guard, succ, fail)
@@ -1456,7 +1456,7 @@ object Simplifier {
 
     // Build the nested if-then-else
     val tagType = exp.tpe
-    val extName = Symbol.freshVarSym("ext", BoundBy.Let, exp.loc)(RegionScope.Top, flix)
+    val extName = Symbol.freshVarSym("ext", BoundBy.Let, exp.loc)(RegionScope.Top, flix).asSynthetic
     val extVar = SimplifiedAst.Expr.Var(extName, tagType, exp.loc)
     val errorExp = SimplifiedAst.Expr.ApplyAtomic(AtomicOp.MatchError, List.empty, tpe, Purity.Impure, loc)
     val iftes = rules.foldRight(errorExp: SimplifiedAst.Expr) {
@@ -1524,12 +1524,12 @@ object Simplifier {
 
     // Find types and new names.
     val freshFieldNames = givenFields.map {
-      fieldSym => (fieldSym, Symbol.freshVarSym(fieldSym.name, BoundBy.Let, synthLoc))
+      fieldSym => (fieldSym, Symbol.freshVarSym(fieldSym.name, BoundBy.Let, synthLoc).asSynthetic)
     }.toMap
     val fieldTypes = fieldInitializations.map {
       case (fieldSym, e) => (fieldSym, e.tpe)
     }.toMap
-    val freshRegName = Symbol.freshVarSym("r", BoundBy.Let, synthLoc)
+    val freshRegName = Symbol.freshVarSym("r", BoundBy.Let, synthLoc).asSynthetic
     val regTypeOpt = regExpOpt.map(_.tpe)
     val freshFieldInitialization = fieldInitializations.map {
       case (fieldSym, e) => (freshFieldNames(fieldSym), e)

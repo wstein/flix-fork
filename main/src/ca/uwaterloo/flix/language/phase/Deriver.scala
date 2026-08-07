@@ -125,8 +125,8 @@ object Deriver {
       val eqTraitSym = PredefinedTraits.lookupTraitSym("Eq", root)
       val eqDefSym = Symbol.mkDefnSym("Eq.eq", Some(flix.genSym.freshId()))
 
-      val param1 = Symbol.freshVarSym("x", BoundBy.FormalParam, loc)
-      val param2 = Symbol.freshVarSym("y", BoundBy.FormalParam, loc)
+      val param1 = Symbol.freshVarSym("x", BoundBy.FormalParam, loc).asSynthetic
+      val param2 = Symbol.freshVarSym("y", BoundBy.FormalParam, loc).asSynthetic
       val exp = mkEqImpl(enum0, param1, param2, loc, root)
       val spec = mkEqSpec(enum0, param1, param2, loc, root)
 
@@ -306,8 +306,8 @@ object Deriver {
       val orderTraitSym = PredefinedTraits.lookupTraitSym("Order", root)
       val compareDefSym = Symbol.mkDefnSym("Order.compare", Some(flix.genSym.freshId()))
 
-      val param1 = Symbol.freshVarSym("x", BoundBy.FormalParam, loc)
-      val param2 = Symbol.freshVarSym("y", BoundBy.FormalParam, loc)
+      val param1 = Symbol.freshVarSym("x", BoundBy.FormalParam, loc).asSynthetic
+      val param2 = Symbol.freshVarSym("y", BoundBy.FormalParam, loc).asSynthetic
       val exp = mkCompareImpl(enum0, param1, param2, loc, root)
       val spec = mkCompareSpec(enum0, param1, param2, loc, root)
 
@@ -442,7 +442,7 @@ object Deriver {
         * (Cannot be inlined due to issues with Scala's type inference.
         */
       def thenCompare(exp1: KindedAst.Expr, exp2: KindedAst.Expr): KindedAst.Expr = {
-        val matchVarSym = Symbol.freshVarSym("z", BoundBy.Pattern, loc)
+        val matchVarSym = Symbol.freshVarSym("z", BoundBy.Pattern, loc).asSynthetic
         KindedAst.Expr.Match(exp1,
           List(
             KindedAst.MatchRule(
@@ -504,7 +504,7 @@ object Deriver {
       val toStringTraitSym = PredefinedTraits.lookupTraitSym("ToString", root)
       val toStringDefSym = Symbol.mkDefnSym("ToString.toString", Some(flix.genSym.freshId()))
 
-      val param = Symbol.freshVarSym("x", BoundBy.FormalParam, loc)
+      val param = Symbol.freshVarSym("x", BoundBy.FormalParam, loc).asSynthetic
       val exp = mkToStringImpl(enum0, param, loc, root)
       val spec = mkToStringSpec(enum0, param, loc, root)
 
@@ -651,7 +651,7 @@ object Deriver {
         }
 
         def thenCompare(exp1: KindedAst.Expr, exp2: KindedAst.Expr): KindedAst.Expr = {
-          val matchVarSym = Symbol.freshVarSym("z", BoundBy.Pattern, loc)
+          val matchVarSym = Symbol.freshVarSym("z", BoundBy.Pattern, loc).asSynthetic
           KindedAst.Expr.Match(exp1, List(
             KindedAst.MatchRule(
               KindedAst.Pattern.Tag(CaseSymUse(comparisonEquals, loc), Nil, Type.freshVar(Kind.Star, loc), loc),
@@ -713,7 +713,7 @@ object Deriver {
       val hashTraitSym = PredefinedTraits.lookupTraitSym("Hash", root)
       val hashDefSym = Symbol.mkDefnSym("Hash.hash", Some(flix.genSym.freshId()))
 
-      val param = Symbol.freshVarSym("x", BoundBy.FormalParam, loc)
+      val param = Symbol.freshVarSym("x", BoundBy.FormalParam, loc).asSynthetic
       val exp = mkHashImpl(enum0, param, loc, root)
       val spec = mkHashSpec(enum0, param, loc, root)
 
@@ -867,7 +867,7 @@ object Deriver {
           loc
         )
 
-        val param = Symbol.freshVarSym("x", BoundBy.FormalParam, loc)
+        val param = Symbol.freshVarSym("x", BoundBy.FormalParam, loc).asSynthetic
         val exp = mkCoerceImpl(enum0, param, loc)
         val spec = mkCoerceSpec(enum0, param, loc, root)
 
@@ -1059,7 +1059,7 @@ object Deriver {
     * Creates a pattern corresponding to the given tag type.
     */
   private def mkPattern(sym: Symbol.CaseSym, tpes: List[Type], varPrefix: String, loc: SourceLocation)(implicit flix: Flix): (KindedAst.Pattern, List[Symbol.VarSym]) = {
-    val varSyms = tpes.zipWithIndex.map { case (_, index) => Symbol.freshVarSym(s"$varPrefix$index", BoundBy.Pattern, loc) }
+    val varSyms = tpes.zipWithIndex.map { case (_, index) => Symbol.freshVarSym(s"$varPrefix$index", BoundBy.Pattern, loc).asSynthetic }
     val subPats = varSyms.map(varSym => mkVarPattern(varSym, loc))
     (KindedAst.Pattern.Tag(CaseSymUse(sym, loc), subPats, Type.freshVar(Kind.Star, loc), loc), varSyms)
   }
