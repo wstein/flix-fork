@@ -23,10 +23,12 @@ import org.scalatest.funsuite.AnyFunSuite
 
 import java.nio.file.{Files, Path}
 import scala.collection.mutable
+import scala.jdk.CollectionConverters._
+import scala.util.Using
 
 /**
   * Tests that `--Xdebug` emits a `LocalVariableTable`, which is what lets a debugger show a
-  * variable by its source name rather than as a numbered JVM slot.
+  * variable by its source name rather than as a numbered JVM slot, and hides synthetic compiler locals.
   */
 class TestLocalVariableTable extends AnyFunSuite {
 
@@ -83,6 +85,44 @@ class TestLocalVariableTable extends AnyFunSuite {
     found.toList
   }
 
+  /** Reads all `LocalVariableTable` entries across all `.class` files in the output directory tree. */
+  private def readAllEntries(classDir: Path): List[(Path, Entry)] = {
+    if (!Files.exists(classDir)) return Nil
+    val found = mutable.ListBuffer.empty[(Path, Entry)]
+    val classFiles = Using.resource(Files.walk(classDir)) { stream =>
+      stream.iterator().asScala.filter(p => Files.isRegularFile(p) && p.toString.endsWith(".class")).toList
+    }
+    for (classPath <- classFiles) {
+      val reader = new ClassReader(Files.readAllBytes(classPath))
+      reader.accept(new ClassVisitor(Opcodes.ASM9) {
+        override def visitMethod(access: Int, name: String, descriptor: String, signature: String, exceptions: Array[String]): MethodVisitor = {
+          new MethodVisitor(Opcodes.ASM9) {
+            override def visitLocalVariable(name: String, descriptor: String, signature: String, start: Label, end: Label, index: Int): Unit = {
+              found += ((classPath, Entry(name, descriptor, index)))
+            }
+          }
+        }
+      }, 0)
+    }
+    found.toList
+  }
+
+  private def compileAndReadAllEntries(program: String, xdebug: Boolean = true): List[(Path, Entry)] = {
+    val out = Files.createTempDirectory("flix-lvt-test")
+    try {
+      val opts = Options.DefaultTest.copy(xdebug = xdebug, outputJvm = true, outputPath = out)
+      val flix = new Flix().setOptions(opts)
+      flix.addVirtualPath(CompilerConstants.VirtualTestFile, program)
+      flix.compile().toResult match {
+        case Result.Ok(_) => ()
+        case Result.Err(errors) => fail(s"the test program must compile, but got: $errors")
+      }
+      readAllEntries(out.resolve("class"))
+    } finally {
+      deleteRecursively(out)
+    }
+  }
+
   private def deleteRecursively(path: Path): Unit = {
     if (Files.isDirectory(path)) Files.list(path).forEach(deleteRecursively)
     Files.deleteIfExists(path)
@@ -107,6 +147,80 @@ class TestLocalVariableTable extends AnyFunSuite {
   test("with --Xdebug every variable occupies a distinct slot") {
     val entries = entriesOf(xdebug = true)
     assertResult(entries.size)(entries.map(_.slot).distinct.size)
+  }
+
+  test("with --Xdebug delimiter-marked synthetic variables are hidden in match and match-lambda") {
+    val program =
+      """
+        |@DontInline
+        |pub def classify(x: Option[Option[Int32]]): Int32 = match x {
+        |    case Some(Some(n)) => n
+        |    case _              => 0
+        |}
+        |
+        |@DontInline
+        |pub def classifyLambda(v: Option[Option[Int32]]): Int32 =
+        |    (match x -> match x {
+        |        case Some(Some(n)) => n
+        |        case _              => 0
+        |    })(v)
+        |
+        |def main(): Unit = {
+        |    let _ = classify(None);
+        |    let _ = classifyLambda(None);
+        |    ()
+        |}
+        |""".stripMargin
+    val allEntries = compileAndReadAllEntries(program, xdebug = true)
+    val names = allEntries.map(_._2.name)
+    assert(names.contains("n"), s"expected user variable 'n' in entries: $names")
+    assert(!names.exists(_.contains(Flix.Delimiter)), s"expected no delimiter in local variable names, but got: ${names.filter(_.contains(Flix.Delimiter))}")
+  }
+
+  test("with --Xdebug derived instance synthetic variables (x, y, z) are hidden") {
+    val program =
+      """
+        |enum Color with Eq {
+        |    case Red, Green, Blue
+        |}
+        |
+        |@DontInline
+        |pub def sameColor(a: Color, b: Color): Bool = a == b
+        |
+        |def main(): Unit = {
+        |    let _ = sameColor(Color.Red, Color.Blue);
+        |    ()
+        |}
+        |""".stripMargin
+    val allEntries = compileAndReadAllEntries(program, xdebug = true)
+    val names = allEntries.map(_._2.name)
+    assert(!names.contains("x"), s"derived parameter 'x' should be hidden, but found in $names")
+    assert(!names.contains("y"), s"derived parameter 'y' should be hidden, but found in $names")
+    assert(!names.contains("z"), s"derived pattern variable 'z' should be hidden, but found in $names")
+  }
+
+  test("with --Xdebug synthetic variables remain synthetic after specialization clone") {
+    val program =
+      """
+        |@DontInline
+        |pub def describe(x: a): Int32 = match Option.Some(x) {
+        |    case Some(_) => 1
+        |    case None    => 0
+        |}
+        |
+        |@DontInline
+        |pub def useTwice(): Int32 = describe(1) + describe(true)
+        |
+        |def main(): Unit = {
+        |    let _ = useTwice();
+        |    ()
+        |}
+        |""".stripMargin
+    val allEntries = compileAndReadAllEntries(program, xdebug = true)
+    val describeClasses = allEntries.map(_._1.getFileName.toString).filter(_.contains("describe"))
+    assert(describeClasses.distinct.size >= 2, s"expected at least 2 specialized describe classes, but found: $describeClasses")
+    val names = allEntries.map(_._2.name)
+    assert(!names.exists(_.contains(Flix.Delimiter)), s"expected no delimiter in specialized local variable names, but got: ${names.filter(_.contains(Flix.Delimiter))}")
   }
 
 }
