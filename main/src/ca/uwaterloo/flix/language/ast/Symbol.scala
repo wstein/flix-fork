@@ -172,14 +172,14 @@ object Symbol {
     * Returns a fresh variable symbol based on the given symbol.
     */
   def freshVarSym(sym: VarSym)(implicit flix: Flix): VarSym = {
-    new VarSym(flix.genSym.freshId(), sym.text, sym.tvar, sym.boundBy, sym.loc)
+    new VarSym(flix.genSym.freshId(), sym.text, sym.tvar, sym.boundBy, sym.loc, sym.isSynthetic)
   }
 
   /**
     * Returns a fresh variable symbol for the given identifier.
     */
   def freshVarSym(ident: Name.Ident, boundBy: BoundBy)(implicit scope: RegionScope, flix: Flix): VarSym = {
-    new VarSym(flix.genSym.freshId(), ident.name, Type.freshVar(Kind.Star, ident.loc), boundBy, ident.loc)
+    new VarSym(flix.genSym.freshId(), ident.name, Type.freshVar(Kind.Star, ident.loc), boundBy, ident.loc, isSynthetic = ident.loc.isSynthetic)
   }
 
   /**
@@ -408,12 +408,22 @@ object Symbol {
     * @param boundBy the way the variable is bound.
     * @param loc     the source location associated with the symbol.
     */
-  final class VarSym(val id: Int, val text: String, val tvar: Type.Var, val boundBy: BoundBy, val loc: SourceLocation) extends Ordered[VarSym] with Symbol {
+  final class VarSym(val id: Int, val text: String, val tvar: Type.Var, val boundBy: BoundBy, val loc: SourceLocation, val isSynthetic: Boolean = false) extends Ordered[VarSym] with Symbol {
 
     /**
       * Returns `true` if `this` symbol is a wildcard.
       */
     def isWild: Boolean = text.startsWith("_")
+
+    /**
+      * Returns `true` if `this` symbol is visible to a debugger.
+      */
+    def isDebugVisible: Boolean = !isWild && !isSynthetic
+
+    /**
+      * Returns `this` variable symbol marked as synthetic.
+      */
+    def asSynthetic: VarSym = new VarSym(id, text, tvar, boundBy, loc, isSynthetic = true)
 
     /**
       * Returns `true` if this symbol is equal to `that` symbol.
