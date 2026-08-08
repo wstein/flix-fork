@@ -3,14 +3,15 @@
 Decisions taken while building `flix format` into a working formatter, each with
 the evidence behind it and the alternative that was rejected. "Canonical"
 throughout means one layout per syntax tree *for what the formatter decides*;
-where an ordinary expression breaks is still the author's, which puts the tool in
-`gofmt`'s class rather than `dart format`'s (D23).
+line breaking is now decided by a search-based solver backend (`dart_style` tall style port, D28)
+against a column budget (80 columns).
 
 A decision recorded here is not a preference; it is a claim that can be checked,
 and several entries below exist because an earlier claim was checked and failed.
 
 Status values are **Settled** (evidence is decisive and in the repository),
 **Proposed** (our choice, offered upstream, reversible on maintainer objection),
+**Superseded / Reversed** (overruled by later architectural evolution),
 and **Deferred** (knowingly unresolved, with the blocker named).
 
 Sources referred to throughout:
@@ -968,3 +969,14 @@ being the identity.
   readability-critical is a question for diff review.
 - **Constructs not yet calibrated:** Datalog clause bodies, enum cases, struct
   fields, and trait and instance members.
+
+## D28 — Transition to Solver-Based Canonical Formatting (dart_style Tall Style Port)
+
+**Status: Settled.** Replaces D23, updates D1, D9, D15, D21, D24, D27.
+
+The formatter adopts a full line-rewriting model powered by a best-first search solver (`ca.uwaterloo.flix.tools.fmt.layout`).
+- **Source-Independence:** Formatting is a pure function of `(AST, Comments)`. Author whitespace does not leak into line-breaking decisions.
+- **Total Ordering:** `Solution.compare` implements a strict total order (cost, overflow, lexicographic bound states) to remove heap-dependent non-determinism.
+- **Zero Trailing Separators:** Split `ListPiece` instances strictly enforce zero trailing separators to preserve Flix syntax validity (`allowTrailing = false`).
+- **Bounded Search:** Solver search is capped at 10,000 attempts with memoization via `SolutionCache` and shape propagation via `ShapeSet`.
+

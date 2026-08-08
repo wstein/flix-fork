@@ -17,6 +17,7 @@
   - If necessary, effect casts are OK.
   - Only in extreme cases are type casts OK.
 - Indentation is 4 spaces.
+- Target page width budget for line breaking is 80 columns.
 - Pattern matches should align `=>`.
 - Avoid unnecessary lambdas. 
   - e.g. prefer `List.map(String.toLowerCase)` over `List.map(s -> String.toLowerCase(s)`.
