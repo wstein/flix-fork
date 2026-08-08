@@ -43,3 +43,5 @@ examples/apps/langcensus/report.md
 
 # scala-cli build cache, created by the calling-flix-from-scala example
 .scala-build/
+
+tmp/
