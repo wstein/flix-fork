@@ -55,16 +55,27 @@ final case class MatchPiece(subject: Piece, arms: List[MatchArmPiece]) extends P
     writer.write("{")
 
     if (arms.nonEmpty) {
-      writer.pushIndent(Indent.Block)
-      writer.newline()
-      arms.zipWithIndex.foreach { case (arm, idx) =>
-        writer.format(arm)
-        if (idx < arms.length - 1) {
-          writer.newline()
+      if (state == State.Split) {
+        writer.pushIndent(Indent.Block)
+        writer.newline()
+        arms.zipWithIndex.foreach { case (arm, idx) =>
+          writer.format(arm)
+          if (idx < arms.length - 1) {
+            writer.newline()
+          }
         }
+        writer.popIndent()
+        writer.newline()
+      } else {
+        writer.space()
+        arms.zipWithIndex.foreach { case (arm, idx) =>
+          writer.format(arm)
+          if (idx < arms.length - 1) {
+            writer.space()
+          }
+        }
+        writer.space()
       }
-      writer.popIndent()
-      writer.newline()
     }
 
     writer.write("}")

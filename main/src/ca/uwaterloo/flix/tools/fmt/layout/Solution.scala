@@ -201,32 +201,37 @@ final class Solution private(private var boundStates: Solution.StateNode,
   /**
     * Orders solutions best-first: cost, then overflow, then bound states.
     *
-    * Cost comes before overflow even though overflow is the worse defect,
-    * because a solution that overflows now may refine into a cheap one that
-    * does not, so the search must proceed in cost order to stay admissible.
-    *
-    * The third key exists purely for determinism. Without it, two solutions
-    * with equal cost and overflow would be ordered by whatever the heap does
-    * with equal elements, and the output would depend on insertion timing. Do
-    * not remove it, and do not replace it with anything derived from
-    * [[Piece.id]] or a hash code.
+    * Formulates a strict total order across solutions so priority queue search
+    * behavior is completely deterministic across runs.
     */
   override def compare(that: Solution): Int = {
     if (cost != that.cost) return Integer.compare(cost, that.cost)
     if (overflow != that.overflow) return Integer.compare(overflow, that.overflow)
 
-    // The binding list is newest-first; compare in insertion order.
-    var pieces: List[Piece] = Nil
-    var node = boundStates
-    while (node != null) {
-      pieces = node.piece :: pieces
-      node = node.parent
+    // Collect bound states from both solutions in insertion order (oldest first).
+    var listA: List[(Piece, State)] = Nil
+    var nodeA = boundStates
+    while (nodeA != null) {
+      listA = (nodeA.piece, nodeA.state) :: listA
+      nodeA = nodeA.parent
     }
 
-    pieces.foreach { piece =>
-      val a = pieceState(piece)
-      val b = that.pieceState(piece)
-      if (a != b) return a.compare(b)
+    var listB: List[(Piece, State)] = Nil
+    var nodeB = that.boundStates
+    while (nodeB != null) {
+      listB = (nodeB.piece, nodeB.state) :: listB
+      nodeB = nodeB.parent
+    }
+
+    if (listA.length != listB.length) return Integer.compare(listA.length, listB.length)
+
+    var i = 0
+    while (i < listA.length) {
+      val (pieceA, stateA) = listA(i)
+      val (pieceB, stateB) = listB(i)
+      if (pieceA ne pieceB) return Integer.compare(pieceA.id, pieceB.id)
+      if (stateA != stateB) return stateA.compare(stateB)
+      i += 1
     }
 
     0

@@ -22,8 +22,8 @@ import scala.collection.mutable
   *
   * Handles four responsibilities in a single rendering pass:
   *   1. Formats pieces into output text spans.
-  *   2. Tracks horizontal column position and records overflow past `ctx.pageWidth`.
-  *   3. Computes each piece's [[Shape]] bottom-up and enforces parent constraints via [[Solution.invalidate]].
+  *   2. Tracks horizontal column position and records line overflow past `ctx.pageWidth`.
+  *   3. Computes each child piece's [[Shape]] bottom-up and enforces parent constraints via [[Solution.invalidate]].
   *   4. Identifies expandable stateful pieces on the first problematic line for search progression.
   *
   * @param ctx      the active solve context
@@ -33,9 +33,11 @@ final class CodeWriter(ctx: SolveContext, solution: Solution) {
 
   private val sb = new StringBuilder()
   private val indentStack = mutable.Stack[Int]()
+  private val parentStack = mutable.Stack[(Piece, State)]()
 
   private var currentLineIndex: Int = 0
   private var currentColumn: Int = ctx.leadingIndent
+  private var maxLineColumn: Int = ctx.leadingIndent
   private var lineStartColumn: Int = ctx.leadingIndent
   private var pendingIndentSpaces: Int = ctx.leadingIndent
 
@@ -56,14 +58,16 @@ final class CodeWriter(ctx: SolveContext, solution: Solution) {
     if (lines.length == 1) {
       sb.append(text)
       currentColumn += text.length
-      checkLineOverflow()
+      maxLineColumn = math.max(maxLineColumn, currentColumn)
     } else {
       var i = 0
       while (i < lines.length) {
         if (i > 0) {
+          flushLineOverflow()
           sb.append("\n")
           currentLineIndex += 1
           currentColumn = 0
+          maxLineColumn = 0
           lineStartColumn = 0
           piecesOnCurrentLine.clear()
         }
@@ -71,7 +75,7 @@ final class CodeWriter(ctx: SolveContext, solution: Solution) {
         if (line.nonEmpty) {
           sb.append(line)
           currentColumn += line.length
-          checkLineOverflow()
+          maxLineColumn = math.max(maxLineColumn, currentColumn)
         }
         i += 1
       }
@@ -96,7 +100,7 @@ final class CodeWriter(ctx: SolveContext, solution: Solution) {
 
   /** Emits a newline and sets pending indentation for the next line. */
   def newline(blank: Boolean = false, flushLeft: Boolean = false): Unit = {
-    checkLineOverflow()
+    flushLineOverflow()
     if (blank) {
       sb.append("\n\n")
       currentLineIndex += 2
@@ -107,6 +111,7 @@ final class CodeWriter(ctx: SolveContext, solution: Solution) {
 
     val indent = if (flushLeft) 0 else currentIndentLevel
     currentColumn = 0
+    maxLineColumn = indent
     lineStartColumn = indent
     pendingIndentSpaces = indent
     piecesOnCurrentLine.clear()
@@ -145,12 +150,14 @@ final class CodeWriter(ctx: SolveContext, solution: Solution) {
     val startLine = currentLineIndex
     val startCol = currentColumn
 
+    parentStack.push((piece, state))
     piece.format(this, state)
+    parentStack.pop()
 
     val endLine = currentLineIndex
     val endCol = currentColumn
 
-    val shape: Shape = if (startLine == endLine) {
+    val pieceShape: Shape = if (startLine == endLine) {
       Shape.Inline
     } else if (endLine > startLine && startCol > lineStartColumn) {
       Shape.Block
@@ -160,10 +167,11 @@ final class CodeWriter(ctx: SolveContext, solution: Solution) {
       Shape.Other
     }
 
-    piece.forEachChild { child =>
-      val allowed = piece.allowedChildShapes(state, child)
-      if (!ShapeSet.contains(allowed, shape)) {
-        solution.invalidate(piece)
+    if (parentStack.nonEmpty) {
+      val (parentPiece, parentState) = parentStack.top
+      val allowed = parentPiece.allowedChildShapes(parentState, piece)
+      if (!ShapeSet.contains(allowed, pieceShape)) {
+        solution.invalidate(parentPiece)
         markProblematicLine()
       }
     }
@@ -171,7 +179,7 @@ final class CodeWriter(ctx: SolveContext, solution: Solution) {
 
   /** Finishes formatting and returns rendered output and expandable pieces. */
   def finish(): (GroupCode, List[Piece]) = {
-    checkLineOverflow()
+    flushLineOverflow()
     (new GroupCode(sb.toString()), expandPieces.toList)
   }
 
@@ -179,13 +187,14 @@ final class CodeWriter(ctx: SolveContext, solution: Solution) {
     if (pendingIndentSpaces > 0) {
       sb.append(" " * pendingIndentSpaces)
       currentColumn += pendingIndentSpaces
+      maxLineColumn = math.max(maxLineColumn, currentColumn)
       pendingIndentSpaces = 0
     }
   }
 
-  private def checkLineOverflow(): Unit = {
-    if (currentColumn > ctx.pageWidth) {
-      solution.addOverflow(currentColumn - ctx.pageWidth)
+  private def flushLineOverflow(): Unit = {
+    if (maxLineColumn > ctx.pageWidth) {
+      solution.addOverflow(maxLineColumn - ctx.pageWidth)
       markProblematicLine()
     }
   }

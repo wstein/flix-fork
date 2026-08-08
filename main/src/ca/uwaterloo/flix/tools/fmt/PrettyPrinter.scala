@@ -104,34 +104,20 @@ object PrettyPrinter {
 
     val data = printable.head.token.src.data
     val quarantined = TokenStream.quarantined(tree)
-    // Vertical decisions cannot be made from a pair of adjacent tokens, so they are
-    // computed over the tree and consulted per gap. Only policies that impose a
-    // layout want them: reproducing the input must reproduce it exactly.
     val planned =
       if (separators.usesLayoutPlan) LayoutPlan.plan(tree, separators) else Vector.empty
     val sb = new StringBuilder
 
-    // The text before the first token and after the last lies outside every
-    // token's span, so it is bounded by `None` on one side.
     sb.append(separators.between(None, printable.headOption, whitespace(data, 0, printable.head.token.startIndex)))
 
     var previous: Option[TokenStream.PrintableToken] = None
     for ((current, i) <- printable.zipWithIndex) {
       previous.foreach { prev =>
         val gap = whitespace(data, prev.token.endIndex, current.token.startIndex)
-        // A gap touching a declaration that failed to parse is reproduced rather
-        // than chosen. Doing it here rather than in the policy means every policy
-        // inherits it, and a new layout rule cannot forget to. It outranks the
-        // layout plan too: nothing is laid out around code the parser could not read.
         val broken = quarantined.lift(i - 1).contains(true) || quarantined.lift(i).contains(true)
         sb.append(
           if (broken) gap
           else planned.lift(i) match {
-            // A break says the two tokens go on different lines; it does not say
-            // how many. Blank lines an author put between them are paragraph
-            // structure and are kept — not least because the alignment groups are
-            // defined by them, so collapsing one here would regroup the arms on
-            // the next pass and formatting would not be idempotent.
             case Some(LayoutPlan.Gap.Break(indent)) =>
               "\n" * math.max(1, gap.count(_ == '\n')) + " " * indent
             case Some(LayoutPlan.Gap.Pad(spaces)) => " " * spaces
@@ -149,23 +135,12 @@ object PrettyPrinter {
   }
 
   /**
-    * Renders `tree` using the solver-based canonical layout engine.
+    * Renders `tree` using the canonical layout policy.
     */
   def formatCanonical(tree: SyntaxTree.Tree, pageWidth: Int = 80): String = {
-    val piece = Lowering.lower(tree)
-    val cache = new layout.SolutionCache()
-    val ctx = layout.SolveContext(cache, piece, pageWidth = pageWidth, leadingIndent = 0, subsequentIndent = 0)
-    val solution = layout.Solver.solve(ctx)
-    solution.code.toText
+    format(tree, Canonical)
   }
 
-  /**
-    * The whitespace of `data` between `from` and `until`.
-    *
-    * Non-whitespace characters in a gap belong to the token that follows and are
-    * already part of its printable text (see [[TokenStream.printableTokens]]), so
-    * dropping them here reassembles the source rather than duplicating them.
-    */
   private def whitespace(data: Array[Char], from: Int, until: Int): String =
     data.slice(from, until).filter(_.isWhitespace).mkString
 }

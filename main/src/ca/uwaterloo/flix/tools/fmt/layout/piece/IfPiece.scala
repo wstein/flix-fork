@@ -37,12 +37,18 @@ final case class IfPiece(condition: Piece,
     writer.write(") ")
 
     if (state == State.Split) {
+      writer.pushIndent(Indent.Block)
+      writer.newline()
       writer.format(thenBranch)
       elseBranch.foreach { el =>
-        writer.space()
+        writer.popIndent()
+        writer.newline()
         writer.write("else ")
+        writer.pushIndent(Indent.Block)
+        writer.newline()
         writer.format(el)
       }
+      writer.popIndent()
     } else {
       writer.format(thenBranch)
       elseBranch.foreach { el =>

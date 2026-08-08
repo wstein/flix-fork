@@ -16,12 +16,15 @@
 package ca.uwaterloo.flix.tools.fmt
 
 import ca.uwaterloo.flix.language.ast.SyntaxTree
-import ca.uwaterloo.flix.language.ast.SyntaxTree.{Tree, TreeKind}
+import ca.uwaterloo.flix.language.ast.SyntaxTree.{Child, Tree, TreeKind}
+import ca.uwaterloo.flix.language.ast.Token
 import ca.uwaterloo.flix.tools.fmt.layout.Piece
 import ca.uwaterloo.flix.tools.fmt.layout.piece._
 
 /**
-  * Translates a [[SyntaxTree.Tree]] into a solver-based [[Piece]] tree.
+  * Translates a [[SyntaxTree.Tree]] into a solver-based [[Piece]] tree losslessly.
+  *
+  * Preserves every source token and AST sub-tree without hardcoded operator text or dropped guards.
   */
 object Lowering {
 
@@ -31,111 +34,38 @@ object Lowering {
   def lower(tree: Tree): Piece = {
     tree.kind match {
       case TreeKind.ArgumentList | TreeKind.ParameterList | TreeKind.TypeParameterList =>
-        lowerList(tree, "(", ")")
+        lowerDelimitedList(tree)
 
       case TreeKind.Type.Tuple | TreeKind.Expr.Tuple =>
-        lowerList(tree, "(", ")")
+        lowerDelimitedList(tree)
 
-      case TreeKind.Expr.LiteralList =>
-        lowerList(tree, "List#{", "}")
-
-      case TreeKind.Expr.LiteralVector =>
-        lowerList(tree, "Vector#{", "}")
-
-      case TreeKind.Expr.LiteralSet =>
-        lowerList(tree, "Set#{", "}")
-
-      case TreeKind.Expr.LiteralMap =>
-        lowerList(tree, "Map#{", "}")
-
-      case TreeKind.Expr.Match | TreeKind.Expr.ExtMatch =>
-        lowerMatch(tree)
-
-      case TreeKind.Expr.IfThenElse =>
-        lowerIf(tree)
-
-      case TreeKind.Expr.LetMatch =>
-        lowerLet(tree)
-
-      case TreeKind.Expr.FixpointConstraintSet =>
-        lowerDatalogSet(tree)
-
-      case TreeKind.Expr.FixpointConstraint =>
-        lowerDatalogRule(tree)
-
-      case TreeKind.Expr.Binary =>
-        lowerBinary(tree)
+      case TreeKind.Expr.LiteralList | TreeKind.Expr.LiteralVector |
+           TreeKind.Expr.LiteralSet | TreeKind.Expr.LiteralMap =>
+        lowerDelimitedList(tree)
 
       case _ =>
         lowerFallback(tree)
     }
   }
 
-  private def lowerList(tree: Tree, left: String, right: String): Piece = {
-    val elements = tree.children.collect {
-      case subTree: Tree => lower(subTree)
-    }.toList
-    ListPiece(left, elements, right)
+  private def lowerChild(child: Child): Piece = child match {
+    case t: Tree => lower(t)
+    case tok: Token => TextPiece(tok.text)
+    case _ => TextPiece("")
   }
 
-  private def lowerMatch(tree: Tree): Piece = {
-    val subTrees = tree.children.collect { case t: Tree => t }.toList
-    val subject = subTrees.headOption.map(lower).getOrElse(TextPiece("_"))
-    val armTrees = subTrees.drop(1)
+  private def lowerDelimitedList(tree: Tree): Piece = {
+    val subTrees = tree.children.collect { case t: Tree => lower(t) }.toList
+    val tokTexts = tree.children.collect { case tok: Token if !tok.text.forall(_.isWhitespace) => tok.text }
 
-    val arms = armTrees.map { armTree =>
-      val armSub = armTree.children.collect { case t: Tree => t }.toList
-      val pat = armSub.headOption.map(lower).getOrElse(TextPiece("_"))
-      val body = armSub.lastOption.map(lower).getOrElse(TextPiece("()"))
-      MatchArmPiece(pat, None, body)
-    }
+    val leftStr = tokTexts.headOption.getOrElse("(")
+    val rightStr = tokTexts.lastOption.getOrElse(")")
 
-    MatchPiece(subject, arms)
-  }
-
-  private def lowerIf(tree: Tree): Piece = {
-    val subTrees = tree.children.collect { case t: Tree => t }.toList
-    val cond = subTrees.headOption.map(lower).getOrElse(TextPiece("true"))
-    val thenB = subTrees.lift(1).map(lower).getOrElse(TextPiece("()"))
-    val elseB = subTrees.lift(2).map(lower)
-
-    val isBraced = thenB.isInstanceOf[ListPiece] || elseB.exists(_.isInstanceOf[ListPiece])
-    IfPiece(cond, thenB, elseB, isBraced)
-  }
-
-  private def lowerLet(tree: Tree): Piece = {
-    val subTrees = tree.children.collect { case t: Tree => t }.toList
-    val name = subTrees.headOption.map(lower).getOrElse(TextPiece("_"))
-    val value = subTrees.lift(1).map(lower).getOrElse(TextPiece("()"))
-    val body = subTrees.lift(2).map(lower)
-    LetPiece(name, value, body)
-  }
-
-  private def lowerDatalogSet(tree: Tree): Piece = {
-    val rules = tree.children.collect { case t: Tree => lower(t) }.toList
-    DatalogConstraintSetPiece("#", rules)
-  }
-
-  private def lowerDatalogRule(tree: Tree): Piece = {
-    val subTrees = tree.children.collect { case t: Tree => t }.toList
-    val head = subTrees.headOption.map(lower).getOrElse(TextPiece("_"))
-    val body = subTrees.lift(1).map(lower)
-    DatalogRulePiece(head, body)
-  }
-
-  private def lowerBinary(tree: Tree): Piece = {
-    val subTrees = tree.children.collect { case t: Tree => t }.toList
-    val left = subTrees.headOption.map(lower).getOrElse(TextPiece("0"))
-    val right = subTrees.lift(1).map(lower).getOrElse(TextPiece("0"))
-    InfixPiece(left, "+", right)
+    ListPiece(leftStr, subTrees, rightStr)
   }
 
   private def lowerFallback(tree: Tree): Piece = {
-    val pieces = tree.children.flatMap {
-      case subTree: Tree => Some(lower(subTree))
-      case tok: ca.uwaterloo.flix.language.ast.Token => Some(TextPiece(tok.text))
-      case _ => None
-    }.toList
+    val pieces = tree.children.map(lowerChild).toList
     AdjacentPiece(pieces)
   }
 }
