@@ -149,6 +149,17 @@ object PrettyPrinter {
   }
 
   /**
+    * Renders `tree` using the solver-based canonical layout engine.
+    */
+  def formatCanonical(tree: SyntaxTree.Tree, pageWidth: Int = 80): String = {
+    val piece = Lowering.lower(tree)
+    val cache = new layout.SolutionCache()
+    val ctx = layout.SolveContext(cache, piece, pageWidth = pageWidth, leadingIndent = 0, subsequentIndent = 0)
+    val solution = layout.Solver.solve(ctx)
+    solution.code.toText
+  }
+
+  /**
     * The whitespace of `data` between `from` and `until`.
     *
     * Non-whitespace characters in a gap belong to the token that follows and are
