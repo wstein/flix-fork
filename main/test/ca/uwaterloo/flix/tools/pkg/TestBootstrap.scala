@@ -1,7 +1,7 @@
 package ca.uwaterloo.flix.tools.pkg
 
-import ca.uwaterloo.flix.api.{Bootstrap, BootstrapError, Version}
-import ca.uwaterloo.flix.util.{FileOps, Formatter, Result}
+import ca.uwaterloo.flix.api.{Bootstrap, BootstrapError, BuildManifest, Flix, Version}
+import ca.uwaterloo.flix.util.{Build, FileOps, Formatter, LibLevel, Options, Result}
 import org.scalatest.DoNotDiscover
 import org.scalatest.funsuite.AnyFunSuite
 
@@ -302,6 +302,133 @@ class TestBootstrap extends AnyFunSuite {
       s"second build produced ${second.size} entries but the first produced ${first.size}")
   }
 
+  test("build-jar deletes the class files the sources no longer produce") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out)
+    writeSources(p, extra = true)
+    val b = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
+    val jarPath = p.resolve("artifact").resolve(p.getFileName.toString + ".jar")
+
+    b.buildJar(mkDeterministicFlix).unsafeGet
+    val before = classFilesOf(p)
+
+    // Remove the module main was calling. Its class files are products of a build that no longer
+    // describes the project, and a build that only overwrites what it generates would leave them
+    // behind - on the classpath, and in the jar.
+    writeSources(p, extra = false)
+    b.buildJar(mkDeterministicFlix).unsafeGet
+    val after = classFilesOf(p)
+
+    // Note that `after` is not a subset of `before`: which specializations the monomorphizer
+    // reaches is a property of the whole program, so a smaller program can also require a class
+    // the larger one did not. What must hold is that the removed module's own class is gone.
+    val disappeared = before -- after
+    assert(
+      disappeared.exists(_.contains("countdown")),
+      s"the removed def's class file survived the rebuild: ${disappeared.toList.sorted}")
+    assert(
+      entryNamesOf(jarPath).intersect(disappeared).isEmpty,
+      s"a class file of the earlier build was packaged: ${entryNamesOf(jarPath).intersect(disappeared)}")
+
+    // And the jar holds the products of this build, no more: a jar that carried a class the class
+    // directory no longer has would mean packaging read something other than the product set.
+    assert(
+      entryNamesOf(jarPath).filter(_.endsWith(".class")) == after,
+      s"the jar and the class directory disagree: ${diffOf(after, entryNamesOf(jarPath).filter(_.endsWith(".class")))}")
+  }
+
+  test("an incremental build leaves what a clean build leaves") {
+    // This is the property that makes not wiping the class directory safe. Everything else about
+    // incremental packaging - the manifest, the fingerprint, the reconciliation - exists to keep
+    // it true, and no other assertion here would notice a stale product that both builds keep.
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out)
+    writeSources(p, extra = true)
+    val b = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
+    val jarPath = p.resolve("artifact").resolve(p.getFileName.toString + ".jar")
+
+    b.buildJar(mkDeterministicFlix).unsafeGet
+
+    writeSources(p, extra = false)
+    b.buildJar(mkDeterministicFlix).unsafeGet
+    val incrementalClasses = classFilesOf(p)
+    val incrementalEntries = entryNamesOf(jarPath)
+
+    b.buildJar(mkDeterministicFlix, clean = true).unsafeGet
+
+    assert(
+      classFilesOf(p) == incrementalClasses,
+      s"the class directory differs from a clean build's: ${diffOf(incrementalClasses, classFilesOf(p))}")
+    assert(
+      entryNamesOf(jarPath) == incrementalEntries,
+      s"the jar differs from a clean build's: ${diffOf(incrementalEntries, entryNamesOf(jarPath))}")
+  }
+
+  test("build-jar records what it produced in the build manifest") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out)
+    val b = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
+    b.buildJar(PkgTestUtils.mkFlix).unsafeGet
+
+    val manifest = BuildManifest.read(p.resolve("build").resolve(BuildManifest.FileName)) match {
+      case Some(m) => m
+      case None => fail("the build wrote no readable build manifest")
+    }
+
+    // The manifest is the account of the class directory that the next build reconciles against.
+    // One that disagrees with the directory would have it delete products that are in use, or
+    // keep ones that are not.
+    assert(manifest.products.toSet == classFilesOf(p), "the manifest disagrees with the class directory")
+    assert(manifest.sources.contains("src/Main.flix"), s"the manifest omits the sources: ${manifest.sources}")
+  }
+
+  test("a build manifest of another compiler or another format is not trusted") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out)
+    val b = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
+    val jarPath = p.resolve("artifact").resolve(p.getFileName.toString + ".jar")
+    b.buildJar(mkDeterministicFlix).unsafeGet
+    val entries = entryNamesOf(jarPath)
+
+    // A manifest this compiler cannot read leaves the state of the class directory unknown, and
+    // the build has to fall back to a full one rather than reconcile against a set it guessed.
+    val manifestFile = p.resolve("build").resolve(BuildManifest.FileName)
+    FileOps.writeString(manifestFile, """{"formatVersion": 999, "fingerprint": "?"}""")
+    assert(BuildManifest.read(manifestFile).isEmpty, "a manifest of an unknown format was read anyway")
+
+    b.buildJar(mkDeterministicFlix).unsafeGet
+    assert(
+      entryNamesOf(jarPath) == entries,
+      s"the fallback build did not produce the same jar: ${diffOf(entries, entryNamesOf(jarPath))}")
+    assert(BuildManifest.read(manifestFile).isDefined, "the fallback build left no readable manifest")
+  }
+
+  test("the build fingerprint separates the inputs that change what is emitted") {
+    val options = Options.Default
+    val fingerprint = BuildManifest.fingerprintOf(options, Nil)
+
+    // A build may only reuse what an earlier build left if every non-source input agrees. These
+    // reach the back end, so a product set produced under one of them describes nothing about
+    // what the other produces.
+    assert(fingerprint != BuildManifest.fingerprintOf(options.copy(coverage = true), Nil))
+    assert(fingerprint != BuildManifest.fingerprintOf(options.copy(build = Build.Production), Nil))
+    assert(fingerprint != BuildManifest.fingerprintOf(options.copy(xnewmono = true), Nil))
+    assert(fingerprint != BuildManifest.fingerprintOf(options.copy(lib = LibLevel.Min), Nil))
+    assert(fingerprint != BuildManifest.fingerprintOf(options.copy(xdebug = true), Nil))
+
+    // A dependency is part of the fingerprint, and one that changed underneath the project is a
+    // different input even though its path is the same.
+    val jar = Files.createTempFile("flix-dep-", ".jar")
+    val withDep = BuildManifest.fingerprintOf(options, List(jar))
+    assert(withDep != fingerprint)
+    Files.write(jar, "changed".getBytes)
+    assert(BuildManifest.fingerprintOf(options, List(jar)) != withDep)
+
+    // Thread count is deliberately not part of it: it perturbs generated symbol names without
+    // changing the program, and a rename is handled by reconciling the product set.
+    assert(fingerprint == BuildManifest.fingerprintOf(options.copy(threads = 1), Nil))
+  }
+
   test("build-jar refuses to delete a non-class file in the class directory") {
     val p = Files.createTempDirectory(ProjectPrefix)
     Bootstrap.init(p)(System.out)
@@ -436,7 +563,11 @@ class TestBootstrap extends AnyFunSuite {
     val b = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
     b.build(PkgTestUtils.mkFlix)
     val buildDir = p.resolve("./build/").normalize()
-    val buildFiles = FileOps.getFilesIn(buildDir, Int.MaxValue)
+    // The build manifest is the one file in the build directory that is not a class file, and
+    // 'clean' has to remove it with the products it describes.
+    val manifestFile = buildDir.resolve(BuildManifest.FileName).normalize()
+    assert(Files.exists(manifestFile), "the build wrote no build manifest")
+    val buildFiles = FileOps.getFilesIn(buildDir, Int.MaxValue).filterNot(_.normalize() == manifestFile)
     if (buildFiles.isEmpty || buildFiles.exists(!FileOps.checkExt(_, "class"))) {
       fail(
         s"""build output is not as expected:
@@ -693,5 +824,68 @@ class TestBootstrap extends AnyFunSuite {
   /** Returns the names of all entries in the zip archive at `p`. */
   private def entryNamesOf(p: Path): Set[String] =
     Using(new ZipFile(p.toFile))(_.entries().asScala.map(_.getName).toSet).get
+
+  /**
+    * Returns a Flix instance that generates the same class names for the same program.
+    *
+    * A few generated names carry a symbol counter, and the order symbols are allocated in
+    * depends on how the work was scheduled across threads. Two builds of one program otherwise
+    * differ in the *names* of a handful of closure classes, which is indistinguishable from a
+    * stale product when comparing class directories.
+    */
+  private def mkDeterministicFlix: Flix = {
+    val flix = PkgTestUtils.mkFlix
+    flix.setOptions(flix.options.copy(threads = 1))
+  }
+
+  /** Describes how two sets of file names differ, for an assertion message. */
+  private def diffOf(expected: Set[String], actual: Set[String]): String =
+    s"only in the first: ${(expected -- actual).toList.sorted}, only in the second: ${(actual -- expected).toList.sorted}"
+
+  /** Returns the class files in the class directory of the project at `p`, relative to it. */
+  private def classFilesOf(p: Path): Set[String] = {
+    val classDir = p.resolve("build").resolve("class").normalize()
+    FileOps.getFilesWithExtIn(classDir, "class", Int.MaxValue)
+      .map(f => classDir.relativize(f.normalize()).toString.replace('\\', '/'))
+      .toSet
+  }
+
+  /**
+    * Writes a two-file project whose `main` calls into a second module, or - with `extra` unset -
+    * one whose `main` does not, so that the second module's products are no longer required.
+    *
+    * Both files are always written, and never created or deleted: `Bootstrap` scans for sources
+    * once, when it is created, so a file added afterwards is invisible to it until the next scan.
+    * Call this before `Bootstrap.bootstrap`.
+    *
+    * The extra def recurses so that it reaches the back end as a def of its own. A def the
+    * optimizer can fold into its one call site produces no class file, and then there is no
+    * product for the second build to lose.
+    */
+  private def writeSources(p: Path, extra: Boolean): Unit = {
+    val extraSource =
+      if (extra)
+        """mod Extra {
+          |    pub def countdown(x: Int32): String =
+          |        if (x <= 0) "done" else countdown(x - 1)
+          |}
+          |""".stripMargin
+      else
+        """mod Extra {
+          |}
+          |""".stripMargin
+    val main =
+      if (extra)
+        """def main(): Unit \ IO =
+          |    println(Extra.countdown(3))
+          |""".stripMargin
+      else
+        """def main(): Unit \ IO =
+          |    println("done")
+          |""".stripMargin
+
+    FileOps.writeString(p.resolve("src").resolve("Extra.flix").normalize(), extraSource)
+    FileOps.writeString(p.resolve("src").resolve("Main.flix").normalize(), main)
+  }
 
 }

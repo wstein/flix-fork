@@ -75,6 +75,76 @@ wrong:
 - `max_line_length = off`. Some editors read a width as an instruction to
   hard-wrap, which reformats code without understanding it.
 
+## Building a Project
+
+`flix build`, `build-jar` and `build-fatjar` go through `Bootstrap`, and none of
+them wipes `build/class` any more. They **reconcile** it: compile, then delete
+every class file that is not one this compilation wrote, and prune the
+directories that empties. `--clean` restores the old behaviour and is what a
+reproducible release wants, since it makes the artifact a function of the sources
+and nothing the compiler cached.
+
+Reconciling is only sound because of one fact about the compiler, and a change
+that stops it being true breaks this silently: **`Flix.codeGen` is
+whole-program.** Every call runs the monomorphizer, both tree shakers and
+`CodeGen` over the entire program, so the classes it emits are the *complete*
+set the current sources require — never a changed subset. `previous −
+current` is therefore exactly the products to delete, computed rather than
+guessed. `JvmWriter.run` returns the relative path of every file it wrote and
+that set reaches `CompilationResult.products`; deriving those names a second
+time from the class names instead is how a writer and its bookkeeping drift
+apart.
+
+The same fact is why there is **no per-source product ownership**, and why
+`BuildManifest.sources` is one group rather than a map. Most generated classes
+are keyed on *types* aggregated over the whole program — tuples, records,
+function interfaces, closures, tag classes and the effect runtime all come out
+of `root.types` — and a monomorphized specialization exists because of a call
+site in some source other than the one declaring it. A per-file mapping would
+read as ownership while being wrong about it, and nothing needs one: the set
+difference is exact where an ownership approximation is not.
+
+`build/build.json` (`BuildManifest`) records the product set and a fingerprint of
+every *non-source* input: compiler version, the back-end options, and the
+dependencies by size and modification time. A build whose fingerprint differs
+from the recorded one, or which cannot read the manifest at all, falls back to a
+full build. Three details are load-bearing:
+
+- Source changes are deliberately **not** in the fingerprint. They are handled by
+  recompiling and diffing the product set; putting them there would force a full
+  build on every edit and defeat the point.
+- Thread count is not in it either, and must not be. A few generated names carry a
+  symbol counter whose allocation order depends on scheduling, so two builds of
+  one program can disagree about a handful of closure class *names*. Reconciling
+  handles a rename exactly; a fingerprint over it would rebuild everything at
+  random. It is also why a test that compares class directories has to pin
+  `threads = 1`.
+- `clean` knows the manifest by name and deletes it with the products it
+  describes. A manifest that outlived them would be trusted by the next build.
+
+`build` mode is one of those inputs and has to be, because it reaches the *typer*
+(`ConstraintSolverInterface` is lenient about the `Debug` effect in development).
+The practical consequence: `flix build` is `Development` and `flix build-jar` is
+`Production`, so alternating them resets every time — there is one class directory
+and the two modes do not describe the same products. Splitting the directory per
+mode would fix it and is a larger change than this one.
+
+`Bootstrap` tracks which sources a **particular** `Flix` instance has already
+been given, so `updateStaleSources` hands a *different* instance everything. The
+timestamps and the drained watcher events are per-instance facts; telling a fresh
+instance only what changed since leaves it compiling an empty program, which
+`reconcileClassDirectory` would then read as "every class file is stale". It
+refuses an empty product set for that reason: emptying the directory and
+packaging an empty jar is the one failure here that looks like success.
+
+Two things the incremental path newly exposes are fixed in
+`updateStaleSourcesByTimestamp`: a deleted file reads as stale but must be
+removed rather than re-added (`addFile` rejects a file that is not there), and
+only a `.flix` path may be handed to `remFile`. Note also that `Bootstrap` scans
+for sources once, when it is constructed — a file *created* afterwards is
+invisible until the next scan, so a test that adds one has to write it before
+`Bootstrap.bootstrap`.
+
 ## Source Code Formatting
 
 `flix format` parses `.flix` sources and rewrites them through

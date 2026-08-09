@@ -708,14 +708,14 @@ class Flix {
 
     val totalTime = flix.getTotalTime
 
-    JvmWriter.run(bytecodeAst)
+    val products = JvmWriter.run(bytecodeAst)
     // (Optionally) load generated JVM classes.
     val loaderResult = JvmLoader.run(bytecodeAst)
 
     // Construct the compilation result.
     val totalSize = bytecodeAst.classes.values.map(_.bytecode.length).sum
     val classNames = bytecodeAst.classes.keys.map(_.toBinaryName).toSet
-    val result = new CompilationResult(loaderResult.main, loaderResult.tests, loaderResult.sources, totalTime, totalSize, classNames)
+    val result = new CompilationResult(loaderResult.main, loaderResult.tests, loaderResult.sources, totalTime, totalSize, classNames, products)
 
     // Shutdown fork-join thread pool.
     shutdownForkJoinPool()

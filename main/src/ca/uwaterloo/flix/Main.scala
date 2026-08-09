@@ -294,7 +294,7 @@ object Main {
           val runBuild = () => Bootstrap.bootstrap(cwd, options.githubToken).flatMap { bootstrap =>
             val flix = new Flix().setFormatter(formatter)
             flix.setOptions(options.copy(loadClassFiles = false))
-            addLibs(flix, cmdOpts.libs).flatMap(_ => bootstrap.build(flix))
+            addLibs(flix, cmdOpts.libs).flatMap(_ => bootstrap.build(flix, clean = cmdOpts.clean))
           }
           if (cmdOpts.jsonDiagnostics) exitWithJson(runBuild()) else exitOnResult(runBuild())
 
@@ -307,7 +307,7 @@ object Main {
             Bootstrap.bootstrap(cwd, options.githubToken).flatMap { bootstrap =>
               val flix = new Flix().setFormatter(formatter)
               flix.setOptions(options.copy(loadClassFiles = false))
-              bootstrap.buildJar(flix)
+              bootstrap.buildJar(flix, clean = cmdOpts.clean)
             }
           }
 
@@ -320,7 +320,7 @@ object Main {
             Bootstrap.bootstrap(cwd, options.githubToken).flatMap { bootstrap =>
               val flix = new Flix().setFormatter(formatter)
               flix.setOptions(options.copy(loadClassFiles = false))
-              bootstrap.buildFatJar(flix)
+              bootstrap.buildFatJar(flix, clean = cmdOpts.clean)
             }
           }
 
@@ -578,6 +578,7 @@ object Main {
     coverageOutput: Option[String] = None,
     coverageLcovOutput: Option[String] = None,
     canonical: Boolean = false,
+    clean: Boolean = false,
     docFormat: DocFormat = Options.Default.docFormat,
     entryPoint: Option[String] = None,
     installDeps: Boolean = true,
@@ -739,11 +740,19 @@ object Main {
           text("adds a jar to the classpath. Repeatable."),
         opt[Unit]("diagnostics-json").action((_, c) => c.copy(jsonDiagnostics = true)).
           text("writes diagnostics to stdout as JSON, for a build tool to read."),
+        opt[Unit]("clean").action((_, c) => c.copy(clean = true)).
+          text("discards the previous build's class files and caches first."),
       )
 
-      cmd("build-jar").action((_, c) => c.copy(command = Command.BuildJar)).text("  builds a jar-file from the current project (full, clean build).")
+      cmd("build-jar").action((_, c) => c.copy(command = Command.BuildJar)).text("  builds a jar-file from the current project.").children(
+        opt[Unit]("clean").action((_, c) => c.copy(clean = true)).
+          text("discards the previous build's class files and caches first. For a reproducible release."),
+      )
 
-      cmd("build-fatjar").action((_, c) => c.copy(command = Command.BuildFatJar)).text("  builds a fatjar-file from the current project (full, clean build).")
+      cmd("build-fatjar").action((_, c) => c.copy(command = Command.BuildFatJar)).text("  builds a fatjar-file from the current project.").children(
+        opt[Unit]("clean").action((_, c) => c.copy(clean = true)).
+          text("discards the previous build's class files and caches first. For a reproducible release."),
+      )
 
       cmd("build-pkg").action((_, c) => c.copy(command = Command.BuildPkg)).text("  builds a fpkg-file from the current project.")
 

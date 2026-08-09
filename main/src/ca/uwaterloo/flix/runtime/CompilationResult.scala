@@ -19,6 +19,8 @@ package ca.uwaterloo.flix.runtime
 import ca.uwaterloo.flix.language.ast.*
 import ca.uwaterloo.flix.language.ast.shared.Source
 
+import java.nio.file.Path
+
 /**
   * A class representing the result of a compilation.
   *
@@ -28,13 +30,20 @@ import ca.uwaterloo.flix.language.ast.shared.Source
   * @param totalTime the total compilation time, excluding class writing/loading.
   * @param codeSize   the number of bytes the compiler generated.
   * @param classNames the binary names of every class the compiler generated.
+  * @param products   the class file the compiler *wrote* for each of those classes, relative to
+  *                   the class directory. Empty when JVM output is disabled - the compiler then
+  *                   generated classes but wrote none. Because `codeGen` is whole-program this
+  *                   set is complete rather than incremental: it is every class the current
+  *                   sources require, which is what lets a caller tell a product of an earlier
+  *                   build apart from one of this build.
   */
 class CompilationResult(main: Option[Array[String] => Unit],
                         tests: Map[Symbol.DefnSym, TestFn],
                         sources: Map[Source, SourceLocation],
                         val totalTime: Long,
                         val codeSize: Int,
-                        val classNames: Set[String]
+                        val classNames: Set[String],
+                        val products: Set[Path]
                        ) {
 
   /** Optionally returns the main function. */
