@@ -1,7 +1,8 @@
 # The Flix build server
 
-**Status: lifecycle, discovery, sources, compiling, the project queries, running, the
-JVM environments and testing are implemented. Reload and cache cleaning are not.** This document describes what `flix bsp` does today, what it
+**Status: complete for the scope below — lifecycle, discovery, sources, compiling, the
+project queries, running, the JVM environments, testing, reload and cache cleaning.**
+This document describes what `flix bsp` does today, what it
 deliberately does not do, and why each decision was taken. It is written to be the
 front matter of a pull request, in the manner of `docs/JOINT-COMPILATION.md`.
 
@@ -62,8 +63,8 @@ explicitly.
 | `buildTarget/run` | served |
 | `buildTarget/jvmRunEnvironment`, `jvmTestEnvironment` | served |
 | `buildTarget/test` | served |
-| `workspace/reload`, `buildTarget/cleanCache` | **not yet** |
-| `debugSessionStart` | never (see §10) |
+| `workspace/reload`, `buildTarget/cleanCache` | served |
+| `debugSessionStart` | never (see §11) |
 
 Anything not served is refused with `MethodNotFound`, never answered with an empty
 result: an empty answer is indistinguishable from a real one, so a client would draw a
@@ -246,7 +247,7 @@ disagree about whether a test passed. `TestTesterSink` pins the events themselve
 
 The console rendering is the one that must *not* be attached here: it builds a JLine
 system terminal and writes to the real file descriptor, which in a server carries the
-protocol. §11.
+protocol. §12.
 
 **The tests run in the server's process, deliberately for now.** A test is a compiled
 function the compiler reflects and calls, so unlike `buildTarget/run` there is no forked
@@ -262,7 +263,46 @@ with no tests is a run that succeeded — a project may legitimately have none y
 failing would leave an editor's test button permanently red. A project that does not
 compile is a run that failed, with the diagnostics saying why and no test events at all.
 
-## 9. What a client will get wrong
+## 9. Reloading, and clearing the cache
+
+`workspace/reload` re-reads `flix.toml` and the project layout. It is not a rescan of the
+sources — every compile already reconciles those (§5). It is for the manifest, which can
+add a dependency, change a version or drop one, so the answer to every question this
+server serves may change.
+
+**It is transactional.** A fresh `Bootstrap` and a fresh `Flix` are built, and only a
+complete one is installed; a `Bootstrap` mutated halfway through re-resolution would
+answer some questions from the old project and some from the new. **A reload that fails
+changes nothing** — the previous session keeps serving and the request fails — because a
+typo in a manifest must not leave an editor connected to a dead server. The generation is
+bumped, so a compile already running finishes into a project that no longer exists and
+its diagnostics are discarded rather than published. `buildTarget/didChange` follows a
+successful reload, so a client re-reads what it cached.
+
+Markers are cleared before they are forgotten. A file the reload dropped from the project
+cannot be spoken for by any later compile, so its marker would otherwise stay until the
+editor restarted; the next compile republishes whatever is still wrong. A momentary clean
+slate after an explicit user action is the better of the two errors.
+
+`buildTarget/cleanCache` empties the target's output — `build/development/`, its build
+manifest, and the compiler's in-memory caches — and **nothing else**. It is deliberately
+not `Bootstrap.clean`, which resets the whole project: every build mode, plus `doc/`,
+`stubs/` and the coverage reports. A client asking to clear a target's cache has not asked
+for the API documentation to be deleted. Both halves are needed and neither is sufficient:
+emptying the directory alone leaves the cached ASTs that the next build actually reuses,
+and discarding those alone leaves the previous build's class files behind.
+
+A failure is reported as `cleaned: false` with a message rather than as a failed request —
+the protocol has a field for exactly this, and a client told the cache was not cleaned can
+act on it, where a request error would leave it guessing whether anything was deleted. The
+state a failure leaves is one the next build recovers from rather than trusts: the manifest
+goes first, and a build with no manifest treats everything as new.
+
+`buildTarget/cleanCache` is the one request driven by neither
+`BspCapabilities.Implemented` nor a flag, because the protocol gives it no capability
+field — there is nothing for it to be out of step with.
+
+## 10. What a client will get wrong
 
 Stated plainly, because each is a real limitation rather than an oversight:
 
@@ -278,23 +318,24 @@ Stated plainly, because each is a real limitation rather than an oversight:
   `buildTarget/javacOptions`, which is not implemented — a worse trade.
 - **Some sources cannot be opened.** A diagnostic in the standard library or inside a
   `.fpkg` dependency is reported against a `flix-lib:` or `jar:` URI. That is
-  deliberate; see §12.
+  deliberate; see §13.
 
-## 10. What is not built, and why
+## 11. What is not built, and why
 
 - **`debugSessionStart`.** Flix has no debug adapter, so there is no address to return.
   `canDebug` is false and the request always fails. This one does not become available
   in a later phase; it is refused permanently, and asserted to be.
 - **Running is forked, so a program cannot be debugged through the server.** Use
   `jvmRunEnvironment` and start it yourself.
-- **Watcher-driven recompilation and `buildTarget/didChange`.** Needs debounce, and
-  the file watcher is currently wired only to the REPL.
+- **Watcher-driven recompilation.** `buildTarget/didChange` is announced on a reload, but
+  nothing watches the filesystem: a client compiles when it decides to. A watcher needs
+  debounce, and the one in this repository is wired only to the REPL.
 - **A `src`/`test` target split.** §4. It needs a source-set concept in the compiler,
   and the argument against faking one is a correctness argument.
 - **TCP transport and concurrent clients.** stdio only. One `Flix` instance per
   session is the concurrency ceiling regardless.
 
-## 11. Standard output belongs to the protocol
+## 12. Standard output belongs to the protocol
 
 This is the invariant most easily broken by an unrelated edit, so it is stated as a
 rule: **never `println` on a code path a BSP request can reach.**
@@ -315,7 +356,7 @@ interesting failures happen while the project is loading.
 `C` of `Content-Length`, which is the only assertion that can catch a `println` added
 anywhere on the initialize path.
 
-## 12. URIs, and why nothing is dropped
+## 13. URIs, and why nothing is dropped
 
 `BspUri.ofSource` returns a `String`, not an `Option[String]`. There is no filter, so
 there is nothing to drop.
@@ -347,7 +388,7 @@ Two details are load-bearing and were each established by a failing test:
   the user opened are then two spellings of one directory, and a correct client is
   refused.
 
-## 13. Session model
+## 14. Session model
 
 One `Bootstrap` and one `Flix` per connection, held by `BspSession`, which also owns
 the lifecycle state machine: `Uninitialized`, `Initialized`, `ShutDown`. Requests
@@ -373,7 +414,7 @@ outlives a reload can be recognised as stale rather than published against the p
 that replaced it. Nothing produces such work yet; the counter is one field, and the
 alternative is to add it after the first stale-publish bug.
 
-## 14. Acceptance criteria
+## 15. Acceptance criteria
 
 Each names the test that pins it.
 
@@ -463,8 +504,20 @@ Each names the test that pins it.
     `TestTesterSink` — one runner, and the events it emits are pinned: every test
     reported, a skip announced without being started, a failure carrying its output, one
     terminal event, and success decided by the runner rather than by a rendering.
+34. **A manifest change takes effect on reload, and only then.** `TestBspReload`, "a
+    manifest change takes effect on reload, and the client is told" — including the
+    `didChange` event naming the target the client has already seen.
+35. **A reload that fails changes nothing.** `TestBspReload`, "a reload that fails leaves
+    the previous configuration serving" — the target still answers and the project still
+    builds after a manifest that is not TOML at all.
+36. **A reload clears what it can no longer speak for.** `TestBspReload`, "a reload clears
+    the markers it can no longer speak for".
+37. **Cleaning the cache is scoped to the target's output.** `TestBspReload`, "cleaning the
+    cache empties the class directory and nothing else" — the class files go, the build
+    manifest goes, `build/doc/` stays, and the next compile rebuilds. That distinction from
+    `Bootstrap.clean` is the whole point of the request having its own path.
 
-## 15. Running the tests
+## 16. Running the tests
 
 ```
 ./mill flix.test        # the in-process tests, with the rest of the suite

@@ -155,6 +155,17 @@ class DiagnosticLedger {
     cleared ::: reports
   }
 
-  /** Forgets everything, for a reload that makes the previous report meaningless. */
-  def forget(): Unit = reported = Set.empty
+  /**
+    * Returns the clears for every document that carried a diagnostic, and forgets them.
+    *
+    * For a reload or a cache clean, where the previous compile no longer describes anything. Clearing
+    * and forgetting are one operation on purpose: forgetting without clearing leaves a marker no later
+    * compile can take responsibility for, so a file dropped from the project would keep its error
+    * until the editor restarted.
+    */
+  def clearEverything(target: BuildTargetIdentifier): List[PublishDiagnosticsParams] = {
+    val clears = reported.toList.sorted.map(BspDiagnostics.clearFor(target, _))
+    reported = Set.empty
+    clears
+  }
 }

@@ -193,17 +193,15 @@ class TestBspLifecycle extends AnyFunSuite {
         initialize(client, project)
         val target = client.workspaceBuildTargets().get(Timeout, TimeUnit.SECONDS).getTargets.asScala.head.getId
 
-        // Each of these is a later phase. Until then a refusal is the honest answer: an empty result
-        // is indistinguishable from a real one and a client would draw a conclusion from it. When a
-        // phase implements one, this list is what makes removing it from here a deliberate act.
-        val codes = List(
-          errorCodeOf(client.workspaceReload()),
-          errorCodeOf(client.buildTargetCleanCache(new CleanCacheParams(List(target).asJava))),
-          errorCodeOf(client.debugSessionStart(new DebugSessionParams(List(target).asJava))))
+        // One request is left, and unlike the others that were here it is not waiting for a phase:
+        // Flix has no debug adapter, so there is no address `debugSessionStart` could return. A
+        // refusal is the honest answer -- an empty result is indistinguishable from a real one, and a
+        // client would draw a conclusion from it.
+        val code = errorCodeOf(client.debugSessionStart(new DebugSessionParams(List(target).asJava)))
 
         assert(
-          codes.forall(_.contains(ResponseErrorCode.MethodNotFound.getValue)),
-          s"expected every unimplemented request to be refused, got $codes")
+          code.contains(ResponseErrorCode.MethodNotFound.getValue),
+          s"expected debugSessionStart to be refused, got $code")
       }
     }
   }

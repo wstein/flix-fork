@@ -84,7 +84,9 @@ object BspCapabilities {
     BspFeature.Run,
     BspFeature.JvmRunEnvironment,
     BspFeature.JvmTestEnvironment,
-    BspFeature.Test)
+    BspFeature.Test,
+    BspFeature.Reload,
+    BspFeature.BuildTargetChanged)
 
   /** Returns `true` if `feature` is served. */
   def implemented(feature: BspFeature): Boolean = Implemented.contains(feature)

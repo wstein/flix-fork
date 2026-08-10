@@ -1192,6 +1192,27 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
   }
 
   /**
+    * Empties one build mode's output and forgets what the compiler had cached about it.
+    *
+    * This is what a build server's `buildTarget/cleanCache` needs, and it is deliberately *not*
+    * [[clean]]. `clean` resets the project: every build mode, plus `doc/`, `stubs/` and the coverage
+    * reports. A client asking to clear a target's cache has not asked for the documentation to be
+    * deleted, and a server that deleted it anyway would be destroying work nobody mentioned.
+    *
+    * Both halves are needed and neither is sufficient. Emptying the directory alone leaves the cached
+    * ASTs in memory, so "clear the cache" would not have cleared the cache the next build actually
+    * reuses; discarding those alone leaves the previous build's class files and manifest on disk.
+    *
+    * Failure-atomic in the only sense available: nothing is written, and a failure leaves the
+    * directory partly emptied with no manifest -- which is a state the next build treats as no
+    * previous build at all, so it recovers by rebuilding rather than by trusting what is left.
+    */
+  def cleanOutput(flix: Flix, build: Build): Result[Unit, BootstrapError] = {
+    Steps.discardIncrementalState(flix)
+    Steps.emptyOutputDirectory(build)
+  }
+
+  /**
     * Deletes all compiled `.class` files under the project's build directory and removes any now-empty
     * directories (including the `build` directory itself). Performs safety checks to ensure:
     *  - the current directory is a Flix project (manifest present),

@@ -77,7 +77,10 @@ class BspSession(val projectPath: Path, options: Options, log: BspLogStream) {
     * One instance, because that is what makes a second compile incremental: `Bootstrap` keys its
     * record of what it has handed over on the instance it handed it to.
     */
-  private val flix: Flix = new Flix().setFormatter(Formatter.NoFormatter).setOptions(options)
+  // A `var` because a reload replaces it. The instance holds the cached ASTs and the change set of one
+  // project configuration, so carrying it across a reload would answer questions about the new project
+  // from the old one's caches.
+  @volatile private var flix: Flix = mkFlix()
 
   /** Progress notifications. Held here because a test run emits them as its events arrive. */
   private val tasks: BspTasks = new BspTasks(() => client)
@@ -381,6 +384,106 @@ class BspSession(val projectPath: Path, options: Options, log: BspLogStream) {
     result
   }
 
+  /**
+    * Reloads the project from `flix.toml` and the directory, atomically.
+    *
+    * ==Why a whole new session, and why not in place==
+    *
+    * A reload is not a rescan. `flix.toml` may have gained a dependency, changed a version or dropped
+    * one, so the answer to every question this server serves can change -- and a `Bootstrap` mutated
+    * halfway through re-resolution would answer some of them from the old project and some from the
+    * new. So a fresh `Bootstrap` and a fresh `Flix` are built first, and only a complete one is
+    * installed.
+    *
+    * **A reload that fails changes nothing.** The previous session keeps serving and the request
+    * fails, because a typo in a manifest must not leave an editor connected to a dead server. That is
+    * the whole reason this is transactional rather than a re-run of what `initialize` does.
+    *
+    * The generation is bumped, so a compile that was already running finishes into a project that no
+    * longer exists and its diagnostics are discarded rather than published.
+    *
+    * Published markers are cleared before they are forgotten. A file that is no longer part of the
+    * project cannot be spoken for by any later compile, so its marker would otherwise stay until the
+    * editor restarted; the next compile republishes whatever is still wrong. A momentary clean slate
+    * after an explicit user action is the better of the two errors.
+    */
+  def reload(): Unit = {
+    val view = requireView()
+
+    implicit val formatter: Formatter = Formatter.NoFormatter
+    implicit val printStream: PrintStream = out
+
+    buildLock.synchronized {
+      Bootstrap.bootstrap(projectPath, options.githubToken) match {
+        case Result.Err(e) =>
+          val message = s"reloading ${view.packageName} failed, so the previous configuration is still " +
+            s"in use: ${e.message(Formatter.NoFormatter)}"
+          showMessage(MessageType.ERROR, message)
+          throw new ResponseErrorException(new ResponseError(ResponseErrorCode.InternalError, message, null))
+
+        case Result.Ok(reloaded) =>
+          val target = BuildTargets.id(view)
+          client.foreach(c => ledger.clearEverything(target).foreach(c.onBuildPublishDiagnostics))
+
+          bootstrap = Some(reloaded)
+          flix = mkFlix()
+          lastCompileHadMain = false
+          generation.incrementAndGet()
+
+          announceTargetChanged(reloaded.view)
+      }
+    }
+  }
+
+  /**
+    * Empties the target's output directory and forgets what was cached about it.
+    *
+    * Scoped to what the target *is*: the development output. `Bootstrap.clean` would also delete
+    * `doc/`, `stubs/` and the coverage reports, none of which a client asked about, and would refuse
+    * outside project mode for reasons that have nothing to do with a cache.
+    *
+    * `cleaned = false` on failure rather than a failed request. The protocol has a field for exactly
+    * this, and a client that is told the cache was not cleaned can decide what to do; a request error
+    * would leave it guessing whether anything was deleted.
+    */
+  def cleanCache(target: BuildTargetIdentifier): CleanCacheResult = {
+    requireView()
+
+    buildLock.synchronized {
+      val b = requireBootstrapForBuild()
+      b.cleanOutput(flix, Build.Development) match {
+        case Result.Ok(()) =>
+          // The class files that were just deleted are what the last compile's diagnostics described,
+          // and there is now no build to speak for them.
+          client.foreach(c => ledger.clearEverything(target).foreach(c.onBuildPublishDiagnostics))
+          lastCompileHadMain = false
+          new CleanCacheResult(true)
+
+        case Result.Err(e) =>
+          val message = e.message(Formatter.NoFormatter)
+          showMessage(MessageType.ERROR, s"could not clean the build output: $message")
+          val result = new CleanCacheResult(false)
+          result.setMessage(message)
+          result
+      }
+    }
+  }
+
+  /**
+    * Tells the client the target changed, so it re-reads what it cached about the project.
+    *
+    * Only when the client speaks this server's language: it was told about no target, so telling it one
+    * changed would name something it has never seen.
+    */
+  private def announceTargetChanged(view: ProjectView): Unit = {
+    if (!BuildTargets.servesClient(clientLanguageIds)) {
+      return
+    }
+    val event = new BuildTargetEvent(BuildTargets.id(view))
+    event.setKind(BuildTargetEventKind.CHANGED)
+    client.foreach(_.onBuildTargetDidChange(new DidChangeBuildTarget(List(event).asJava)))
+  }
+
   /** Returns the environment a client needs to run this project's program itself. */
   def jvmEnvironment(target: BuildTargetIdentifier): JvmEnvironmentItem = {
     val view = requireView()
@@ -424,6 +527,9 @@ class BspSession(val projectPath: Path, options: Options, log: BspLogStream) {
     lastCompileHadMain = outcome.root.exists(_.mainEntryPoint.isDefined)
     outcome
   }
+
+  /** Returns a compiler instance configured the way every build in this session needs it. */
+  private def mkFlix(): Flix = new Flix().setFormatter(Formatter.NoFormatter).setOptions(options)
 
   /** Attaches `originId` to `result`, which is how a client correlates it with its request. */
   private def statusOf(result: RunResult, originId: Option[String]): RunResult = {

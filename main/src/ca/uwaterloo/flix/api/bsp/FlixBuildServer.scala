@@ -231,16 +231,28 @@ class FlixBuildServer(session: BspSession, onExit: () => Unit) extends BuildServ
   }
 
   /**
-    * Refused by name, not by feature: `buildTarget/cleanCache` has no capability flag in the
-    * protocol, so there is no advertisement for it to be out of step with. Routing it through
-    * `Compile`'s feature would make it claim to be a bug in the server the moment compiling is
-    * implemented and this is not.
+    * Empties the target's build output and forgets what was cached about it.
+    *
+    * This one is not driven by [[BspCapabilities.Implemented]], and cannot be: `buildTarget/cleanCache`
+    * has no capability flag in the protocol, so there is no advertisement for it to be in step with.
     */
-  override def buildTargetCleanCache(params: CleanCacheParams): CompletableFuture[CleanCacheResult] =
-    refuseByName("buildTarget/cleanCache")
+  override def buildTargetCleanCache(params: CleanCacheParams): CompletableFuture[CleanCacheResult] = completing {
+    val view = session.requireView()
+    val targets = requireKnownTargets(view, params.getTargets)
 
-  override def workspaceReload(): CompletableFuture[Object] =
-    refuse(BspFeature.Reload)
+    session.cleanCache(targets.headOption.getOrElse(BuildTargets.id(view)))
+  }
+
+  /**
+    * Re-reads `flix.toml` and the project layout.
+    *
+    * Returns `null`, which is what the protocol specifies for this request -- it carries no result, and
+    * a client waits on it only to know the reload has happened before it asks anything else.
+    */
+  override def workspaceReload(): CompletableFuture[Object] = completing {
+    session.reload()
+    null
+  }
 
   /**
     * Describes what a client needs to run the program itself.

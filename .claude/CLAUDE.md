@@ -279,6 +279,18 @@ descriptor, which is the protocol channel. Three traps here:
   calls `System.exit` therefore takes the server with it. `jvmTestEnvironment` is the way
   out for a client that wants isolation.
 
+**`workspace/reload` is transactional, and `buildTarget/cleanCache` is not
+`Bootstrap.clean`.** A reload builds a fresh `Bootstrap` and a fresh `Flix` and installs
+only a complete one — a half-applied reload would answer some questions from the old
+project and some from the new — and a reload that fails leaves the previous session
+serving, because a typo in `flix.toml` must not leave an editor connected to a dead
+server. It bumps the generation, so a compile already in flight is discarded rather than
+published, and it clears published markers before forgetting them: a file dropped from
+the project can never be spoken for again, so the marker would otherwise outlive the
+editor session. `Bootstrap.cleanOutput(flix, build)` is what `cleanCache` uses — one
+build mode's class files, its manifest, and the compiler's in-memory caches. `clean()`
+would also delete `doc/`, `stubs/` and the coverage reports, which no client asked about.
+
 **Source membership is reconciled before every compile** (`Steps.rescanSources`).
 Modification-time polling answers which *known* files changed, and a created file is
 not among them. Two related traps, both found by tests rather than by reading:
