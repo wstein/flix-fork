@@ -16,6 +16,7 @@
 
 package ca.uwaterloo.flix
 
+import ca.uwaterloo.flix.api.bsp.{BspDiscovery, BspServer}
 import ca.uwaterloo.flix.api.lsp.{LspServer, VSCodeLspServer, FormatterLsp as LspFormatter}
 import ca.uwaterloo.flix.tools.fmt.{Canonical, PrettyPrinter}
 import ca.uwaterloo.flix.api.{Bootstrap, BootstrapError, CliContract, Flix, Version}
@@ -462,6 +463,33 @@ object Main {
               System.exit(1)
           }
 
+        case Command.Bsp =>
+          if (cmdOpts.files.nonEmpty) {
+            println("The 'bsp' command does not support file arguments.")
+            System.exit(1)
+          }
+          // `cwd` and not a flag: a client starts the server with the workspace as its working
+          // directory, which is exactly the project it means.
+          BspServer.run(options, cwd)
+          System.exit(0)
+
+        case Command.BspInstall =>
+          if (cmdOpts.files.nonEmpty) {
+            println("The 'bsp-install' command does not support file arguments.")
+            System.exit(1)
+          }
+          BspDiscovery.install(cwd, cmdOpts.bspJar.map(Paths.get(_)), cmdOpts.force) match {
+            case Result.Ok(file) =>
+              println(s"Wrote $file")
+              if (BspDiscovery.isFromCheckout(cmdOpts.bspJar.map(Paths.get(_)))) {
+                println("Note: it names this checkout's classpath, so it works on this machine only.")
+              }
+              System.exit(0)
+            case Result.Err(message) =>
+              println(message)
+              System.exit(1)
+          }
+
         case Command.PlainLsp =>
           if (cmdOpts.files.nonEmpty) {
             println("The 'lsp' command does not support file arguments.")
@@ -579,6 +607,8 @@ object Main {
     coverageLcovOutput: Option[String] = None,
     canonical: Boolean = false,
     clean: Boolean = false,
+    bspJar: Option[String] = None,
+    force: Boolean = false,
     docFormat: DocFormat = Options.Default.docFormat,
     entryPoint: Option[String] = None,
     installDeps: Boolean = true,
@@ -646,6 +676,10 @@ object Main {
     case object Repl extends Command
 
     case object PlainLsp extends Command
+
+    case object Bsp extends Command
+
+    case object BspInstall extends Command
 
     case class VSCodeLsp(port: Int) extends Command
 
@@ -777,6 +811,21 @@ object Main {
 
       cmd("lsp").text("  starts the Plain-LSP server.")
         .action((_, c) => c.copy(command = Command.PlainLsp))
+
+      // Two commands rather than `bsp --install`: a flag on `bsp` would also be accepted while
+      // serving, and writing a JSON document onto the protocol stream is the failure this whole
+      // endpoint is arranged to avoid.
+      cmd("bsp").text("  starts the Build Server Protocol server on stdio.")
+        .action((_, c) => c.copy(command = Command.Bsp))
+
+      cmd("bsp-install").text("  writes '.bsp/flix.json' so an editor can find the BSP server.")
+        .action((_, c) => c.copy(command = Command.BspInstall))
+        .children(
+          opt[String]("jar").action((arg, c) => c.copy(bspJar = Some(arg))).
+            text("the compiler jar to name in the connection file. Defaults to the running one."),
+          opt[Unit]("force").action((_, c) => c.copy(force = true)).
+            text("replace a connection file this server did not write."),
+        )
 
       cmd("lsp-vscode").text("  starts the VSCode-LSP server and listens on the given port.")
         .children(

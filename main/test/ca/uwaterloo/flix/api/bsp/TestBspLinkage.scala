@@ -19,7 +19,8 @@ import ch.epfl.scala.bsp4j.*
 import org.eclipse.lsp4j.jsonrpc.Launcher
 import org.scalatest.funsuite.AnyFunSuite
 
-import java.io.{PipedInputStream, PipedOutputStream}
+import java.io.{ByteArrayOutputStream, OutputStream, PipedInputStream, PipedOutputStream}
+import java.nio.charset.StandardCharsets
 import java.util
 import java.util.concurrent.{CompletableFuture, Executors, LinkedBlockingQueue, TimeUnit}
 import scala.jdk.CollectionConverters.*
@@ -46,7 +47,8 @@ class TestBspLinkage extends AnyFunSuite {
   private val Timeout: Long = 30
 
   test("a real launcher completes an initialize round trip") {
-    withConnection { case Connection(client, _) =>
+    withConnection { connection =>
+      val client = connection.client
       val params = new InitializeBuildParams(
         "test-client", "1.2.3", Bsp4j.PROTOCOL_VERSION, "file:///tmp/project",
         new BuildClientCapabilities(List("flix").asJava))
@@ -63,16 +65,24 @@ class TestBspLinkage extends AnyFunSuite {
     }
   }
 
-  test("an int-valued enum survives the round trip as its number") {
-    // `StatusCode` and `DiagnosticSeverity` are not ordinary enums: they carry an `int` and the
-    // protocol is defined in terms of that number, so gson has to route them through jsonrpc's
-    // `EnumTypeAdapter` rather than writing the constant's name. A skew that broke this would send
-    // `"OK"` where a client expects `1`, and the client would report a failed build as a success.
-    withConnection { case Connection(client, _) =>
-      val ok = client.buildTargetCompile(new CompileParams(List(target).asJava)).get(Timeout, TimeUnit.SECONDS)
+  test("an int-valued enum is written to the wire as its number") {
+    // `StatusCode` and `DiagnosticSeverity` carry an `int`, and the protocol is defined in terms of
+    // that number, so gson has to route them through jsonrpc's `EnumTypeAdapter` rather than writing
+    // the constant's name.
+    //
+    // Asserting on the round trip cannot see whether it does. Both ends here share one jsonrpc, so
+    // if both fell back to name-based serialisation the value would still arrive as `StatusCode.OK`
+    // and this would pass while the wire was wrong -- and a real client, on its own version, would
+    // read nothing. So it reads the bytes that actually crossed.
+    withConnection { connection =>
+      val ok = connection.client.buildTargetCompile(new CompileParams(List(target).asJava)).get(Timeout, TimeUnit.SECONDS)
       assert(ok.getStatusCode == StatusCode.OK)
-      assert(StatusCode.OK.getValue == 1, "the protocol's number for OK changed")
-      assert(StatusCode.forValue(2) == StatusCode.ERROR)
+
+      val frames = connection.wire
+      assert(frames.contains("\"statusCode\":1"), s"statusCode did not cross as a number:\n$frames")
+      assert(!frames.contains("\"statusCode\":\"OK\""), s"statusCode crossed as a name:\n$frames")
+      // The same question one level down, on a field of a nested object.
+      assert(frames.contains("\"severity\":1"), s"severity did not cross as a number:\n$frames")
     }
   }
 
@@ -80,7 +90,9 @@ class TestBspLinkage extends AnyFunSuite {
     // The payload this server exists to deliver, sent the other way down the same connection: a
     // notification dispatched by reflection over `@JsonNotification` on `BuildClient`, carrying a
     // nested object graph and an int-valued enum.
-    withConnection { case Connection(client, received) =>
+    withConnection { connection =>
+      val client = connection.client
+      val received = connection.received
       client.buildTargetCompile(new CompileParams(List(target).asJava)).get(Timeout, TimeUnit.SECONDS)
 
       val params = received.poll(Timeout, TimeUnit.SECONDS)
@@ -131,8 +143,35 @@ class TestBspLinkage extends AnyFunSuite {
       new TextDocumentIdentifier("file:///tmp/project/src/Main.flix"), target, List(d).asJava, true)
   }
 
-  /** A client proxy, and the diagnostics the client was sent. */
-  private case class Connection(client: BuildServer, received: LinkedBlockingQueue[PublishDiagnosticsParams])
+  /**
+    * A client proxy, the diagnostics the client was sent, and the bytes the server wrote.
+    *
+    * `wire` is the only way to check the *format* rather than the round trip: a symmetric mistake
+    * made by both ends of one shared library version is invisible from the objects alone.
+    */
+  private case class Connection(client: BuildServer,
+                                received: LinkedBlockingQueue[PublishDiagnosticsParams],
+                                serverOutput: ByteArrayOutputStream) {
+    /** What the server has written so far, framing and all. */
+    def wire: String = serverOutput.synchronized(serverOutput.toString(StandardCharsets.UTF_8))
+  }
+
+  /** Copies everything written through it, so a test can read the bytes that crossed. */
+  private class TeeOutputStream(to: OutputStream, copy: ByteArrayOutputStream) extends OutputStream {
+    override def write(b: Int): Unit = {
+      copy.synchronized(copy.write(b))
+      to.write(b)
+    }
+
+    override def write(bytes: Array[Byte], off: Int, len: Int): Unit = {
+      copy.synchronized(copy.write(bytes, off, len))
+      to.write(bytes, off, len)
+    }
+
+    override def flush(): Unit = to.flush()
+
+    override def close(): Unit = to.close()
+  }
 
   /**
     * Runs `f` against a `BuildServer` proxy wired to a stub server over two pipes.
@@ -141,11 +180,15 @@ class TestBspLinkage extends AnyFunSuite {
     * and the gson handler are the same code a client would drive.
     */
   private def withConnection(f: Connection => Unit): Unit = {
+    // 64 KB, not the 1 KB default: a frame larger than the buffer blocks the writer until the reader
+    // drains it, and a test that deadlocks on its own message is a bad way to learn that.
+    val bufferSize = 64 * 1024
     val clientToServer = new PipedOutputStream()
     val serverToClient = new PipedOutputStream()
-    val serverIn = new PipedInputStream(clientToServer)
-    val clientIn = new PipedInputStream(serverToClient)
+    val serverIn = new PipedInputStream(clientToServer, bufferSize)
+    val clientIn = new PipedInputStream(serverToClient, bufferSize)
 
+    val serverOutput = new ByteArrayOutputStream()
     val received = new LinkedBlockingQueue[PublishDiagnosticsParams]()
     val executor = Executors.newFixedThreadPool(4, (r: Runnable) => {
       val t = new Thread(r, "bsp-linkage")
@@ -153,11 +196,13 @@ class TestBspLinkage extends AnyFunSuite {
       t
     })
 
+    val stubServer = new StubServer
+
     try {
       val serverLauncher = new Launcher.Builder[BuildClient]()
-        .setLocalService(new StubServer)
+        .setLocalService(stubServer)
         .setRemoteInterface(classOf[BuildClient])
-        .setInput(serverIn).setOutput(serverToClient)
+        .setInput(serverIn).setOutput(new TeeOutputStream(serverToClient, serverOutput))
         .setExecutorService(executor)
         .create()
 
@@ -168,26 +213,25 @@ class TestBspLinkage extends AnyFunSuite {
         .setExecutorService(executor)
         .create()
 
-      // The stub server answers `buildTargetCompile` by notifying the client, so it needs the
-      // proxy before anything is dispatched.
-      serverLauncher.getRemoteProxy match {
-        case c: BuildClient => StubServer.client = c
-      }
+      // The stub answers `buildTargetCompile` by notifying the client, so it needs the proxy before
+      // anything is dispatched. Set on the instance rather than on a shared object: a field shared
+      // between tests is safe only while the suite runs serially, which is a property of the build
+      // rather than of this file.
+      stubServer.connect(serverLauncher.getRemoteProxy)
       serverLauncher.startListening()
       clientLauncher.startListening()
 
-      f(Connection(clientLauncher.getRemoteProxy, received))
+      f(Connection(clientLauncher.getRemoteProxy, received, serverOutput))
     } finally {
-      executor.shutdownNow()
+      // Streams first, executor second. The other order interrupts a listener thread blocked in
+      // `PipedInputStream.read`, which lsp4j logs as an `InterruptedIOException` with a stack trace
+      // through `java.util.logging` -- `slf4j-nop` silences JLine, not this. Closing first gives the
+      // listener a clean end of stream and the suite output stays readable.
       List[AutoCloseable](clientToServer, serverToClient, serverIn, clientIn).foreach { c =>
         try c.close() catch { case _: Exception => () }
       }
+      executor.shutdownNow()
     }
-  }
-
-  private object StubServer {
-    /** Set before listening starts; only ever read on a dispatch thread afterwards. */
-    @volatile var client: BuildClient = _
   }
 
   /**
@@ -198,6 +242,12 @@ class TestBspLinkage extends AnyFunSuite {
     */
   private class StubServer extends BuildServer {
 
+    /** The client to notify, set before listening starts and read on dispatch threads after. */
+    @volatile private var client: BuildClient = _
+
+    /** Attaches the proxy this stub notifies. */
+    def connect(c: BuildClient): Unit = client = c
+
     override def buildInitialize(params: InitializeBuildParams): CompletableFuture[InitializeBuildResult] = {
       val capabilities = new BuildServerCapabilities()
       capabilities.setCompileProvider(new CompileProvider(params.getCapabilities.getLanguageIds))
@@ -206,7 +256,7 @@ class TestBspLinkage extends AnyFunSuite {
     }
 
     override def buildTargetCompile(params: CompileParams): CompletableFuture[CompileResult] = {
-      StubServer.client.onBuildPublishDiagnostics(diagnosticParams)
+      client.onBuildPublishDiagnostics(diagnosticParams)
       CompletableFuture.completedFuture(new CompileResult(StatusCode.OK))
     }
 

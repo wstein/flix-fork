@@ -37,7 +37,14 @@ import org.json4s.JsonDSL.*
   *
   * It is also not an LSP extension. Build requests do not belong in a language server: that the
   * server already holds a warm compiler is a fact about implementation, not an argument about where
-  * the boundary goes.
+  * the boundary goes. That part is unchanged by what follows.
+  *
+  * '''Being revisited.''' The claim above that Flix does not serve the upper boundary is being
+  * reopened, because for a plain `flix.toml` project `flix` '''is''' the build tool. A `flix bsp`
+  * endpoint is under construction in `ca.uwaterloo.flix.api.bsp` -- a separate endpoint, not a
+  * language-server extension, so the constraint in the previous paragraph still holds. This contract
+  * is not superseded: it remains how a *foreign* build tool, one that owns the build itself, drives
+  * the compiler. See `docs/TOOLING-CONTRACT.md`.
   *
   * ==Why a contract rather than a linked API==
   *

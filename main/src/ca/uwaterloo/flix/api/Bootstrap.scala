@@ -158,6 +158,7 @@ object Bootstrap {
          |$artifactDirectoryRaw
          |$buildDirectoryRaw
          |$libDirectoryRaw
+         |$bspDirectoryRaw
          |crash_report_*.txt
          |""".stripMargin
     }
@@ -493,6 +494,16 @@ object Bootstrap {
     * N.B.: Use [[getLibraryDirectory]] if possible.
     */
   private val libDirectoryRaw: String = "lib/"
+
+  /**
+    * The relative path to the build server's discovery directory as a string.
+    *
+    * Named here only so that `init` can ignore it. A connection file names a compiler jar on one
+    * machine, so it has no business in a repository.
+    *
+    * @see [[ca.uwaterloo.flix.api.bsp.BspDiscovery]]
+    */
+  private val bspDirectoryRaw: String = ".bsp/"
 
   /**
     * Returns the path to the source directory relative to the given path `p`.
@@ -1071,6 +1082,45 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
 
   /** Returns `true` if in project mode. This is the case when a `flix.toml` file is present. */
   private def isProjectMode: Boolean = optManifest.isDefined
+
+  /**
+    * Returns what this project is configured to be, as of now.
+    *
+    * A copy, and one method rather than an accessor per field: the lists below are rewritten by a
+    * rescan, a watcher event or a reload, so a caller holding several accessors could answer one
+    * request from two different projects. It is built here because the layout functions on the
+    * companion are private and should stay that way - a second definition of where `src/` lives is
+    * how two definitions of a layout begin.
+    *
+    * Everything in it is known without compiling, which is the point: the questions it answers
+    * arrive before the first build and while the project is broken.
+    *
+    * Paths are absolutised and normalised here rather than trusted, because `projectPath` is
+    * whatever the caller constructed this with, and only the command line guarantees an absolute
+    * one.
+    *
+    * @see [[ProjectView]]
+    */
+  def view: ProjectView = {
+    val root = projectPath.toAbsolutePath.normalize()
+    ProjectView(
+      projectPath = root,
+      packageName = optManifest.map(_.name).getOrElse(Bootstrap.getPackageName(root)),
+      manifest = optManifest,
+      sourcePaths = sourcePaths.map(_.toAbsolutePath.normalize()).distinct.sorted,
+      flixPackagePaths = flixPackagePaths.map(_.toAbsolutePath.normalize()).distinct.sorted,
+      mavenPackagePaths = mavenPackagePaths.map(_.toAbsolutePath.normalize()).distinct.sorted,
+      jarPackagePaths = jarPackagePaths.map(_.toAbsolutePath.normalize()).distinct.sorted,
+      sourceDirectory = Bootstrap.getSourceDirectory(root),
+      testDirectory = Bootstrap.getTestDirectory(root),
+      resourcesDirectory = Bootstrap.getResourcesDirectory(root),
+      libraryDirectory = Bootstrap.getLibraryDirectory(root),
+      artifactDirectory = Bootstrap.getArtifactDirectory(root),
+      jarFile = Bootstrap.getJarFile(root),
+      outputDirectories = Bootstrap.AllBuilds.map(b => b -> Bootstrap.getOutputDirectory(root, b)).toMap,
+      classDirectories = Bootstrap.AllBuilds.map(b => b -> Bootstrap.getClassDirectory(root, b)).toMap
+    )
+  }
 
   /**
     * Deletes all compiled `.class` files under the project's build directory and removes any now-empty

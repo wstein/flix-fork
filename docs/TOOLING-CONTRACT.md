@@ -3,6 +3,21 @@
 How a **build tool** drives `flix.jar`: `--diagnostics-json`, `--lib`, `stubs`,
 and a version handshake.
 
+> **Being revisited.** The section below concludes that BSP is "none of the
+> compiler's business". The boundary analysis in it is right; the inference is
+> being reopened, because for a plain `flix.toml` project **`flix` is the build
+> tool** — it resolves dependencies, owns `build/`, packages, and runs the tests —
+> so "leave it to the build tool" leaves it to nobody. Work on a `flix bsp`
+> endpoint has started: the `ch.epfl.scala:bsp4j` dependency and its linkage tests
+> are in `build.mill` and `main/test/ca/uwaterloo/flix/api/bsp/`.
+>
+> One thing this document says is *not* being reopened, and it constrains that
+> work: build requests do not belong in the language server. `flix bsp` is a
+> separate endpoint, which is the same paragraph's own suggested alternative.
+>
+> This notice stays until the section is rewritten, so that the repository does not
+> assert the opposite of what it does.
+
 ## This is not BSP, and not an LSP extension
 
 An earlier draft of this document called itself a build protocol and proposed

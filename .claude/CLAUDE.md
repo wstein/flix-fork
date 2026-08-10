@@ -211,6 +211,68 @@ compare a *count* when what matters is that nothing accumulated. And a test that
 edits a source between builds must use a fresh `Flix` instance per build, or it
 depends on mtime resolution to notice the edit.
 
+## The BSP Server
+
+`flix bsp` serves the Build Server Protocol on stdio, so an editor can drive a real
+Flix build. `flix bsp-install` writes `.bsp/flix.json` so a client can find it.
+Everything lives in `ca.uwaterloo.flix.api.bsp`, and it is **not** in the language
+server: `docs/TOOLING-CONTRACT.md` forbids putting build requests there and that
+constraint stands. What that document concluded — that BSP belongs to some other
+build tool — does not hold for a plain `flix.toml` project, where `flix` *is* the
+build tool. The document carries a notice saying so until its section is rewritten.
+
+**Standard output belongs to the protocol, so never `println` on a path a BSP
+request can reach.** `BspServer.run` takes `FileDescriptor.out` for the launcher and
+points `System.out` at `BspLogStream`, which turns each line into a
+`build/logMessage`. That is not paranoia: `Bootstrap` narrates dependency resolution
+on every start, and without the quarantine those lines land between two frames and
+end the connection. Redirecting to the client's log rather than to nothing is
+deliberate — a crash report that vanishes is worse than one that arrives somewhere
+unexpected. `TestBspProcess` asserts the first byte of stdout is the `C` of
+`Content-Length`.
+
+**One target per project, and it is forced rather than chosen.** `src/`, `test/` and
+the project root compile together as one whole program and `@Test` defs are entry
+points, so a `src`/`test` split would publish test diagnostics against the `src`
+target while `inverseSources` assigned those files to `test` — and the marker would
+never be cleared. `BuildTargets` is the only place this is decided. The tag is
+`library`, never `application` (unknown until it compiles, and discovery must answer
+for a broken project) and never `test` (a client turns that into a test source root,
+which with one target means every source in the project).
+
+**Advertise nothing that is not implemented.** `BspCapabilities.Implemented` is the
+single source of truth: it drives both the capability flags and the `MethodNotFound`
+refusals in `FlixBuildServer`, so a request and its advertisement cannot drift.
+`TestBspCapabilities` holds them in step in both directions. A phase adds its request
+and its flag together. `debugSessionStart` is the one that never becomes available —
+there is no debug adapter, so `canDebug` is false permanently.
+
+Four things learned the hard way, each now pinned by a test:
+
+- **A target id needs an *empty* URI authority, not a null one.** `new URI(scheme,
+  null, path, query, null)` renders `file:/path`, which is legal and is not what
+  `Path.toUri` or any other build server produces — a client that computes the id
+  itself and compares strings would see a different target.
+- **Comparing normalised paths refuses correct clients.** `rootUri` is checked with
+  `toRealPath`, because on macOS every temp directory is under `/var`, a link to
+  `/private/var`; `normalize` is textual and cannot see a link, so the path the JVM
+  reports and the path the user opened are two spellings of one directory.
+- **`Source.name` is not a URI.** It is `path.toString`. `BspUri.ofSource` is total —
+  `String`, not `Option[String]` — so nothing is silently dropped. The language
+  server's `file://` filter drops diagnostics from bundled and packaged code, and
+  would drop ordinary project files too if documents did not reach it as virtual
+  URIs. Bundled library sources get `flix-lib:`, `.fpkg` contents get `jar:…!/…`.
+- **`ProjectView` is a snapshot, and there is one per request.** `Bootstrap`'s source
+  and dependency lists are mutable, so accessors would let one request be answered
+  from two different projects. It carries only what is known *without* compiling,
+  because discovery is asked before the first build and while the project is broken.
+
+`./mill flix.test` runs the in-process tests. The ones that need a built assembly or
+a process of their own are `@DoNotDiscover` in `BspSuite`, reached by `./mill
+flix.testBsp`, which builds the assembly first — a test that cancels itself when the
+jar is missing reports green while proving nothing. `.github/workflows/bsp.yaml`
+runs it; it needs no token, since nothing there reaches the network.
+
 ## Source Code Formatting
 
 `flix format` parses `.flix` sources and rewrites them through

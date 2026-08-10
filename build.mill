@@ -254,6 +254,24 @@ object flix extends ScalaModule {
   }
 
   /**
+   * Run: ./mill flix.testBsp
+   *
+   * The BSP tests that need something the ordinary suite cannot give them: a built
+   * assembly, or a process of their own. It depends on `assembly()` rather than
+   * assuming a jar is lying around, because the suite's whole subject is what the
+   * *packaged* compiler can do -- `assemblyRules` drops most of guava, and an
+   * exclusion that went too far is invisible to any test run on the full classpath.
+   * Without the dependency these tests cancel themselves and report green.
+   *
+   * The in-process BSP tests are not here. They are fast and belong in `flix.test`,
+   * where a dependency bump is noticed by whoever made it.
+   */
+  def testBsp = Task {
+    assembly()
+    runSuite("ca.uwaterloo.flix.api.bsp.BspSuite", test.runClasspath(), Task.env)
+  }
+
+  /**
    * Run: ./mill flix.formatterDiffReport
    *
    * Reports what `flix format --canonical` would do to the corpus, ranked by how

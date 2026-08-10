@@ -320,6 +320,36 @@ class TestMain extends AnyFunSuite {
     assert(Main.parseCmdOpts(Array("--refresh", "init")).isEmpty)
   }
 
+  test("bsp") {
+    val opts = Main.parseCmdOpts(Array("bsp")).get
+    assert(opts.command == Main.Command.Bsp)
+  }
+
+  test("bsp-install") {
+    val opts = Main.parseCmdOpts(Array("bsp-install")).get
+    assert(opts.command == Main.Command.BspInstall)
+    assert(opts.bspJar.isEmpty)
+    assert(!opts.force)
+  }
+
+  test("bsp-install --jar and --force") {
+    val opts = Main.parseCmdOpts(Array("bsp-install", "--jar", "/tmp/flix.jar", "--force")).get
+    assert(opts.command == Main.Command.BspInstall)
+    assert(opts.bspJar.contains("/tmp/flix.jar"))
+    assert(opts.force)
+  }
+
+  test("bsp-install's options belong to it, and bsp takes none") {
+    // `bsp` serves a protocol on stdout, so it must not grow a flag that writes a document: a flag
+    // declared globally would parse there too. Writing the connection file is its own command for
+    // exactly that reason, and these assertions are what hold the two apart.
+    assert(Main.parseCmdOpts(Array("bsp", "--jar", "/tmp/flix.jar")).isEmpty)
+    assert(Main.parseCmdOpts(Array("bsp", "--force")).isEmpty)
+    assert(Main.parseCmdOpts(Array("bsp", "--install")).isEmpty)
+    assert(Main.parseCmdOpts(Array("build", "--force")).isEmpty)
+    assert(Main.parseCmdOpts(Array("--force")).isEmpty)
+  }
+
   test("an unrecognised doc option is rejected, not ignored") {
     // The `--datalog` diagram option was removed because nothing consumed it. These assertions are
     // what make the rest of this suite mean anything: if the parser accepted unknown flags, a test
