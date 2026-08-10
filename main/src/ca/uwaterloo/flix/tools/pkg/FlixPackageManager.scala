@@ -65,6 +65,28 @@ object FlixPackageManager {
       * what the old `release` effectively used -- it named the file after the directory, and a
       * project's directory is usually what its manifest calls it. Neither is guaranteed: a manifest
       * can name a package something else entirely, which is why the listing remains.
+      *
+      * Measured across the packages the tests depend on:
+      *
+      * {{{
+      * ┌────────────────────────────────────────────────────────┬─────────────┬──────────────────────┐
+      * │                       repository                       │ <repo>.fpkg │ <manifest.name>.fpkg │
+      * ├────────────────────────────────────────────────────────┼─────────────┼──────────────────────┤
+      * │ flix/museum, -clerk, -giftshop, -entrance, -restaurant │     ✅      │          ✅          │
+      * ├────────────────────────────────────────────────────────┼─────────────┼──────────────────────┤
+      * │ jaschdoc/flix-test-pkg-mismatched-versions             │     ✅      │          ✅          │
+      * ├────────────────────────────────────────────────────────┼─────────────┼──────────────────────┤
+      * │ jaschdoc/flix-test-pkg-eff-upgrade                     │     ❌      │          ✅          │
+      * ├────────────────────────────────────────────────────────┼─────────────┼──────────────────────┤
+      * │ jaschdoc/flix-test-pkg-trust-transitive-java           │     ❌      │          ✅          │
+      * ├────────────────────────────────────────────────────────┼─────────────┼──────────────────────┤
+      * │ jaschdoc/flix-test-pkg-trust-transitive-plain          │     ❌      │          ❌          │
+      * └────────────────────────────────────────────────────────┴─────────────┴──────────────────────┘
+      * }}}
+      *
+      * The last row is the one to keep in mind before deleting the fallback: that manifest declares
+      * `name = "test-pkg-trust-transitive-java"` while publishing `test-pkg-trust-transitive-plain.fpkg`,
+      * so no field of anything the consumer holds names its package file.
       */
     case class NamedOrLookedUp(candidates: List[String], apiKey: Option[String]) extends AssetSource
   }
