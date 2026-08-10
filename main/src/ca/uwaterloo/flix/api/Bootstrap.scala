@@ -917,7 +917,19 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
       (Bootstrap.getPkgFile(projectPath), s"${githubRepo.repo}.$EXT_FPKG"),
       (Bootstrap.getManifestFile(projectPath), FLIX_TOML)
     )
-    val publishResult = GitHub.publishRelease(githubRepo, manifest.version, artifacts, githubToken)
+
+    // Each asset is published with its SHA-256 beside it, so that whoever downloads it can tell
+    // that they received what was published. It is not a signature -- anyone who can replace an
+    // asset can replace the digest next to it -- so it guards against corruption and truncation,
+    // which are the failures that actually happen and that a silent short read otherwise caches
+    // forever.
+    val checksums = artifacts.map { case (path, name) =>
+      val checksumPath = Bootstrap.getArtifactDirectory(projectPath).resolve(s"$name.sha256")
+      FileOps.writeString(checksumPath, s"${FileOps.sha256(path)}  $name${System.lineSeparator()}")
+      (checksumPath, s"$name.sha256")
+    }
+
+    val publishResult = GitHub.publishRelease(githubRepo, manifest.version, artifacts ++ checksums, githubToken)
     publishResult match {
       case Ok(()) => // Continue
       case Err(e) => return Result.Err(BootstrapError.ReleaseError(e))

@@ -25,6 +25,8 @@ import ca.uwaterloo.flix.util.collection.ListMap
 
 import java.io.{IOException, PrintStream}
 import java.nio.file.{Files, Path, StandardCopyOption}
+import java.security.{DigestInputStream, MessageDigest}
+import java.util.HexFormat
 import scala.collection.mutable
 import scala.util.Using
 
@@ -62,16 +64,28 @@ object FlixPackageManager {
   }
 
   /**
+    * An asset that has been opened, and the name it was found under when that name was computed.
+    *
+    * A checksum lives at an address computed from the asset's name, so it can only be looked for
+    * when the asset's name was computed too. Asking for one on the legacy path would spend a
+    * round trip on a 404 for every package published before checksums existed.
+    */
+  private case class OpenedAsset(download: GitHub.Download, computedName: Option[String])
+
+  /**
     * Opens a stream over the asset described by `source`.
     */
-  private def openAsset(project: GitHub.Project, version: SemVer, extension: String, source: AssetSource): Result[java.io.InputStream, PackageError] =
+  private def openAsset(project: GitHub.Project, version: SemVer, extension: String, source: AssetSource): Result[OpenedAsset, PackageError] =
     source match {
-      case AssetSource.Named(assetName) => GitHub.downloadReleaseAsset(project, version, assetName)
+      case AssetSource.Named(assetName) =>
+        GitHub.downloadReleaseAsset(project, version, assetName).map(OpenedAsset(_, Some(assetName)))
       case AssetSource.NamedOrLookedUp(assetName, apiKey) =>
         GitHub.downloadReleaseAsset(project, version, assetName) match {
-          case Ok(stream) => Ok(stream)
+          case Ok(download) => Ok(OpenedAsset(download, Some(assetName)))
           case Err(_: PackageError.ReleaseAssetNotFound) =>
-            GitHub.findReleaseAsset(project, version, extension, apiKey).flatMap(asset => GitHub.download(asset.url))
+            GitHub.findReleaseAsset(project, version, extension, apiKey)
+              .flatMap(asset => GitHub.download(asset.url))
+              .map(OpenedAsset(_, None))
           case Err(e) => Err(e)
         }
     }
@@ -213,29 +227,99 @@ object FlixPackageManager {
       } else {
         out.print(s"  Downloading `${formatter.blue(s"${proj.owner}/${proj.repo}.$extension")}` (${formatter.cyan(s"v$version")})... ")
         out.flush()
-        openAsset(proj, version, extension, source) match {
+        fetchInto(proj, version, extension, source, assetPath, localName) match {
+          case Ok(verified) =>
+            out.println(if (verified) "OK (sha256 verified)." else "OK.")
+            Ok(assetPath)
           case Err(e) =>
             out.println("ERROR.")
             Err(e)
-          case Ok(stream) =>
-            try {
-              Using(stream) { s => Files.copy(s, assetPath, StandardCopyOption.REPLACE_EXISTING) }
-            } catch {
-              case e: IOException =>
-                out.println(s"ERROR: ${e.getMessage}.")
-                return Err(PackageError.DownloadIncomplete(proj, version, localName, Some(e.getMessage)))
-            }
-            if (Files.exists(assetPath)) {
-              out.println(s"OK.")
-              Ok(assetPath)
-            } else {
-              out.println(s"ERROR: File was not created.")
-              Err(PackageError.DownloadIncomplete(proj, version, localName, None))
-            }
         }
       }
     }
   }
+
+  /**
+    * Downloads the asset described by `source` to `assetPath`, and reports whether a published
+    * checksum was checked.
+    *
+    * Nothing is written to `assetPath` until the bytes have been accepted. The download goes to a
+    * temporary file beside it and is moved into place only once the length and, when the release
+    * publishes one, the digest agree. Writing straight to the final path leaves a truncated file
+    * behind when a connection drops, and the next run finds that file, calls it cached, and never
+    * downloads it again -- a corrupt dependency that survives every retry.
+    */
+  private def fetchInto(project: GitHub.Project, version: SemVer, extension: String, source: AssetSource, assetPath: Path, localName: String): Result[Boolean, PackageError] = {
+    val partPath = assetPath.resolveSibling(s"${assetPath.getFileName}.part")
+
+    val result = for {
+      opened <- openAsset(project, version, extension, source)
+      written <- copyToFile(opened.download, partPath, project, version, localName)
+      _ <- verifyLength(opened.download, written, project, version, localName)
+      // A checksum that cannot be read is an error rather than a reason to skip verification: a
+      // release that publishes one is not installed unverified because the digest was unreachable.
+      expected <- checksumOf(project, version, opened.computedName)
+      _ <- verifyDigest(expected, written, project, version, localName)
+    } yield {
+      Files.move(partPath, assetPath, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+      expected.isDefined
+    }
+
+    if (result.isInstanceOf[Err[?, ?]]) {
+      Files.deleteIfExists(partPath)
+    }
+    result
+  }
+
+  /**
+    * Returns the digest published for the asset, if the release publishes one.
+    *
+    * Only an asset reached at a computed address can have a computed checksum address. A release
+    * old enough to need the listing predates published checksums, so it is not asked for one.
+    */
+  private def checksumOf(project: GitHub.Project, version: SemVer, computedName: Option[String]): Result[Option[String], PackageError] =
+    computedName match {
+      case Some(assetName) => GitHub.fetchChecksum(project, version, assetName)
+      case None => Ok(None)
+    }
+
+  /**
+    * Copies `download` to `path`, returning what was written.
+    */
+  private def copyToFile(download: GitHub.Download, path: Path, project: GitHub.Project, version: SemVer, localName: String): Result[WrittenFile, PackageError] = {
+    val digest = MessageDigest.getInstance("SHA-256")
+    try {
+      Using.resource(new DigestInputStream(download.stream, digest)) { stream =>
+        val bytes = Files.copy(stream, path, StandardCopyOption.REPLACE_EXISTING)
+        Ok(WrittenFile(bytes, HexFormat.of().formatHex(digest.digest())))
+      }
+    } catch {
+      case e: IOException => Err(PackageError.DownloadIncomplete(project, version, localName, Some(e.getMessage)))
+    }
+  }
+
+  /** What a completed write produced. */
+  private case class WrittenFile(bytes: Long, sha256: String)
+
+  /**
+    * Checks the bytes received against the length the server promised, when it promised one.
+    */
+  private def verifyLength(download: GitHub.Download, written: WrittenFile, project: GitHub.Project, version: SemVer, localName: String): Result[Unit, PackageError] =
+    download.contentLength match {
+      case Some(expected) if expected != written.bytes =>
+        Err(PackageError.DownloadTruncated(project, version, localName, expected, written.bytes))
+      case _ => Ok(())
+    }
+
+  /**
+    * Checks the bytes received against the published digest, when the release published one.
+    */
+  private def verifyDigest(expected: Option[String], written: WrittenFile, project: GitHub.Project, version: SemVer, localName: String): Result[Unit, PackageError] =
+    expected match {
+      case Some(digest) if !digest.equalsIgnoreCase(written.sha256) =>
+        Err(PackageError.ChecksumMismatch(project, version, localName, digest, written.sha256))
+      case _ => Ok(())
+    }
 
   /**
     * Recursively finds all transitive dependencies of `manifest`.

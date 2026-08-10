@@ -54,6 +54,15 @@ object GitHub {
   case class Asset(name: String, url: URL)
 
   /**
+    * A response body being streamed, together with the length the server promised.
+    *
+    * The length is what makes a truncated download detectable: a connection dropped halfway
+    * produces a short file rather than an error, and a short file written to the cache is treated
+    * as a complete one on every later run.
+    */
+  case class Download(stream: InputStream, contentLength: Option[Long])
+
+  /**
     * Lists the project's releases.
     *
     * Reading a listing is what consumes the REST quota -- 60 requests an hour for an anonymous
@@ -255,7 +264,7 @@ object GitHub {
     * package's name is chosen by whoever published it, so [[findReleaseAsset]] still has to look
     * that one up.
     */
-  def downloadReleaseAsset(project: Project, version: SemVer, assetName: String): Result[InputStream, PackageError] = {
+  def downloadReleaseAsset(project: Project, version: SemVer, assetName: String): Result[Download, PackageError] = {
     val url = releaseAssetUrl(project, version, assetName)
     download(url).mapErr {
       // At this address a 404 means the release or the asset is absent, which is worth saying in
@@ -272,7 +281,7 @@ object GitHub {
     * a refusal (which for an anonymous request usually means a rate limit), any other unexpected
     * status including a redirect that could not be followed, and never reaching a server at all.
     */
-  def download(url: URL): Result[InputStream, PackageError] = {
+  def download(url: URL): Result[Download, PackageError] = {
     val request = HttpRequest.newBuilder(url.toURI).GET().build()
 
     val response = try {
@@ -284,13 +293,53 @@ object GitHub {
 
     response.statusCode() match {
       case status if status >= 200 && status < 300 =>
-        Ok(response.body())
+        Ok(Download(response.body(), contentLength(response)))
       case status =>
         // Every non-success response still carries a body, and leaving it open holds the connection.
         response.body().close()
         status match {
           case 403 | 429 => Err(PackageError.DownloadRefused(url, status, retryAfter(response)))
           case _ => Err(PackageError.DownloadFailed(url, status))
+        }
+    }
+  }
+
+  /**
+    * Returns the `Content-Length` of `response`, if it gave one that parses.
+    */
+  private def contentLength(response: HttpResponse[InputStream]): Option[Long] = {
+    val header = response.headers().firstValue("Content-Length")
+    if (header.isPresent) header.get().toLongOption else None
+  }
+
+  /**
+    * Fetches the SHA-256 published beside `assetName`, or nothing if the release does not publish
+    * one.
+    *
+    * A release made by a current compiler publishes `<asset>.sha256` next to each asset, in the
+    * format `sha256sum` writes, so the address is computed like the asset's own. Releases made
+    * before that publish nothing, and are installed unverified rather than refused -- refusing them
+    * would make every package published so far uninstallable.
+    *
+    * This checks that the bytes are the bytes that were published. It is not a signature: an
+    * attacker able to replace an asset can replace the digest beside it, so it guards against
+    * corruption and truncation rather than against the registry.
+    */
+  def fetchChecksum(project: Project, version: SemVer, assetName: String): Result[Option[String], PackageError] = {
+    val url = releaseAssetUrl(project, version, s"$assetName.sha256")
+    download(url) match {
+      case Err(PackageError.DownloadFailed(_, 404)) => Ok(None)
+      case Err(e) => Err(e)
+      case Ok(dl) =>
+        val text = try {
+          new String(dl.stream.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8)
+        } catch {
+          case ex: IOException => return Err(PackageError.DownloadUnreachable(url, ex.getMessage))
+        } finally dl.stream.close()
+        // `sha256sum` writes "<hex>  <name>"; only the digest is of interest.
+        text.trim.split("\\s+").headOption.filter(_.nonEmpty) match {
+          case Some(digest) => Ok(Some(digest.toLowerCase))
+          case None => Err(PackageError.ChecksumUnreadable(project, version, assetName, url))
         }
     }
   }

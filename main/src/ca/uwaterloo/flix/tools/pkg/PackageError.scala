@@ -102,6 +102,43 @@ object PackageError {
   }
 
   /**
+    * An error raised when a download does not match the digest published beside it.
+    *
+    * The file is discarded rather than installed: a package that does not hash to what its
+    * publisher said it does is not the package that was asked for, whether it was corrupted in
+    * transit or replaced.
+    */
+  case class ChecksumMismatch(project: Project, version: SemVer, assetName: String, expected: String, actual: String) extends PackageError {
+    override def message(f: Formatter): String =
+      s"""${f.bold(assetName)} from release ${f.bold(s"v$version")} of ${f.bold(project.toString)} is not what was published.
+         |Expected sha256 ${f.green(expected)}
+         |but downloaded ${f.red(actual)}.
+         |The download was discarded.
+         |""".stripMargin
+  }
+
+  /**
+    * An error raised when a download stops short of the length the server promised.
+    */
+  case class DownloadTruncated(project: Project, version: SemVer, assetName: String, expected: Long, actual: Long) extends PackageError {
+    override def message(f: Formatter): String =
+      s"""${f.bold(assetName)} from release ${f.bold(s"v$version")} of ${f.bold(project.toString)} arrived incomplete.
+         |Expected ${f.green(s"$expected bytes")} but received ${f.red(s"$actual bytes")}.
+         |The download was discarded.
+         |""".stripMargin
+  }
+
+  /**
+    * An error raised when a published checksum cannot be read.
+    */
+  case class ChecksumUnreadable(project: Project, version: SemVer, assetName: String, url: URL) extends PackageError {
+    override def message(f: Formatter): String =
+      s"""The checksum published for ${f.bold(assetName)} in release ${f.bold(s"v$version")} of ${f.bold(project.toString)} is empty.
+         |Read from ${f.cyan(url.toString)}.
+         |""".stripMargin
+  }
+
+  /**
     * An error raised when a download was served but could not be written to disk.
     */
   case class DownloadIncomplete(project: Project, version: SemVer, assetName: String, message: Option[String]) extends PackageError {
