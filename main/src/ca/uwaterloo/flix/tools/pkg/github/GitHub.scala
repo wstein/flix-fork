@@ -28,6 +28,7 @@ import java.net.http.HttpRequest.BodyPublishers
 import java.net.http.{HttpClient, HttpRequest, HttpResponse}
 import java.net.{URI, URL}
 import java.nio.file.Path
+import java.time.Duration
 
 /**
   * An interface for the GitHub API.
@@ -105,7 +106,7 @@ object GitHub {
     // add the API key as bearer if needed
     apiKey.foreach(key => reqBuilder.header("Authorization", "Bearer " + key))
     etag.foreach(tag => reqBuilder.header("If-None-Match", tag))
-    val req = reqBuilder.GET().build()
+    val req = reqBuilder.timeout(RequestTimeout).GET().build()
 
     val response = try {
       Client.sendRequest(req)
@@ -116,7 +117,13 @@ object GitHub {
     response.statusCode() match {
       case 200 => Ok(ReleaseResponse.Modified(response.body(), header(response, "ETag")))
       case 304 => Ok(ReleaseResponse.NotModified)
-      case 403 | 429 => Err(PackageError.ApiRateLimited(project, url, header(response, "x-ratelimit-reset").flatMap(_.toLongOption)))
+      // A 403 is not always a rate limit. GitHub answers a private or missing repository the same
+      // way, and telling someone to wait an hour for a repository they cannot read is worse than
+      // saying nothing. The remaining-requests header is what tells the two apart.
+      case 429 => Err(PackageError.ApiRateLimited(project, url, resetAt(response)))
+      case 403 if header(response, "x-ratelimit-remaining").contains("0") =>
+        Err(PackageError.ApiRateLimited(project, url, resetAt(response)))
+      case 403 => Err(PackageError.ApiForbidden(project, url))
       case 404 => Err(PackageError.ProjectNotFound(url, project, new IOException("404 Not Found")))
       case status => Err(PackageError.DownloadFailed(url, status))
     }
@@ -133,6 +140,12 @@ object GitHub {
     }
     Ok(releaseJsons.arr.map(parseRelease))
   }
+
+  /**
+    * Returns when the rate limit resets, if `response` says.
+    */
+  private def resetAt(response: HttpResponse[?]): Option[Long] =
+    header(response, "x-ratelimit-reset").flatMap(_.toLongOption)
 
   /**
     * Returns the named header of `response`, if it has one.
@@ -333,18 +346,23 @@ object GitHub {
     * status including a redirect that could not be followed, and never reaching a server at all.
     */
   def download(url: URL): Result[Download, PackageError] = {
-    val request = HttpRequest.newBuilder(url.toURI).GET().build()
+    val request = HttpRequest.newBuilder(url.toURI).timeout(RequestTimeout).GET().build()
 
     val response = try {
       Client.sendStreamingRequest(request)
     } catch {
       case ex: IOException => return Err(PackageError.DownloadUnreachable(url, ex.getMessage))
-      case ex: InterruptedException => return Err(PackageError.DownloadUnreachable(url, ex.getMessage))
+      case ex: InterruptedException =>
+        // Catching an interrupt clears the flag, and swallowing it leaves whoever asked for the
+        // cancellation waiting on a thread that no longer knows it was cancelled.
+        Thread.currentThread().interrupt()
+        return Err(PackageError.DownloadUnreachable(url, ex.getMessage))
     }
 
     response.statusCode() match {
-      case status if status >= 200 && status < 300 =>
-        Ok(Download(response.body(), contentLength(response)))
+      // Only 200 is a downloaded asset. `204 No Content` is a success with nothing in it, and
+      // accepting it would install an empty file as though it were a package.
+      case 200 => Ok(Download(response.body(), contentLength(response)))
       case status =>
         // Every non-success response still carries a body, and leaving it open holds the connection.
         response.body().close()
@@ -354,6 +372,35 @@ object GitHub {
         }
     }
   }
+
+  /**
+    * Reads a `sha256sum`-style line: a 64 character hex digest, optionally followed by the name of
+    * the file it describes.
+    *
+    * Strict on both halves. A digest of the wrong shape is metadata that is wrong rather than a
+    * file that is corrupt, and letting it through reports the difference as a mismatch -- sending
+    * whoever hits it to look at the package instead of at the release. A name that does not match
+    * the asset means the digest is of something else.
+    */
+  private[github] def parseChecksum(text: String, assetName: String): Option[String] = {
+    val fields = text.trim.split("\\s+").toList
+    fields match {
+      case digest :: rest if digest.length == 64 && digest.forall(isHexDigit) =>
+        rest match {
+          case Nil => Some(digest.toLowerCase)
+          // `sha256sum` marks a binary read with a `*` before the name.
+          case name :: Nil if name.stripPrefix("*") == assetName => Some(digest.toLowerCase)
+          case _ => None
+        }
+      case _ => None
+    }
+  }
+
+  /**
+    * Returns `true` if `c` is a hexadecimal digit.
+    */
+  private def isHexDigit(c: Char): Boolean =
+    (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
 
   /**
     * Returns the `Content-Length` of `response`, if it gave one that parses.
@@ -387,9 +434,8 @@ object GitHub {
         } catch {
           case ex: IOException => return Err(PackageError.DownloadUnreachable(url, ex.getMessage))
         } finally dl.stream.close()
-        // `sha256sum` writes "<hex>  <name>"; only the digest is of interest.
-        text.trim.split("\\s+").headOption.filter(_.nonEmpty) match {
-          case Some(digest) => Ok(Some(digest.toLowerCase))
+        parseChecksum(text, assetName) match {
+          case Some(digest) => Ok(Some(digest))
           case None => Err(PackageError.ChecksumUnreadable(project, version, assetName, url))
         }
     }
@@ -499,6 +545,18 @@ object GitHub {
     }
   }
 
+  /** How long to wait for a connection before giving up. */
+  private val ConnectTimeout: Duration = Duration.ofSeconds(30)
+
+  /**
+    * How long to wait for a response before giving up.
+    *
+    * Without one a build waits on a stalled connection forever, with nothing to say for itself.
+    * The bound is on the response, not on the transfer: a large package on a slow line must still
+    * be allowed to finish.
+    */
+  private val RequestTimeout: Duration = Duration.ofMinutes(2)
+
   /** A thread-safe HTTP Client. */
   private object Client {
 
@@ -514,7 +572,10 @@ object GitHub {
     private val HTTP_CLIENT: HttpClient =
       // A release download address redirects to the storage the asset actually lives on, and the
       // default policy is to follow nothing at all, which would turn every download into a 302.
-      HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NORMAL).build()
+      HttpClient.newBuilder()
+        .followRedirects(HttpClient.Redirect.NORMAL)
+        .connectTimeout(ConnectTimeout)
+        .build()
 
     /**
       * Sends the HTTP request, `request`, and returns the response.

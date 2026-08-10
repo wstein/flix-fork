@@ -41,6 +41,16 @@ import java.nio.file.{Files, Path, Paths}
 object ReleaseCache {
 
   /**
+    * How a listing is asked for: the project, an API key, and the entity tag to quote.
+    *
+    * Named as a type so that it can be supplied, which is what lets the cache be tested without a
+    * network. Every case worth asserting about -- a listing that has not changed, a refusal, a
+    * refusal with nothing cached -- is a response the tests must be able to produce on demand, and
+    * against a live registry none of them can be.
+    */
+  type Fetch = (Project, Option[String], Option[String]) => Result[ReleaseResponse, PackageError]
+
+  /**
     * How long a listing is used without asking again.
     *
     * Long enough that a session's repeated `outdated` costs nothing, short enough that someone
@@ -63,7 +73,7 @@ object ReleaseCache {
     * old it is, with a note saying so: answering `outdated` from yesterday's data is more use than
     * refusing to answer, and the note is what stops that being silent.
     */
-  def getReleases(project: Project, apiKey: Option[String], now: Long, cacheDir: Path = defaultCacheDirectory)(implicit formatter: Formatter, out: PrintStream): Result[List[Release], PackageError] = {
+  def getReleases(project: Project, apiKey: Option[String], now: Long, cacheDir: Path = defaultCacheDirectory, fetch: Fetch = GitHub.fetchReleases)(implicit formatter: Formatter, out: PrintStream): Result[List[Release], PackageError] = {
     val cached = read(project, cacheDir)
 
     cached match {
@@ -71,7 +81,7 @@ object ReleaseCache {
         GitHub.parseReleases(entry.body, project)
 
       case _ =>
-        GitHub.fetchReleases(project, apiKey, cached.flatMap(_.etag)) match {
+        fetch(project, apiKey, cached.flatMap(_.etag)) match {
           case Ok(ReleaseResponse.Modified(body, etag)) =>
             write(project, cacheDir, Entry(body, etag, now))
             GitHub.parseReleases(body, project)
@@ -84,7 +94,10 @@ object ReleaseCache {
                 GitHub.parseReleases(entry.body, project)
               case None =>
                 // Only reachable if the entry vanished between reading and asking.
-                GitHub.getReleases(project, apiKey)
+                fetch(project, apiKey, None).flatMap {
+                  case ReleaseResponse.Modified(body, _) => GitHub.parseReleases(body, project)
+                  case ReleaseResponse.NotModified => Err(PackageError.JsonError("304 Not Modified", project))
+                }
             }
 
           case Err(e: PackageError.ApiRateLimited) =>

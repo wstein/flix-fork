@@ -52,6 +52,22 @@ object PackageError {
     }
   }
 
+  /**
+    * An error raised when the GitHub API refuses a request for a reason other than a spent limit.
+    *
+    * A private repository, a repository that does not exist, and a token without the rights to see
+    * it all answer this way. Reporting it as a rate limit would tell someone to wait an hour for
+    * something waiting cannot fix.
+    */
+  case class ApiForbidden(project: Project, url: URL) extends PackageError {
+    override def message(f: Formatter): String =
+      s"""GitHub refused access to ${f.bold(project.toString)}.
+         |The repository may be private, or may not exist. If it is private, supply a token with
+         |${f.bold("--github-token")} that is allowed to read it.
+         |Asked at ${f.cyan(url.toString)}.
+         |""".stripMargin
+  }
+
   case class VersionDoesNotExist(version: SemVer, project: Project) extends PackageError {
     override def message(f: Formatter): String =
       s"Version ${f.bold(version.toString)} does not exist for project ${f.bold(project.toString)}"

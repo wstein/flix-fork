@@ -19,12 +19,13 @@ import ca.uwaterloo.flix.api.Bootstrap
 import ca.uwaterloo.flix.language.ast.shared.SecurityContext
 import ca.uwaterloo.flix.tools.pkg.Dependency.{FlixDependency, JarDependency, MavenDependency}
 import ca.uwaterloo.flix.tools.pkg.github.GitHub
-import ca.uwaterloo.flix.util.{Formatter, Result}
+import ca.uwaterloo.flix.util.{FileOps, Formatter, Result}
 import ca.uwaterloo.flix.util.Result.{Err, Ok, traverse}
 import ca.uwaterloo.flix.util.collection.ListMap
 
 import java.io.{IOException, PrintStream}
-import java.nio.file.{Files, Path, StandardCopyOption}
+import java.nio.charset.StandardCharsets
+import java.nio.file.{AtomicMoveNotSupportedException, Files, Path, StandardCopyOption}
 import java.security.{DigestInputStream, MessageDigest}
 import java.util.HexFormat
 import scala.collection.mutable
@@ -275,21 +276,88 @@ object FlixPackageManager {
       Files.createDirectories(dirPath)
       val assetPath = dirPath.resolve(localName)
 
-      if (Files.exists(assetPath)) {
-        out.println(s"  Cached `${formatter.blue(s"${proj.owner}/${proj.repo}.$extension")}` (${formatter.cyan(s"v$version")}).")
-        Ok(assetPath)
-      } else {
-        out.print(s"  Downloading `${formatter.blue(s"${proj.owner}/${proj.repo}.$extension")}` (${formatter.cyan(s"v$version")})... ")
-        out.flush()
-        fetchInto(proj, version, extension, source, assetPath, localName) match {
-          case Ok(verified) =>
-            out.println(if (verified) "OK (sha256 verified)." else "OK.")
-            Ok(assetPath)
-          case Err(e) =>
-            out.println("ERROR.")
-            Err(e)
-        }
+      cacheState(assetPath) match {
+        case CacheState.Verified =>
+          out.println(s"  Cached `${formatter.blue(s"${proj.owner}/${proj.repo}.$extension")}` (${formatter.cyan(s"v$version")}), sha256 verified.")
+          Ok(assetPath)
+        case CacheState.Unverified =>
+          out.println(s"  Cached `${formatter.blue(s"${proj.owner}/${proj.repo}.$extension")}` (${formatter.cyan(s"v$version")}), unverified.")
+          Ok(assetPath)
+        case CacheState.Corrupt =>
+          // The receipt says these are not the bytes that were installed, so the file is not a
+          // cache hit but damage. Removing it is what lets the download below replace it; leaving
+          // it would make the corruption permanent, since every later run would find it again.
+          out.println(s"  Replacing damaged `${formatter.blue(s"${proj.owner}/${proj.repo}.$extension")}` (${formatter.cyan(s"v$version")}).")
+          Files.deleteIfExists(assetPath)
+          Files.deleteIfExists(receiptFor(assetPath))
+          download(proj, version, extension, source, assetPath, localName)
+        case CacheState.Absent =>
+          download(proj, version, extension, source, assetPath, localName)
       }
+    }
+  }
+
+  /**
+    * Downloads the asset and reports where it ended up.
+    */
+  private def download(proj: GitHub.Project, version: SemVer, extension: String, source: AssetSource, assetPath: Path, localName: String)(implicit formatter: Formatter, out: PrintStream): Result[Path, PackageError] = {
+    out.print(s"  Downloading `${formatter.blue(s"${proj.owner}/${proj.repo}.$extension")}` (${formatter.cyan(s"v$version")})... ")
+    out.flush()
+    fetchInto(proj, version, extension, source, assetPath, localName) match {
+      case Ok(verified) =>
+        out.println(if (verified) "OK (sha256 verified)." else "OK.")
+        Ok(assetPath)
+      case Err(e) =>
+        out.println("ERROR.")
+        Err(e)
+    }
+  }
+
+  /**
+    * What is already on disk for an asset.
+    */
+  private sealed trait CacheState
+
+  private object CacheState {
+
+    /** Nothing is there. */
+    case object Absent extends CacheState
+
+    /** A file is there and hashes to what was recorded when it was installed. */
+    case object Verified extends CacheState
+
+    /** A file is there from before receipts were written, so nothing says whether it is intact. */
+    case object Unverified extends CacheState
+
+    /** A file is there and does not hash to what was recorded. */
+    case object Corrupt extends CacheState
+  }
+
+  /**
+    * Returns the path of the receipt recording what an installed asset hashed to.
+    */
+  private def receiptFor(assetPath: Path): Path =
+    assetPath.resolveSibling(s"${assetPath.getFileName}.sha256")
+
+  /**
+    * Decides what to make of whatever is already at `assetPath`.
+    *
+    * The presence of a file used to be the whole test, which meant a file truncated by an
+    * interrupted download in an older version is treated as a complete one forever. A receipt is
+    * written beside every asset this installs, so an asset with a receipt can be checked rather
+    * than assumed; an asset without one predates them and can only be taken on trust, which is
+    * worth saying out loud rather than silently.
+    */
+  private def cacheState(assetPath: Path): CacheState = {
+    if (!Files.exists(assetPath)) return CacheState.Absent
+    val receipt = receiptFor(assetPath)
+    if (!Files.exists(receipt)) return CacheState.Unverified
+    try {
+      val recorded = Files.readString(receipt, StandardCharsets.UTF_8).trim.split("\\s+").head
+      if (recorded.equalsIgnoreCase(FileOps.sha256(assetPath))) CacheState.Verified else CacheState.Corrupt
+    } catch {
+      // A receipt that cannot be read says nothing about the asset either way.
+      case _: Exception => CacheState.Unverified
     }
   }
 
@@ -302,9 +370,16 @@ object FlixPackageManager {
     * publishes one, the digest agree. Writing straight to the final path leaves a truncated file
     * behind when a connection drops, and the next run finds that file, calls it cached, and never
     * downloads it again -- a corrupt dependency that survives every retry.
+    *
+    * The temporary file has a name of its own rather than a name derived from the asset's. Two
+    * builds of the same project run at once often enough -- an editor and a terminal, two CI jobs
+    * sharing a checkout -- and a staging path they agree on is a path they overwrite, hash, move
+    * and delete from under each other. With a name apiece the worst that happens is that both
+    * download the same bytes and one of them wins the move, which produces the right file either
+    * way.
     */
   private def fetchInto(project: GitHub.Project, version: SemVer, extension: String, source: AssetSource, assetPath: Path, localName: String): Result[Boolean, PackageError] = {
-    val partPath = assetPath.resolveSibling(s"${assetPath.getFileName}.part")
+    val partPath = Files.createTempFile(assetPath.getParent, s"${assetPath.getFileName}.", ".part")
 
     val result = for {
       opened <- openAsset(project, version, extension, source)
@@ -314,15 +389,39 @@ object FlixPackageManager {
       // release that publishes one is not installed unverified because the digest was unreachable.
       expected <- checksumOf(project, version, opened.computedName)
       _ <- verifyDigest(expected, written, project, version, localName)
-    } yield {
-      Files.move(partPath, assetPath, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
-      expected.isDefined
-    }
+      _ <- publish(partPath, assetPath, written, expected, project, version, localName)
+    } yield expected.isDefined
 
-    if (result.isInstanceOf[Err[?, ?]]) {
-      Files.deleteIfExists(partPath)
-    }
+    // Only ever this call's own staging file, which is why it may be deleted without checking
+    // whether anybody else is using it.
+    Files.deleteIfExists(partPath)
     result
+  }
+
+  /**
+    * Moves the accepted download into place and records what it hashed to.
+    *
+    * The move is atomic where the filesystem offers it, so that no reader ever sees a half-written
+    * asset. Where it does not -- some network and container filesystems -- a plain move is used
+    * instead: the alternative is refusing to install on those filesystems at all, and the window it
+    * opens is the one that existed before any of this.
+    */
+  private def publish(partPath: Path, assetPath: Path, written: WrittenFile, expected: Option[String], project: GitHub.Project, version: SemVer, localName: String): Result[Unit, PackageError] = {
+    try {
+      try {
+        Files.move(partPath, assetPath, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+      } catch {
+        case _: AtomicMoveNotSupportedException =>
+          Files.move(partPath, assetPath, StandardCopyOption.REPLACE_EXISTING)
+      }
+      // The receipt is written after the asset, so a run that stops between the two leaves an asset
+      // that reads as unverified rather than one that reads as corrupt.
+      Files.writeString(receiptFor(assetPath), s"${written.sha256}  $localName\n", StandardCharsets.UTF_8)
+      Ok(())
+    } catch {
+      case e: IOException =>
+        Err(PackageError.DownloadIncomplete(project, version, localName, Some(s"Could not install the download: ${e.getMessage}")))
+    }
   }
 
   /**

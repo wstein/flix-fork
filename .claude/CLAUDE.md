@@ -41,11 +41,47 @@ release that does not exist.
 
 `getReleases` is the only function that spends REST quota. Two paths reach it:
 `outdated`, which genuinely needs metadata, and the legacy half of the package
-lookup above. `GitHub.download` handles the rest, and keeps the failures apart —
-a refusal (usually a rate limit, with `Retry-After` when given), any other
-status including a redirect that could not be followed, and never reaching a
-server. The shared `HttpClient` follows redirects because a release download
-address redirects to storage; Java's default is to follow nothing.
+lookup above. `outdated` goes through `ReleaseCache`, which answers from a
+per-user copy inside a fifteen minute window, revalidates with an entity tag
+past it, and falls back to a stale listing — saying so — when the limit is
+spent. A refusal that is *not* a rate limit never gets that fallback: waiting
+does not fix a repository nobody may read, which is why `fetchReleases` reads
+`x-ratelimit-remaining` before deciding between `ApiRateLimited` and
+`ApiForbidden`.
+
+Downloading is deliberately strict, and each rule is there for a failure that
+otherwise installs something:
+
+- **Only `200` is a download.** A `204` is a success with nothing in it, and
+  accepting it caches an empty file as a package.
+- **Nothing lands on the final path until it is whole.** The bytes go to a
+  temp file with a name of its own — not `<asset>.part`, which two concurrent
+  builds would fight over — and are checked against `Content-Length` and, when
+  the release publishes one, the SHA-256 beside it, before an atomic move.
+  `AtomicMoveNotSupportedException` falls back to a plain move rather than
+  refusing to install on filesystems that lack it.
+- **A cache hit is checked, not assumed.** Every install writes a receipt next
+  to the asset; `cacheState` re-hashes against it, so a file truncated by an
+  older version is replaced instead of trusted forever. An asset without a
+  receipt predates them and is reported as unverified rather than silently
+  believed.
+- **Checksums are parsed strictly** — 64 hex characters, and the optional
+  filename must match the asset. Loose parsing turns broken metadata into a
+  digest mismatch, which sends the reader to inspect the package instead of the
+  release.
+
+The shared `HttpClient` follows redirects because a release download address
+redirects to storage (Java's default is to follow nothing), and carries connect
+and request timeouts so a stalled connection cannot hang a build forever. An
+`InterruptedException` restores the interrupt flag before returning.
+
+**Test the network layer offline.** `TestGitHubDownload` serves every status
+from a local `HttpServer`, and `TestReleaseCache` supplies responses through
+`ReleaseCache.Fetch`. Neither touches GitHub — a suite that spends the rate
+limit to test rate-limit handling is self-defeating, and the interesting
+responses (304, 403, an unfollowable redirect) cannot be asked for on demand
+anyway. `TestFlixPackageManager` still uses the real registry, which is what
+keeps the URL shapes honest.
 
 ## Running Tests
 
