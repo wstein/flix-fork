@@ -83,7 +83,7 @@ class BspSession(val projectPath: Path, options: Options, log: BspLogStream) {
   @volatile private var flix: Flix = mkFlix()
 
   /** Progress notifications. Held here because a test run emits them as its events arrive. */
-  private val tasks: BspTasks = new BspTasks(() => client)
+  private val tasks: BspTasks = new BspTasks(() => liveClient)
 
   /** Which documents the client has been told about, so the ones that come clean can be cleared. */
   private val ledger: DiagnosticLedger = new DiagnosticLedger
@@ -166,6 +166,10 @@ class BspSession(val projectPath: Path, options: Options, log: BspLogStream) {
   /** Moves to `ShutDown`, after which no request is served and no notification is published. */
   def shutdown(): Unit = synchronized {
     state = State.ShutDown
+    // Work already in flight becomes void as well, not just future work: a compile that was running
+    // when this arrived answers into a connection that is closing down, and its result describes a
+    // session nobody is using.
+    generation.incrementAndGet()
   }
 
   /** Returns `true` once `build/shutdown` has been received. */
@@ -261,7 +265,7 @@ class BspSession(val projectPath: Path, options: Options, log: BspLogStream) {
   private def publish(target: BuildTargetIdentifier, outcome: Bootstrap.CompileOutcome): Unit = {
     val reports = BspDiagnostics.reportsFor(target, outcome.messages, outcome.root)
     val toSend = ledger.publishFor(reports, target, reachedEverySource = outcome.isSuccess)
-    client.foreach(c => toSend.foreach(c.onBuildPublishDiagnostics))
+    liveClient.foreach(c => toSend.foreach(c.onBuildPublishDiagnostics))
 
     // A diagnostic on a source the client cannot open would otherwise be invisible: it is reported,
     // but against a `flix-lib:` or `jar:` URI that no editor will show. One aggregate message, not
@@ -423,7 +427,7 @@ class BspSession(val projectPath: Path, options: Options, log: BspLogStream) {
 
         case Result.Ok(reloaded) =>
           val target = BuildTargets.id(view)
-          client.foreach(c => ledger.clearEverything(target).foreach(c.onBuildPublishDiagnostics))
+          liveClient.foreach(c => ledger.clearEverything(target).foreach(c.onBuildPublishDiagnostics))
 
           bootstrap = Some(reloaded)
           flix = mkFlix()
@@ -455,7 +459,7 @@ class BspSession(val projectPath: Path, options: Options, log: BspLogStream) {
         case Result.Ok(()) =>
           // The class files that were just deleted are what the last compile's diagnostics described,
           // and there is now no build to speak for them.
-          client.foreach(c => ledger.clearEverything(target).foreach(c.onBuildPublishDiagnostics))
+          liveClient.foreach(c => ledger.clearEverything(target).foreach(c.onBuildPublishDiagnostics))
           lastCompileHadMain = false
           new CleanCacheResult(true)
 
@@ -481,7 +485,7 @@ class BspSession(val projectPath: Path, options: Options, log: BspLogStream) {
     }
     val event = new BuildTargetEvent(BuildTargets.id(view))
     event.setKind(BuildTargetEventKind.CHANGED)
-    client.foreach(_.onBuildTargetDidChange(new DidChangeBuildTarget(List(event).asJava)))
+    liveClient.foreach(_.onBuildTargetDidChange(new DidChangeBuildTarget(List(event).asJava)))
   }
 
   /** Returns the environment a client needs to run this project's program itself. */
@@ -538,15 +542,26 @@ class BspSession(val projectPath: Path, options: Options, log: BspLogStream) {
   }
 
   /** The attached client, for a helper that must tolerate not having one yet. */
-  def currentClient: Option[BuildClient] = client
+  def currentClient: Option[BuildClient] = liveClient
+
+  /**
+    * The client, if there is one and it may still be told things.
+    *
+    * Every notification goes through here, and that is the point: after `build/shutdown` a client has
+    * said it wants nothing more, and work that was already running would otherwise finish into a
+    * connection that has been closed down -- publishing diagnostics or a task finish for a build
+    * nobody is waiting for. Requests are dispatched off the connection's thread, so that window is
+    * real rather than theoretical.
+    */
+  private def liveClient: Option[BuildClient] = if (isShutDown) None else client
 
   /** Sends `message` to the client's log, if there is a client. */
   def logMessage(message: String): Unit =
-    client.foreach(_.onBuildLogMessage(new LogMessageParams(MessageType.LOG, message)))
+    liveClient.foreach(_.onBuildLogMessage(new LogMessageParams(MessageType.LOG, message)))
 
   /** Shows `message` to the user, for something they have to know about rather than look up. */
   def showMessage(kind: MessageType, message: String): Unit =
-    client.foreach(_.onBuildShowMessage(new ShowMessageParams(kind, message)))
+    liveClient.foreach(_.onBuildShowMessage(new ShowMessageParams(kind, message)))
 
   /**
     * Fails unless `rootUri` names the directory this server was started in.

@@ -17,7 +17,7 @@ package ca.uwaterloo.flix.api.bsp
 
 import ca.uwaterloo.flix.api.Bootstrap
 import org.json4s.native.JsonMethods
-import org.json4s.{JArray, JString, jvalue2monadic}
+import org.json4s.{JArray, JInt, JString, jvalue2monadic}
 import org.scalatest.DoNotDiscover
 import org.scalatest.funsuite.AnyFunSuite
 
@@ -99,6 +99,61 @@ class TestBspProcess extends AnyFunSuite {
     }
   }
 
+  test("a scripted session drives a real server through the whole cycle") {
+    val project = newProject()
+    Files.writeString(project.resolve("src").resolve("Main.flix"),
+      """def main(): Unit \ IO = println("PROGRAM-RAN")""" + "\n")
+    Files.writeString(project.resolve("test").resolve("TestMain.flix"),
+      """@Test
+        |def testPasses(): Unit \ Assert = Assert.assertEq(expected = 2, 1 + 1)
+        |""".stripMargin)
+    install(project)
+
+    // The end-to-end case, and the only one where nothing is stubbed: the jar a release ships, started
+    // the way a client starts it, driven over hand-written frames. Everything else in these suites
+    // runs the server in the test's own JVM, which cannot see a packaging fault -- a missing resource,
+    // an excluded class, a shaded dependency.
+    val process = new ProcessBuilder(connectionArgv(project)*).directory(project.toFile).start()
+    try {
+      val out = process.getOutputStream
+      val in = new BufferedInputStream(process.getInputStream)
+
+      writeFrame(out, initializeRequest(project))
+      assert((awaitId(in, 1) \ "displayName") == JString(BspSession.ServerName), "initialize failed")
+      writeFrame(out, """{"jsonrpc":"2.0","method":"build/initialized","params":{}}""")
+
+      val targets = request(out, in, 2, """{"jsonrpc":"2.0","id":2,"method":"workspace/buildTargets","params":{}}""")
+      // json4s projects a field of an array element back into an array, so this is a one-element
+      // `JArray` rather than the string, however many targets there are.
+      val targetUri = (targets \ "targets" \ "id" \ "uri") match {
+        case JString(uri) => uri
+        case JArray(JString(uri) :: Nil) => uri
+        case other => fail(s"no single target in $other")
+      }
+      val target = s"""{"uri":"$targetUri"}"""
+
+      val sources = request(out, in, 3, s"""{"jsonrpc":"2.0","id":3,"method":"buildTarget/sources","params":{"targets":[$target]}}""")
+      assert(JsonMethods.compact(JsonMethods.render(sources)).contains("Main.flix"), s"no sources: $sources")
+
+      val compiled = request(out, in, 4, s"""{"jsonrpc":"2.0","id":4,"method":"buildTarget/compile","params":{"targets":[$target]}}""")
+      assert((compiled \ "statusCode") == JInt(1), s"the compile did not succeed: $compiled")
+
+      val ran = request(out, in, 5, s"""{"jsonrpc":"2.0","id":5,"method":"buildTarget/run","params":{"target":$target}}""")
+      assert((ran \ "statusCode") == JInt(1), s"the run did not succeed: $ran")
+
+      val tested = request(out, in, 6, s"""{"jsonrpc":"2.0","id":6,"method":"buildTarget/test","params":{"targets":[$target]}}""")
+      assert((tested \ "statusCode") == JInt(1), s"the tests did not pass: $tested")
+
+      // And it shuts down when asked, rather than having to be killed.
+      request(out, in, 7, """{"jsonrpc":"2.0","id":7,"method":"build/shutdown","params":null}""")
+      writeFrame(out, """{"jsonrpc":"2.0","method":"build/exit","params":null}""")
+      assert(process.waitFor(Timeout, TimeUnit.SECONDS), "the server did not exit when told to")
+    } finally {
+      process.destroyForcibly()
+      process.waitFor(Timeout, TimeUnit.SECONDS)
+    }
+  }
+
   test("a connection file this server did not write is left alone") {
     val project = newProject()
     val file = BspDiscovery.connectionFile(project)
@@ -166,6 +221,35 @@ class TestBspProcess extends AnyFunSuite {
       frames += 1
     }
     fail("the server never answered build/initialize")
+  }
+
+  /** Sends `body` and returns the result of the response carrying `id`. */
+  private def request(out: OutputStream, in: InputStream, id: Int, body: String): org.json4s.JValue = {
+    writeFrame(out, body)
+    awaitId(in, id)
+  }
+
+  /**
+    * Reads until the frame answering `id`, and returns its result.
+    *
+    * Reading until the id is not laziness: a server is entitled to interleave notifications with
+    * responses and this one does -- progress tasks, the program's own output, `Bootstrap`'s narration
+    * of dependency resolution. A client that expected the next frame to be its answer would fail
+    * against a correct server.
+    */
+  private def awaitId(in: InputStream, id: Int): org.json4s.JValue = {
+    var frames = 0
+    while (frames < 500) {
+      val message = JsonMethods.parse(readFrame(in))
+      if ((message \ "id") == JInt(id)) {
+        (message \ "error") match {
+          case org.json4s.JNothing => return message \ "result"
+          case error => fail(s"request $id failed: ${JsonMethods.compact(JsonMethods.render(error))}")
+        }
+      }
+      frames += 1
+    }
+    fail(s"the server never answered request $id")
   }
 
   private def initializeRequest(project: Path): String =

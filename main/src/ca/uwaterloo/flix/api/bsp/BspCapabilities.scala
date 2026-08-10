@@ -62,17 +62,19 @@ object BspFeature {
   * nothing, because a client believes it and fails at the point of use -- which is the moment the
   * handshake existed to get ahead of. The same rule governs `CliContract`.
   *
-  * The set is small because the server is being built in phases, and each phase adds its request and
-  * its flag together.
+  * `Debug` is the one that will never be in the set: Flix has no debug adapter, so there is no address
+  * `debugSessionStart` could return, and advertising it would be exactly the mistake this rule exists
+  * to prevent.
   */
 object BspCapabilities {
 
   /**
-    * The requests this server serves today.
+    * The requests this server serves.
     *
     * Everything in [[BspFeature.All]] that is absent here is refused with `MethodNotFound`, and
     * `TestBspCapabilities` holds the two in step. The lifecycle, `workspace/buildTargets` and
-    * `buildTarget/sources` are mandatory and carry no flag, so they are not listed.
+    * `buildTarget/sources` are mandatory and carry no flag, so they are not listed; neither is
+    * `buildTarget/cleanCache`, which the protocol gives no capability field at all.
     */
   val Implemented: Set[BspFeature] = Set(
     BspFeature.Compile,

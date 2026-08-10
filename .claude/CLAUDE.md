@@ -219,7 +219,9 @@ Everything lives in `ca.uwaterloo.flix.api.bsp`, and it is **not** in the langua
 server: `docs/TOOLING-CONTRACT.md` forbids putting build requests there and that
 constraint stands. What that document concluded — that BSP belongs to some other
 build tool — does not hold for a plain `flix.toml` project, where `flix` *is* the
-build tool. The document carries a notice saying so until its section is rewritten.
+build tool, and its section now says so: the two are peers, `flix bsp` for a project
+whose build is `flix` and `--diagnostics-json` for one whose build is Gradle, Mill or
+Bazel.
 
 **Standard output belongs to the protocol, so never `println` on a path a BSP
 request can reach.** `BspServer.run` takes `FileDescriptor.out` for the launcher and
@@ -278,6 +280,16 @@ descriptor, which is the protocol channel. Three traps here:
   compiler reflects and calls; there is no test-runner entry point to fork. A test that
   calls `System.exit` therefore takes the server with it. `jvmTestEnvironment` is the way
   out for a client that wants isolation.
+
+**Requests do not run on lsp4j's message thread, and that has two consequences.** A
+handler that ran there would stop the connection being read for the length of a compile,
+so `FlixBuildServer` dispatches to the connection's executor; builds stay serialised by
+`BspSession`'s lock rather than by the transport. The consequences: cancellation is *soft*
+(the work finishes and its result is dropped, because the compiler's ForkJoin pool and
+`JvmWriter`'s writes are not interrupt-safe and a half-reconciled class directory is worse
+than a late answer), and work can outlive the `shutdown` that ended the session — so every
+notification goes through one accessor that returns no client once shut down, and
+`shutdown` bumps the generation so an in-flight build's result is discarded.
 
 **`workspace/reload` is transactional, and `buildTarget/cleanCache` is not
 `Bootstrap.clean`.** A reload builds a fresh `Bootstrap` and a fresh `Flix` and installs

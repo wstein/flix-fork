@@ -112,7 +112,7 @@ object BspServer {
     // sends `exit` in the window before the assignment would then find nothing to cancel and the
     // server would keep listening until its input closed.
     val listening = new AtomicReference[java.util.concurrent.Future[Void]]()
-    val server = new FlixBuildServer(session, () => Option(listening.get()).foreach(_.cancel(true)))
+    val server = new FlixBuildServer(session, () => Option(listening.get()).foreach(_.cancel(true)), executor)
 
     val launcher = new Launcher.Builder[BuildClient]()
       .setLocalService(server)

@@ -323,10 +323,15 @@ Stated plainly, because each is a real limitation rather than an oversight:
 ## 11. What is not built, and why
 
 - **`debugSessionStart`.** Flix has no debug adapter, so there is no address to return.
-  `canDebug` is false and the request always fails. This one does not become available
-  in a later phase; it is refused permanently, and asserted to be.
+  `canDebug` is false and the request always fails. Unlike everything else that was once
+  in this list, it is not waiting for anything: it is refused permanently, and asserted
+  to be.
 - **Running is forked, so a program cannot be debugged through the server.** Use
   `jvmRunEnvironment` and start it yourself.
+- **Collapsing queued builds.** A client that compiles on every keystroke gets one compile
+  per request, serialised. A pending slot per target would collapse the queue, but it would
+  answer a client about a compile it did not run, and inventing that semantics is a decision
+  rather than an optimisation.
 - **Watcher-driven recompilation.** `buildTarget/didChange` is announced on a reload, but
   nothing watches the filesystem: a client compiles when it decides to. A watcher needs
   debounce, and the one in this repository is wired only to the REPL.
@@ -413,6 +418,27 @@ The session carries a generation counter, incremented on reload, so that work wh
 outlives a reload can be recognised as stale rather than published against the project
 that replaced it. Nothing produces such work yet; the counter is one field, and the
 alternative is to add it after the first stale-publish bug.
+
+**Requests do not run on the connection's thread.** lsp4j reads and dispatches messages
+on one thread, so a handler that ran there would stop the connection being read for as
+long as it took — and a whole-program compile takes seconds. Nothing else could be
+answered in the meantime, including `build/shutdown` and `$/cancelRequest`, which is to
+say the server would look wedged exactly when a client most wants to talk to it. Handlers
+run on the connection's executor instead; builds are still serialised, by a lock rather
+than by the transport.
+
+**Cancellation is soft.** `$/cancelRequest` marks the request cancelled and the work
+finishes anyway: the compiler's ForkJoin pool and `JvmWriter`'s writes are not
+interrupt-safe, and the class directory must be reconciled and its manifest written or the
+build directory describes nothing. The result is then dropped and lsp4j answers the request
+with `RequestCancelled`. A late answer is recoverable; a half-reconciled output directory is
+the failure `compileProject` exists to prevent.
+
+**Nothing is published after `build/shutdown`.** One accessor decides whether a client may
+still be told anything, and every notification goes through it, because asynchronous
+dispatch makes "work that outlives the shutdown that cancelled it" a real window rather
+than a theoretical one. Shutdown also bumps the generation, so an in-flight build's result
+is discarded rather than published.
 
 ## 15. Acceptance criteria
 
@@ -516,6 +542,21 @@ Each names the test that pins it.
     cache empties the class directory and nothing else" — the class files go, the build
     manifest goes, `build/doc/` stays, and the next compile rebuilds. That distinction from
     `Bootstrap.clean` is the whole point of the request having its own path.
+38. **A session survives every way a client can get it wrong.** `TestBspMatrix`, "a session
+    survives every way a client can get it wrong" — an unknown target, a duplicated target,
+    a cancelled build, a source that does not compile and a manifest that is not TOML, in
+    sequence against one session, with ordinary work asserted to work after each. No
+    single-condition test can see this, and it is the failure an editor user experiences.
+39. **A slow build does not stop the connection being read.** `TestBspMatrix`, "a slow build
+    does not stop the connection being read" — a query is answered while a compile is still
+    running. If this fails by timing out, dispatch has moved back onto lsp4j's thread.
+40. **Nothing is published after shutdown.** `TestBspMatrix`, "nothing is published after
+    shutdown" — asserted against a build that was already running when the shutdown arrived.
+41. **A real server process completes the whole cycle.** `TestBspProcess`, "a scripted
+    session drives a real server through the whole cycle" — the assembled jar, started from
+    the connection file it wrote, driven over hand-written frames through initialize,
+    targets, sources, compile, run, test, shutdown and exit. The only case where nothing is
+    stubbed, and so the only one that can see a packaging fault.
 
 ## 16. Running the tests
 

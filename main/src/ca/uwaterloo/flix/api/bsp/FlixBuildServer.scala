@@ -22,7 +22,7 @@ import org.eclipse.lsp4j.jsonrpc.ResponseErrorException
 import org.eclipse.lsp4j.jsonrpc.messages.{ResponseError, ResponseErrorCode}
 
 import java.nio.file.{Files, Path}
-import java.util.concurrent.CompletableFuture
+import java.util.concurrent.{CompletableFuture, Executor}
 import scala.jdk.CollectionConverters.*
 
 /**
@@ -37,9 +37,20 @@ import scala.jdk.CollectionConverters.*
   * `MethodNotFound` rather than answered with something empty. An empty answer is indistinguishable
   * from a real one, so a client would draw a conclusion from it; a refusal is a fact it can act on.
   *
-  * @param onExit run when the client sends `build/exit`, to stop listening.
+  * ==Requests do not run on the connection's thread==
+  *
+  * Every request that does work is dispatched to `executor`. lsp4j reads and dispatches messages on
+  * one thread, so a handler that ran there would stop the connection being read for as long as it
+  * took -- and a whole-program compile takes seconds. Nothing else could be answered in the meantime,
+  * including `build/shutdown` and `$/cancelRequest`, which is to say the server would look wedged
+  * exactly when a client most wants to talk to it. Builds are still serialised, by a lock in
+  * [[BspSession]] rather than by the transport.
+  *
+  * @param onExit   run when the client sends `build/exit`, to stop listening.
+  * @param executor where request handlers run. The connection's own executor, so its threads are
+  *                 daemons and end with the process.
   */
-class FlixBuildServer(session: BspSession, onExit: () => Unit) extends BuildServer with JvmBuildServer {
+class FlixBuildServer(session: BspSession, onExit: () => Unit, executor: Executor) extends BuildServer with JvmBuildServer {
 
   /** Progress notifications, which read the client through the session so a late connect is fine. */
   private val tasks: BspTasks = new BspTasks(() => session.currentClient)
@@ -367,13 +378,28 @@ class FlixBuildServer(session: BspSession, onExit: () => Unit) extends BuildServ
     */
   private def completing[T](body: => T): CompletableFuture[T] = {
     val future = new CompletableFuture[T]()
-    try {
-      future.complete(body)
-    } catch {
-      case e: ResponseErrorException => future.completeExceptionally(e)
-      case e: Exception =>
-        future.completeExceptionally(new ResponseErrorException(
-          new ResponseError(ResponseErrorCode.InternalError, Option(e.getMessage).getOrElse(e.toString), null)))
+    executor.execute { () =>
+      // A client that has already given up gets no work done on its behalf.
+      if (!future.isCancelled) {
+        try {
+          val result = body
+          // Soft cancellation, and the softness is deliberate. A cancel that arrived while the work
+          // was running does not interrupt it: the ForkJoin pool the compiler uses and the writes
+          // `JvmWriter` makes are not interrupt-safe, and the class directory must be reconciled and
+          // its manifest written or the build directory describes nothing. A late answer is
+          // recoverable; a half-reconciled output directory is what `compileProject` exists to
+          // prevent. So the work finishes and its result is dropped -- lsp4j answers the cancelled
+          // request with `RequestCancelled` on its own.
+          if (!future.isCancelled) {
+            future.complete(result)
+          }
+        } catch {
+          case e: ResponseErrorException => future.completeExceptionally(e)
+          case e: Exception =>
+            future.completeExceptionally(new ResponseErrorException(
+              new ResponseError(ResponseErrorCode.InternalError, Option(e.getMessage).getOrElse(e.toString), null)))
+        }
+      }
     }
     future
   }
