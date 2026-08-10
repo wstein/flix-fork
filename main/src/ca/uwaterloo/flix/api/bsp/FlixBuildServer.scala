@@ -40,6 +40,9 @@ import scala.jdk.CollectionConverters.*
   */
 class FlixBuildServer(session: BspSession, onExit: () => Unit) extends BuildServer with JvmBuildServer {
 
+  /** Progress notifications, which read the client through the session so a late connect is fine. */
+  private val tasks: BspTasks = new BspTasks(() => session.currentClient)
+
   // ── Lifecycle ────────────────────────────────────────────────────────────────
 
   override def buildInitialize(params: InitializeBuildParams): CompletableFuture[InitializeBuildResult] =
@@ -104,8 +107,26 @@ class FlixBuildServer(session: BspSession, onExit: () => Unit) extends BuildServ
   override def buildTargetOutputPaths(params: OutputPathsParams): CompletableFuture[OutputPathsResult] =
     refuse(BspFeature.OutputPaths)
 
-  override def buildTargetCompile(params: CompileParams): CompletableFuture[CompileResult] =
-    refuse(BspFeature.Compile)
+  /**
+    * Compiles the project and publishes what the compiler said.
+    *
+    * Bracketed by task notifications so a client can show progress: a compile takes seconds, and one
+    * that reports nothing looks like a hang. The status of the finish comes from the result, so a
+    * compile that found errors finishes as `ERROR` while still being a request that was served.
+    */
+  override def buildTargetCompile(params: CompileParams): CompletableFuture[CompileResult] = completing {
+    val view = session.requireView()
+    val targets = requireKnownTargets(view, params.getTargets)
+    val target = targets.headOption.getOrElse(BuildTargets.id(view))
+    val originId = Option(params.getOriginId)
+
+    tasks.bracket[CompileResult](
+      message = s"Compiling ${view.packageName}",
+      startData = _ => Some((TaskStartDataKind.COMPILE_TASK, new CompileTask(target))),
+      finishData = (_, result) => Some((TaskFinishDataKind.COMPILE_REPORT, compileReport(target, result, originId))),
+      statusOf = _.getStatusCode
+    )(_ => session.compile(target, originId))
+  }
 
   override def buildTargetRun(params: RunParams): CompletableFuture[RunResult] =
     refuse(BspFeature.Run)
@@ -140,6 +161,22 @@ class FlixBuildServer(session: BspSession, onExit: () => Unit) extends BuildServ
     refuse(BspFeature.Debug)
 
   // ── Helpers ──────────────────────────────────────────────────────────────────
+
+  /**
+    * Returns the report that ends a compile task.
+    *
+    * The counts are what a client puts in its status bar. Warnings are always zero because
+    * `CompilationMessage` has no severity and `Flix.check` returns only errors -- reporting a warning
+    * here would be inventing one.
+    */
+  private def compileReport(target: BuildTargetIdentifier,
+                            result: CompileResult,
+                            originId: Option[String]): CompileReport = {
+    val errors = if (result.getStatusCode == StatusCode.OK) 0 else 1
+    val report = new CompileReport(target, errors, 0)
+    originId.foreach(report.setOriginId)
+    report
+  }
 
   /** Returns the project's sources as protocol items, in a stable order. */
   private def sourceItems(view: ProjectView): List[SourceItem] =

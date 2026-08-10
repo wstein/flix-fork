@@ -70,11 +70,11 @@ object BspCapabilities {
   /**
     * The requests this server serves today.
     *
-    * Empty of optional requests: what works so far is the lifecycle, `workspace/buildTargets` and
-    * `buildTarget/sources`, none of which has a flag. Everything in [[BspFeature.All]] that is
-    * absent here is refused with `MethodNotFound`, and `TestBspCapabilities` holds the two in step.
+    * Everything in [[BspFeature.All]] that is absent here is refused with `MethodNotFound`, and
+    * `TestBspCapabilities` holds the two in step. The lifecycle, `workspace/buildTargets` and
+    * `buildTarget/sources` are mandatory and carry no flag, so they are not listed.
     */
-  val Implemented: Set[BspFeature] = Set.empty
+  val Implemented: Set[BspFeature] = Set(BspFeature.Compile)
 
   /** Returns `true` if `feature` is served. */
   def implemented(feature: BspFeature): Boolean = Implemented.contains(feature)

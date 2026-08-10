@@ -195,11 +195,14 @@ class TestBspLifecycle extends AnyFunSuite {
         val target = client.workspaceBuildTargets().get(Timeout, TimeUnit.SECONDS).getTargets.asScala.head.getId
 
         // Each of these is a later phase. Until then a refusal is the honest answer: an empty result
-        // is indistinguishable from a real one and a client would draw a conclusion from it.
+        // is indistinguishable from a real one and a client would draw a conclusion from it. When a
+        // phase implements one, this list is what makes removing it from here a deliberate act.
         val codes = List(
-          errorCodeOf(client.buildTargetCompile(new CompileParams(List(target).asJava))),
           errorCodeOf(client.buildTargetInverseSources(new InverseSourcesParams(new TextDocumentIdentifier("file:///x.flix")))),
           errorCodeOf(client.buildTargetResources(new ResourcesParams(List(target).asJava))),
+          errorCodeOf(client.buildTargetOutputPaths(new OutputPathsParams(List(target).asJava))),
+          errorCodeOf(client.buildTargetRun(new RunParams(target))),
+          errorCodeOf(client.buildTargetTest(new TestParams(List(target).asJava))),
           errorCodeOf(client.workspaceReload()),
           errorCodeOf(client.debugSessionStart(new DebugSessionParams(List(target).asJava))))
 

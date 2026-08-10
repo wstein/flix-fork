@@ -15,8 +15,8 @@
  */
 package ca.uwaterloo.flix.api.bsp
 
-import ca.uwaterloo.flix.api.{Bootstrap, ProjectView, Version}
-import ca.uwaterloo.flix.util.{Formatter, Options, Result}
+import ca.uwaterloo.flix.api.{Bootstrap, Flix, ProjectView, Version}
+import ca.uwaterloo.flix.util.{Build, Formatter, Options, Result}
 import ch.epfl.scala.bsp4j.*
 import org.eclipse.lsp4j.jsonrpc.ResponseErrorException
 import org.eclipse.lsp4j.jsonrpc.messages.{ResponseError, ResponseErrorCode}
@@ -59,6 +59,26 @@ class BspSession(val projectPath: Path, options: Options, log: BspLogStream) {
 
   /** Bumped whenever the project is reloaded, so stale work can be recognised as stale. */
   private val generation: AtomicLong = new AtomicLong(0)
+
+  /**
+    * Held for the duration of a build.
+    *
+    * One `Flix` holds the cached ASTs and a change set, so two concurrent compiles corrupt them. A
+    * separate object rather than the session itself, so that a query answered from a snapshot is not
+    * blocked behind a compile.
+    */
+  private val buildLock: AnyRef = new AnyRef
+
+  /**
+    * The compiler this session compiles with, kept warm for its whole life.
+    *
+    * One instance, because that is what makes a second compile incremental: `Bootstrap` keys its
+    * record of what it has handed over on the instance it handed it to.
+    */
+  private val flix: Flix = new Flix().setFormatter(Formatter.NoFormatter).setOptions(options)
+
+  /** Which documents the client has been told about, so the ones that come clean can be cleared. */
+  private val ledger: DiagnosticLedger = new DiagnosticLedger
 
   /** Everything the compiler would have printed, as client log messages. */
   private val out: PrintStream = new PrintStream(log, true, "UTF-8")
@@ -172,6 +192,96 @@ class BspSession(val projectPath: Path, options: Options, log: BspLogStream) {
       Nil
     }
   }
+
+  /**
+    * Compiles the project once, and publishes what the compiler said.
+    *
+    * ==Serialised, and not on the caller's thread==
+    *
+    * One `Flix` instance holds the cached ASTs and a change set, so two concurrent compiles would
+    * corrupt them; a second instance would double the memory and lose the incrementality, since
+    * `Bootstrap` keys its bookkeeping on the instance it was last given. So compiles hold a lock, and
+    * they run on the build thread rather than the thread that dispatched the request -- the language
+    * server compiles on its RPC thread, which is why a slow check there blocks every other request.
+    *
+    * ==Generation==
+    *
+    * The generation is read before the work and checked after it. A compile that finishes after a
+    * reload describes a project that no longer exists, and publishing its diagnostics would put
+    * markers on a file from a different configuration.
+    *
+    * Returns the status a client should see: `OK` when the program compiled, `ERROR` when it did not.
+    * Diagnostics are published either way, which is the case a `Result` cannot express -- a compile
+    * can succeed and still have something to say.
+    */
+  def compile(target: BuildTargetIdentifier, originId: Option[String]): CompileResult = {
+    val startedAt = currentGeneration
+
+    val outcome = buildLock.synchronized {
+      val b = requireBootstrapForBuild()
+      val view = b.view
+      // Development mode: production is a release action, and the target advertised is the
+      // development one. `loadClassFiles` stays off -- nothing here runs the program, and loading
+      // every class into this JVM would cost memory a server holds for its whole life.
+      val configured = flix.options.copy(
+        build = Build.Development,
+        outputJvm = true,
+        // Without this the class files go wherever `Options.Default.outputPath` points, which is
+        // `./build/` relative to the *server's* working directory. That is the project only by
+        // accident, and when it is not, a compile writes 250 class files somewhere nobody looks.
+        outputPath = view.outputDirectories(Build.Development),
+        loadClassFiles = false,
+        progress = false)
+      flix.setOptions(configured)
+      b.compileProjectOutcome(flix, clean = false)
+    }
+
+    if (!isCurrent(startedAt)) {
+      // Discarded rather than published. The request still answers, because a client is waiting on
+      // it, and `CANCELLED` says the answer is not about the project it asked about.
+      return new CompileResult(StatusCode.CANCELLED)
+    }
+
+    publish(target, outcome)
+
+    val result = new CompileResult(if (outcome.isSuccess) StatusCode.OK else StatusCode.ERROR)
+    originId.foreach(result.setOriginId)
+    result
+  }
+
+  /**
+    * Publishes the diagnostics of `outcome`, and clears the documents that no longer have any.
+    *
+    * Clearing is only safe when the compiler spoke for everything it spoke for last time, which is
+    * what a successful compile means. After a failure a document left unmentioned has not been shown
+    * to be clean -- the compiler may simply not have reached it -- so its markers stay.
+    */
+  private def publish(target: BuildTargetIdentifier, outcome: Bootstrap.CompileOutcome): Unit = {
+    val reports = BspDiagnostics.reportsFor(target, outcome.messages, outcome.root)
+    val toSend = ledger.publishFor(reports, target, reachedEverySource = outcome.isSuccess)
+    client.foreach(c => toSend.foreach(c.onBuildPublishDiagnostics))
+
+    // A diagnostic on a source the client cannot open would otherwise be invisible: it is reported,
+    // but against a `flix-lib:` or `jar:` URI that no editor will show. One aggregate message, not
+    // one per diagnostic, so it cannot become noise.
+    val unopenable = reports.count(r => !BspUri.isOpenable(r.getTextDocument.getUri))
+    if (unopenable > 0) {
+      showMessage(MessageType.WARNING,
+        s"$unopenable file(s) with problems are inside the standard library or a package dependency, " +
+          "so your editor may not be able to open them.")
+    }
+
+    outcome.error.foreach(e => showMessage(MessageType.ERROR, e.message(Formatter.NoFormatter)))
+  }
+
+  /** Returns the loaded project for a build, or fails the way a request expects. */
+  private def requireBootstrapForBuild(): Bootstrap = {
+    requireView()
+    bootstrap.getOrElse(throw invalidRequest("the project is not loaded"))
+  }
+
+  /** The attached client, for a helper that must tolerate not having one yet. */
+  def currentClient: Option[BuildClient] = client
 
   /** Sends `message` to the client's log, if there is a client. */
   def logMessage(message: String): Unit =

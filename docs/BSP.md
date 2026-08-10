@@ -1,6 +1,6 @@
 # The Flix build server
 
-**Status: lifecycle, discovery and queries implemented. Compiling, running and
+**Status: lifecycle, discovery, sources and compiling implemented. Running and
 testing are not.** This document describes what `flix bsp` does today, what it
 deliberately does not do, and why each decision was taken. It is written to be the
 front matter of a pull request, in the manner of `docs/JOINT-COMPILATION.md`.
@@ -56,7 +56,7 @@ explicitly.
 | `build/initialize`, `build/initialized`, `build/shutdown`, `build/exit` | served |
 | `workspace/buildTargets` | served |
 | `buildTarget/sources` | served |
-| `buildTarget/compile` | **not yet** |
+| `buildTarget/compile` | served |
 | `buildTarget/run`, `buildTarget/test` | **not yet** |
 | `buildTarget/inverseSources`, `resources`, `outputPaths` | **not yet** |
 | `buildTarget/dependencySources`, `dependencyModules` | **not yet** |
@@ -115,7 +115,45 @@ that affordance without the misfiling.
 change the identity of the first. A client stores target ids, and an id that changes is
 a target that vanished.
 
-## 5. What a client will get wrong
+## 5. Compiling
+
+`buildTarget/compile` is a **build**, not a typecheck: it writes class files into
+`build/development/class/`, through the same `Bootstrap` path `flix build` uses --
+reconciliation of the class directory and the build manifest included. A second
+compile path is how a build server's idea of a build drifts from the command's.
+
+It is bracketed by `build/taskStart` and `build/taskFinish` carrying a `compile-task`
+and a `compile-report`, because a compile takes seconds and one that reports nothing
+looks like a hang. Every start has exactly one finish, including when the body throws
+-- a missing finish leaves a progress indicator turning forever and reports no error
+anywhere, so `BspTasks.bracket` makes forgetting it impossible.
+
+The result's status is `OK` when the program compiled and `ERROR` when it did not, and
+diagnostics are published in both cases. That is the case a `Result` cannot express and
+`Bootstrap.CompileOutcome` exists for: a compile can succeed and still have something
+to say.
+
+Three properties are worth stating because each is a way to get diagnostics wrong:
+
+- **Positions are zero-based, and the conversion is borrowed rather than repeated.**
+  `lsp.Position` is one-*indexed* internally; only `toJSON` and `toLsp4j` subtract. Reading
+  `range.start.line` directly reports every diagnostic one line low, which this used to
+  do. It now converts through `toLsp4j`.
+- **`code` is the stable identifier**, `E2136`, not the category. The language server's
+  `code` field carries the *kind* -- "Resolution Error" -- which hundreds of distinct
+  errors share and nothing can key on. `CliContract` draws the same distinction.
+- **A fixed file is explicitly cleared.** A client shows what it was last told, so a
+  document that stops having diagnostics needs an empty report or the marker stays until
+  the editor restarts. `DiagnosticLedger` remembers what was reported. After a *failed*
+  compile nothing is cleared: a document the compiler did not reach has not been shown
+  to be clean, and clearing it would hide a real error.
+
+Source membership is reconciled before every compile. Modification-time polling answers
+which *known* files changed, and a file created since the last build is not among them --
+so without the rescan a long-lived session never compiles a new source and never stops
+compiling a deleted one.
+
+## 6. What a client will get wrong
 
 Stated plainly, because each is a real limitation rather than an oversight:
 
@@ -131,15 +169,15 @@ Stated plainly, because each is a real limitation rather than an oversight:
   `buildTarget/javacOptions`, which is not implemented — a worse trade.
 - **Some sources cannot be opened.** A diagnostic in the standard library or inside a
   `.fpkg` dependency is reported against a `flix-lib:` or `jar:` URI. That is
-  deliberate; see §7.
+  deliberate; see §9.
 
-## 6. What is not built, and why
+## 7. What is not built, and why
 
 - **`debugSessionStart`.** Flix has no debug adapter, so there is no address to return.
   `canDebug` is false and the request always fails. This one does not become available
   in a later phase; it is refused permanently, and asserted to be.
-- **Compiling, running, testing.** Later phases. Their capability flags are false
-  until then, so no client is told they exist.
+- **Running and testing.** Later phases. Their capability flags are false until then,
+  so no client is told they exist.
 - **Watcher-driven recompilation and `buildTarget/didChange`.** Needs debounce, and
   the file watcher is currently wired only to the REPL.
 - **A `src`/`test` target split.** §4. It needs a source-set concept in the compiler,
@@ -147,7 +185,7 @@ Stated plainly, because each is a real limitation rather than an oversight:
 - **TCP transport and concurrent clients.** stdio only. One `Flix` instance per
   session is the concurrency ceiling regardless.
 
-## 7. Standard output belongs to the protocol
+## 8. Standard output belongs to the protocol
 
 This is the invariant most easily broken by an unrelated edit, so it is stated as a
 rule: **never `println` on a code path a BSP request can reach.**
@@ -168,7 +206,7 @@ interesting failures happen while the project is loading.
 `C` of `Content-Length`, which is the only assertion that can catch a `println` added
 anywhere on the initialize path.
 
-## 8. URIs, and why nothing is dropped
+## 9. URIs, and why nothing is dropped
 
 `BspUri.ofSource` returns a `String`, not an `Option[String]`. There is no filter, so
 there is nothing to drop.
@@ -200,7 +238,7 @@ Two details are load-bearing and were each established by a failing test:
   the user opened are then two spellings of one directory, and a correct client is
   refused.
 
-## 9. Session model
+## 10. Session model
 
 One `Bootstrap` and one `Flix` per connection, held by `BspSession`, which also owns
 the lifecycle state machine: `Uninitialized`, `Initialized`, `ShutDown`. Requests
@@ -226,7 +264,7 @@ outlives a reload can be recognised as stale rather than published against the p
 that replaced it. Nothing produces such work yet; the counter is one field, and the
 alternative is to add it after the first stale-publish bug.
 
-## 10. Acceptance criteria
+## 11. Acceptance criteria
 
 Each names the test that pins it.
 
@@ -266,8 +304,21 @@ Each names the test that pins it.
     number rather than a name.
 12. **The assembled jar can render a protocol object with nothing else on its
     classpath.** `TestBspAssembly` — `jshell --class-path` naming only the jar.
+13. **A compile writes class files.** `TestBspCompile`, "a compile writes class files,
+    because a compile means class files" — answering from `check` alone would be cheaper
+    and would leave a client with nothing to run.
+14. **One task start, one task finish, with the right data kinds.** `TestBspCompile`,
+    "a clean project compiles, and says so in one task start and one finish".
+15. **An error carries its stable code at a zero-based range.** `TestBspCompile`, "an
+    error is reported at its own range, keyed by its stable code".
+16. **Fixing an error clears its marker.** `TestBspCompile`, "fixing an error clears the
+    marker it left" — the assertion a naive implementation fails.
+17. **A failed compile clears nothing it could not speak for.** `TestBspCompile`, "a
+    failed compile does not clear markers it could not speak for".
+18. **A created or deleted source is seen by the next compile.** `TestBspCompile`, "a
+    compile after a source is created sees it" and "…is deleted sees that too".
 
-## 11. Running the tests
+## 12. Running the tests
 
 ```
 ./mill flix.test        # the in-process tests, with the rest of the suite

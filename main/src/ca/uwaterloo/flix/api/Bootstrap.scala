@@ -562,6 +562,40 @@ object Bootstrap {
   private val AllBuilds: List[Build] = List(Build.Development, Build.Production)
 
   /**
+    * What a compilation produced, and what the compiler said while producing it.
+    *
+    * Kept apart from `Result` on purpose. A `Result` says a build either worked or failed, which is
+    * what a command needs to decide an exit code -- but a compile that *succeeded* can still carry
+    * messages, and a caller publishing diagnostics has to report those. Collapsing the two loses
+    * exactly the case a build server exists to handle.
+    *
+    * @param result   the compilation, if the program type checked.
+    * @param root     the typed program, when there is one -- available even on failure, which is
+    *                 what lets a caller name the sources a previous report covered.
+    * @param messages everything the compiler said. Empty exactly when nothing was wrong.
+    * @param error    a failure of the *build* rather than of the code: an output directory that
+    *                 could not be emptied, a class directory that could not be reconciled. Separate
+    *                 from `messages` because it has no source location and is not the user's fault.
+    */
+  case class CompileOutcome(result: Option[CompilationResult],
+                            root: Option[TypedAst.Root],
+                            messages: List[CompilationMessage],
+                            error: Option[BootstrapError] = None) {
+
+    /** Returns `true` if the program compiled and the build finished. */
+    def isSuccess: Boolean = result.isDefined && error.isEmpty
+
+    /** Collapses to the shape a command wants: the compilation, or what prevented it. */
+    def toResult: Result[CompilationResult, BootstrapError] = (result, error) match {
+      // A build failure outranks a successful compile: a class directory that was not reconciled is
+      // one whose contents nobody can describe, whatever the compiler managed.
+      case (_, Some(e)) => Err(e)
+      case (Some(compiled), None) => Ok(compiled)
+      case (None, None) => Err(BootstrapError.CompilationErrors(messages, root))
+    }
+  }
+
+  /**
     * Returns the directory `flix stubs` writes Java stubs to by default, relative to `p`.
     *
     * @see [[ca.uwaterloo.flix.tools.ExportStubs]]
@@ -912,7 +946,19 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
     * If compilation fails, nothing on disk is touched *except* by an explicit `clean`: the class
     * directory and the manifest still describe the last build that succeeded.
     */
-  private def compileProject(flix: Flix, clean: Boolean): Result[CompilationResult, BootstrapError] = {
+  private def compileProject(flix: Flix, clean: Boolean): Result[CompilationResult, BootstrapError] =
+    compileProjectOutcome(flix, clean).toResult
+
+  /**
+    * Compiles the project and reports what the compiler said, not only whether it worked.
+    *
+    * The same path as [[compileProject]] -- reconciliation and the manifest included -- because a
+    * second compile path is how a build server's idea of a build drifts from `flix build`'s.
+    *
+    * On failure the messages are returned and nothing on disk is touched, so a caller can publish
+    * diagnostics for a program that does not compile without the class directory being disturbed.
+    */
+  private[api] def compileProjectOutcome(flix: Flix, clean: Boolean): Bootstrap.CompileOutcome = {
     val build = flix.options.build
     val fingerprint = BuildManifest.fingerprintOf(flix.options, dependencyPaths)
     val recorded = Steps.readBuildManifest(build)
@@ -922,18 +968,40 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
       Steps.discardIncrementalState(flix)
     }
 
+    // Only `--clean` empties the directory, and only before the compile. See the note above.
     val emptied = if (clean) Steps.emptyOutputDirectory(build) else Ok(())
+    emptied match {
+      case Err(e) => return Bootstrap.CompileOutcome(None, None, Nil, Some(e))
+      case Ok(()) => ()
+    }
 
-    emptied.flatMap { _ =>
-      Steps.updateStaleSources(flix)
+    // Which files the project *has*, before asking which of them changed.
+    //
+    // `updateStaleSources` answers the second question about the paths it already knows, and a file
+    // created since the last build is not among them -- so without this a long-lived session never
+    // compiles a new source, and never stops compiling a deleted one. The scan happens once per
+    // build and costs a directory walk against a whole-program compile.
+    Steps.rescanSources()
+    Steps.updateStaleSources(flix)
 
-      for {
-        result <- Steps.compile(flix)
-        _ <- Steps.reconcileClassDirectory(build, result.products)
-        _ <- Steps.writeBuildManifest(build, fingerprint, result.products)
-      } yield {
-        result
-      }
+    val outcome = Steps.compileOutcome(flix)
+    outcome.result match {
+      case None =>
+        // Nothing to reconcile against and no manifest to write, so the previous build's output and
+        // its manifest stay as they are, describing the last build that succeeded.
+        outcome
+
+      case Some(result) =>
+        val recorded = for {
+          _ <- Steps.reconcileClassDirectory(build, result.products)
+          _ <- Steps.writeBuildManifest(build, fingerprint, result.products)
+        } yield ()
+        recorded match {
+          case Ok(()) => outcome
+          // The program compiled but the build did not finish. Reported as a failure, because a
+          // class directory that was not reconciled is one whose contents nobody can describe.
+          case Err(e) => outcome.copy(error = Some(e))
+        }
     }
   }
 
@@ -1623,6 +1691,23 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
     }
 
     /**
+      * Re-reads which `.flix` files the project has.
+      *
+      * Separate from [[updateStaleSources]] because they answer different questions. That one asks
+      * which of the *known* sources changed; this one asks which sources there are. A file created
+      * since the last scan is in neither list until this runs, and a file deleted since is still in
+      * both.
+      *
+      * Only the sources. Dependencies change when the manifest does, which is a reload rather than a
+      * build, and rescanning `lib/` here would make every build pay for a directory walk it cannot
+      * act on.
+      */
+    def rescanSources(): Unit = {
+      addLocalFlixFiles()
+      ()
+    }
+
+    /**
       * Returns and caches all `.flix` files from `src/` and `test/`.
       */
     def addLocalFlixFiles(): List[Path] = {
@@ -1717,12 +1802,24 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
       * It is up to the caller to set the appropriate options on `flix`.
       * It is often the case that `outputJvm` and `loadClassFiles` must be toggled on or off.
       */
-    def compile(flix: Flix): Result[CompilationResult, BootstrapError] = {
+    def compile(flix: Flix): Result[CompilationResult, BootstrapError] =
+      compileOutcome(flix).toResult
+
+    /**
+      * Compiles, and reports what the compiler said as well as whether it succeeded.
+      *
+      * `compile` collapses that into a `Result`, which is the right shape for a command that either
+      * builds or prints errors. It is the wrong shape for a caller that has to publish diagnostics:
+      * a compile can succeed *and* have messages, and there is nowhere in a `Result` to put them.
+      * The typed root goes with them, because it is what names the sources a previous compile
+      * reported on -- which is what a caller needs to clear a marker that no longer applies.
+      */
+    def compileOutcome(flix: Flix): Bootstrap.CompileOutcome = {
       val (optRoot, errors) = flix.check()
       if (errors.isEmpty) {
-        Ok(flix.codeGen(optRoot.get))
+        Bootstrap.CompileOutcome(Some(flix.codeGen(optRoot.get)), optRoot, errors)
       } else {
-        Err(BootstrapError.CompilationErrors(errors, optRoot))
+        Bootstrap.CompileOutcome(None, optRoot, errors)
       }
     }
 
@@ -1895,8 +1992,12 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
           // are ordinary rather than exotic. Every source is therefore handed over again, which
           // marks it changed; the watcher path above is the one that may be selective, because
           // there an edit is an event rather than an inference.
-          invalidateSourceTimestamps()
-          updateStaleSourcesByTimestamp(flix)
+          //
+          // Re-offering is *not* the same as forgetting. `timestamps` doubles as the record of which
+          // sources have been loaded, and that record is what identifies a source that has since been
+          // deleted. Clearing it first leaves the deleted file in the compiler's inputs, where the
+          // reader then fails on a file that is not there.
+          updateStaleSourcesByTimestamp(flix, reofferAll = true)
       }
     }
 
@@ -2001,15 +2102,21 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
 
     /**
       * Timestamp-based stale source detection (used when no file watcher is active).
+      *
+      * @param reofferAll hand every source to the compiler again rather than only the ones whose
+      *                   modification time moved. What the caller wants when it cannot trust an
+      *                   mtime to prove a file is unchanged - which, without a watcher, it cannot.
+      *                   Note that this is separate from *forgetting* what was loaded: the record of
+      *                   loaded sources is what identifies one that has since been deleted.
       */
-    private def updateStaleSourcesByTimestamp(flix: Flix): Unit = {
+    private def updateStaleSourcesByTimestamp(flix: Flix, reofferAll: Boolean = false): Unit = {
       val previousSources = timestamps.keySet
 
       // A path that no longer exists reads as stale - it has no timestamp to match - but it is
       // gone rather than changed, and every `add` below rejects a file that is not there. It is
       // removed further down instead. The path stays in the cached lists so that a file which
       // comes back is picked up again.
-      def isStale(path: Path): Boolean = Files.exists(path) && hasChanged(path)
+      def isStale(path: Path): Boolean = Files.exists(path) && (reofferAll || hasChanged(path))
 
       for (path <- sourcePaths if isStale(path)) {
         flix.addFile(path)(SecurityContext.Unrestricted)
@@ -2054,19 +2161,6 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
         }
       }
       Ok(())
-    }
-
-    /**
-      * Forgets which sources have already been compiled, so that the next call to
-      * [[updateStaleSources]] hands every source to the compiler again.
-      *
-      * Required whenever the class directory is wiped: the timestamps are recorded per
-      * `Bootstrap`, but the class files belong to whichever `Flix` instance produced
-      * them. Without this, a second build on the same `Bootstrap` would consider every
-      * source unchanged, add nothing, and emit a jar missing almost all of its classes.
-      */
-    def invalidateSourceTimestamps(): Unit = {
-      timestamps = Map.empty
     }
 
     /**
@@ -2189,8 +2283,7 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
     }
 
     /**
-      * Discards the state an incremental build would have reused: the compiler's caches, and the
-      * record of which sources it has already been given.
+      * Discards the state an incremental build would have reused: the compiler's cached ASTs.
       *
       * Nothing on disk. A full build does not need to delete the previous build's class files
       * first - [[reconcileClassDirectory]] reaches the same directory after a successful compile -
@@ -2198,10 +2291,18 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
       * meant to replace it fails. The same applies to the manifest: leaving the old one in place
       * costs one more full build if this one fails, where deleting it early costs the products it
       * describes.
+      *
+      * The record of which sources have been loaded is deliberately *kept*. It looks like state an
+      * incremental build reuses, and it is not: it is the only account of what the compiler was
+      * given, so it is what identifies a source that has since been deleted. Clearing it left the
+      * deleted file in the compiler's inputs and the reader failed on a file that was not there --
+      * on every build after a failed one, since a failed build writes no manifest and so every
+      * later build arrives here. Re-offering every source, which
+      * [[updateStaleSourcesByTimestamp]] does without a watcher, already achieves what clearing was
+      * for.
       */
     def discardIncrementalState(flix: Flix): Unit = {
       flix.clearCaches()
-      invalidateSourceTimestamps()
     }
 
     /**

@@ -231,6 +231,33 @@ deliberate — a crash report that vanishes is worse than one that arrives somew
 unexpected. `TestBspProcess` asserts the first byte of stdout is the `C` of
 `Content-Length`.
 
+**`buildTarget/compile` is a real build, through `Bootstrap`'s own path.** It writes
+class files and reuses the reconciliation and manifest logic, because a second compile
+path is how a build server's idea of a build drifts from `flix build`'s.
+`Bootstrap.CompileOutcome` is what makes that possible: a `Result` says a build worked
+or failed, and a compile that *succeeded* can still carry messages a client must be
+shown. Three ways to get diagnostics wrong, each now pinned by a test:
+
+- **`lsp.Position` is one-indexed**; only `toJSON`/`toLsp4j` subtract. Reading
+  `range.start.line` directly puts every diagnostic one line low. `BspDiagnostics`
+  converts through `toLsp4j` rather than repeating the arithmetic.
+- **`code` must be the stable `E2136`**, not the kind. The language server's `code`
+  field is the category, which hundreds of errors share and nothing can key on.
+- **A fixed file needs an explicit empty report**, or the marker stays until the editor
+  restarts. `DiagnosticLedger` remembers what was published — and after a *failed*
+  compile clears nothing, because a document the compiler never reached has not been
+  shown to be clean.
+
+**Source membership is reconciled before every compile** (`Steps.rescanSources`).
+Modification-time polling answers which *known* files changed, and a created file is
+not among them. Two related traps, both found by tests rather than by reading:
+re-offering every source is not the same as *forgetting* what was loaded — the
+timestamp map doubles as the record of what the compiler was given, which is what
+identifies a deleted file, and clearing it left the deleted file in the compiler's
+inputs until the reader failed on it. And a failed build writes no manifest, so every
+later build takes the stale-inputs path, which is how that bug reached every build
+after the first failure.
+
 **One target per project, and it is forced rather than chosen.** `src/`, `test/` and
 the project root compile together as one whole program and `@Test` defs are entry
 points, so a `src`/`test` split would publish test diagnostics against the `src`
