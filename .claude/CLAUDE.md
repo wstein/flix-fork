@@ -27,17 +27,20 @@ What is computable and what is not is the thing to understand before changing
   transitive dependency — therefore reads no API at all.
 - The **package** is `<repo>.fpkg` *for releases made by a current compiler*.
   It did not used to be: `release` uploaded whatever `getPkgFile` named the file
-  after, which is the directory it was built in. So `flix-test-pkg-eff-upgrade`
-  published `test-pkg-eff-upgrade.fpkg`, and neither the repository name nor the
-  manifest's `name` predicts it in general — `flix-test-pkg-trust-transitive-plain`
-  declares `name = "test-pkg-trust-transitive-java"` and publishes
-  `test-pkg-trust-transitive-plain.fpkg`. `AssetSource.NamedOrLookedUp` therefore
-  tries the computed address first and reads a listing only on a 404, so a
-  current package costs no request and a legacy one costs one.
+  after, which is the directory it was built in. `AssetSource.NamedOrLookedUp`
+  therefore tries two computed names before spending a request — the repository
+  name, which is not a guess for anything published from now on, then the
+  manifest's `name`, which is what the old `release` effectively used. The
+  measured hit rates are tabulated on that type; read them before touching the
+  order.
 
-Do not "simplify" that fallback away, and do not replace it with a second guess:
-a guessed name that is wrong produces a 404 that cannot be told apart from a
-release that does not exist.
+Neither name is guaranteed, so the listing has to stay:
+`flix-test-pkg-trust-transitive-plain` declares
+`name = "test-pkg-trust-transitive-java"` and publishes
+`test-pkg-trust-transitive-plain.fpkg`. Do not "simplify" the fallback away.
+Guesses are cheap only because they are unmetered — a candidate costs a plain
+404, the listing costs rate-limited quota — so adding a *third* guess needs
+evidence that it hits, not a symmetry argument.
 
 `getReleases` is the only function that spends REST quota. Two paths reach it:
 `outdated`, which genuinely needs metadata, and the legacy half of the package
