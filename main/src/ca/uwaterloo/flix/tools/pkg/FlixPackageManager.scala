@@ -55,12 +55,18 @@ object FlixPackageManager {
     case class Named(assetName: String) extends AssetSource
 
     /**
-      * The asset is published under a computable name by a current compiler, but releases made
-      * before that was true named it after the directory they were built in. The computed address
-      * is tried first and the listing is only read when it is not there, so a package published by
-      * a current `flix release` costs no REST request and a legacy one costs one.
+      * The asset's name is one of `candidates`, or, if it is none of them, whatever the release
+      * listing says. Each candidate costs an unmetered request; the listing costs a rate-limited
+      * one, which is the whole reason for guessing at all.
+      *
+      * The candidates are ordered by what they are worth rather than by how often they hit. The
+      * repository name comes first because `release` publishes under it, so it is not a guess for
+      * anything published from now on. The package's own declared name comes second because it is
+      * what the old `release` effectively used -- it named the file after the directory, and a
+      * project's directory is usually what its manifest calls it. Neither is guaranteed: a manifest
+      * can name a package something else entirely, which is why the listing remains.
       */
-    case class NamedOrLookedUp(assetName: String, apiKey: Option[String]) extends AssetSource
+    case class NamedOrLookedUp(candidates: List[String], apiKey: Option[String]) extends AssetSource
   }
 
   /**
@@ -79,14 +85,31 @@ object FlixPackageManager {
     source match {
       case AssetSource.Named(assetName) =>
         GitHub.downloadReleaseAsset(project, version, assetName).map(OpenedAsset(_, Some(assetName)))
-      case AssetSource.NamedOrLookedUp(assetName, apiKey) =>
-        GitHub.downloadReleaseAsset(project, version, assetName) match {
-          case Ok(download) => Ok(OpenedAsset(download, Some(assetName)))
-          case Err(_: PackageError.ReleaseAssetNotFound) =>
+      case AssetSource.NamedOrLookedUp(candidates, apiKey) =>
+        tryCandidates(project, version, candidates.distinct) match {
+          case Some(opened) => opened
+          case None =>
             GitHub.findReleaseAsset(project, version, extension, apiKey)
               .flatMap(asset => GitHub.download(asset.url))
               .map(OpenedAsset(_, None))
-          case Err(e) => Err(e)
+        }
+    }
+
+  /**
+    * Opens the first candidate the release actually publishes, or nothing if it publishes none.
+    *
+    * A candidate that is simply absent is not a failure -- that is what the next candidate, and
+    * ultimately the listing, is for. Any other failure is, and stops the search: trying the rest
+    * after the network has gone would turn one clear error into a series of misleading ones.
+    */
+  private def tryCandidates(project: GitHub.Project, version: SemVer, candidates: List[String]): Option[Result[OpenedAsset, PackageError]] =
+    candidates match {
+      case Nil => None
+      case assetName :: rest =>
+        GitHub.downloadReleaseAsset(project, version, assetName) match {
+          case Ok(download) => Some(Ok(OpenedAsset(download, Some(assetName))))
+          case Err(_: PackageError.ReleaseAssetNotFound) => tryCandidates(project, version, rest)
+          case Err(e) => Some(Err(e))
         }
     }
 
@@ -189,11 +212,16 @@ object FlixPackageManager {
   def installAll(resolution: SecureResolution, projectRoot: Path, apiKey: Option[String])(implicit formatter: Formatter, out: PrintStream): Result[List[(Path, SecurityContext)], PackageError] = {
     out.println("Downloading Flix dependencies...")
 
-    val allFlixDeps = ListMap.from(resolution.manifestToFlixDeps.map { case (manifest, flixDep) => resolution.security(manifest) -> flixDep })
+    // The manifest a dependency resolved to is carried along, not just its security level: the name
+    // it declares is the second guess at what the release called the package file.
+    val allFlixDeps = ListMap.from(resolution.manifestToFlixDeps.map {
+      case (manifest, flixDep) => (resolution.security(manifest), manifest.name) -> flixDep
+    })
 
-    val flixPaths = allFlixDeps.map { case (sctx, dep) =>
+    val flixPaths = allFlixDeps.map { case ((sctx, packageName), dep) =>
       val depName: String = s"${dep.username}/${dep.projectName}"
-      install(depName, dep.version, "fpkg", AssetSource.NamedOrLookedUp(s"${dep.projectName}.fpkg", apiKey), projectRoot) match {
+      val candidates = List(s"${dep.projectName}.fpkg", s"$packageName.fpkg")
+      install(depName, dep.version, "fpkg", AssetSource.NamedOrLookedUp(candidates, apiKey), projectRoot) match {
         case Ok(p) => (p, sctx)
         case Err(e) =>
           out.println(s"ERROR: Installation of `$depName' failed.")
