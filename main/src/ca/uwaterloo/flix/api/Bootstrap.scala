@@ -909,7 +909,14 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
 
     // Publish to GitHub
     out.println("Publishing a new release...")
-    val artifacts = List(Bootstrap.getPkgFile(projectPath), Bootstrap.getManifestFile(projectPath))
+    // Both assets are published under names a consumer can compute, so that installing a dependency
+    // needs no REST request to discover what the release called its files. The package file is
+    // named after the repository rather than after the directory it was built in, which is what
+    // `getPkgFile` uses and what made the old names unpredictable.
+    val artifacts = List(
+      (Bootstrap.getPkgFile(projectPath), s"${githubRepo.repo}.$EXT_FPKG"),
+      (Bootstrap.getManifestFile(projectPath), FLIX_TOML)
+    )
     val publishResult = GitHub.publishRelease(githubRepo, manifest.version, artifacts, githubToken)
     publishResult match {
       case Ok(()) => // Continue
@@ -1317,7 +1324,7 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
       * Requires network access.
       */
     def resolveFlixDependencies(manifest: Manifest)(implicit formatter: Formatter, out: PrintStream): Result[FlixPackageManager.SecureResolution, BootstrapError] = {
-      FlixPackageManager.findTransitiveDependencies(manifest, projectPath, apiKey).map(FlixPackageManager.resolveSecurityLevels) match {
+      FlixPackageManager.findTransitiveDependencies(manifest, projectPath).map(FlixPackageManager.resolveSecurityLevels) match {
         case Err(e) => Err(BootstrapError.FlixPackageError(e))
         case Ok(securityMap) =>
           val securityResolutionErrors = FlixPackageManager.checkSecurity(securityMap)

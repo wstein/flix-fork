@@ -8,6 +8,45 @@ The project uses [Mill](https://mill-build.org/) as its build tool.
 - `./mill flix.run <file.flix>` — Run a Flix source file through the compiler (should take at most 3 minutes)
 - `./mill flix.assembly` — Build a fat JAR at `out/flix/assembly.dest/out.jar`
 
+## Dependency Downloads
+
+Installing a dependency fetches two files from a GitHub release, and **the
+address of each is computed rather than looked up**. Asking the REST API for a
+release listing in order to rediscover a URL cost one request per file, and
+anonymous REST traffic is capped at 60 requests an hour per address — which is
+why bootstrapping a project with a handful of dependencies used to fail, and why
+`./mill flix.testPackageManager` used to report a double-digit number of
+failures whose count changed between runs.
+
+What is computable and what is not is the thing to understand before changing
+`FlixPackageManager.install`:
+
+- The **manifest** is always `flix.toml`. `Bootstrap.release` uploads the
+  project's manifest unchanged, so this holds for every package ever published.
+  Resolving a dependency graph — the recursive phase, one manifest per
+  transitive dependency — therefore reads no API at all.
+- The **package** is `<repo>.fpkg` *for releases made by a current compiler*.
+  It did not used to be: `release` uploaded whatever `getPkgFile` named the file
+  after, which is the directory it was built in. So `flix-test-pkg-eff-upgrade`
+  published `test-pkg-eff-upgrade.fpkg`, and neither the repository name nor the
+  manifest's `name` predicts it in general — `flix-test-pkg-trust-transitive-plain`
+  declares `name = "test-pkg-trust-transitive-java"` and publishes
+  `test-pkg-trust-transitive-plain.fpkg`. `AssetSource.NamedOrLookedUp` therefore
+  tries the computed address first and reads a listing only on a 404, so a
+  current package costs no request and a legacy one costs one.
+
+Do not "simplify" that fallback away, and do not replace it with a second guess:
+a guessed name that is wrong produces a 404 that cannot be told apart from a
+release that does not exist.
+
+`getReleases` is the only function that spends REST quota. Two paths reach it:
+`outdated`, which genuinely needs metadata, and the legacy half of the package
+lookup above. `GitHub.download` handles the rest, and keeps the failures apart —
+a refusal (usually a rate limit, with `Retry-After` when given), any other
+status including a redirect that could not be followed, and never reaching a
+server. The shared `HttpClient` follows redirects because a release download
+address redirects to storage; Java's default is to follow nothing.
+
 ## Running Tests
 
 **Step 1:** First, verify the standard library compiles by running an empty file:

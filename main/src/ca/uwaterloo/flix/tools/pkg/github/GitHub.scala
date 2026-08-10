@@ -55,6 +55,12 @@ object GitHub {
 
   /**
     * Lists the project's releases.
+    *
+    * Reading a listing is what consumes the REST quota -- 60 requests an hour for an anonymous
+    * caller -- so the paths that reach it are worth knowing. Two do: `outdated`, which cannot
+    * answer "is there a newer version" without metadata, and [[findReleaseAsset]], which needs the
+    * name of an asset only the publisher chose. Resolving a dependency graph does not: manifests
+    * come from [[downloadReleaseAsset]], which computes their address.
     */
   def getReleases(project: Project, apiKey: Option[String]): Result[List[Release], PackageError] = {
     val url = releasesUrl(project)
@@ -79,11 +85,11 @@ object GitHub {
   /**
     * Publish a new release the given project.
     */
-  def publishRelease(project: Project, version: SemVer, artifacts: Iterable[Path], apiKey: String): Result[Unit, ReleaseError] = {
+  def publishRelease(project: Project, version: SemVer, artifacts: Iterable[(Path, String)], apiKey: String): Result[Unit, ReleaseError] = {
     for (
       _ <- verifyRelease(project, version, apiKey);
       id <- createDraftRelease(project, version, apiKey);
-      _ <- Result.traverse(artifacts)(p => uploadAsset(p, project, id, apiKey));
+      _ <- Result.traverse(artifacts) { case (p, name) => uploadAsset(p, name, project, id, apiKey) };
       _ <- markReleaseReady(project, version, id, apiKey)
     ) yield Ok(())
   }
@@ -165,11 +171,10 @@ object GitHub {
   }
 
   /**
-    * Uploads a single asset.
+    * Uploads a single asset under the name `assetName`, which is not necessarily the name it has on
+    * disk: a release publishes its files under names a consumer can predict.
     */
-  private def uploadAsset(assetPath: Path, project: Project, releaseId: String, apiKey: String): Result[Unit, ReleaseError] = {
-    val assetName = assetPath.getFileName.toString
-
+  private def uploadAsset(assetPath: Path, assetName: String, project: Project, releaseId: String, apiKey: String): Result[Unit, ReleaseError] = {
     val url = releaseAssetUploadUrl(project, releaseId, assetName)
     val req = HttpRequest.newBuilder(url.toURI)
       .header("Authorization", "Bearer " + apiKey)
@@ -235,23 +240,102 @@ object GitHub {
   }
 
   /**
-    * Gets the project release with the relevant semantic version.
+    * Opens a stream over the asset `assetName` of the given project's release `version`, without
+    * consulting the REST API.
+    *
+    * The caller is responsible for closing the stream.
+    *
+    * A release asset has a permanent address built from the owner, the repository, the tag and the
+    * asset's own name, so an asset whose name is known needs no lookup. Asking the REST API to hand
+    * back a URL that could be computed cost one rate-limited request per dependency, and anonymous
+    * REST traffic is capped at 60 requests an hour per address -- which is what made bootstrapping
+    * a project with a handful of dependencies fail.
+    *
+    * Only the manifest has a knowable name (see `FlixPackageManager.ManifestAssetName`). The
+    * package's name is chosen by whoever published it, so [[findReleaseAsset]] still has to look
+    * that one up.
     */
-  def getSpecificRelease(project: Project, version: SemVer, apiKey: Option[String]): Result[Release, PackageError] = {
-    getReleases(project, apiKey).flatMap {
-      releases =>
-        releases.find(r => r.version == version) match {
-          case None => Err(PackageError.VersionDoesNotExist(version, project))
-          case Some(release) => Ok(release)
+  def downloadReleaseAsset(project: Project, version: SemVer, assetName: String): Result[InputStream, PackageError] = {
+    val url = releaseAssetUrl(project, version, assetName)
+    download(url).mapErr {
+      // At this address a 404 means the release or the asset is absent, which is worth saying in
+      // those terms rather than as a status code.
+      case PackageError.DownloadFailed(_, 404) => PackageError.ReleaseAssetNotFound(project, version, assetName, url)
+      case e => e
+    }
+  }
+
+  /**
+    * Opens a stream over `url`, following redirects.
+    *
+    * The caller is responsible for closing the stream. The ways a download can fail are kept apart:
+    * a refusal (which for an anonymous request usually means a rate limit), any other unexpected
+    * status including a redirect that could not be followed, and never reaching a server at all.
+    */
+  def download(url: URL): Result[InputStream, PackageError] = {
+    val request = HttpRequest.newBuilder(url.toURI).GET().build()
+
+    val response = try {
+      Client.sendStreamingRequest(request)
+    } catch {
+      case ex: IOException => return Err(PackageError.DownloadUnreachable(url, ex.getMessage))
+      case ex: InterruptedException => return Err(PackageError.DownloadUnreachable(url, ex.getMessage))
+    }
+
+    response.statusCode() match {
+      case status if status >= 200 && status < 300 =>
+        Ok(response.body())
+      case status =>
+        // Every non-success response still carries a body, and leaving it open holds the connection.
+        response.body().close()
+        status match {
+          case 403 | 429 => Err(PackageError.DownloadRefused(url, status, retryAfter(response)))
+          case _ => Err(PackageError.DownloadFailed(url, status))
         }
     }
   }
 
   /**
-    * Downloads the given asset.
+    * Returns the `Retry-After` header of `response`, if it has one.
     */
-  def downloadAsset(asset: Asset): InputStream =
-    asset.url.openStream()
+  private def retryAfter(response: HttpResponse[InputStream]): Option[String] = {
+    val header = response.headers().firstValue("Retry-After")
+    if (header.isPresent) Some(header.get()) else None
+  }
+
+  /**
+    * Finds the single asset with the given extension in the project's release `version`.
+    *
+    * This reads the REST API, and does so because it has to: a release publishes its package under
+    * a name the publisher chose, and nothing the consumer holds predicts it. `flix-test-pkg-eff-upgrade`
+    * publishes `test-pkg-eff-upgrade.fpkg`, so the repository name does not; `flix-test-pkg-trust-transitive-plain`
+    * declares `name = "test-pkg-trust-transitive-java"` in its manifest and publishes
+    * `test-pkg-trust-transitive-plain.fpkg`, so the manifest name does not either. Guessing costs a
+    * 404 that cannot be told apart from a release that truly does not exist.
+    */
+  def findReleaseAsset(project: Project, version: SemVer, extension: String, apiKey: Option[String]): Result[Asset, PackageError] = {
+    getReleases(project, apiKey).flatMap { releases =>
+      releases.find(r => r.version == version) match {
+        case None => Err(PackageError.VersionDoesNotExist(version, project))
+        case Some(release) =>
+          release.assets.filter(_.name.endsWith(s".$extension")) match {
+            case Nil => Err(PackageError.NoSuchFile(project.toString, extension))
+            case asset :: Nil => Ok(asset)
+            case _ => Err(PackageError.TooManyFiles(project.toString, extension))
+          }
+      }
+    }
+  }
+
+  /**
+    * Returns the address of a release asset.
+    *
+    * This is the permanent form of a release download link. It is not the REST API and does not
+    * consume its quota.
+    */
+  private def releaseAssetUrl(project: Project, version: SemVer, assetName: String): URL = {
+    new URI(s"https://github.com/${project.owner}/${project.repo}/releases/download/v$version/$assetName").toURL
+  }
 
   /**
     * Returns the URL that returns data related to the project's releases.
@@ -287,8 +371,7 @@ object GitHub {
   private def parseRelease(json: JValue): Release = {
     val version = parseSemVer((json \ "tag_name").values.toString)
     val assetJsons = (json \ "assets").asInstanceOf[JArray]
-    val assets = assetJsons.arr.map(parseAsset)
-    Release(version, assets)
+    Release(version, assetJsons.arr.map(parseAsset))
   }
 
   /**
@@ -328,7 +411,10 @@ object GitHub {
       * This field should only be accessed in a thread-safe manner, e.g.,
       * such as using `this.synchronized` blocks or some other locking mechanism.
       */
-    private val HTTP_CLIENT: HttpClient = HttpClient.newHttpClient()
+    private val HTTP_CLIENT: HttpClient =
+      // A release download address redirects to the storage the asset actually lives on, and the
+      // default policy is to follow nothing at all, which would turn every download into a 302.
+      HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NORMAL).build()
 
     /**
       * Sends the HTTP request, `request`, and returns the response.
@@ -339,6 +425,18 @@ object GitHub {
       */
     def sendRequest(request: HttpRequest): HttpResponse[String] = this.synchronized {
       HTTP_CLIENT.send(request, HttpResponse.BodyHandlers.ofString())
+    }
+
+    /**
+      * Sends the HTTP request, `request`, and returns a response whose body is a stream.
+      *
+      * Returns once the response headers have arrived; the body is read afterwards, and the caller
+      * closes it. Blocking and thread-safe.
+      *
+      * May throw [[IOException]].
+      */
+    def sendStreamingRequest(request: HttpRequest): HttpResponse[InputStream] = this.synchronized {
+      HTTP_CLIENT.send(request, HttpResponse.BodyHandlers.ofInputStream())
     }
 
   }
