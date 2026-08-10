@@ -367,7 +367,7 @@ object Bootstrap {
       |- `flix check` — type-check without generating code; the fast feedback loop
       |- `flix test` — run every `@Test` function under `test/`
       |- `flix run` — run `main`
-      |- `flix build` — compile to `build/class`
+      |- `flix build` — compile the project; `--clean` rebuilds from scratch
       |- `flix doc` — write API documentation for the standard library and this project to `build/doc/`
       |
       |## Layout
@@ -517,16 +517,57 @@ object Bootstrap {
   private val buildDirectoryRaw: String = "build/"
 
   /**
-    * Returns the directory of the output .class-files relative to the given path `p`.
+    * Returns the output directory of the build mode `build`, relative to the given path `p`.
+    *
+    * Each mode owns a directory - `build/development/` and `build/production/` - and its class files, its
+    * build manifest and its product set all live in that one. They cannot be shared: the mode
+    * reaches the typer, so the two modes do not compile the same program, and a single directory
+    * would have each build invalidate the other's and reset it.
+    *
+    * This is what `Options.outputPath` is set to, so it is also where the class files land:
+    * `JvmWriter` resolves `class/` against that path, which is what [[getClassDirectory]]
+    * returns.
     */
-  private def getClassDirectory(p: Path): Path = getBuildDirectory(p).resolve("./class/").normalize()
+  private def getOutputDirectory(p: Path, build: Build): Path =
+    getBuildDirectory(p).resolve(s"./${build.directoryName}/").normalize()
 
   /**
-    * Returns the path to the build manifest relative to the given path `p`.
+    * Returns the directory of the output .class-files of the build mode `build`, relative to the
+    * given path `p`.
+    */
+  private def getClassDirectory(p: Path, build: Build): Path =
+    getOutputDirectory(p, build).resolve("./class/").normalize()
+
+  /**
+    * Returns the path to the build manifest of the build mode `build`, relative to the given
+    * path `p`.
     *
     * @see [[BuildManifest]]
     */
-  private def getBuildManifestFile(p: Path): Path = BuildManifest.fileIn(getBuildDirectory(p))
+  private def getBuildManifestFile(p: Path, build: Build): Path =
+    BuildManifest.fileIn(getOutputDirectory(p, build))
+
+  /** Every build mode, so that `clean` can visit the output of each. */
+  private val AllBuilds: List[Build] = List(Build.Development, Build.Production)
+
+  /**
+    * Returns the directory `flix stubs` writes Java stubs to by default, relative to `p`.
+    *
+    * @see [[ca.uwaterloo.flix.tools.ExportStubs]]
+    */
+  private def getStubsDirectory(p: Path): Path = getBuildDirectory(p).resolve("./stubs/").normalize()
+
+  /**
+    * The coverage reports, relative to the build directory.
+    *
+    * These are the default names only. `--coverage-output` can put a report anywhere, and one
+    * written outside the build directory is not `clean`'s business - but one left at its default
+    * name is, and before it was recognised here `flix test --coverage` made a project that `flix
+    * clean` refused to clean at all.
+    *
+    * @see [[ca.uwaterloo.flix.util.Options.coverageOutput]]
+    */
+  private val CoverageReports: List[String] = List("coverage.json", "coverage.info")
 
   /**
     * Returns the directory of the generated documentation files relative to the given path `p`.
@@ -759,7 +800,7 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
     * @see [[compileProject]]
     */
   def build(flix: Flix, build: Build = Build.Development, clean: Boolean = false): Result[CompilationResult, BootstrapError] = {
-    val newOptions = flix.options.copy(build = build, outputJvm = true, outputPath = Bootstrap.getBuildDirectory(projectPath))
+    val newOptions = flix.options.copy(build = build, outputJvm = true, outputPath = Bootstrap.getOutputDirectory(projectPath, build))
     flix.setOptions(newOptions)
     compileProject(flix, clean)
   }
@@ -771,6 +812,9 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
     * directory happens to contain - so it is a function of the current sources alone whether
     * or not the build directory was wiped first.
     *
+    * Builds in production mode, so its output is `build/production/` and it neither reads nor
+    * invalidates what `flix build` left in `build/development/`.
+    *
     * @param clean forces a full build. This is what a reproducible release wants: it makes the
     *              jar a function of the sources and nothing else, including the compiler's own
     *              caches.
@@ -781,8 +825,9 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
       _ <- Steps.configureJarOutput(flix)
       result <- compileProject(flix, clean)
       _ <- Steps.validateJarFile(jarFile)
+      _ <- Steps.validateProducts(Build.Production, result.products)
       contents = (zip: ZipOutputStream) => {
-        Steps.addProductsToZip(result.products, zip)
+        Steps.addProductsToZip(Build.Production, result.products, zip)
         Steps.addResourcesFromDirToZip(Bootstrap.getResourcesDirectory(projectPath), zip)
       }
       _ <- Steps.createJar(jarFile, contents)
@@ -804,10 +849,11 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
       _ <- Steps.configureJarOutput(flix)
       result <- compileProject(flix, clean)
       _ <- Steps.validateJarFile(jarFile)
+      _ <- Steps.validateProducts(Build.Production, result.products)
       _ <- Steps.validateDirectory(libDir)
       _ <- Steps.validateJarFilesIn(libDir)
       contents = (zip: ZipOutputStream) => {
-        Steps.addProductsToZip(result.products, zip)
+        Steps.addProductsToZip(Build.Production, result.products, zip)
         Steps.addResourcesFromDirToZip(Bootstrap.getResourcesDirectory(projectPath), zip)
         Steps.addJarsFromDirToZip(libDir, zip, extraJars = mavenPackagePaths ::: jarPackagePaths)
       }
@@ -831,22 +877,36 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
     *
     * A full build is forced when `clean` is set, and also when the recorded fingerprint of the
     * non-source inputs - compiler version, back-end options, dependencies - does not match this
-    * build's, since nothing an earlier build left behind was produced under these settings.
+    * build's, since nothing an earlier build left behind was produced under these settings. What
+    * a full build discards is the compiler's *in-memory* state; it does not delete the previous
+    * build's class files first, because reconciling after a successful compile reaches the same
+    * directory anyway. Deleting them up front would destroy a working build's output whenever the
+    * compile meant to replace it fails - and a failing compile is ordinary, while the inputs that
+    * force a full build (a compiler upgrade, a new `--coverage` flag, an updated dependency) are
+    * not rare enough for that to be an edge case.
+    *
+    * Everything here is scoped to the output directory of the mode `flix` is configured for, so
+    * a development build and a production build keep separate products and separate manifests
+    * and neither resets the other.
     *
     * If compilation fails nothing on disk is touched: the class directory and the manifest still
     * describe the last build that succeeded.
     */
   private def compileProject(flix: Flix, clean: Boolean): Result[CompilationResult, BootstrapError] = {
+    val build = flix.options.build
     val fingerprint = BuildManifest.fingerprintOf(flix.options, dependencyPaths)
-    val recorded = Steps.readBuildManifest()
+    val recorded = Steps.readBuildManifest(build)
     val fullBuild = clean || !recorded.exists(_.fingerprint == fingerprint)
 
+    if (fullBuild) {
+      Steps.discardIncrementalState(flix)
+    }
+    Steps.updateStaleSources(flix)
+
     for {
-      _ <- if (fullBuild) Steps.resetBuild(flix) else Ok(())
-      _ = Steps.updateStaleSources(flix)
       result <- Steps.compile(flix)
-      _ <- Steps.reconcileClassDirectory(result.products)
-      _ <- Steps.writeBuildManifest(fingerprint, result.products)
+      _ <- Steps.reconcileClassDirectory(build, result.products)
+      _ <- Steps.writeBuildManifest(build, fingerprint, result.products)
     } yield {
       result
     }
@@ -1004,7 +1064,12 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
     *  - the current directory is a Flix project (manifest present),
     *  - no root or home directories are targeted,
     *  - no ancestor of the project directory is targeted,
-    *  - every file in the build directory has a `.class` extension and is a valid class file.
+    *  - every file in the build directory is a valid class file, a build manifest, or documentation.
+    *
+    * Every build mode's output is visited, since this resets the project rather than one of its
+    * modes: a `clean` that emptied `build/development/` and left `build/production/` alone would be a
+    * surprise, and one that refused to recognise the mode it was not asked about would make the
+    * project uncleanable.
     *
     * Returns `Ok(())` on success or `Err(BootstrapError.FileError(...))` on validation or IO failures.
     */
@@ -1028,8 +1093,12 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
     }
 
     val buildDir = Bootstrap.getBuildDirectory(projectPath)
-    val classDir = Bootstrap.getClassDirectory(projectPath)
+    // Every build mode's output, since 'clean' resets the project and not one of its modes.
+    val classDirs = Bootstrap.AllBuilds.map(Bootstrap.getClassDirectory(projectPath, _))
+    val manifestFiles = Bootstrap.AllBuilds.map(Bootstrap.getBuildManifestFile(projectPath, _))
     val docDir = Bootstrap.getDocumentationDirectory(projectPath)
+    val stubsDir = Bootstrap.getStubsDirectory(projectPath)
+    val coverageReports = Bootstrap.CoverageReports.map(name => buildDir.resolve(name).normalize())
 
     // Ensure `buildDir` is not dangerous
     checkForDangerousPath(buildDir) match {
@@ -1040,11 +1109,11 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
     // Ensure all files in `buildDir` are valid class files.
     val files = FileOps.getFilesIn(buildDir, Int.MaxValue).map(_.normalize())
     for (file <- files) {
-      if (file == Bootstrap.getBuildManifestFile(projectPath)) {
+      if (manifestFiles.contains(file)) {
         // The record of what the last build produced. It has to go with the products it
         // describes: a manifest that outlives them would let the next build reuse a class
         // directory that is no longer there.
-      } else if (file.startsWith(classDir)) {
+      } else if (classDirs.exists(file.startsWith)) {
         if (!FileOps.checkExt(file, "class")) {
           return Err(BootstrapError.FileError(s"Unexpected file extension in build directory (only '.class' files are allowed): '${projectPath.relativize(file)}'"))
         }
@@ -1056,6 +1125,14 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
         isValidDocumentFile(file) match {
           case Err(e) => return Err(e)
           case Ok(()) => ()
+        }
+      } else if (coverageReports.contains(file)) {
+        // A coverage report left at its default name. Generated, so it goes.
+      } else if (file.startsWith(stubsDir)) {
+        // `flix stubs` output. Only the Java sources it writes - anything else under there was
+        // put there by somebody, and this is the one chance to notice.
+        if (!FileOps.checkExt(file, "java")) {
+          return Err(BootstrapError.FileError(s"Unexpected file in the stubs directory (only 'java' files are allowed): '${projectPath.relativize(file)}'"))
         }
       } else {
         return Err(BootstrapError.FileError(s"Unexpected directory in build directory: '${projectPath.relativize(file)}'"))
@@ -1360,13 +1437,32 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
       * directory between reconciling and packaging cannot reach the jar, and neither can one
       * this build did not write.
       */
-    def addProductsToZip(products: Set[Path], zip: ZipOutputStream): Unit = {
-      val classDir = Bootstrap.getClassDirectory(projectPath)
+    def addProductsToZip(build: Build, products: Set[Path], zip: ZipOutputStream): Unit = {
+      val classDir = Bootstrap.getClassDirectory(projectPath, build)
       // Here we sort entries by relative file name to apply https://reproducible-builds.org/
       val entries = products.toList.map(BuildManifest.nameOf).sorted
       for (name <- entries) {
         FileOps.addToZip(zip, name, classDir.resolve(name))
       }
+    }
+
+    /**
+      * Returns `Ok(())` if every product of the build mode `build` is on disk.
+      *
+      * Checked *before* the jar is opened, because opening it truncates the last good one and
+      * `FileOps.addToZip` skips a path that does not exist rather than failing. Without this, a
+      * product that went missing between writing and packaging - another build reconciling the
+      * same directory, something outside the compiler deleting it - yields a jar quietly missing
+      * a class, an exit code of zero, and no previous jar to fall back on.
+      */
+    def validateProducts(build: Build, products: Set[Path]): Result[Unit, BootstrapError] = {
+      val classDir = Bootstrap.getClassDirectory(projectPath, build)
+      val missing = products.toList.map(BuildManifest.nameOf).sorted.filterNot(name => Files.isRegularFile(classDir.resolve(name)))
+      if (missing.nonEmpty) {
+        return Err(BootstrapError.FileError(
+          s"${missing.length} class file(s) the compiler reported are missing from '${projectPath.relativize(classDir)}', so the jar would be incomplete: ${missing.take(5).mkString(", ")}"))
+      }
+      Ok(())
     }
 
     /**
@@ -1567,18 +1663,18 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
     }
 
     /**
-      * Configures `flix` to emit class files to the build directory (on the file system)
-      * in production mode.
+      * Configures `flix` to emit class files to the production output directory (on the file
+      * system) in production mode.
       *
-      * @see [[Bootstrap.getBuildDirectory]]
+      * @see [[Bootstrap.getOutputDirectory]]
       * @see [[Build.Production]]
       */
     def configureJarOutput(flix: Flix): Result[Unit, BootstrapError] = {
-      val buildDir = Bootstrap.getBuildDirectory(projectPath)
+      val outputDir = Bootstrap.getOutputDirectory(projectPath, Build.Production)
       for {
-        _ <- validateDirectory(buildDir)
+        _ <- validateDirectory(outputDir)
       } yield {
-        val newOptions = flix.options.copy(build = Build.Production, outputJvm = true, outputPath = buildDir)
+        val newOptions = flix.options.copy(build = Build.Production, outputJvm = true, outputPath = outputDir)
         flix.setOptions(newOptions)
         ()
       }
@@ -1724,8 +1820,18 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
         case Some(fw) =>
           val events = fw.drain()
           if (sameInstance) applyWatcherEvents(events, flix) else rescanAndUpdate(flix)
+
         case None =>
-          if (!sameInstance) invalidateSourceTimestamps()
+          // Without a watcher, staleness can only be guessed from modification times - and a guess
+          // is not enough to license reusing a cached AST. `Source` equality is by path and not by
+          // content (`Source.equals`), and `ChangeSet.partition` hands back the *cached* result for
+          // any input not marked changed, so a file whose mtime did not move is compiled as it was
+          // and the edit silently never reaches the output. Modification times are millisecond
+          // resolution at best and whole seconds on some filesystems, so two writes inside one tick
+          // are ordinary rather than exotic. Every source is therefore handed over again, which
+          // marks it changed; the watcher path above is the one that may be selective, because
+          // there an edit is an event rather than an inference.
+          invalidateSourceTimestamps()
           updateStaleSourcesByTimestamp(flix)
       }
     }
@@ -1900,17 +2006,6 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
     }
 
     /**
-      * Removes every class file from the class directory of the project.
-      *
-      * Refuses to delete anything that is not a class file, so that a mis-configured
-      * output path cannot cause data loss.
-      *
-      * @see [[reconcileClassDirectory]], which is what an ordinary build does instead.
-      */
-    def cleanClassDirectory(): Result[Unit, BootstrapError] =
-      removeClassFiles(keep = Set.empty)
-
-    /**
       * Removes every class file from the class directory that is not in `products`, and prunes
       * the directories left empty.
       *
@@ -1928,7 +2023,7 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
       * Refuses to delete anything that is not a class file, so that a mis-configured output path
       * cannot cause data loss.
       */
-    def reconcileClassDirectory(products: Set[Path]): Result[Unit, BootstrapError] = {
+    def reconcileClassDirectory(build: Build, products: Set[Path]): Result[Unit, BootstrapError] = {
       // A build that wrote nothing makes every class file on disk look stale. Reconciling
       // against it would empty the directory and then package an empty jar, so it is refused:
       // any program at all produces class files, and JVM output was configured above.
@@ -1936,9 +2031,9 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
         return Err(BootstrapError.FileError("The compiler wrote no class files. Refusing to reconcile the class directory."))
       }
 
-      val classDir = Bootstrap.getClassDirectory(projectPath)
+      val classDir = Bootstrap.getClassDirectory(projectPath, build)
       for {
-        _ <- removeClassFiles(keep = products.map(p => classDir.resolve(p).normalize()))
+        _ <- removeClassFiles(build, keep = products.map(p => classDir.resolve(p).normalize()))
         _ <- pruneEmptyDirectories(classDir)
       } yield {
         ()
@@ -1946,13 +2041,20 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
     }
 
     /**
-      * Removes every class file in the project's class directory except those in `keep`.
+      * Removes every class file in the class directory of the build mode `build` except those in
+      * `keep`.
       *
       * Validates every file in the directory before deleting any of it, so that an unexpected
       * file stops the build with the directory untouched rather than half-emptied.
+      *
+      * The name is not enough: a file called `Notes.class` that is not bytecode is somebody's
+      * file, and this now runs on every ordinary build where before only `clean` deleted here.
+      * So the contents are checked too, the way `clean` checks them - and an empty file is
+      * tolerated for the same reason `JvmWriter` tolerates one, since that is what an interrupted
+      * write leaves behind and refusing it would wedge every later build.
       */
-    private def removeClassFiles(keep: Set[Path]): Result[Unit, BootstrapError] = {
-      val classDir = Bootstrap.getClassDirectory(projectPath)
+    private def removeClassFiles(build: Build, keep: Set[Path]): Result[Unit, BootstrapError] = {
+      val classDir = Bootstrap.getClassDirectory(projectPath, build)
       if (!Files.exists(classDir)) {
         return Ok(())
       }
@@ -1967,6 +2069,9 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
       for (file <- files) {
         if (!FileOps.checkExt(file, EXT_CLASS)) {
           return Err(BootstrapError.FileError(s"Unexpected file extension in class directory (only '$EXT_CLASS' files are allowed): '${projectPath.relativize(file)}'"))
+        }
+        if (!(FileOps.isEmpty(file) || FileOps.isClassFile(file))) {
+          return Err(BootstrapError.FileError(s"Refusing to delete a file that is not a class file: '${projectPath.relativize(file)}'"))
         }
         checkForDangerousPath(file) match {
           case Err(e) => return Err(e)
@@ -2020,26 +2125,27 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
     }
 
     /**
-      * Discards everything an earlier build left behind: the compiler's caches, the record of
-      * which sources it has already been given, the class files, and the build manifest.
+      * Discards the state an incremental build would have reused: the compiler's caches, and the
+      * record of which sources it has already been given.
       *
-      * The manifest goes first. A build directory with no manifest is one the next build resets
-      * again, where a manifest that outlived the class files it describes is one it would trust.
+      * Nothing on disk. A full build does not need to delete the previous build's class files
+      * first - [[reconcileClassDirectory]] reaches the same directory after a successful compile -
+      * and deleting them up front would destroy a working build's output whenever the compile
+      * meant to replace it fails. The same applies to the manifest: leaving the old one in place
+      * costs one more full build if this one fails, where deleting it early costs the products it
+      * describes.
       */
-    def resetBuild(flix: Flix): Result[Unit, BootstrapError] = {
+    def discardIncrementalState(flix: Flix): Unit = {
       flix.clearCaches()
       invalidateSourceTimestamps()
-      for {
-        _ <- deleteBuildManifest()
-        _ <- cleanClassDirectory()
-      } yield {
-        ()
-      }
     }
 
-    /** Returns the recorded manifest of the previous build, if there is one this compiler can read. */
-    def readBuildManifest(): Option[BuildManifest] =
-      BuildManifest.read(Bootstrap.getBuildManifestFile(projectPath))
+    /**
+      * Returns the recorded manifest of the previous build in the mode `build`, if there is one
+      * this compiler can read.
+      */
+    def readBuildManifest(build: Build): Option[BuildManifest] =
+      BuildManifest.read(Bootstrap.getBuildManifestFile(projectPath, build))
 
     /**
       * Records what this build produced, from which inputs.
@@ -2047,19 +2153,22 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
       * Written after the class directory has been reconciled, so that a manifest exists only
       * once it describes the directory.
       */
-    def writeBuildManifest(fingerprint: String, products: Set[Path]): Result[Unit, BootstrapError] = {
+    def writeBuildManifest(build: Build, fingerprint: String, products: Set[Path]): Result[Unit, BootstrapError] = {
+      // Only sources that exist. A deleted path stays in `sourcePaths` on purpose - so that a file
+      // which comes back is noticed - but recording it here would describe the build as having read
+      // a file that is not there.
       val manifest = BuildManifest(
         fingerprint,
         products.toList.map(BuildManifest.nameOf).sorted,
-        sourcePaths.map(p => BuildManifest.relativeName(projectPath, p)).sorted
+        sourcePaths.filter(Files.isRegularFile(_)).map(p => BuildManifest.relativeName(projectPath, p)).sorted
       )
-      BuildManifest.write(Bootstrap.getBuildManifestFile(projectPath), manifest)
+      BuildManifest.write(Bootstrap.getBuildManifestFile(projectPath, build), manifest)
         .mapErr(e => BootstrapError.FileError(s"Failed to write the build manifest: ${e.getMessage}"))
     }
 
-    /** Deletes the build manifest, if there is one. */
-    private def deleteBuildManifest(): Result[Unit, BootstrapError] = {
-      val path = Bootstrap.getBuildManifestFile(projectPath)
+    /** Deletes the build manifest of the build mode `build`, if there is one. */
+    private def deleteBuildManifest(build: Build): Result[Unit, BootstrapError] = {
+      val path = Bootstrap.getBuildManifestFile(projectPath, build)
       if (!Files.exists(path)) {
         return Ok(())
       }

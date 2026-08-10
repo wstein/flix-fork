@@ -741,17 +741,17 @@ object Main {
         opt[Unit]("diagnostics-json").action((_, c) => c.copy(jsonDiagnostics = true)).
           text("writes diagnostics to stdout as JSON, for a build tool to read."),
         opt[Unit]("clean").action((_, c) => c.copy(clean = true)).
-          text("discards the previous build's class files and caches first."),
+          text("rebuilds from scratch instead of reusing the previous build's state."),
       )
 
       cmd("build-jar").action((_, c) => c.copy(command = Command.BuildJar)).text("  builds a jar-file from the current project.").children(
         opt[Unit]("clean").action((_, c) => c.copy(clean = true)).
-          text("discards the previous build's class files and caches first. For a reproducible release."),
+          text("rebuilds from scratch instead of reusing the previous build's state. For a reproducible release."),
       )
 
       cmd("build-fatjar").action((_, c) => c.copy(command = Command.BuildFatJar)).text("  builds a fatjar-file from the current project.").children(
         opt[Unit]("clean").action((_, c) => c.copy(clean = true)).
-          text("discards the previous build's class files and caches first. For a reproducible release."),
+          text("rebuilds from scratch instead of reusing the previous build's state. For a reproducible release."),
       )
 
       cmd("build-pkg").action((_, c) => c.copy(command = Command.BuildPkg)).text("  builds a fpkg-file from the current project.")

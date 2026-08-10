@@ -77,12 +77,29 @@ wrong:
 
 ## Building a Project
 
+**Each build mode owns an output directory**: `build/development/` for
+`Build.Development` (`flix build`, `run`, `test`) and `build/production/` for
+`Build.Production` (`build-jar`, `build-fatjar`). `Build.directoryName` is the
+mapping, `Bootstrap.getOutputDirectory` resolves it, and it is what
+`Options.outputPath` is set to — so the class files land in
+`build/<mode>/class/`, since `JvmWriter` resolves `class/` against that path.
+Class files, build manifest and product set are all per mode. They cannot be
+shared: build mode reaches the *typer* (`ConstraintSolverInterface` is lenient
+about the `Debug` effect in development), so the two modes do not compile the
+same program, and one directory had every `build` reset what the last
+`build-jar` left and the other way round. `build/doc/` stays outside, because
+documentation is not mode-specific. `clean` visits every mode's output —
+`Bootstrap.AllBuilds` is the list, and a new mode has to be added there or its
+output becomes uncleanable.
+
 `flix build`, `build-jar` and `build-fatjar` go through `Bootstrap`, and none of
-them wipes `build/class` any more. They **reconcile** it: compile, then delete
-every class file that is not one this compilation wrote, and prune the
-directories that empties. `--clean` restores the old behaviour and is what a
-reproducible release wants, since it makes the artifact a function of the sources
-and nothing the compiler cached.
+them wipes its class directory any more. They **reconcile** it: compile, then
+delete every class file that is not one this compilation wrote, and prune the
+directories that empties. `--clean` forces a build from scratch — it discards the
+compiler's cached state and re-reads every source — which is what a reproducible
+release wants, since it makes the artifact a function of the sources and nothing
+carried over. Note that it does *not* empty the directory up front; see the last
+paragraph of this section for why.
 
 Reconciling is only sound because of one fact about the compiler, and a change
 that stops it being true breaks this silently: **`Flix.codeGen` is
@@ -104,11 +121,11 @@ site in some source other than the one declaring it. A per-file mapping would
 read as ownership while being wrong about it, and nothing needs one: the set
 difference is exact where an ownership approximation is not.
 
-`build/build.json` (`BuildManifest`) records the product set and a fingerprint of
-every *non-source* input: compiler version, the back-end options, and the
-dependencies by size and modification time. A build whose fingerprint differs
-from the recorded one, or which cannot read the manifest at all, falls back to a
-full build. Three details are load-bearing:
+`build/<mode>/build.json` (`BuildManifest`) records the product set and a
+fingerprint of every *non-source* input: compiler version, the back-end options,
+and the dependencies by size and modification time. A build whose fingerprint
+differs from the recorded one, or which cannot read the manifest at all, falls
+back to a full build. Three details are load-bearing:
 
 - Source changes are deliberately **not** in the fingerprint. They are handled by
   recompiling and diffing the product set; putting them there would force a full
@@ -122,20 +139,48 @@ full build. Three details are load-bearing:
 - `clean` knows the manifest by name and deletes it with the products it
   describes. A manifest that outlived them would be trusted by the next build.
 
-`build` mode is one of those inputs and has to be, because it reaches the *typer*
-(`ConstraintSolverInterface` is lenient about the `Debug` effect in development).
-The practical consequence: `flix build` is `Development` and `flix build-jar` is
-`Production`, so alternating them resets every time — there is one class directory
-and the two modes do not describe the same products. Splitting the directory per
-mode would fix it and is a larger change than this one.
+Build mode is in the fingerprint too, which is belt and braces now that each mode
+has its own directory: a manifest is only ever compared against one written for
+the same mode, so the check cannot fire. It stays because the fingerprint is meant
+to describe *every* non-source input, and a reader who finds mode missing from it
+would reasonably conclude modes are interchangeable.
 
-`Bootstrap` tracks which sources a **particular** `Flix` instance has already
-been given, so `updateStaleSources` hands a *different* instance everything. The
-timestamps and the drained watcher events are per-instance facts; telling a fresh
-instance only what changed since leaves it compiling an empty program, which
-`reconcileClassDirectory` would then read as "every class file is stale". It
-refuses an empty product set for that reason: emptying the directory and
-packaging an empty jar is the one failure here that looks like success.
+**A modification time may not license reusing a cached AST.** `Source` equality is
+by path, not by content, and `ChangeSet.partition` hands back the *cached* result
+for any input not marked changed — so a file whose mtime did not move is compiled
+as it was, and the edit silently never reaches the output. Mtimes are millisecond
+resolution at best and whole seconds on some filesystems, so two writes inside one
+tick are ordinary. `updateStaleSources` therefore re-offers **every** source when
+no watcher is active, and is selective only on the watcher path, where an edit is
+an event rather than an inference. This is why `build` dropping `incremental =
+false` is safe: the front-end cache is only ever reused when something
+authoritative said what changed. Real front-end incrementality for a long-lived
+non-watcher client (a BSP server) needs content hashes in place of mtimes — that
+is a separate change, and it is the thing to do rather than loosening this.
+
+`Bootstrap` also tracks which sources a **particular** `Flix` instance has already
+been given, so a *different* instance gets a full rescan. The drained watcher
+events are per-instance facts; telling a fresh instance only what changed since
+leaves it compiling an empty program, which `reconcileClassDirectory` would then
+read as "every class file is stale". It refuses an empty product set for that
+reason: emptying the directory and packaging an empty jar is the one failure here
+that looks like success.
+
+Two more places where a silent-wrong-output path was closed, both worth keeping:
+`removeClassFiles` checks the *bytes* of a `.class` file and not just its name,
+because it now runs on every ordinary build where before only `clean` deleted
+there — and it tolerates an empty one, since that is what an interrupted write
+leaves. And `validateProducts` runs before the jar is opened, because
+`FileOps.addToZip` *skips* a path that does not exist rather than failing, and
+`createJar` truncates the last good jar first: without the check, a product that
+went missing yields a jar quietly short a class and an exit code of zero.
+
+A full build discards the compiler's in-memory state and **nothing on disk**.
+Reconciling after a successful compile reaches the same directory anyway, so
+deleting first would only mean destroying a working build's output whenever the
+compile meant to replace it fails — and the inputs that force a full build (a
+compiler upgrade, a new `--coverage`, an updated dependency) are common enough
+that this is not an edge case. `TestBootstrap` asserts it.
 
 Two things the incremental path newly exposes are fixed in
 `updateStaleSourcesByTimestamp`: a deleted file reads as stale but must be
@@ -144,6 +189,24 @@ only a `.flix` path may be handed to `remFile`. Note also that `Bootstrap` scans
 for sources once, when it is constructed — a file *created* afterwards is
 invisible until the next scan, so a test that adds one has to write it before
 `Bootstrap.bootstrap`.
+
+**`./mill flix.test` does not run any of this.** `TestBootstrap` is
+`@DoNotDiscover` and reached only through `PackageManagerSuite`, so the whole
+`Bootstrap` surface — build, `build-jar`, `clean`, the manifest, reconciliation —
+is covered by `./mill flix.testPackageManager` alone. CI does run it
+(`.github/workflows/package-manager.yaml`, with a token, on every PR), but the
+local loop this guide recommends reports green on a regression here. Run
+`flix.testPackageManager` too when touching `Bootstrap`; without a token its
+GitHub-fetching tests fail on the anonymous rate limit, and a failure whose
+message is not `API rate limit exceeded` is a real one.
+
+`main/test/resources` has no fixtures for any of this on purpose: every test
+builds a real temp project. Two properties of that setup are load-bearing. A test
+comparing generated class *names* must pin `threads = 1` (`mkDeterministicFlix`),
+and even then a few specialization hashes vary across `Flix` instances — so
+compare a *count* when what matters is that nothing accumulated. And a test that
+edits a source between builds must use a fresh `Flix` instance per build, or it
+depends on mtime resolution to notice the edit.
 
 ## Source Code Formatting
 
