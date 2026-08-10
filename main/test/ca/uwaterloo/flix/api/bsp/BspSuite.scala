@@ -31,5 +31,6 @@ import org.scalatest.{DoNotDiscover, Suites}
 @DoNotDiscover
 class BspSuite extends Suites(
   new TestBspAssembly,
-  new TestBspProcess
+  new TestBspProcess,
+  new TestBspRun
 )

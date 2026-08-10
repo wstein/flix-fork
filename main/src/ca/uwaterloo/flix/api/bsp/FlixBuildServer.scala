@@ -190,8 +190,26 @@ class FlixBuildServer(session: BspSession, onExit: () => Unit) extends BuildServ
     )(_ => session.compile(target, originId))
   }
 
-  override def buildTargetRun(params: RunParams): CompletableFuture[RunResult] =
-    refuse(BspFeature.Run)
+  /**
+    * Builds the program and runs it in a JVM of its own.
+    *
+    * Bracketed like a compile so a client can show that something is happening, and the program's own
+    * output arrives as log messages rather than as diagnostics -- it is not a problem with the code.
+    */
+  override def buildTargetRun(params: RunParams): CompletableFuture[RunResult] = completing {
+    val view = session.requireView()
+    requireKnownTarget(view, params.getTarget)
+    val target = params.getTarget
+    val originId = Option(params.getOriginId)
+    val arguments = Option(params.getArguments).map(_.asScala.toList).getOrElse(Nil)
+
+    tasks.bracket[RunResult](
+      message = s"Running ${view.packageName}",
+      startData = _ => None,
+      finishData = (_, _) => None,
+      statusOf = _.getStatusCode
+    )(_ => session.run(target, arguments, originId))
+  }
 
   override def buildTargetTest(params: TestParams): CompletableFuture[TestResult] =
     refuse(BspFeature.Test)
@@ -208,11 +226,31 @@ class FlixBuildServer(session: BspSession, onExit: () => Unit) extends BuildServ
   override def workspaceReload(): CompletableFuture[Object] =
     refuse(BspFeature.Reload)
 
-  override def buildTargetJvmRunEnvironment(params: JvmRunEnvironmentParams): CompletableFuture[JvmRunEnvironmentResult] =
-    refuse(BspFeature.JvmRunEnvironment)
+  /**
+    * Describes what a client needs to run the program itself.
+    *
+    * This is the escape hatch that makes the limits of `buildTarget/run` acceptable: a client that
+    * wants its own console, its own environment or its own debugger forks the program with this rather
+    * than asking the server to.
+    */
+  override def buildTargetJvmRunEnvironment(params: JvmRunEnvironmentParams): CompletableFuture[JvmRunEnvironmentResult] = completing {
+    val view = session.requireView()
+    val items = requireKnownTargets(view, params.getTargets).map(session.jvmEnvironment)
+    new JvmRunEnvironmentResult(items.asJava)
+  }
 
-  override def buildTargetJvmTestEnvironment(params: JvmTestEnvironmentParams): CompletableFuture[JvmTestEnvironmentResult] =
-    refuse(BspFeature.JvmTestEnvironment)
+  /**
+    * The same environment, for running the tests.
+    *
+    * Identical to the run environment, and that is not laziness: `@Test` definitions are entry points
+    * compiled into the same output as everything else, so there is no test-only classpath to report.
+    * Answering with the same list is the truth about this compiler.
+    */
+  override def buildTargetJvmTestEnvironment(params: JvmTestEnvironmentParams): CompletableFuture[JvmTestEnvironmentResult] = completing {
+    val view = session.requireView()
+    val items = requireKnownTargets(view, params.getTargets).map(session.jvmEnvironment)
+    new JvmTestEnvironmentResult(items.asJava)
+  }
 
   /**
     * Refused unconditionally, and it is the one method here that never becomes available by adding a
@@ -268,6 +306,16 @@ class FlixBuildServer(session: BspSession, onExit: () => Unit) extends BuildServ
       // sources are not project sources and do not appear.
       new SourceItem(BspUri.ofFile(p), SourceItemKind.FILE, false)
     }
+
+  /** Fails unless `target` is one this server has. */
+  private def requireKnownTarget(view: ProjectView, target: BuildTargetIdentifier): Unit = {
+    if (!BuildTargets.isKnown(view, target)) {
+      throw new ResponseErrorException(new ResponseError(
+        ResponseErrorCode.InvalidParams,
+        s"unknown build target: ${Option(target).map(_.getUri).getOrElse("none")}",
+        null))
+    }
+  }
 
   /** Returns `targets`, or fails naming the ones this server does not have. */
   private def requireKnownTargets(view: ProjectView, targets: java.util.List[BuildTargetIdentifier]): List[BuildTargetIdentifier] = {

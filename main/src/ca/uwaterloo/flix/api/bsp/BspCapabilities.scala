@@ -80,7 +80,10 @@ object BspCapabilities {
     BspFeature.DependencySources,
     BspFeature.DependencyModules,
     BspFeature.Resources,
-    BspFeature.OutputPaths)
+    BspFeature.OutputPaths,
+    BspFeature.Run,
+    BspFeature.JvmRunEnvironment,
+    BspFeature.JvmTestEnvironment)
 
   /** Returns `true` if `feature` is served. */
   def implemented(feature: BspFeature): Boolean = Implemented.contains(feature)

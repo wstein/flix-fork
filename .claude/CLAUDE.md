@@ -248,6 +248,17 @@ shown. Three ways to get diagnostics wrong, each now pinned by a test:
   compile clears nothing, because a document the compiler never reached has not been
   shown to be clean.
 
+**`buildTarget/run` forks.** `Bootstrap.run` runs `main` in the compiler's own process by
+reflection, which a server cannot do: a `System.exit` in user code would take the
+connection with it. `ProjectView.runtimeClasspath` is what makes forking possible — class
+directory, `resources/`, then the Maven and url jars. It excludes `flix.jar`, and that
+exclusion is load-bearing rather than tidy: the compiler ships a *mock*
+`dev.flix.runtime.Global` whose `setArgs` throws, so a program that finds the compiler
+ahead of its own classes dies before `main`. `jvmRunEnvironment` reports the same
+classpath so a client can fork it itself, and `jvmTestEnvironment` reports the same list
+again — `@Test` defs are entry points in the same output, so there is no test-only
+classpath to invent.
+
 **Source membership is reconciled before every compile** (`Steps.rescanSources`).
 Modification-time polling answers which *known* files changed, and a created file is
 not among them. Two related traps, both found by tests rather than by reading:

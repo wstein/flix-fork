@@ -18,7 +18,7 @@ package ca.uwaterloo.flix.api
 import ca.uwaterloo.flix.tools.pkg.Manifest
 import ca.uwaterloo.flix.util.Build
 
-import java.nio.file.Path
+import java.nio.file.{Files, Path}
 
 /**
   * What a project is configured to be, as of one moment.
@@ -42,9 +42,13 @@ import java.nio.file.Path
   * arrive before the first build and while the project is broken, which is exactly when a client
   * needs them most.
   *
-  * So there is nothing here about generated output: no product set, no runtime classpath, no
-  * `main`. Those are facts about a build that succeeded, they are unavailable until one has, and
-  * mixing them in would make discovery depend on compilation.
+  * So there is nothing here about what a build *produced*: no product set, and no `main`. Those are
+  * facts about a compile that succeeded, unavailable until one has, and mixing them in would make
+  * discovery depend on compilation.
+  *
+  * [[runtimeClasspath]] is the boundary case and belongs here rather than on the other side of it: it
+  * is a list of *locations*, every one of them derived from the layout, and it is the same list before
+  * and after a build. Whether those locations hold anything yet is a different question.
   *
   * @param projectPath      the project's root, absolute and normalised.
   * @param packageName      the name from `flix.toml`, or the directory's own name outside project mode.
@@ -72,6 +76,33 @@ case class ProjectView(projectPath: Path,
 
   /** Every dependency the project resolves against, whatever its kind. */
   def dependencyPaths: List[Path] = flixPackagePaths ::: mavenPackagePaths ::: jarPackagePaths
+
+  /**
+    * Returns the classpath a compiled Flix program needs, in search order.
+    *
+    * ==What is on it==
+    *
+    *   1. the class directory of `build`, which holds the program *and* its generated runtime
+    *      (`CodeGen` emits the `dev.flix.runtime` classes into the program's own output);
+    *   1. `resources/`, because `buildJar` copies it to the jar root, so a program calling
+    *      `getResourceAsStream` must behave the same forked as jarred;
+    *   1. the Maven jars, then the url jars, which are ordinary Java dependencies.
+    *
+    * ==What is deliberately not on it==
+    *
+    * The `.fpkg` packages and the standard library. Both are Flix *source*, compiled into the class
+    * directory by the build that produced it; a zip of `.flix` files on a JVM classpath is inert.
+    *
+    * And `flix.jar` itself, which is the one that looks like an omission and is not. The compiler
+    * ships a *mock* `dev.flix.runtime.Global` whose `setArgs` throws "should not be called on the
+    * mock class". Put the compiler ahead of the program on a classpath and the program dies on that
+    * line before reaching `main`. Verified, not inferred.
+    */
+  def runtimeClasspath(build: Build): List[Path] = {
+    val classes = classDirectories.get(build).toList
+    val resources = if (Files.isDirectory(resourcesDirectory)) List(resourcesDirectory) else Nil
+    classes ::: resources ::: mavenPackagePaths ::: jarPackagePaths
+  }
 
   /** Returns `true` if `p` is one of the project's declared sources. */
   def declaresSource(p: Path): Boolean = {

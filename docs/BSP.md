@@ -1,7 +1,7 @@
 # The Flix build server
 
-**Status: lifecycle, discovery, sources, compiling and the project queries are
-implemented. Running and testing are not.** This document describes what `flix bsp` does today, what it
+**Status: lifecycle, discovery, sources, compiling, the project queries, running and
+the JVM environments are implemented. Testing, reload and cache cleaning are not.** This document describes what `flix bsp` does today, what it
 deliberately does not do, and why each decision was taken. It is written to be the
 front matter of a pull request, in the manner of `docs/JOINT-COMPILATION.md`.
 
@@ -59,10 +59,11 @@ explicitly.
 | `buildTarget/compile` | served |
 | `buildTarget/inverseSources`, `resources`, `outputPaths` | served |
 | `buildTarget/dependencySources`, `dependencyModules` | served |
-| `buildTarget/run`, `buildTarget/test` | **not yet** |
-| `buildTarget/jvmRunEnvironment`, `jvmTestEnvironment` | **not yet** |
+| `buildTarget/run` | served |
+| `buildTarget/jvmRunEnvironment`, `jvmTestEnvironment` | served |
+| `buildTarget/test` | **not yet** |
 | `workspace/reload`, `buildTarget/cleanCache` | **not yet** |
-| `debugSessionStart` | never (see §8) |
+| `debugSessionStart` | never (see §9) |
 
 Anything not served is refused with `MethodNotFound`, never answered with an empty
 result: an empty answer is indistinguishable from a real one, so a client would draw a
@@ -181,7 +182,53 @@ program would fail exactly then.
 Every one of them refuses an unknown target rather than answering emptily, for the
 reason given in §3.
 
-## 7. What a client will get wrong
+## 7. Running
+
+`buildTarget/run` builds the program and then starts it **in a JVM of its own**.
+`Bootstrap.run` runs `main` in the compiler's process by reflection, which is right for a
+command that exits afterwards and wrong for a server that does not: a `System.exit` in
+user code would take the connection with it, an infinite loop would wedge every later
+request, and stray threads would outlive the run. Forking makes each of those the
+program's own problem and gives a client the exit status it asked for. A run that does
+not finish within ten minutes is stopped, because a client cannot cancel a process it
+cannot see.
+
+The program's output arrives as `build/logMessage`, not as diagnostics — it is not a
+problem with the code, and a client shows the two in different places. A project with no
+`main` is refused with a message rather than treated as a run that did nothing:
+"nothing happened" and "there was nothing to happen" call for different words.
+
+The classpath is `ProjectView.runtimeClasspath`: the mode's class directory, `resources/`
+(because `buildJar` copies it to the jar root, so a program calling
+`getResourceAsStream` behaves the same forked as jarred), then the Maven and url jars.
+Not the `.fpkg` packages or the standard library — both are Flix *source*, compiled into
+the class directory, and a zip of `.flix` files on a JVM classpath is inert.
+
+**And not `flix.jar`.** That is the exclusion that looks like an oversight. The compiler
+ships a *mock* `dev.flix.runtime.Global` whose `setArgs` throws "should not be called on
+the mock class", so a program that finds the compiler ahead of its own classes dies
+before reaching `main`:
+
+```
+$ java -cp flix.jar:build/development/class Main
+Exception in thread "main" java.lang.RuntimeException: Global.setArgs should not be
+called on the mock class
+```
+
+`buildTarget/jvmRunEnvironment` reports that classpath so a client can fork the program
+itself — its own console, its own environment, its own debugger. It is the escape hatch
+that makes the limits above acceptable. `jvmOptions` is empty because the compiler's own
+flags are about the compiler, and `environmentVariables` is empty because a server that
+quietly injected its own `PATH` would make a run unreproducible; a client that wants the
+parent environment already has it. `jvmTestEnvironment` reports the same list, and that
+is the truth rather than laziness: `@Test` definitions are entry points compiled into the
+same output, so this compiler has no test-only classpath to report.
+
+`mainClasses` is answered from the *last* compile rather than by compiling, because these
+are queries — one that compiled would make describing a project as expensive as building
+it.
+
+## 8. What a client will get wrong
 
 Stated plainly, because each is a real limitation rather than an oversight:
 
@@ -197,15 +244,16 @@ Stated plainly, because each is a real limitation rather than an oversight:
   `buildTarget/javacOptions`, which is not implemented — a worse trade.
 - **Some sources cannot be opened.** A diagnostic in the standard library or inside a
   `.fpkg` dependency is reported against a `flix-lib:` or `jar:` URI. That is
-  deliberate; see §10.
+  deliberate; see §11.
 
-## 8. What is not built, and why
+## 9. What is not built, and why
 
 - **`debugSessionStart`.** Flix has no debug adapter, so there is no address to return.
   `canDebug` is false and the request always fails. This one does not become available
   in a later phase; it is refused permanently, and asserted to be.
-- **Running and testing.** Later phases. Their capability flags are false until then,
-  so no client is told they exist.
+- **Testing.** A later phase; `canTest` is false until then.
+- **Running is forked, so a program cannot be debugged through the server.** Use
+  `jvmRunEnvironment` and start it yourself.
 - **Watcher-driven recompilation and `buildTarget/didChange`.** Needs debounce, and
   the file watcher is currently wired only to the REPL.
 - **A `src`/`test` target split.** §4. It needs a source-set concept in the compiler,
@@ -213,7 +261,7 @@ Stated plainly, because each is a real limitation rather than an oversight:
 - **TCP transport and concurrent clients.** stdio only. One `Flix` instance per
   session is the concurrency ceiling regardless.
 
-## 9. Standard output belongs to the protocol
+## 10. Standard output belongs to the protocol
 
 This is the invariant most easily broken by an unrelated edit, so it is stated as a
 rule: **never `println` on a code path a BSP request can reach.**
@@ -234,7 +282,7 @@ interesting failures happen while the project is loading.
 `C` of `Content-Length`, which is the only assertion that can catch a `println` added
 anywhere on the initialize path.
 
-## 10. URIs, and why nothing is dropped
+## 11. URIs, and why nothing is dropped
 
 `BspUri.ofSource` returns a `String`, not an `Option[String]`. There is no filter, so
 there is nothing to drop.
@@ -266,7 +314,7 @@ Two details are load-bearing and were each established by a failing test:
   the user opened are then two spellings of one directory, and a correct client is
   refused.
 
-## 11. Session model
+## 12. Session model
 
 One `Bootstrap` and one `Flix` per connection, held by `BspSession`, which also owns
 the lifecycle state machine: `Uninitialized`, `Initialized`, `ShutDown`. Requests
@@ -292,7 +340,7 @@ outlives a reload can be recognised as stale rather than published against the p
 that replaced it. Nothing produces such work yet; the counter is one field, and the
 alternative is to add it after the first stale-publish bug.
 
-## 12. Acceptance criteria
+## 13. Acceptance criteria
 
 Each names the test that pins it.
 
@@ -356,8 +404,19 @@ Each names the test that pins it.
     dependency is reported as a maven module with its coordinate".
 23. **Every query refuses an unknown target.** `TestBspQueries`, "every query refuses a
     target it does not have".
+24. **The reported classpath actually starts the program.** `TestBspRun`, "the reported
+    classpath actually starts the program" — executed in a fresh JVM, because a path list
+    that looks right is exactly the artifact that rots.
+25. **The compiler's own jar is not on it.** `TestBspRun`, "the compiler's own jar is not
+    on the program's classpath".
+26. **A program's failure is reported as one.** `TestBspRun`, "a program that fails
+    reports a failure" — a program that exits 3 must not be reported as `OK`.
+27. **A project with no main is refused, not silently ignored.** `TestBspRun`, "a project
+    with no main is refused, not silently ignored".
+28. **A program that does not compile is not run.** `TestBspRun`, "a program that does not
+    compile is not run".
 
-## 13. Running the tests
+## 14. Running the tests
 
 ```
 ./mill flix.test        # the in-process tests, with the rest of the suite

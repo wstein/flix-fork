@@ -80,6 +80,14 @@ class BspSession(val projectPath: Path, options: Options, log: BspLogStream) {
   /** Which documents the client has been told about, so the ones that come clean can be cleared. */
   private val ledger: DiagnosticLedger = new DiagnosticLedger
 
+  /**
+    * Whether the last compile found an entry point.
+    *
+    * Remembered so that `jvmRunEnvironment` can name the main class without compiling. It is a query,
+    * and a query that compiled would make describing a project as expensive as building it.
+    */
+  @volatile private var lastCompileHadMain: Boolean = false
+
   /** Everything the compiler would have printed, as client log messages. */
   private val out: PrintStream = new PrintStream(log, true, "UTF-8")
 
@@ -219,21 +227,7 @@ class BspSession(val projectPath: Path, options: Options, log: BspLogStream) {
 
     val outcome = buildLock.synchronized {
       val b = requireBootstrapForBuild()
-      val view = b.view
-      // Development mode: production is a release action, and the target advertised is the
-      // development one. `loadClassFiles` stays off -- nothing here runs the program, and loading
-      // every class into this JVM would cost memory a server holds for its whole life.
-      val configured = flix.options.copy(
-        build = Build.Development,
-        outputJvm = true,
-        // Without this the class files go wherever `Options.Default.outputPath` points, which is
-        // `./build/` relative to the *server's* working directory. That is the project only by
-        // accident, and when it is not, a compile writes 250 class files somewhere nobody looks.
-        outputPath = view.outputDirectories(Build.Development),
-        loadClassFiles = false,
-        progress = false)
-      flix.setOptions(configured)
-      b.compileProjectOutcome(flix, clean = false)
+      compileWith(b, b.view)
     }
 
     if (!isCurrent(startedAt)) {
@@ -278,6 +272,110 @@ class BspSession(val projectPath: Path, options: Options, log: BspLogStream) {
   private def requireBootstrapForBuild(): Bootstrap = {
     requireView()
     bootstrap.getOrElse(throw invalidRequest("the project is not loaded"))
+  }
+
+  /**
+    * Compiles, then runs the program in a JVM of its own.
+    *
+    * Compiled first because `buildTarget/run` is defined to build what it runs -- a client that had to
+    * compile separately could run a stale program and would have no way to know.
+    *
+    * A project with no `main` is refused rather than treated as a run that did nothing.
+    * `Bootstrap.run` silently returns in that case, which is defensible for a command and useless to a
+    * client: "nothing happened" and "there was nothing to happen" call for different messages.
+    *
+    * The compile lock is released before the program starts. A user program may run for minutes, and
+    * holding the lock across it would block every later compile behind it.
+    */
+  def run(target: BuildTargetIdentifier, arguments: List[String], originId: Option[String]): RunResult = {
+    val startedAt = currentGeneration
+
+    val (outcome, view) = buildLock.synchronized {
+      val b = requireBootstrapForBuild()
+      val v = b.view
+      (compileWith(b, v), v)
+    }
+
+    if (!isCurrent(startedAt)) {
+      return statusOf(new RunResult(StatusCode.CANCELLED), originId)
+    }
+
+    publish(target, outcome)
+
+    if (!outcome.isSuccess) {
+      // Not run. A program that did not compile cannot be run, and the diagnostics just published say
+      // why, so there is nothing to add.
+      return statusOf(new RunResult(StatusCode.ERROR), originId)
+    }
+
+    val hasMain = outcome.root.exists(_.mainEntryPoint.isDefined)
+    if (!hasMain) {
+      showMessage(MessageType.ERROR,
+        s"${view.packageName} has no main function, so there is nothing to run.")
+      return statusOf(new RunResult(StatusCode.ERROR), originId)
+    }
+
+    val result = BspRunner.run(
+      view, Build.Development, arguments,
+      // The program's own output, as log messages. A client shows these in its run console; they are
+      // not diagnostics and must not be mistaken for them.
+      line => logMessage(line),
+      RunTimeout)
+
+    if (result.timedOut) {
+      showMessage(MessageType.ERROR, s"${view.packageName} did not finish within ${RunTimeout.toMinutes} minutes and was stopped.")
+    }
+    statusOf(new RunResult(if (result.isSuccess) StatusCode.OK else StatusCode.ERROR), originId)
+  }
+
+  /** Returns the environment a client needs to run this project's program itself. */
+  def jvmEnvironment(target: BuildTargetIdentifier): JvmEnvironmentItem = {
+    val view = requireView()
+    val item = new JvmEnvironmentItem(
+      target,
+      view.runtimeClasspath(Build.Development).map(BspUri.ofFile).asJava,
+      // No options. The compiler's own `Enable-Native-Access` is about the compiler, not about a
+      // program it produced, and inventing flags here would silently change how a client runs one.
+      List.empty[String].asJava,
+      view.projectPath.toAbsolutePath.toString,
+      // Empty rather than this process's environment. A client that wants the parent environment
+      // already has it, and a server that quietly injected its own `PATH` would make a run
+      // unreproducible.
+      java.util.Collections.emptyMap[String, String]())
+    item.setMainClasses(mainClasses().asJava)
+    item
+  }
+
+  /**
+    * Returns the program's entry class, if it has one.
+    *
+    * Answered from the *last* compile rather than by compiling: `jvmRunEnvironment` is a query, and a
+    * query that compiled would make a client's attempt to describe a project as expensive as building
+    * it. A project that has not been compiled yet reports no main class, which is true -- nothing is
+    * known about it yet.
+    */
+  private def mainClasses(): List[JvmMainClass] =
+    if (lastCompileHadMain) List(new JvmMainClass(BspRunner.MainClass, List.empty[String].asJava))
+    else Nil
+
+  /** Compiles under an already-held lock. */
+  private def compileWith(b: Bootstrap, view: ProjectView): Bootstrap.CompileOutcome = {
+    val configured = flix.options.copy(
+      build = Build.Development,
+      outputJvm = true,
+      outputPath = view.outputDirectories(Build.Development),
+      loadClassFiles = false,
+      progress = false)
+    flix.setOptions(configured)
+    val outcome = b.compileProjectOutcome(flix, clean = false)
+    lastCompileHadMain = outcome.root.exists(_.mainEntryPoint.isDefined)
+    outcome
+  }
+
+  /** Attaches `originId` to `result`, which is how a client correlates it with its request. */
+  private def statusOf(result: RunResult, originId: Option[String]): RunResult = {
+    originId.foreach(result.setOriginId)
+    result
   }
 
   /** The attached client, for a helper that must tolerate not having one yet. */
@@ -335,6 +433,14 @@ class BspSession(val projectPath: Path, options: Options, log: BspLogStream) {
 }
 
 object BspSession {
+
+  /**
+    * How long a run may take before the server stops it.
+    *
+    * A server that waited forever would be held open by any program that does not end, and a client
+    * has no way to cancel a process it cannot see. Generous, because a legitimate program may be slow.
+    */
+  private val RunTimeout: java.time.Duration = java.time.Duration.ofMinutes(10)
 
   /** What this server calls itself in the initialize result and in `.bsp/flix.json`. */
   val ServerName: String = "flix"
