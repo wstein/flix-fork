@@ -80,6 +80,46 @@ class BspTasks(client: () => Option[BuildClient]) {
     }
   }
 
+  /** Returns a fresh id for a task nested under `parent`, which is how a client builds a tree. */
+  def child(parent: TaskId): TaskId = {
+    val id = new TaskId(nextId.incrementAndGet().toString)
+    id.setParents(java.util.List.of(parent.getId))
+    id
+  }
+
+  /** Returns a fresh top-level task id. */
+  def newTask(): TaskId = new TaskId(nextId.incrementAndGet().toString)
+
+  /**
+    * Opens a task explicitly.
+    *
+    * Paired with [[finish]] by the caller, for work whose start and end are not one block -- a test
+    * run reports each test as it happens, so the pairs interleave with the events driving them.
+    * [[bracket]] is what to use when the work *is* a block.
+    */
+  def start(id: TaskId, message: String, data: Option[(String, Object)]): Unit = {
+    val params = new TaskStartParams(id)
+    params.setEventTime(System.currentTimeMillis())
+    params.setMessage(message)
+    data.foreach { case (kind, d) =>
+      params.setDataKind(kind)
+      params.setData(d)
+    }
+    notify(_.onBuildTaskStart(params))
+  }
+
+  /** Closes a task opened by [[start]]. */
+  def finish(id: TaskId, message: String, status: StatusCode, data: Option[(String, Object)]): Unit = {
+    val params = new TaskFinishParams(id, status)
+    params.setEventTime(System.currentTimeMillis())
+    params.setMessage(message)
+    data.foreach { case (kind, d) =>
+      params.setDataKind(kind)
+      params.setData(d)
+    }
+    notify(_.onBuildTaskFinish(params))
+  }
+
   /** Reports how far along a task is, for a client that draws a bar rather than a spinner. */
   def progress(id: TaskId, message: String): Unit = {
     val params = new TaskProgressParams(id)

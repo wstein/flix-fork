@@ -19,7 +19,7 @@ import ch.epfl.scala.bsp4j.*
 import org.eclipse.lsp4j.jsonrpc.Launcher
 import org.scalatest.funsuite.AnyFunSuite
 
-import java.io.{ByteArrayOutputStream, OutputStream, PipedInputStream, PipedOutputStream}
+import java.io.{ByteArrayOutputStream, OutputStream}
 import java.nio.charset.StandardCharsets
 import java.util
 import java.util.concurrent.{CompletableFuture, Executors, LinkedBlockingQueue, TimeUnit}
@@ -180,13 +180,7 @@ class TestBspLinkage extends AnyFunSuite {
     * and the gson handler are the same code a client would drive.
     */
   private def withConnection(f: Connection => Unit): Unit = {
-    // 64 KB, not the 1 KB default: a frame larger than the buffer blocks the writer until the reader
-    // drains it, and a test that deadlocks on its own message is a bad way to learn that.
-    val bufferSize = 64 * 1024
-    val clientToServer = new PipedOutputStream()
-    val serverToClient = new PipedOutputStream()
-    val serverIn = new PipedInputStream(clientToServer, bufferSize)
-    val clientIn = new PipedInputStream(serverToClient, bufferSize)
+    val channel = BspTestChannel.open()
 
     val serverOutput = new ByteArrayOutputStream()
     val received = new LinkedBlockingQueue[PublishDiagnosticsParams]()
@@ -202,14 +196,14 @@ class TestBspLinkage extends AnyFunSuite {
       val serverLauncher = new Launcher.Builder[BuildClient]()
         .setLocalService(stubServer)
         .setRemoteInterface(classOf[BuildClient])
-        .setInput(serverIn).setOutput(new TeeOutputStream(serverToClient, serverOutput))
+        .setInput(channel.serverIn).setOutput(new TeeOutputStream(channel.serverOut, serverOutput))
         .setExecutorService(executor)
         .create()
 
       val clientLauncher = new Launcher.Builder[BuildServer]()
         .setLocalService(new StubClient(received))
         .setRemoteInterface(classOf[BuildServer])
-        .setInput(clientIn).setOutput(clientToServer)
+        .setInput(channel.clientIn).setOutput(channel.clientOut)
         .setExecutorService(executor)
         .create()
 
@@ -223,13 +217,11 @@ class TestBspLinkage extends AnyFunSuite {
 
       f(Connection(clientLauncher.getRemoteProxy, received, serverOutput))
     } finally {
-      // Streams first, executor second. The other order interrupts a listener thread blocked in
-      // `PipedInputStream.read`, which lsp4j logs as an `InterruptedIOException` with a stack trace
-      // through `java.util.logging` -- `slf4j-nop` silences JLine, not this. Closing first gives the
-      // listener a clean end of stream and the suite output stays readable.
-      List[AutoCloseable](clientToServer, serverToClient, serverIn, clientIn).foreach { c =>
-        try c.close() catch { case _: Exception => () }
-      }
+      // Streams first, executor second. The other order interrupts a listener thread blocked in a
+      // read, which lsp4j logs as an `InterruptedIOException` with a stack trace through
+      // `java.util.logging` -- `slf4j-nop` silences JLine, not this. Closing first gives the listener
+      // a clean end of stream and the suite output stays readable.
+      channel.close()
       executor.shutdownNow()
     }
   }

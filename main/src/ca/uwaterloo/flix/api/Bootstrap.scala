@@ -38,6 +38,7 @@ import java.util.zip.{ZipInputStream, ZipOutputStream}
 import scala.collection.mutable
 import scala.io.StdIn.readLine
 import scala.jdk.CollectionConverters.IterableHasAsScala
+import scala.util.matching.Regex
 import scala.util.{Failure, Success, Using}
 
 
@@ -1430,12 +1431,37 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
   /**
     * Runs all tests in the flix package for the project.
     */
-  def test(flix: Flix): Result[Unit, BootstrapError] = {
+  def test(flix: Flix, filters: List[Regex] = Nil): Result[Unit, BootstrapError] =
     for {
       compilationResult <- build(flix)
-      res <- Tester.run(Nil, compilationResult)(flix).mapErr(_ => BootstrapError.GeneralError("Tester Error"))
+      res <- Tester.run(filters, compilationResult)(flix).mapErr(_ => BootstrapError.GeneralError("Tester Error"))
     } yield {
       res
+    }
+
+  /**
+    * Runs the project's tests, reporting each event to `sink`.
+    *
+    * The compilation is returned alongside the outcome because a caller reporting on a test run needs
+    * both: the messages, to publish, and whether the program compiled at all, since a test run that
+    * never started is not a test run that failed.
+    *
+    * `loadClassFiles` is forced on. A test is a compiled function this process reflects and calls, so
+    * unlike a compile there is no version of this that leaves the classes on disk.
+    */
+  def testWith(flix: Flix, filters: List[Regex], sink: Tester.TestEventSink): (Bootstrap.CompileOutcome, Option[Boolean]) = {
+    val configured = flix.options.copy(
+      build = Build.Development,
+      outputJvm = true,
+      outputPath = Bootstrap.getOutputDirectory(projectPath, Build.Development),
+      loadClassFiles = true,
+      progress = false)
+    flix.setOptions(configured)
+
+    val outcome = compileProjectOutcome(flix, clean = false)
+    outcome.result match {
+      case None => (outcome, None)
+      case Some(compiled) => (outcome, Some(Tester.run(filters, compiled, sink)(flix).isInstanceOf[Ok[?, ?]]))
     }
   }
 

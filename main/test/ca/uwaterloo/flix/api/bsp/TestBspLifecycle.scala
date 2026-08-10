@@ -22,7 +22,6 @@ import org.eclipse.lsp4j.jsonrpc.messages.ResponseErrorCode
 import org.eclipse.lsp4j.jsonrpc.{Launcher, ResponseErrorException}
 import org.scalatest.funsuite.AnyFunSuite
 
-import java.io.{PipedInputStream, PipedOutputStream}
 import java.nio.file.{Files, Path}
 import java.util.concurrent.{ExecutionException, Executors, TimeUnit}
 import scala.jdk.CollectionConverters.*
@@ -198,7 +197,6 @@ class TestBspLifecycle extends AnyFunSuite {
         // is indistinguishable from a real one and a client would draw a conclusion from it. When a
         // phase implements one, this list is what makes removing it from here a deliberate act.
         val codes = List(
-          errorCodeOf(client.buildTargetTest(new TestParams(List(target).asJava))),
           errorCodeOf(client.workspaceReload()),
           errorCodeOf(client.buildTargetCleanCache(new CleanCacheParams(List(target).asJava))),
           errorCodeOf(client.debugSessionStart(new DebugSessionParams(List(target).asJava))))
@@ -246,11 +244,7 @@ class TestBspLifecycle extends AnyFunSuite {
     * under test is the wiring the command uses. `serve` blocks, so it runs on its own thread.
     */
   private def withServer(project: Path)(f: BuildServer => Unit): Unit = {
-    val bufferSize = 64 * 1024
-    val clientToServer = new PipedOutputStream()
-    val serverToClient = new PipedOutputStream()
-    val serverIn = new PipedInputStream(clientToServer, bufferSize)
-    val clientIn = new PipedInputStream(serverToClient, bufferSize)
+    val channel = BspTestChannel.open()
 
     val executor = Executors.newFixedThreadPool(6, (r: Runnable) => {
       val t = new Thread(r, "bsp-lifecycle")
@@ -259,7 +253,7 @@ class TestBspLifecycle extends AnyFunSuite {
     })
 
     val serverThread = new Thread(
-      () => BspServer.serve(Options.DefaultTest, project, new BspLogStream(), serverIn, serverToClient, executor),
+      () => BspServer.serve(Options.DefaultTest, project, new BspLogStream(), channel.serverIn, channel.serverOut, executor),
       "bsp-server-under-test")
     serverThread.setDaemon(true)
 
@@ -269,7 +263,7 @@ class TestBspLifecycle extends AnyFunSuite {
       val clientLauncher = new Launcher.Builder[BuildServer]()
         .setLocalService(new SilentClient)
         .setRemoteInterface(classOf[BuildServer])
-        .setInput(clientIn).setOutput(clientToServer)
+        .setInput(channel.clientIn).setOutput(channel.clientOut)
         .setExecutorService(executor)
         .create()
       clientLauncher.startListening()
@@ -278,9 +272,7 @@ class TestBspLifecycle extends AnyFunSuite {
     } finally {
       // Streams before the executor: interrupting a listener blocked in a pipe read makes lsp4j log
       // an `InterruptedIOException` with a stack trace, which buries the suite's own output.
-      List[AutoCloseable](clientToServer, serverToClient, serverIn, clientIn).foreach { c =>
-        try c.close() catch { case _: Exception => () }
-      }
+      channel.close()
       executor.shutdownNow()
     }
   }

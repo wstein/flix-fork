@@ -22,7 +22,7 @@ import org.eclipse.lsp4j.jsonrpc.Launcher
 import org.scalatest.DoNotDiscover
 import org.scalatest.funsuite.AnyFunSuite
 
-import java.io.{File, PipedInputStream, PipedOutputStream}
+import java.io.File
 import java.nio.file.{Files, Path}
 import java.util.concurrent.{ConcurrentLinkedQueue, Executors, TimeUnit}
 import scala.jdk.CollectionConverters.*
@@ -194,11 +194,7 @@ class TestBspRun extends AnyFunSuite {
     Bootstrap.init(project)(System.out).unsafeGet
     Files.writeString(project.resolve("src").resolve("Main.flix"), source + "\n")
 
-    val bufferSize = 256 * 1024
-    val clientToServer = new PipedOutputStream()
-    val serverToClient = new PipedOutputStream()
-    val serverIn = new PipedInputStream(clientToServer, bufferSize)
-    val clientIn = new PipedInputStream(serverToClient, bufferSize)
+    val channel = BspTestChannel.open()
 
     val executor = Executors.newFixedThreadPool(6, (r: Runnable) => {
       val t = new Thread(r, "bsp-run")
@@ -207,7 +203,7 @@ class TestBspRun extends AnyFunSuite {
     })
 
     val serverThread = new Thread(
-      () => BspServer.serve(Options.DefaultTest, project, new BspLogStream(), serverIn, serverToClient, executor),
+      () => BspServer.serve(Options.DefaultTest, project, new BspLogStream(), channel.serverIn, channel.serverOut, executor),
       "bsp-server-under-test")
     serverThread.setDaemon(true)
 
@@ -218,7 +214,7 @@ class TestBspRun extends AnyFunSuite {
       val launcher = new Launcher.Builder[FlixBuildServerProxy]()
         .setLocalService(new RecordingClient(received))
         .setRemoteInterface(classOf[FlixBuildServerProxy])
-        .setInput(clientIn).setOutput(clientToServer)
+        .setInput(channel.clientIn).setOutput(channel.clientOut)
         .setExecutorService(executor)
         .create()
       launcher.startListening()
@@ -232,9 +228,7 @@ class TestBspRun extends AnyFunSuite {
       val target = client.workspaceBuildTargets().get(Timeout, TimeUnit.SECONDS).getTargets.asScala.head.getId
       f(new Session(project, client, target, received))
     } finally {
-      List[AutoCloseable](clientToServer, serverToClient, serverIn, clientIn).foreach { c =>
-        try c.close() catch { case _: Exception => () }
-      }
+      channel.close()
       executor.shutdownNow()
     }
   }

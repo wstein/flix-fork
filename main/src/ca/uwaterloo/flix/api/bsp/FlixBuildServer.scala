@@ -211,8 +211,24 @@ class FlixBuildServer(session: BspSession, onExit: () => Unit) extends BuildServ
     )(_ => session.run(target, arguments, originId))
   }
 
-  override def buildTargetTest(params: TestParams): CompletableFuture[TestResult] =
-    refuse(BspFeature.Test)
+  /**
+    * Builds and runs the project's tests, reporting each one as it happens.
+    *
+    * The task pair is opened by the session rather than here, because a test run's notifications
+    * interleave with the events that drive them -- `bracket` is for work that is a block, and this is
+    * not.
+    *
+    * `params.getArguments` is read as regular expressions selecting which tests to run, which is what
+    * `Tester` already accepts; a client that sends none runs them all.
+    */
+  override def buildTargetTest(params: TestParams): CompletableFuture[TestResult] = completing {
+    val view = session.requireView()
+    val targets = requireKnownTargets(view, params.getTargets)
+    val target = targets.headOption.getOrElse(BuildTargets.id(view))
+    val filters = Option(params.getArguments).map(_.asScala.toList).getOrElse(Nil).map(_.r)
+
+    session.test(target, filters, Option(params.getOriginId))
+  }
 
   /**
     * Refused by name, not by feature: `buildTarget/cleanCache` has no capability flag in the

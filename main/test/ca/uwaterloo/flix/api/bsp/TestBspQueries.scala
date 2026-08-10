@@ -22,7 +22,6 @@ import org.eclipse.lsp4j.jsonrpc.messages.ResponseErrorCode
 import org.eclipse.lsp4j.jsonrpc.{Launcher, ResponseErrorException}
 import org.scalatest.funsuite.AnyFunSuite
 
-import java.io.{PipedInputStream, PipedOutputStream}
 import java.nio.file.{Files, Path}
 import java.util.concurrent.{ExecutionException, Executors, TimeUnit}
 import scala.jdk.CollectionConverters.*
@@ -187,11 +186,7 @@ class TestBspQueries extends AnyFunSuite {
     }
     manifest.foreach(m => Files.writeString(project.resolve("flix.toml"), m))
 
-    val bufferSize = 256 * 1024
-    val clientToServer = new PipedOutputStream()
-    val serverToClient = new PipedOutputStream()
-    val serverIn = new PipedInputStream(clientToServer, bufferSize)
-    val clientIn = new PipedInputStream(serverToClient, bufferSize)
+    val channel = BspTestChannel.open()
 
     val executor = Executors.newFixedThreadPool(6, (r: Runnable) => {
       val t = new Thread(r, "bsp-queries")
@@ -200,7 +195,7 @@ class TestBspQueries extends AnyFunSuite {
     })
 
     val serverThread = new Thread(
-      () => BspServer.serve(Options.DefaultTest, project, new BspLogStream(), serverIn, serverToClient, executor),
+      () => BspServer.serve(Options.DefaultTest, project, new BspLogStream(), channel.serverIn, channel.serverOut, executor),
       "bsp-server-under-test")
     serverThread.setDaemon(true)
 
@@ -210,7 +205,7 @@ class TestBspQueries extends AnyFunSuite {
       val launcher = new Launcher.Builder[BuildServer]()
         .setLocalService(new SilentClient)
         .setRemoteInterface(classOf[BuildServer])
-        .setInput(clientIn).setOutput(clientToServer)
+        .setInput(channel.clientIn).setOutput(channel.clientOut)
         .setExecutorService(executor)
         .create()
       launcher.startListening()
@@ -224,9 +219,7 @@ class TestBspQueries extends AnyFunSuite {
       val target = client.workspaceBuildTargets().get(Timeout, TimeUnit.SECONDS).getTargets.asScala.head.getId
       f(project, client, target)
     } finally {
-      List[AutoCloseable](clientToServer, serverToClient, serverIn, clientIn).foreach { c =>
-        try c.close() catch { case _: Exception => () }
-      }
+      channel.close()
       executor.shutdownNow()
     }
   }

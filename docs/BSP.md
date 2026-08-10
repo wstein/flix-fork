@@ -1,7 +1,7 @@
 # The Flix build server
 
-**Status: lifecycle, discovery, sources, compiling, the project queries, running and
-the JVM environments are implemented. Testing, reload and cache cleaning are not.** This document describes what `flix bsp` does today, what it
+**Status: lifecycle, discovery, sources, compiling, the project queries, running, the
+JVM environments and testing are implemented. Reload and cache cleaning are not.** This document describes what `flix bsp` does today, what it
 deliberately does not do, and why each decision was taken. It is written to be the
 front matter of a pull request, in the manner of `docs/JOINT-COMPILATION.md`.
 
@@ -61,9 +61,9 @@ explicitly.
 | `buildTarget/dependencySources`, `dependencyModules` | served |
 | `buildTarget/run` | served |
 | `buildTarget/jvmRunEnvironment`, `jvmTestEnvironment` | served |
-| `buildTarget/test` | **not yet** |
+| `buildTarget/test` | served |
 | `workspace/reload`, `buildTarget/cleanCache` | **not yet** |
-| `debugSessionStart` | never (see §9) |
+| `debugSessionStart` | never (see §10) |
 
 Anything not served is refused with `MethodNotFound`, never answered with an empty
 result: an empty answer is indistinguishable from a real one, so a client would draw a
@@ -228,7 +228,41 @@ same output, so this compiler has no test-only classpath to report.
 are queries — one that compiled would make describing a project as expensive as building
 it.
 
-## 8. What a client will get wrong
+## 8. Testing
+
+`buildTarget/test` builds the project and runs its tests, reporting **each test
+individually** — a `taskStart`/`taskFinish` pair carrying `test-start` and `test-finish`
+under one parent task for the run, with a `test-report` on the parent's finish. That is
+what a client renders as a test tree, and `Symbol.DefnSym.loc` is what makes each row
+clickable.
+
+**There is one runner, and the renderings are sinks over its events.** `Tester` decides
+what a test outcome *is* — a `false` result is an assertion failure, a non-false result
+that wrote to standard error is also one, a `@Skip`ped test never starts the clock — and
+that rule is written down in exactly one place. `flix test` attaches a console rendering;
+the server attaches `BspTestSink`. Neither is privileged and neither reimplements the
+loop, which is the structural reason the command line and the editor cannot come to
+disagree about whether a test passed. `TestTesterSink` pins the events themselves.
+
+The console rendering is the one that must *not* be attached here: it builds a JLine
+system terminal and writes to the real file descriptor, which in a server carries the
+protocol. §11.
+
+**The tests run in the server's process, deliberately for now.** A test is a compiled
+function the compiler reflects and calls, so unlike `buildTarget/run` there is no forked
+process to hand it to — forking would need a test-runner entry point in the compiled
+program, which does not exist. The consequence is worth stating rather than discovering:
+a test that calls `System.exit` takes the server with it, and one that loops forever
+holds the build lock until the client gives up. `buildTarget/jvmTestEnvironment` is the
+way out for a client that wants isolation.
+
+`TestParams.arguments` is read as regular expressions selecting which tests to run,
+which is what `Tester` already accepts; a client that sends none runs them all. A project
+with no tests is a run that succeeded — a project may legitimately have none yet, and
+failing would leave an editor's test button permanently red. A project that does not
+compile is a run that failed, with the diagnostics saying why and no test events at all.
+
+## 9. What a client will get wrong
 
 Stated plainly, because each is a real limitation rather than an oversight:
 
@@ -244,14 +278,13 @@ Stated plainly, because each is a real limitation rather than an oversight:
   `buildTarget/javacOptions`, which is not implemented — a worse trade.
 - **Some sources cannot be opened.** A diagnostic in the standard library or inside a
   `.fpkg` dependency is reported against a `flix-lib:` or `jar:` URI. That is
-  deliberate; see §11.
+  deliberate; see §12.
 
-## 9. What is not built, and why
+## 10. What is not built, and why
 
 - **`debugSessionStart`.** Flix has no debug adapter, so there is no address to return.
   `canDebug` is false and the request always fails. This one does not become available
   in a later phase; it is refused permanently, and asserted to be.
-- **Testing.** A later phase; `canTest` is false until then.
 - **Running is forked, so a program cannot be debugged through the server.** Use
   `jvmRunEnvironment` and start it yourself.
 - **Watcher-driven recompilation and `buildTarget/didChange`.** Needs debounce, and
@@ -261,7 +294,7 @@ Stated plainly, because each is a real limitation rather than an oversight:
 - **TCP transport and concurrent clients.** stdio only. One `Flix` instance per
   session is the concurrency ceiling regardless.
 
-## 10. Standard output belongs to the protocol
+## 11. Standard output belongs to the protocol
 
 This is the invariant most easily broken by an unrelated edit, so it is stated as a
 rule: **never `println` on a code path a BSP request can reach.**
@@ -282,7 +315,7 @@ interesting failures happen while the project is loading.
 `C` of `Content-Length`, which is the only assertion that can catch a `println` added
 anywhere on the initialize path.
 
-## 11. URIs, and why nothing is dropped
+## 12. URIs, and why nothing is dropped
 
 `BspUri.ofSource` returns a `String`, not an `Option[String]`. There is no filter, so
 there is nothing to drop.
@@ -314,7 +347,7 @@ Two details are load-bearing and were each established by a failing test:
   the user opened are then two spellings of one directory, and a correct client is
   refused.
 
-## 12. Session model
+## 13. Session model
 
 One `Bootstrap` and one `Flix` per connection, held by `BspSession`, which also owns
 the lifecycle state machine: `Uninitialized`, `Initialized`, `ShutDown`. Requests
@@ -340,7 +373,7 @@ outlives a reload can be recognised as stale rather than published against the p
 that replaced it. Nothing produces such work yet; the counter is one field, and the
 alternative is to add it after the first stale-publish bug.
 
-## 13. Acceptance criteria
+## 14. Acceptance criteria
 
 Each names the test that pins it.
 
@@ -415,8 +448,23 @@ Each names the test that pins it.
     with no main is refused, not silently ignored".
 28. **A program that does not compile is not run.** `TestBspRun`, "a program that does not
     compile is not run".
+29. **Every test is reported individually, with the right status.** `TestBspTest`, "a run
+    reports every test, individually and in a tree" — a pass, a failure and a `@Skip` in
+    one fixture, three `test-finish` notifications, a `test-report` counting 1/1/1, a
+    failure that carries its output, a clickable location on each, and every one of them
+    nested under the run's own task.
+30. **A filter selects which tests run.** `TestBspTest`, "a filter selects which tests
+    run" — and the run then succeeds despite the project containing a failing test.
+31. **A project that does not compile runs no tests.** `TestBspTest`, "a project that does
+    not compile runs no tests" — an error, with diagnostics, and no test events.
+32. **A project with no tests is not a failure.** `TestBspTest`, "a project with no tests
+    succeeds and reports nothing".
+33. **The command line and the editor cannot disagree about an outcome.**
+    `TestTesterSink` — one runner, and the events it emits are pinned: every test
+    reported, a skip announced without being started, a failure carrying its output, one
+    terminal event, and success decided by the runner rather than by a rendering.
 
-## 14. Running the tests
+## 15. Running the tests
 
 ```
 ./mill flix.test        # the in-process tests, with the rest of the suite

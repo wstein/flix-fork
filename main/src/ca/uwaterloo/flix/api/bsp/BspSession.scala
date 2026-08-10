@@ -17,6 +17,8 @@ package ca.uwaterloo.flix.api.bsp
 
 import ca.uwaterloo.flix.api.{Bootstrap, Flix, ProjectView, Version}
 import ca.uwaterloo.flix.util.{Build, Formatter, Options, Result}
+
+import scala.util.matching.Regex
 import ch.epfl.scala.bsp4j.*
 import org.eclipse.lsp4j.jsonrpc.ResponseErrorException
 import org.eclipse.lsp4j.jsonrpc.messages.{ResponseError, ResponseErrorCode}
@@ -76,6 +78,9 @@ class BspSession(val projectPath: Path, options: Options, log: BspLogStream) {
     * record of what it has handed over on the instance it handed it to.
     */
   private val flix: Flix = new Flix().setFormatter(Formatter.NoFormatter).setOptions(options)
+
+  /** Progress notifications. Held here because a test run emits them as its events arrive. */
+  private val tasks: BspTasks = new BspTasks(() => client)
 
   /** Which documents the client has been told about, so the ones that come clean can be cleared. */
   private val ledger: DiagnosticLedger = new DiagnosticLedger
@@ -326,6 +331,54 @@ class BspSession(val projectPath: Path, options: Options, log: BspLogStream) {
       showMessage(MessageType.ERROR, s"${view.packageName} did not finish within ${RunTimeout.toMinutes} minutes and was stopped.")
     }
     statusOf(new RunResult(if (result.isSuccess) StatusCode.OK else StatusCode.ERROR), originId)
+  }
+
+  /**
+    * Compiles, then runs the project's tests, reporting each one as it happens.
+    *
+    * ==In this process, deliberately for now==
+    *
+    * A test is a compiled function reflected and called, which is what `Tester` does, so the tests run
+    * in the server's JVM rather than a forked one. The consequence has to be stated rather than
+    * discovered: a test that calls `System.exit` takes the server with it, and one that loops forever
+    * holds the build lock until the client gives up. `jvmTestEnvironment` is the way out -- a client
+    * that wants isolation forks with that classpath. Forking here needs a test-runner entry point in
+    * the compiled program, which does not exist.
+    *
+    * The console rendering is *not* attached: it builds a system terminal and writes to the real file
+    * descriptor, which here carries the protocol. The events go to a [[BspTestSink]] instead, and both
+    * renderings agree about pass and fail because both watch the same runner.
+    */
+  def test(target: BuildTargetIdentifier, filters: List[Regex], originId: Option[String]): TestResult = {
+    val startedAt = currentGeneration
+    val parent = tasks.newTask()
+
+    val view = requireView()
+    tasks.start(parent, s"Testing ${view.packageName}", Some((TaskStartDataKind.TEST_TASK, new TestTask(target))))
+
+    val sink = new BspTestSink(tasks, target, parent)
+    val (outcome, ran) = buildLock.synchronized {
+      val b = requireBootstrapForBuild()
+      b.testWith(flix, filters, sink)
+    }
+
+    val status =
+      if (!isCurrent(startedAt)) StatusCode.CANCELLED
+      else {
+        publish(target, outcome)
+        ran match {
+          // The program did not compile, so no test ran. The diagnostics just published say why.
+          case None => StatusCode.ERROR
+          case Some(succeeded) => if (succeeded) StatusCode.OK else StatusCode.ERROR
+        }
+      }
+
+    tasks.finish(parent, s"Tested ${view.packageName}", status,
+      Some((TaskFinishDataKind.TEST_REPORT, sink.report())))
+
+    val result = new TestResult(status)
+    originId.foreach(result.setOriginId)
+    result
   }
 
   /** Returns the environment a client needs to run this project's program itself. */

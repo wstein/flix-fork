@@ -259,6 +259,26 @@ classpath so a client can fork it itself, and `jvmTestEnvironment` reports the s
 again — `@Test` defs are entry points in the same output, so there is no test-only
 classpath to invent.
 
+**`buildTarget/test` reports each test, and there is only one runner.** `Tester` decides
+what a test outcome *is* — a `false` result is a failure, a non-false result that wrote to
+standard error is also one, a `@Skip`ped test never starts the clock — and callers choose
+only how those events are rendered (`Tester.TestEventSink`). `flix test` attaches the
+console rendering; the server attaches `BspTestSink`. That is the structural reason the
+command line and an editor cannot come to disagree about whether a test passed, and
+`TestTesterSink` pins the events. The console rendering is the one that must not be
+attached in a server: it builds a JLine *system* terminal and writes to the real file
+descriptor, which is the protocol channel. Three traps here:
+
+- **A skipped test gets no `Before` event**, so its task pair has to be opened and closed
+  together, or the client receives a finish with no start.
+- **`TestReport` takes five consecutive `Integer` parameters.** `cancelled` and `skipped`
+  the wrong way round compiles, runs, and puts a plausible number in the wrong column.
+  `BspTestSink.report` uses setters for exactly that reason.
+- **The tests run in the server's process**, because a test is a compiled function the
+  compiler reflects and calls; there is no test-runner entry point to fork. A test that
+  calls `System.exit` therefore takes the server with it. `jvmTestEnvironment` is the way
+  out for a client that wants isolation.
+
 **Source membership is reconciled before every compile** (`Steps.rescanSources`).
 Modification-time polling answers which *known* files changed, and a created file is
 not among them. Two related traps, both found by tests rather than by reading:
@@ -285,7 +305,7 @@ refusals in `FlixBuildServer`, so a request and its advertisement cannot drift.
 and its flag together. `debugSessionStart` is the one that never becomes available —
 there is no debug adapter, so `canDebug` is false permanently.
 
-Four things learned the hard way, each now pinned by a test:
+Five things learned the hard way, each now pinned by a test:
 
 - **A target id needs an *empty* URI authority, not a null one.** `new URI(scheme,
   null, path, query, null)` renders `file:/path`, which is legal and is not what
@@ -300,6 +320,13 @@ Four things learned the hard way, each now pinned by a test:
   server's `file://` filter drops diagnostics from bundled and packaged code, and
   would drop ordinary project files too if documents did not reach it as virtual
   URIs. Bundled library sources get `flix-lib:`, `.fpkg` contents get `jar:…!/…`.
+- **A test harness must not connect the two ends with `PipedInputStream`.** It is a pipe
+  between *threads*, not streams: it remembers the last thread that wrote and throws
+  `Write end dead` from `read` once that thread exits. A server writes on whatever thread
+  produced the event, and `Tester`'s reporter thread is deliberately short-lived, so a
+  piped pair killed the client's reader mid-request and accused working code.
+  `BspTestChannel` opens a `java.nio.channels.Pipe`, which has no thread affinity, and
+  every suite goes through it.
 - **`ProjectView` is a snapshot, and there is one per request.** `Bootstrap`'s source
   and dependency lists are mutable, so accessors would let one request be answered
   from two different projects. It carries only what is known *without* compiling,
