@@ -31,6 +31,27 @@ sealed trait PackageError {
 }
 
 object PackageError {
+  /**
+    * An error raised when the GitHub API refuses a request, which for an anonymous caller means the
+    * hourly limit is spent.
+    *
+    * The reset time is reported because it is the only thing that makes the error actionable: the
+    * answer is to wait, or to authenticate, and without a time neither is a decision anyone can
+    * make.
+    */
+  case class ApiRateLimited(project: Project, url: URL, resetAt: Option[Long]) extends PackageError {
+    override def message(f: Formatter): String = {
+      val when = resetAt
+        .map(epochSeconds => s"The limit resets at ${f.bold(java.time.Instant.ofEpochSecond(epochSeconds).toString)}.")
+        .getOrElse("")
+      s"""GitHub refused the request for ${f.bold(project.toString)}: the API rate limit is spent.
+         |$when
+         |Set a token with ${f.bold("--github-token")} to raise the limit.
+         |Asked at ${f.cyan(url.toString)}.
+         |""".stripMargin
+    }
+  }
+
   case class VersionDoesNotExist(version: SemVer, project: Project) extends PackageError {
     override def message(f: Formatter): String =
       s"Version ${f.bold(version.toString)} does not exist for project ${f.bold(project.toString)}"

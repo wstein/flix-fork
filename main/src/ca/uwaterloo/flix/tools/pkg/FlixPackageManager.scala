@@ -164,11 +164,15 @@ object FlixPackageManager {
 
   /**
     * Finds the most relevant available updates for the given dependency.
+    *
+    * This is the one thing that needs a release listing, and it goes through [[ReleaseCache]]
+    * because asking once per dependency on every invocation spends the anonymous hourly budget on
+    * a question whose answer changes rarely.
     */
-  def findAvailableUpdates(dep: FlixDependency, apiKey: Option[String]): Result[AvailableUpdates, PackageError] = {
+  def findAvailableUpdates(dep: FlixDependency, apiKey: Option[String])(implicit formatter: Formatter, out: PrintStream): Result[AvailableUpdates, PackageError] = {
     for {
       githubProject <- GitHub.parseProject(s"${dep.username}/${dep.projectName}")
-      releases <- GitHub.getReleases(githubProject, apiKey)
+      releases <- ReleaseCache.getReleases(githubProject, apiKey, System.currentTimeMillis())
       availableVersions = releases.map(r => r.version)
 
       ver = dep.version

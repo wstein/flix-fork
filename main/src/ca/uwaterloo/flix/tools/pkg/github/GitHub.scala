@@ -71,24 +71,75 @@ object GitHub {
     * name of an asset only the publisher chose. Resolving a dependency graph does not: manifests
     * come from [[downloadReleaseAsset]], which computes their address.
     */
-  def getReleases(project: Project, apiKey: Option[String]): Result[List[Release], PackageError] = {
+  def getReleases(project: Project, apiKey: Option[String]): Result[List[Release], PackageError] =
+    fetchReleases(project, apiKey, etag = None).flatMap {
+      case ReleaseResponse.Modified(body, _) => parseReleases(body, project)
+      case ReleaseResponse.NotModified => Err(PackageError.JsonError("304 Not Modified", project))
+    }
+
+  /**
+    * What asking for a project's releases produced.
+    */
+  sealed trait ReleaseResponse
+
+  object ReleaseResponse {
+
+    /** The listing was returned, with the entity tag to quote when asking again. */
+    case class Modified(body: String, etag: Option[String]) extends ReleaseResponse
+
+    /** The listing has not changed since the entity tag that was quoted. */
+    case object NotModified extends ReleaseResponse
+  }
+
+  /**
+    * Asks for the project's releases, quoting `etag` when one is given.
+    *
+    * Quoting an entity tag is what lets a caller keep a listing and confirm it cheaply rather than
+    * fetch it again. The status is inspected rather than assumed: a refused request returns a JSON
+    * body describing the refusal, which the old code parsed as a listing and reported as a
+    * malformed one -- so a rate limit read as "the project has a broken release feed".
+    */
+  def fetchReleases(project: Project, apiKey: Option[String], etag: Option[String]): Result[ReleaseResponse, PackageError] = {
     val url = releasesUrl(project)
     val reqBuilder = HttpRequest.newBuilder(url.toURI)
     // add the API key as bearer if needed
     apiKey.foreach(key => reqBuilder.header("Authorization", "Bearer " + key))
+    etag.foreach(tag => reqBuilder.header("If-None-Match", tag))
     val req = reqBuilder.GET().build()
-    val json = try {
-      Client.sendRequest(req).body()
+
+    val response = try {
+      Client.sendRequest(req)
     } catch {
       case ex: IOException => return Err(PackageError.ProjectNotFound(url, project, ex))
     }
-    val releaseJsons = try {
-      parse(json).asInstanceOf[JArray]
-    } catch {
 
-      case _: ClassCastException => return Err(PackageError.JsonError(json, project))
+    response.statusCode() match {
+      case 200 => Ok(ReleaseResponse.Modified(response.body(), header(response, "ETag")))
+      case 304 => Ok(ReleaseResponse.NotModified)
+      case 403 | 429 => Err(PackageError.ApiRateLimited(project, url, header(response, "x-ratelimit-reset").flatMap(_.toLongOption)))
+      case 404 => Err(PackageError.ProjectNotFound(url, project, new IOException("404 Not Found")))
+      case status => Err(PackageError.DownloadFailed(url, status))
+    }
+  }
+
+  /**
+    * Parses a release listing.
+    */
+  def parseReleases(body: String, project: Project): Result[List[Release], PackageError] = {
+    val releaseJsons = try {
+      parse(body).asInstanceOf[JArray]
+    } catch {
+      case _: ClassCastException => return Err(PackageError.JsonError(body, project))
     }
     Ok(releaseJsons.arr.map(parseRelease))
+  }
+
+  /**
+    * Returns the named header of `response`, if it has one.
+    */
+  private def header(response: HttpResponse[?], name: String): Option[String] = {
+    val value = response.headers().firstValue(name)
+    if (value.isPresent) Some(value.get()) else None
   }
 
   /**
