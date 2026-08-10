@@ -74,7 +74,13 @@ object BspCapabilities {
     * `TestBspCapabilities` holds the two in step. The lifecycle, `workspace/buildTargets` and
     * `buildTarget/sources` are mandatory and carry no flag, so they are not listed.
     */
-  val Implemented: Set[BspFeature] = Set(BspFeature.Compile)
+  val Implemented: Set[BspFeature] = Set(
+    BspFeature.Compile,
+    BspFeature.InverseSources,
+    BspFeature.DependencySources,
+    BspFeature.DependencyModules,
+    BspFeature.Resources,
+    BspFeature.OutputPaths)
 
   /** Returns `true` if `feature` is served. */
   def implemented(feature: BspFeature): Boolean = Implemented.contains(feature)

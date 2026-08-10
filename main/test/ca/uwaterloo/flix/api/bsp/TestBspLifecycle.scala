@@ -198,12 +198,10 @@ class TestBspLifecycle extends AnyFunSuite {
         // is indistinguishable from a real one and a client would draw a conclusion from it. When a
         // phase implements one, this list is what makes removing it from here a deliberate act.
         val codes = List(
-          errorCodeOf(client.buildTargetInverseSources(new InverseSourcesParams(new TextDocumentIdentifier("file:///x.flix")))),
-          errorCodeOf(client.buildTargetResources(new ResourcesParams(List(target).asJava))),
-          errorCodeOf(client.buildTargetOutputPaths(new OutputPathsParams(List(target).asJava))),
           errorCodeOf(client.buildTargetRun(new RunParams(target))),
           errorCodeOf(client.buildTargetTest(new TestParams(List(target).asJava))),
           errorCodeOf(client.workspaceReload()),
+          errorCodeOf(client.buildTargetCleanCache(new CleanCacheParams(List(target).asJava))),
           errorCodeOf(client.debugSessionStart(new DebugSessionParams(List(target).asJava))))
 
         assert(

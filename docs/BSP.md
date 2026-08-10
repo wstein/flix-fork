@@ -1,7 +1,7 @@
 # The Flix build server
 
-**Status: lifecycle, discovery, sources and compiling implemented. Running and
-testing are not.** This document describes what `flix bsp` does today, what it
+**Status: lifecycle, discovery, sources, compiling and the project queries are
+implemented. Running and testing are not.** This document describes what `flix bsp` does today, what it
 deliberately does not do, and why each decision was taken. It is written to be the
 front matter of a pull request, in the manner of `docs/JOINT-COMPILATION.md`.
 
@@ -57,12 +57,12 @@ explicitly.
 | `workspace/buildTargets` | served |
 | `buildTarget/sources` | served |
 | `buildTarget/compile` | served |
+| `buildTarget/inverseSources`, `resources`, `outputPaths` | served |
+| `buildTarget/dependencySources`, `dependencyModules` | served |
 | `buildTarget/run`, `buildTarget/test` | **not yet** |
-| `buildTarget/inverseSources`, `resources`, `outputPaths` | **not yet** |
-| `buildTarget/dependencySources`, `dependencyModules` | **not yet** |
 | `buildTarget/jvmRunEnvironment`, `jvmTestEnvironment` | **not yet** |
 | `workspace/reload`, `buildTarget/cleanCache` | **not yet** |
-| `debugSessionStart` | never (see §6) |
+| `debugSessionStart` | never (see §8) |
 
 Anything not served is refused with `MethodNotFound`, never answered with an empty
 result: an empty answer is indistinguishable from a real one, so a client would draw a
@@ -153,7 +153,35 @@ which *known* files changed, and a file created since the last build is not amon
 so without the rescan a long-lived session never compiles a new source and never stops
 compiling a deleted one.
 
-## 6. What a client will get wrong
+## 6. The project queries
+
+All of them are answered from `ProjectView`, which holds only what is known *without*
+compiling — because a client asks them before the first build and while the project is
+broken, which is when it needs them most. An implementation that reached for a typed
+program would fail exactly then.
+
+- **`inverseSources`** claims the project's own files and returns an empty list for
+  anything else. An unknown *document* is an ordinary question — a client asks about
+  whatever the user opened — so it is not an error, unlike an unknown *target*.
+- **`outputPaths`** names `build/development/class/`, not `build/`. That directory also
+  holds generated documentation and coverage reports, and a client told to exclude the
+  lot would exclude more than the build's output.
+- **`resources`** names `resources/` whether or not it exists, because a client uses it
+  to decide what to watch.
+- **`dependencySources`** lists the `.fpkg` archives and nothing else. A Maven or url jar
+  is compiled Java with no Flix source to show, and the standard library has no file on
+  this machine at all; reporting either would name something a client cannot open and
+  call it a source.
+- **`dependencyModules`** reads the *manifest*, not the resolved jars, because the
+  manifest is what names a dependency — a jar in `lib/cache` has a file name where a
+  client wants a coordinate. Maven dependencies carry their coordinate under the `maven`
+  data kind; a Flix package and a url jar have no such standard shape and are reported
+  plainly rather than dressed as something they are not.
+
+Every one of them refuses an unknown target rather than answering emptily, for the
+reason given in §3.
+
+## 7. What a client will get wrong
 
 Stated plainly, because each is a real limitation rather than an oversight:
 
@@ -169,9 +197,9 @@ Stated plainly, because each is a real limitation rather than an oversight:
   `buildTarget/javacOptions`, which is not implemented — a worse trade.
 - **Some sources cannot be opened.** A diagnostic in the standard library or inside a
   `.fpkg` dependency is reported against a `flix-lib:` or `jar:` URI. That is
-  deliberate; see §9.
+  deliberate; see §10.
 
-## 7. What is not built, and why
+## 8. What is not built, and why
 
 - **`debugSessionStart`.** Flix has no debug adapter, so there is no address to return.
   `canDebug` is false and the request always fails. This one does not become available
@@ -185,7 +213,7 @@ Stated plainly, because each is a real limitation rather than an oversight:
 - **TCP transport and concurrent clients.** stdio only. One `Flix` instance per
   session is the concurrency ceiling regardless.
 
-## 8. Standard output belongs to the protocol
+## 9. Standard output belongs to the protocol
 
 This is the invariant most easily broken by an unrelated edit, so it is stated as a
 rule: **never `println` on a code path a BSP request can reach.**
@@ -206,7 +234,7 @@ interesting failures happen while the project is loading.
 `C` of `Content-Length`, which is the only assertion that can catch a `println` added
 anywhere on the initialize path.
 
-## 9. URIs, and why nothing is dropped
+## 10. URIs, and why nothing is dropped
 
 `BspUri.ofSource` returns a `String`, not an `Option[String]`. There is no filter, so
 there is nothing to drop.
@@ -238,7 +266,7 @@ Two details are load-bearing and were each established by a failing test:
   the user opened are then two spellings of one directory, and a correct client is
   refused.
 
-## 10. Session model
+## 11. Session model
 
 One `Bootstrap` and one `Flix` per connection, held by `BspSession`, which also owns
 the lifecycle state machine: `Uninitialized`, `Initialized`, `ShutDown`. Requests
@@ -264,7 +292,7 @@ outlives a reload can be recognised as stale rather than published against the p
 that replaced it. Nothing produces such work yet; the counter is one field, and the
 alternative is to add it after the first stale-publish bug.
 
-## 11. Acceptance criteria
+## 12. Acceptance criteria
 
 Each names the test that pins it.
 
@@ -317,8 +345,19 @@ Each names the test that pins it.
     failed compile does not clear markers it could not speak for".
 18. **A created or deleted source is seen by the next compile.** `TestBspCompile`, "a
     compile after a source is created sees it" and "…is deleted sees that too".
+19. **Discovery answers for a project that does not compile.** `TestBspQueries`,
+    "discovery answers for a project that does not compile" — the property that makes
+    answering from `ProjectView` rather than from a typed program the right choice.
+20. **`inverseSources` claims its own files and disclaims others.** `TestBspQueries`,
+    "inverseSources claims the project's own files and disclaims others".
+21. **`outputPaths` names the class directory, not `build/`.** `TestBspQueries`,
+    "outputPaths names the class directory, not the whole build directory".
+22. **A Maven dependency is reported with its coordinate.** `TestBspQueries`, "a maven
+    dependency is reported as a maven module with its coordinate".
+23. **Every query refuses an unknown target.** `TestBspQueries`, "every query refuses a
+    target it does not have".
 
-## 12. Running the tests
+## 13. Running the tests
 
 ```
 ./mill flix.test        # the in-process tests, with the rest of the suite

@@ -16,6 +16,7 @@
 package ca.uwaterloo.flix.api.bsp
 
 import ca.uwaterloo.flix.api.ProjectView
+import ca.uwaterloo.flix.util.Build
 import ch.epfl.scala.bsp4j.*
 import org.eclipse.lsp4j.jsonrpc.ResponseErrorException
 import org.eclipse.lsp4j.jsonrpc.messages.{ResponseError, ResponseErrorCode}
@@ -92,20 +93,81 @@ class FlixBuildServer(session: BspSession, onExit: () => Unit) extends BuildServ
   // the phase that implements one adds it to `BspCapabilities.Implemented` and the refusal stops
   // firing.
 
-  override def buildTargetInverseSources(params: InverseSourcesParams): CompletableFuture[InverseSourcesResult] =
-    refuse(BspFeature.InverseSources)
+  /**
+    * Says which target a document belongs to.
+    *
+    * A document the project does not declare gets an empty list rather than an error: unlike an
+    * unknown *target*, an unknown document is an ordinary question -- a client asks about whatever
+    * file the user opened, including files from other projects -- and "no target owns this" is the
+    * true answer rather than a failure.
+    */
+  override def buildTargetInverseSources(params: InverseSourcesParams): CompletableFuture[InverseSourcesResult] = completing {
+    val view = session.requireView()
+    val owned = BspUri.toPath(params.getTextDocument.getUri).exists(view.declaresSource)
+    val targets = if (owned) List(BuildTargets.id(view)) else Nil
+    new InverseSourcesResult(targets.asJava)
+  }
 
-  override def buildTargetDependencySources(params: DependencySourcesParams): CompletableFuture[DependencySourcesResult] =
-    refuse(BspFeature.DependencySources)
+  /**
+    * Lists the sources of the project's dependencies.
+    *
+    * The `.fpkg` archives, and only those. A Maven or url jar is compiled Java with no Flix source to
+    * show, and the standard library has no file on this machine at all -- reporting either would name
+    * something a client cannot open and call it a source.
+    */
+  override def buildTargetDependencySources(params: DependencySourcesParams): CompletableFuture[DependencySourcesResult] = completing {
+    val view = session.requireView()
+    val items = requireKnownTargets(view, params.getTargets).map { target =>
+      new DependencySourcesItem(target, view.flixPackagePaths.map(BspUri.ofFile).asJava)
+    }
+    new DependencySourcesResult(items.asJava)
+  }
 
-  override def buildTargetDependencyModules(params: DependencyModulesParams): CompletableFuture[DependencyModulesResult] =
-    refuse(BspFeature.DependencyModules)
+  /**
+    * Lists the project's dependencies as modules.
+    *
+    * Read from the manifest rather than from the resolved jars, because the manifest is what names a
+    * dependency: a jar in `lib/cache` has a file name, and a client wants the coordinate.
+    */
+  override def buildTargetDependencyModules(params: DependencyModulesParams): CompletableFuture[DependencyModulesResult] = completing {
+    val view = session.requireView()
+    val items = requireKnownTargets(view, params.getTargets).map { target =>
+      new DependencyModulesItem(target, dependencyModules(view).asJava)
+    }
+    new DependencyModulesResult(items.asJava)
+  }
 
-  override def buildTargetResources(params: ResourcesParams): CompletableFuture[ResourcesResult] =
-    refuse(BspFeature.Resources)
+  /**
+    * Lists the directories holding the project's resources.
+    *
+    * Reported whether or not `resources/` exists yet: a client uses this to decide what to watch, and
+    * a project whose resources arrive tomorrow still wants them noticed.
+    */
+  override def buildTargetResources(params: ResourcesParams): CompletableFuture[ResourcesResult] = completing {
+    val view = session.requireView()
+    val items = requireKnownTargets(view, params.getTargets).map { target =>
+      new ResourcesItem(target, List(BspUri.ofDirectory(view.resourcesDirectory)).asJava)
+    }
+    new ResourcesResult(items.asJava)
+  }
 
-  override def buildTargetOutputPaths(params: OutputPathsParams): CompletableFuture[OutputPathsResult] =
-    refuse(BspFeature.OutputPaths)
+  /**
+    * Says where the build writes.
+    *
+    * The class directory of the development mode, not `build/` itself -- that also holds generated
+    * documentation and coverage reports, and a client that excluded the lot from its source scanning
+    * would be excluding more than the build's output. Production output is not reported because no
+    * target is advertised for it.
+    */
+  override def buildTargetOutputPaths(params: OutputPathsParams): CompletableFuture[OutputPathsResult] = completing {
+    val view = session.requireView()
+    val items = requireKnownTargets(view, params.getTargets).map { target =>
+      val classes = new OutputPathItem(
+        BspUri.ofDirectory(view.classDirectories(Build.Development)), OutputPathItemKind.DIRECTORY)
+      new OutputPathsItem(target, List(classes).asJava)
+    }
+    new OutputPathsResult(items.asJava)
+  }
 
   /**
     * Compiles the project and publishes what the compiler said.
@@ -177,6 +239,27 @@ class FlixBuildServer(session: BspSession, onExit: () => Unit) extends BuildServ
     originId.foreach(report.setOriginId)
     report
   }
+
+  /**
+    * Returns the project's dependencies as protocol modules.
+    *
+    * Maven dependencies carry their coordinate under the `maven` data kind, which is the shape a
+    * client knows how to render and resolve. A Flix package and a url jar have no such standard
+    * shape, so they are reported plainly rather than dressed as something they are not.
+    */
+  private def dependencyModules(view: ProjectView): List[DependencyModule] =
+    view.manifest.toList.flatMap { manifest =>
+      val maven = manifest.mavenDependencies.map { d =>
+        val module = new DependencyModule(d.identifier, d.versionTag)
+        module.setDataKind(DependencyModuleDataKind.MAVEN)
+        module.setData(new MavenDependencyModule(
+          d.groupId, d.artifactId, d.versionTag, List.empty[MavenDependencyModuleArtifact].asJava))
+        module
+      }
+      val flix = manifest.flixDependencies.map(d => new DependencyModule(d.identifier, d.version.toString))
+      val jars = manifest.jarDependencies.map(d => new DependencyModule(d.identifier, d.url))
+      maven ::: flix ::: jars
+    }
 
   /** Returns the project's sources as protocol items, in a stable order. */
   private def sourceItems(view: ProjectView): List[SourceItem] =
