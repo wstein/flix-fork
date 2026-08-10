@@ -495,6 +495,47 @@ class TestBootstrap extends AnyFunSuite {
       "a clean production build disturbed the development class files")
   }
 
+  test("--clean empties the output directory, and an implicit full build does not") {
+    // Two different reasons for a full build, deliberately not the same operation. `--clean` was
+    // asked for, so it wipes first and a failed compile leaves nothing - that is the bargain, and
+    // it is what makes a released artifact a function of the sources alone. A full build forced by
+    // a changed fingerprint was *not* asked for, so it must not destroy a working build.
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out)
+    writeSources(p, extra = true)
+    val b = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
+
+    b.buildJar(mkDeterministicFlix).unsafeGet
+    val good = classFilesOf(p, Build.Production)
+    assert(good.nonEmpty, "the first build produced no class files")
+
+    // Break the source so that the wipe is the only thing that reaches the disk.
+    FileOps.writeString(p.resolve("src").resolve("Main.flix").normalize(), "def main(): Unit = this is not Flix\n")
+
+    val cleanResult = b.buildJar(mkDeterministicFlix, clean = true)
+    assert(cleanResult.isInstanceOf[Result.Err[_, _]], "expected the build to fail on a broken source")
+    assert(
+      classFilesOf(p, Build.Production).isEmpty,
+      s"--clean did not empty the output directory: ${classFilesOf(p, Build.Production).toList.sorted.take(5)}")
+    assert(!Files.exists(manifestFileOf(p, Build.Production)), "--clean left the build manifest behind")
+
+    // Restore, rebuild, and now force a full build the *implicit* way. The same failing compile
+    // must leave the good output alone.
+    writeSources(p, extra = true)
+    b.buildJar(mkDeterministicFlix).unsafeGet
+    val restored = classStampsOf(p, Build.Production)
+    val manifest = Files.readString(manifestFileOf(p, Build.Production))
+
+    FileOps.writeString(p.resolve("src").resolve("Main.flix").normalize(), "def main(): Unit = this is not Flix\n")
+    FileOps.writeString(manifestFileOf(p, Build.Production), manifest.replace("\"fingerprint\" : \"", "\"fingerprint\" : \"x"))
+
+    val implicitResult = b.buildJar(mkDeterministicFlix)
+    assert(implicitResult.isInstanceOf[Result.Err[_, _]], "expected the build to fail on a broken source")
+    assert(
+      classStampsOf(p, Build.Production) == restored,
+      "a full build nobody asked for destroyed the last good output")
+  }
+
   test("a build that fails to compile leaves the last good build on disk") {
     val p = Files.createTempDirectory(ProjectPrefix)
     Bootstrap.init(p)(System.out)

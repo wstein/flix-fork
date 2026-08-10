@@ -795,8 +795,9 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
   /**
     * Builds (compiles) the source files for the project.
     *
-    * @param clean forces a full build: prior class files and the build manifest are discarded
-    *              and every source is handed to the compiler again.
+    * @param clean empties the output directory before compiling and rebuilds from nothing. This
+    *              is the only path that deletes before it knows the compile succeeds, and it does
+    *              so because that is what was asked for.
     * @see [[compileProject]]
     */
   def build(flix: Flix, build: Build = Build.Development, clean: Boolean = false): Result[CompilationResult, BootstrapError] = {
@@ -815,9 +816,9 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
     * Builds in production mode, so its output is `build/production/` and it neither reads nor
     * invalidates what `flix build` left in `build/development/`.
     *
-    * @param clean forces a full build. This is what a reproducible release wants: it makes the
-    *              jar a function of the sources and nothing else, including the compiler's own
-    *              caches.
+    * @param clean empties the output directory before compiling and rebuilds from nothing. This
+    *              is what a reproducible release wants: it makes the jar a function of the sources
+    *              and nothing else, including anything an earlier build left in the directory.
     */
   def buildJar(flix: Flix, clean: Boolean = false): Result[Unit, BootstrapError] = {
     val jarFile = Bootstrap.getJarFile(projectPath)
@@ -839,7 +840,7 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
   /**
     * Builds a fatjar package for the project.
     *
-    * @param clean forces a full build.
+    * @param clean empties the output directory before compiling and rebuilds from nothing.
     * @see [[buildJar]]
     */
   def buildFatJar(flix: Flix, clean: Boolean = false): Result[Unit, BootstrapError] = {
@@ -875,40 +876,53 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
     * [[BuildManifest]] records the outcome so that a build which fails, or one interrupted
     * between writing and packaging, still leaves a directory that can be described.
     *
-    * A full build is forced when `clean` is set, and also when the recorded fingerprint of the
-    * non-source inputs - compiler version, back-end options, dependencies - does not match this
-    * build's, since nothing an earlier build left behind was produced under these settings. What
-    * a full build discards is the compiler's *in-memory* state; it does not delete the previous
-    * build's class files first, because reconciling after a successful compile reaches the same
-    * directory anyway. Deleting them up front would destroy a working build's output whenever the
-    * compile meant to replace it fails - and a failing compile is ordinary, while the inputs that
-    * force a full build (a compiler upgrade, a new `--coverage` flag, an updated dependency) are
-    * not rare enough for that to be an edge case.
+    * A full build - nothing the previous build left is reused - happens for two different
+    * reasons, and they are deliberately *not* the same operation:
+    *
+    *   - `clean` is set. The caller asked to build from nothing, so the output directory is
+    *     emptied before the compile starts: class files, the directories that leaves empty, and
+    *     the manifest. There is then no moment at which the previous build's output could be
+    *     mistaken for this one's, which is the guarantee a reproducible release is after. The cost
+    *     is that a `--clean` whose compile then fails leaves nothing behind - the same bargain
+    *     `make clean && make` offers, and the caller asked for it.
+    *   - The recorded fingerprint of the non-source inputs - compiler version, back-end options,
+    *     dependencies - does not match this build's. Nothing an earlier build left was produced
+    *     under these settings, so the compiler's in-memory state is discarded; but **nothing on
+    *     disk is deleted**, because nobody asked for that. Reconciling after a successful compile
+    *     reaches the same directory anyway, and emptying it up front would destroy a working
+    *     build's output whenever the compile meant to replace it fails. A failing compile is
+    *     ordinary, and so are the inputs that land here: a compiler upgrade, a new `--coverage`
+    *     flag, an updated dependency.
     *
     * Everything here is scoped to the output directory of the mode `flix` is configured for, so
     * a development build and a production build keep separate products and separate manifests
     * and neither resets the other.
     *
-    * If compilation fails nothing on disk is touched: the class directory and the manifest still
-    * describe the last build that succeeded.
+    * If compilation fails, nothing on disk is touched *except* by an explicit `clean`: the class
+    * directory and the manifest still describe the last build that succeeded.
     */
   private def compileProject(flix: Flix, clean: Boolean): Result[CompilationResult, BootstrapError] = {
     val build = flix.options.build
     val fingerprint = BuildManifest.fingerprintOf(flix.options, dependencyPaths)
     val recorded = Steps.readBuildManifest(build)
-    val fullBuild = clean || !recorded.exists(_.fingerprint == fingerprint)
+    val staleInputs = !recorded.exists(_.fingerprint == fingerprint)
 
-    if (fullBuild) {
+    if (clean || staleInputs) {
       Steps.discardIncrementalState(flix)
     }
-    Steps.updateStaleSources(flix)
 
-    for {
-      result <- Steps.compile(flix)
-      _ <- Steps.reconcileClassDirectory(build, result.products)
-      _ <- Steps.writeBuildManifest(build, fingerprint, result.products)
-    } yield {
-      result
+    val emptied = if (clean) Steps.emptyOutputDirectory(build) else Ok(())
+
+    emptied.flatMap { _ =>
+      Steps.updateStaleSources(flix)
+
+      for {
+        result <- Steps.compile(flix)
+        _ <- Steps.reconcileClassDirectory(build, result.products)
+        _ <- Steps.writeBuildManifest(build, fingerprint, result.products)
+      } yield {
+        result
+      }
     }
   }
 
@@ -2138,6 +2152,31 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
     def discardIncrementalState(flix: Flix): Unit = {
       flix.clearCaches()
       invalidateSourceTimestamps()
+    }
+
+    /**
+      * Empties the output directory of the build mode `build`: every class file, the directories
+      * that leaves empty, and the build manifest.
+      *
+      * This is the one thing `--clean` does that an ordinary build does not, and it runs *before*
+      * the compile on purpose. The request is to build from nothing, so there must be no moment at
+      * which the previous build's output could be taken for this one's - which is what makes a
+      * `--clean` artifact a function of the sources and nothing else. It follows that a `--clean`
+      * whose compile then fails leaves nothing behind; that is the bargain the caller asked for,
+      * and it is why a full build forced by a *changed fingerprint* deliberately does not come
+      * here.
+      *
+      * The manifest goes first. A manifest that outlived the products it describes is one the next
+      * build would trust; a missing one only costs one more full build.
+      */
+    def emptyOutputDirectory(build: Build): Result[Unit, BootstrapError] = {
+      for {
+        _ <- deleteBuildManifest(build)
+        _ <- removeClassFiles(build, keep = Set.empty)
+        _ <- pruneEmptyDirectories(Bootstrap.getClassDirectory(projectPath, build))
+      } yield {
+        ()
+      }
     }
 
     /**

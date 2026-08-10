@@ -95,11 +95,9 @@ output becomes uncleanable.
 `flix build`, `build-jar` and `build-fatjar` go through `Bootstrap`, and none of
 them wipes its class directory any more. They **reconcile** it: compile, then
 delete every class file that is not one this compilation wrote, and prune the
-directories that empties. `--clean` forces a build from scratch — it discards the
-compiler's cached state and re-reads every source — which is what a reproducible
-release wants, since it makes the artifact a function of the sources and nothing
-carried over. Note that it does *not* empty the directory up front; see the last
-paragraph of this section for why.
+directories that empties. `--clean` still empties the directory up front and
+rebuilds from nothing, which is what a reproducible release wants: there is then no
+moment at which the previous build's output could be taken for this one's.
 
 Reconciling is only sound because of one fact about the compiler, and a change
 that stops it being true breaks this silently: **`Flix.codeGen` is
@@ -175,12 +173,17 @@ leaves. And `validateProducts` runs before the jar is opened, because
 `createJar` truncates the last good jar first: without the check, a product that
 went missing yields a jar quietly short a class and an exit code of zero.
 
-A full build discards the compiler's in-memory state and **nothing on disk**.
-Reconciling after a successful compile reaches the same directory anyway, so
-deleting first would only mean destroying a working build's output whenever the
-compile meant to replace it fails — and the inputs that force a full build (a
-compiler upgrade, a new `--coverage`, an updated dependency) are common enough
-that this is not an edge case. `TestBootstrap` asserts it.
+**A full build happens for two reasons, and they are not the same operation.**
+`--clean` was asked for, so `emptyOutputDirectory` wipes the class files and the
+manifest *before* the compile — and a `--clean` whose compile then fails leaves
+nothing, the same bargain `make clean && make` offers. A full build forced by a
+changed **fingerprint** was not asked for: it discards the compiler's in-memory
+state and touches **nothing on disk**, because reconciling after a successful
+compile reaches the same directory anyway, and wiping first would destroy a working
+build whenever the compile meant to replace it fails. The inputs that land there —
+a compiler upgrade, a new `--coverage`, an updated dependency — are far too common
+for that. Collapsing the two back into one operation is the mistake to avoid;
+`TestBootstrap` pins both halves.
 
 Two things the incremental path newly exposes are fixed in
 `updateStaleSourcesByTimestamp`: a deleted file reads as stale but must be
