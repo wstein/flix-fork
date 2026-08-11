@@ -71,7 +71,12 @@ object BspServer {
     // a client that captures it gets something useful when a handshake never completes.
     System.err.println("Starting Flix BSP Server...")
 
-    val executor = Executors.newFixedThreadPool(4, (r: Runnable) => {
+    // Cached rather than fixed, and that is not a detail. One thread is permanently the connection's
+    // message listener, and a handler can occupy another for minutes -- a forked run, a test run, a
+    // whole-program compile. A small fixed pool would leave every query queued behind those, which is
+    // the responsiveness problem dispatching off the listener thread was meant to solve. Threads are
+    // created on demand and expire when idle; lsp4j's own default is the same choice.
+    val executor = Executors.newCachedThreadPool((r: Runnable) => {
       val t = new Thread(r, "flix-bsp")
       // Daemon, so a client that vanishes without `build/exit` cannot keep the process alive.
       t.setDaemon(true)

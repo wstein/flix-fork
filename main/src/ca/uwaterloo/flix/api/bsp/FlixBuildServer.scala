@@ -22,7 +22,7 @@ import org.eclipse.lsp4j.jsonrpc.ResponseErrorException
 import org.eclipse.lsp4j.jsonrpc.messages.{ResponseError, ResponseErrorCode}
 
 import java.nio.file.{Files, Path}
-import java.util.concurrent.{CompletableFuture, Executor}
+import java.util.concurrent.{CompletableFuture, Executor, RejectedExecutionException}
 import scala.jdk.CollectionConverters.*
 
 /**
@@ -378,7 +378,7 @@ class FlixBuildServer(session: BspSession, onExit: () => Unit, executor: Executo
     */
   private def completing[T](body: => T): CompletableFuture[T] = {
     val future = new CompletableFuture[T]()
-    executor.execute { () =>
+    val work: Runnable = { () =>
       // A client that has already given up gets no work done on its behalf.
       if (!future.isCancelled) {
         try {
@@ -395,14 +395,29 @@ class FlixBuildServer(session: BspSession, onExit: () => Unit, executor: Executo
           }
         } catch {
           case e: ResponseErrorException => future.completeExceptionally(e)
-          case e: Exception =>
-            future.completeExceptionally(new ResponseErrorException(
-              new ResponseError(ResponseErrorCode.InternalError, Option(e.getMessage).getOrElse(e.toString), null)))
+          case e: Exception => future.completeExceptionally(internalError(e))
         }
       }
     }
+
+    try {
+      executor.execute(work)
+    } catch {
+      // The executor is shut down, which is what `build/exit` and a closed connection do. A future
+      // that is never completed is a client waiting forever, so this path has to answer rather than
+      // drop the request -- and it is not hypothetical: the shutdown and the request race.
+      case _: RejectedExecutionException =>
+        future.completeExceptionally(new ResponseErrorException(new ResponseError(
+          ResponseErrorCode.InternalError, "this server is shutting down and cannot serve the request", null)))
+      case e: Exception => future.completeExceptionally(internalError(e))
+    }
     future
   }
+
+  /** Wraps a failure that is nobody's protocol error, so a client gets a message rather than silence. */
+  private def internalError(e: Exception): ResponseErrorException =
+    new ResponseErrorException(
+      new ResponseError(ResponseErrorCode.InternalError, Option(e.getMessage).getOrElse(e.toString), null))
 
   /** Refuses a request whose feature is not served, and reports one that is as the bug it is. */
   private def refuse[T](feature: BspFeature): CompletableFuture[T] =

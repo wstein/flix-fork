@@ -57,11 +57,7 @@ class BspTestSink(tasks: BspTasks, target: BuildTargetIdentifier, parent: TaskId
 
   override def accept(event: Tester.TestEvent)(implicit flix: Flix): Unit = event match {
     case Tester.TestEvent.Before(sym) =>
-      val id = tasks.child(parent)
-      open += (sym.toString -> id)
-      val start = new TestStart(sym.toString)
-      locationOf(sym).foreach(start.setLocation)
-      tasks.start(id, s"Running $sym", Some((TaskStartDataKind.TEST_START, start)))
+      openFor(sym, s"Running $sym")
 
     case Tester.TestEvent.Success(sym, elapsed) =>
       passed += 1
@@ -78,9 +74,7 @@ class BspTestSink(tasks: BspTasks, target: BuildTargetIdentifier, parent: TaskId
       skipped += 1
       // A skipped test has no `Before`, so this opens and closes its pair in one step -- a finish with
       // no start would leave a client rendering a row it cannot place in its tree.
-      val id = tasks.child(parent)
-      tasks.start(id, s"Skipping $sym", Some((TaskStartDataKind.TEST_START, new TestStart(sym.toString))))
-      open += (sym.toString -> id)
+      openFor(sym, s"Skipping $sym")
       finish(sym, TestStatus.SKIPPED, message = None, Duration(0))
 
     case Tester.TestEvent.Finished(elapsed) =>
@@ -110,10 +104,23 @@ class BspTestSink(tasks: BspTasks, target: BuildTargetIdentifier, parent: TaskId
   /** Returns `true` if no test failed. */
   def isSuccess: Boolean = failed == 0
 
+  /** Opens the task for `sym` and returns its id, recording it so the finish can name the same one. */
+  private def openFor(sym: Symbol.DefnSym, message: String): TaskId = {
+    val id = tasks.child(parent)
+    open += (sym.toString -> id)
+    val start = new TestStart(sym.toString)
+    locationOf(sym).foreach(start.setLocation)
+    tasks.start(id, message, Some((TaskStartDataKind.TEST_START, start)))
+    id
+  }
+
   /** Ends the task opened for `sym`. */
   private def finish(sym: Symbol.DefnSym, status: TestStatus, message: Option[String],
                      elapsed: Duration): Unit = {
-    val id = open.getOrElse(sym.toString, tasks.child(parent))
+    // A test with no open task is one whose `Before` never arrived. That cannot happen for the events
+    // the runner emits today, and if a new one is added the pair is still opened here rather than a
+    // finish being sent on its own -- which is the defect the skip case above exists to avoid.
+    val id = open.getOrElse(sym.toString, openFor(sym, s"Running $sym"))
     open -= sym.toString
 
     val data = new TestFinish(sym.toString, status)

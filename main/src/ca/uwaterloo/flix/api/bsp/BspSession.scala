@@ -358,34 +358,41 @@ class BspSession(val projectPath: Path, options: Options, log: BspLogStream) {
     */
   def test(target: BuildTargetIdentifier, filters: List[Regex], originId: Option[String]): TestResult = {
     val startedAt = currentGeneration
-    val parent = tasks.newTask()
-
     val view = requireView()
+
+    val parent = tasks.newTask()
+    val sink = new BspTestSink(tasks, target, parent)
     tasks.start(parent, s"Testing ${view.packageName}", Some((TaskStartDataKind.TEST_TASK, new TestTask(target))))
 
-    val sink = new BspTestSink(tasks, target, parent)
-    val (outcome, ran) = buildLock.synchronized {
-      val b = requireBootstrapForBuild()
-      b.testWith(flix, filters, sink)
-    }
-
-    val status =
-      if (!isCurrent(startedAt)) StatusCode.CANCELLED
-      else {
-        publish(target, outcome)
-        ran match {
-          // The program did not compile, so no test ran. The diagnostics just published say why.
-          case None => StatusCode.ERROR
-          case Some(succeeded) => if (succeeded) StatusCode.OK else StatusCode.ERROR
-        }
+    // The finish is in a `finally` for the same reason `BspTasks.bracket` puts it there, which this
+    // cannot use because the pairs interleave with the events driving them: a throw between the start
+    // and the finish -- a shutdown, a project that stopped loading -- would leave the client's progress
+    // indicator turning forever and report the failure nowhere.
+    var status: StatusCode = StatusCode.ERROR
+    try {
+      val (outcome, ran) = buildLock.synchronized {
+        val b = requireBootstrapForBuild()
+        b.testWith(flix, filters, sink)
       }
 
-    tasks.finish(parent, s"Tested ${view.packageName}", status,
-      Some((TaskFinishDataKind.TEST_REPORT, sink.report())))
+      status =
+        if (!isCurrent(startedAt)) StatusCode.CANCELLED
+        else {
+          publish(target, outcome)
+          ran match {
+            // The program did not compile, so no test ran. The diagnostics just published say why.
+            case None => StatusCode.ERROR
+            case Some(succeeded) => if (succeeded) StatusCode.OK else StatusCode.ERROR
+          }
+        }
 
-    val result = new TestResult(status)
-    originId.foreach(result.setOriginId)
-    result
+      val result = new TestResult(status)
+      originId.foreach(result.setOriginId)
+      result
+    } finally {
+      tasks.finish(parent, s"Tested ${view.packageName}", status,
+        Some((TaskFinishDataKind.TEST_REPORT, sink.report())))
+    }
   }
 
   /**
