@@ -197,7 +197,10 @@ class TestBspTest extends AnyFunSuite {
 
     val channel = BspTestChannel.open()
 
-    val executor = Executors.newFixedThreadPool(6, (r: Runnable) => {
+    // Cached, like the server's own pool: a handler can block for the length of a build, and a
+    // joiner waits on the build it shares, so a small fixed pool can leave the owner queued behind
+    // its own joiners.
+    val executor = Executors.newCachedThreadPool((r: Runnable) => {
       val t = new Thread(r, "bsp-test")
       t.setDaemon(true)
       t

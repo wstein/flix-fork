@@ -166,14 +166,61 @@ class TestBspCompile extends AnyFunSuite {
     }
   }
 
+  test("concurrent compiles that arrive before a build starts share it") {
+    withSession { s =>
+      // Broken on purpose: a diagnostic batch is published once per build that actually ran, which is
+      // the only count of builds a client can observe. A clean project publishes nothing and would
+      // make this untestable from the outside.
+      s.write("src/Main.flix", "def main(): Unit = undefinedFunction()\n")
+
+      val requests = List.fill(6)(s.compileFuture())
+      val results = requests.map(_.get(Timeout, TimeUnit.SECONDS))
+
+      // Every request is answered, and answered with the truth. A collapsed request is not a dropped
+      // one: it reports the outcome of the build that superseded it.
+      assert(results.forall(_.getStatusCode == StatusCode.ERROR), s"unexpected: ${results.map(_.getStatusCode)}")
+
+      val builds = s.diagnostics.count(_.getDiagnostics.asScala.nonEmpty)
+      assert(builds >= 1, "no build published anything")
+      // Two, and the number is the design rather than an observation: the first request builds, the
+      // second claims the next slot, and everything arriving while that one waits joins it. A three
+      // would mean a build finished before the last request arrived, which a whole-program compile of
+      // the standard library does not do; anything larger means the sharing stopped working.
+      assert(builds <= 2, s"${requests.size} requests caused $builds builds")
+
+      // And each request is still its own task. A client waits on the one it started, so collapsing
+      // the builds must not collapse the progress reporting.
+      assert(s.taskStarts.sizeIs == requests.size, s"expected a task per request, got ${s.taskStarts.size}")
+      assert(s.taskFinishes.sizeIs == requests.size, s"expected a finish per request, got ${s.taskFinishes.size}")
+    }
+  }
+
+  test("a compile issued after a build started gets its own build") {
+    withSession { s =>
+      s.write("src/Main.flix", "def main(): Unit = undefinedFunction()\n")
+      assert(s.compile().getStatusCode == StatusCode.ERROR)
+      s.clear()
+
+      // The condition that makes sharing honest: only a build that has not begun may be joined. A
+      // request that arrives while one is running cannot be answered from it, because that build may
+      // have read the sources before the edit this request is about.
+      assert(s.compile().getStatusCode == StatusCode.ERROR)
+      assert(s.diagnostics.count(_.getDiagnostics.asScala.nonEmpty) >= 1,
+        "a sequential compile published nothing, so it did not run its own build")
+    }
+  }
+
   // ── Harness ──────────────────────────────────────────────────────────────────
 
   /** A connected client, with everything the server sent it. */
   private class Session(val project: Path, val client: BuildServer, val target: BuildTargetIdentifier,
                         received: Received) {
 
-    def compile(): CompileResult =
-      client.buildTargetCompile(new CompileParams(List(target).asJava)).get(Timeout, TimeUnit.SECONDS)
+    def compile(): CompileResult = compileFuture().get(Timeout, TimeUnit.SECONDS)
+
+    /** Issues a compile without waiting for it, so that several can be in flight at once. */
+    def compileFuture(): java.util.concurrent.CompletableFuture[CompileResult] =
+      client.buildTargetCompile(new CompileParams(List(target).asJava))
 
     def diagnostics: List[PublishDiagnosticsParams] = received.diagnostics.asScala.toList
 
@@ -211,7 +258,10 @@ class TestBspCompile extends AnyFunSuite {
 
     val channel = BspTestChannel.open()
 
-    val executor = Executors.newFixedThreadPool(6, (r: Runnable) => {
+    // Cached, like the server's own pool: a handler can block for the length of a build, and a
+    // joiner waits on the build it shares, so a small fixed pool can leave the owner queued behind
+    // its own joiners.
+    val executor = Executors.newCachedThreadPool((r: Runnable) => {
       val t = new Thread(r, "bsp-compile")
       t.setDaemon(true)
       t

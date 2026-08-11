@@ -328,10 +328,6 @@ Stated plainly, because each is a real limitation rather than an oversight:
   to be.
 - **Running is forked, so a program cannot be debugged through the server.** Use
   `jvmRunEnvironment` and start it yourself.
-- **Collapsing queued builds.** A client that compiles on every keystroke gets one compile
-  per request, serialised. A pending slot per target would collapse the queue, but it would
-  answer a client about a compile it did not run, and inventing that semantics is a decision
-  rather than an optimisation.
 - **Watcher-driven recompilation.** `buildTarget/didChange` is announced on a reload, but
   nothing watches the filesystem: a client compiles when it decides to. A watcher needs
   debounce, and the one in this repository is wired only to the REPL.
@@ -426,6 +422,18 @@ answered in the meantime, including `build/shutdown` and `$/cancelRequest`, whic
 say the server would look wedged exactly when a client most wants to talk to it. Handlers
 run on the connection's executor instead; builds are still serialised, by a lock rather
 than by the transport.
+
+**Concurrent compiles are coalesced, under one condition.** An editor compiles on save, and
+a person saving repeatedly used to queue one whole-program compile per keystroke — each
+taking seconds, each already obsolete before it started. A request may now share another's
+build, but **only if that build has not started yet**: the claim is registered before the
+build lock is taken and released once it is held, so every sharer arrived before the compile
+it shares began reading the sources. Nobody is told about a build that predates their edit.
+A request arriving while a build is *running* takes the next slot instead, so two concurrent
+saves cost two builds — and so do twenty. Only the request whose build ran publishes the
+diagnostics; a second publication of the same reports would resend every marker and clear
+nothing. `buildTarget/run` and `buildTarget/test` are not coalesced: they have effects their
+caller asked for, so sharing one between two requests would answer a question nobody asked.
 
 **Cancellation is soft.** `$/cancelRequest` marks the request cancelled and the work
 finishes anyway: the compiler's ForkJoin pool and `JvmWriter`'s writes are not
@@ -552,7 +560,11 @@ Each names the test that pins it.
     running. If this fails by timing out, dispatch has moved back onto lsp4j's thread.
 40. **Nothing is published after shutdown.** `TestBspMatrix`, "nothing is published after
     shutdown" — asserted against a build that was already running when the shutdown arrived.
-41. **A real server process completes the whole cycle.** `TestBspProcess`, "a scripted
+41. **Concurrent compiles share a build that has not started.** `TestBspCompile`, "concurrent
+    compiles that arrive before a build starts share it" — six requests, two builds, six
+    answers and six task pairs. And its converse, "a compile issued after a build started
+    gets its own build", which is the condition that makes sharing honest.
+42. **A real server process completes the whole cycle.** `TestBspProcess`, "a scripted
     session drives a real server through the whole cycle" — the assembled jar, started from
     the connection file it wrote, driven over hand-written frames through initialize,
     targets, sources, compile, run, test, shutdown and exit. The only case where nothing is

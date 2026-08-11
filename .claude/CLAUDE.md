@@ -291,6 +291,14 @@ than a late answer), and work can outlive the `shutdown` that ended the session 
 notification goes through one accessor that returns no client once shut down, and
 `shutdown` bumps the generation so an in-flight build's result is discarded.
 
+**Concurrent compiles are coalesced, and the condition is what makes it sound.** A request
+may share another's build only while that build **has not started**: the slot is claimed
+before `buildLock` is taken and released once it is held, so every sharer arrived before the
+compile read the sources. A request that arrives during a running build takes the next slot
+instead — its edit may postdate that build. Only the request whose build ran publishes, or
+the ledger resends every marker and clears nothing. `run` and `test` are never coalesced:
+they have effects their caller asked for.
+
 **`workspace/reload` is transactional, and `buildTarget/cleanCache` is not
 `Bootstrap.clean`.** A reload builds a fresh `Bootstrap` and a fresh `Flix` and installs
 only a complete one — a half-applied reload would answer some questions from the old

@@ -184,7 +184,10 @@ class TestBspLinkage extends AnyFunSuite {
 
     val serverOutput = new ByteArrayOutputStream()
     val received = new LinkedBlockingQueue[PublishDiagnosticsParams]()
-    val executor = Executors.newFixedThreadPool(4, (r: Runnable) => {
+    // Cached, like the server's own pool: a handler can block for the length of a build, and a
+    // joiner waits on the build it shares, so a small fixed pool can leave the owner queued behind
+    // its own joiners.
+    val executor = Executors.newCachedThreadPool((r: Runnable) => {
       val t = new Thread(r, "bsp-linkage")
       t.setDaemon(true)
       t

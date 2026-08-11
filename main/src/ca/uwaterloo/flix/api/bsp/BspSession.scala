@@ -25,6 +25,7 @@ import org.eclipse.lsp4j.jsonrpc.messages.{ResponseError, ResponseErrorCode}
 
 import java.io.PrintStream
 import java.nio.file.Path
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.atomic.AtomicLong
 import scala.jdk.CollectionConverters.*
 
@@ -70,6 +71,21 @@ class BspSession(val projectPath: Path, options: Options, log: BspLogStream) {
     * blocked behind a compile.
     */
   private val buildLock: AnyRef = new AnyRef
+
+  /**
+    * Guards [[joinable]] only, and is never held across a build.
+    *
+    * A separate monitor from [[buildLock]] on purpose: the whole point of the slot is to be readable
+    * and claimable *while* a build is running.
+    */
+  private val gate: AnyRef = new AnyRef
+
+  /**
+    * The compile a later request may join instead of queueing another, if there is one.
+    *
+    * Non-empty means: a caller has claimed the next build and has not started it yet.
+    */
+  private var joinable: Option[CompletableFuture[Bootstrap.CompileOutcome]] = None
 
   /**
     * The compiler this session compiles with, kept warm for its whole life.
@@ -233,14 +249,17 @@ class BspSession(val projectPath: Path, options: Options, log: BspLogStream) {
     * Returns the status a client should see: `OK` when the program compiled, `ERROR` when it did not.
     * Diagnostics are published either way, which is the case a `Result` cannot express -- a compile
     * can succeed and still have something to say.
+    *
+    * ==Coalescing==
+    *
+    * Concurrent requests that all arrive before a build starts share it. See [[compileOrJoin]] for the
+    * condition that makes that sound; the visible consequence here is that only the request whose
+    * build ran publishes the diagnostics.
     */
   def compile(target: BuildTargetIdentifier, originId: Option[String]): CompileResult = {
     val startedAt = currentGeneration
 
-    val outcome = buildLock.synchronized {
-      val b = requireBootstrapForBuild()
-      compileWith(b, b.view)
-    }
+    val (outcome, ran) = compileOrJoin()
 
     if (!isCurrent(startedAt)) {
       // Discarded rather than published. The request still answers, because a client is waiting on
@@ -248,12 +267,84 @@ class BspSession(val projectPath: Path, options: Options, log: BspLogStream) {
       return new CompileResult(StatusCode.CANCELLED)
     }
 
-    publish(target, outcome)
+    // Only the request whose build actually ran publishes. The ledger is the record of what the client
+    // has been told, so a second publication of the same reports would resend every marker and clear
+    // nothing -- and every joiner would do it again.
+    if (ran) {
+      publish(target, outcome)
+    }
 
     val result = new CompileResult(if (outcome.isSuccess) StatusCode.OK else StatusCode.ERROR)
     originId.foreach(result.setOriginId)
     result
   }
+
+  /**
+    * Compiles, or joins a compile that has been claimed and has not started.
+    *
+    * ==Why this is sound, and where the line is==
+    *
+    * An editor compiles on save, and a person saving repeatedly used to queue one whole-program
+    * compile per keystroke, each taking seconds and each already obsolete when it started. Collapsing
+    * them is only honest under one condition, which is the invariant this maintains: a request may
+    * share another's build **only if that build has not started yet**. The claim is registered before
+    * the build lock is acquired and released once it is held, so every joiner arrived before the
+    * compile it shares began reading the sources -- and `Steps.rescanSources` then sees everything all
+    * of them had written. Nobody is told about a compile that predates their edit.
+    *
+    * A request that arrives while a build is *running* therefore does not join it: that build may have
+    * started before the edit the request is about. It claims the next slot instead and waits, which is
+    * what makes two concurrent saves cost two builds rather than one, and twenty cost two as well.
+    *
+    * Only `buildTarget/compile` goes through here. A run and a test have effects their caller asked
+    * for, so sharing one between two requests would be answering a question nobody asked.
+    *
+    * @return the outcome, and whether this caller is the one whose build produced it.
+    */
+  private def compileOrJoin(): (Bootstrap.CompileOutcome, Boolean) = {
+    val (owner, shared) = gate.synchronized {
+      joinable match {
+        case Some(promise) => (false, promise)
+        case None =>
+          val promise = new CompletableFuture[Bootstrap.CompileOutcome]()
+          joinable = Some(promise)
+          (true, promise)
+      }
+    }
+
+    if (!owner) {
+      // Waits for the build claimed ahead of this request, and fails the same way it did: a joiner
+      // must not report success for a build that could not happen.
+      return (awaiting(shared), false)
+    }
+
+    buildLock.synchronized {
+      // The build is about to read the sources, so the slot closes here: from now on a new request
+      // needs its own build.
+      gate.synchronized { joinable = None }
+      try {
+        val b = requireBootstrapForBuild()
+        val outcome = compileWith(b, b.view)
+        shared.complete(outcome)
+        (outcome, true)
+      } catch {
+        case t: Throwable =>
+          // Every joiner is waiting on this, and a promise nobody completes is a request that never
+          // answers.
+          shared.completeExceptionally(t)
+          throw t
+      }
+    }
+  }
+
+  /** Returns `promise`'s value, rethrowing its failure rather than a wrapper around it. */
+  private def awaiting(promise: CompletableFuture[Bootstrap.CompileOutcome]): Bootstrap.CompileOutcome =
+    try promise.get()
+    catch {
+      // `get` wraps everything in an `ExecutionException`, which would reach a client as an internal
+      // error with a useless message instead of the refusal the build actually produced.
+      case e: java.util.concurrent.ExecutionException => throw Option(e.getCause).getOrElse(e)
+    }
 
   /**
     * Publishes the diagnostics of `outcome`, and clears the documents that no longer have any.
