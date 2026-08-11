@@ -423,6 +423,28 @@ say the server would look wedged exactly when a client most wants to talk to it.
 run on the connection's executor instead; builds are still serialised, by a lock rather
 than by the transport.
 
+**A compile with nothing to do does nothing.** `BuildManifest` records a content digest of
+every source the build read, so a compile whose sources all hash-match it, whose fingerprint
+matches, and whose class directory holds exactly the products the build wrote answers `OK`
+without running the pipeline. On the command line that is 4.4 s against 0.44 s for `flix
+build` on a fresh project; over a connection it is the difference between an editor's compile
+button being instant and being a whole-program compile.
+
+It is a content hash and not a modification time, and that is the whole point: `Source`
+equality is by path, mtimes are whole seconds on some filesystems, and a build that trusted a
+clock would report success over the previous program's class files. A file touched but not
+changed therefore still has nothing to do. Three conditions have to hold and each closes a way
+of being wrong — a changed source, a missing product, or a *stray* product all mean a rebuild,
+because a class directory holding something no build wrote is the state the manifest exists to
+prevent. What is not checked is whether the class files are the bytes this compiler would
+emit; a hand-edited class file of the right name is not detected.
+
+`buildTarget/test` never takes this path. A test is a function the compiler reflects and calls,
+so it needs the compilation itself and not just its output on disk. `buildTarget/run` does take
+it — it forks against the class directory — which is why `hasMain` is recorded in the manifest:
+a build that was skipped produces no typed AST to ask about the entry point, and a client asking
+what to run must still be told.
+
 **Concurrent compiles are coalesced, under one condition.** An editor compiles on save, and
 a person saving repeatedly used to queue one whole-program compile per keystroke — each
 taking seconds, each already obsolete before it started. A request may now share another's
@@ -564,7 +586,13 @@ Each names the test that pins it.
     compiles that arrive before a build starts share it" — six requests, two builds, six
     answers and six task pairs. And its converse, "a compile issued after a build started
     gets its own build", which is the condition that makes sharing honest.
-42. **A real server process completes the whole cycle.** `TestBspProcess`, "a scripted
+42. **A compile with nothing to do does nothing, and still clears what it must.**
+    `TestBspCompile`, "a compile with nothing changed does no work" — the class files are not
+    rewritten — and "a compile with nothing to do still clears the markers of a failure", which
+    is the case a naive skip gets wrong: a failed compile writes no manifest, so restoring the
+    sources puts the project back into the recorded state with the failure's markers still on
+    screen. `TestBspRun`, "a run after a compile that had nothing to do still finds main".
+43. **A real server process completes the whole cycle.** `TestBspProcess`, "a scripted
     session drives a real server through the whole cycle" — the assembled jar, started from
     the connection file it wrote, driven over hand-written frames through initialize,
     targets, sources, compile, run, test, shutdown and exit. The only case where nothing is

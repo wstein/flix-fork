@@ -19,7 +19,7 @@ package ca.uwaterloo.flix.api
 import ca.uwaterloo.flix.util.{Options, Result}
 import org.json4s.JsonDSL.*
 import org.json4s.native.JsonMethods
-import org.json4s.{JArray, JInt, JString, JValue, jvalue2monadic}
+import org.json4s.{JArray, JBool, JInt, JString, JValue, jvalue2monadic}
 
 import java.nio.file.{Files, Path}
 import java.security.MessageDigest
@@ -50,13 +50,35 @@ import java.security.MessageDigest
   * without it a build that fails, or a build interrupted between writing classes and
   * packaging, leaves a directory nobody can describe.
   *
-  * @param fingerprint the [[fingerprintOf]] hash of the non-source inputs of the build.
-  * @param products    every class file the build wrote, as a class-directory-relative,
-  *                    `/`-separated name, sorted.
-  * @param sources     the source files the build read, as project-relative where possible,
-  *                    `/`-separated, sorted.
+  * ==What makes a build skippable==
+  *
+  * [[sourcesDigest]] is the one thing here that is about the sources' *contents*, and it exists so
+  * that a build with nothing to do can be recognised as such rather than repeated. The fingerprint
+  * deliberately excludes source changes -- putting them there would force a full reset on every edit
+  * -- but a *digest*, compared against and never reset from, answers a different question: are the
+  * sources the ones this build was made from? With the fingerprint and the products both intact, that
+  * is the whole up-to-date condition.
+  *
+  * It is a content hash and not a modification time, and that is the point. `Source` equality is by
+  * path, so a build that reused state on the strength of an mtime would silently emit the previous
+  * program; mtimes are millisecond-resolution at best and whole seconds on some filesystems, so two
+  * writes inside one tick are ordinary. A digest cannot be fooled by a clock.
+  *
+  * @param fingerprint   the [[fingerprintOf]] hash of the non-source inputs of the build.
+  * @param products      every class file the build wrote, as a class-directory-relative,
+  *                      `/`-separated name, sorted.
+  * @param sources       the source files the build read, as project-relative where possible,
+  *                      `/`-separated, sorted.
+  * @param sourcesDigest the [[digestOfSources]] hash of those sources' contents.
+  * @param hasMain       whether the program the build compiled had a main entry point. Recorded
+  *                      because a build that is skipped answers no question about the program, and a
+  *                      client asking what to run must still be told.
   */
-case class BuildManifest(fingerprint: String, products: List[String], sources: List[String])
+case class BuildManifest(fingerprint: String,
+                         products: List[String],
+                         sources: List[String],
+                         sourcesDigest: String,
+                         hasMain: Boolean)
 
 object BuildManifest {
 
@@ -76,7 +98,7 @@ object BuildManifest {
     * products this compiler cannot interpret, and discarding it costs one full rebuild while
     * misreading it packages the wrong files.
     */
-  private val FormatVersion: Int = 1
+  private val FormatVersion: Int = 2
 
   /** Returns the path of the manifest inside the build directory `buildDir`. */
   def fileIn(buildDir: Path): Path = buildDir.resolve(FileName).normalize()
@@ -116,6 +138,32 @@ object BuildManifest {
     // build costs more than the rebuild it would occasionally save.
     val deps = dependencies.map(stampOf).sorted
     hash((settings ::: deps).mkString("\n"))
+  }
+
+  /**
+    * Returns a hash of the *contents* of `sources`, together with their names.
+    *
+    * The name is in the digest as well as the content, so that renaming a file, adding one or deleting
+    * one all change it: the question this answers is whether the project's sources are the ones a
+    * build was made from, and that includes which files there are.
+    *
+    * A source that cannot be read counts as a change rather than as an error. It may have been deleted
+    * between the scan and this call, and the safe answer to "is the build still current" is no.
+    *
+    * Cost: every project source is read on every build that consults this. That is a few milliseconds
+    * against a whole-program compile of seconds, and it is the price of an answer a clock cannot give.
+    * The standard library is not among them -- it is not a project source, and the compiler that
+    * carries it is in [[fingerprintOf]] already.
+    */
+  def digestOfSources(projectPath: Path, sources: List[Path]): String = {
+    val entries = sources.map { p =>
+      val name = relativeName(projectPath, p)
+      val content =
+        try hashOf(Files.readAllBytes(p))
+        catch { case _: Exception => "unreadable" }
+      s"$name:$content"
+    }
+    hash(entries.sorted.mkString("\n"))
   }
 
   /**
@@ -165,10 +213,20 @@ object BuildManifest {
       case _ => return None
     }
 
+    val sourcesDigest = (json \ "sourcesDigest") match {
+      case JString(s) => s
+      case _ => return None
+    }
+
+    val hasMain = (json \ "hasMain") match {
+      case JBool(b) => b
+      case _ => return None
+    }
+
     for {
       products <- stringsOf(json \ "products")
       sources <- stringsOf(json \ "sources")
-    } yield BuildManifest(fingerprint, products, sources)
+    } yield BuildManifest(fingerprint, products, sources, sourcesDigest, hasMain)
   }
 
   /** Writes `manifest` to `path`, creating the parent directory if needed. */
@@ -178,7 +236,9 @@ object BuildManifest {
         ("compilerVersion" -> Version.CurrentVersion.toString) ~
         ("fingerprint" -> manifest.fingerprint) ~
         ("products" -> manifest.products) ~
-        ("sources" -> manifest.sources)
+        ("sources" -> manifest.sources) ~
+        ("sourcesDigest" -> manifest.sourcesDigest) ~
+        ("hasMain" -> manifest.hasMain)
     try {
       Files.createDirectories(path.getParent.normalize())
       Files.write(path, JsonMethods.pretty(JsonMethods.render(json)).getBytes)
@@ -205,8 +265,11 @@ object BuildManifest {
   }
 
   /** Returns the SHA-256 of `s`, hex-encoded. */
-  private def hash(s: String): String = {
-    val digest = MessageDigest.getInstance("SHA-256").digest(s.getBytes("UTF-8"))
+  private def hash(s: String): String = hashOf(s.getBytes("UTF-8"))
+
+  /** Returns the SHA-256 of `bytes`, hex-encoded. */
+  private def hashOf(bytes: Array[Byte]): String = {
+    val digest = MessageDigest.getInstance("SHA-256").digest(bytes)
     digest.map(b => f"${b & 0xff}%02x").mkString
   }
 

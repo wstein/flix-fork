@@ -166,6 +166,43 @@ class TestBspCompile extends AnyFunSuite {
     }
   }
 
+  test("a compile with nothing changed does no work") {
+    withSession { s =>
+      assert(s.compile().getStatusCode == StatusCode.OK)
+      val stamps = classStamps(s)
+      assert(stamps.nonEmpty, "the first compile wrote no class files")
+
+      // What an editor asks for most often. The answer is the same either way, so the output is the
+      // only place the difference shows: a build that had nothing to do rewrites nothing.
+      assert(s.compile().getStatusCode == StatusCode.OK)
+      assert(classStamps(s) == stamps, "a compile with nothing to do rewrote the class files")
+    }
+  }
+
+  test("a compile with nothing to do still clears the markers of a failure") {
+    withSession { s =>
+      val main = s.project.resolve("src").resolve("Main.flix")
+      val original = Files.readString(main)
+      assert(s.compile().getStatusCode == StatusCode.OK)
+
+      // A failed compile writes no manifest, so restoring the sources byte for byte puts the project
+      // back into the state the last *successful* build recorded -- and the next compile therefore has
+      // nothing to do. The markers from the failure are still on the client's screen, and only this
+      // path can take them off.
+      s.write("src/Main.flix", "def main(): Unit = undefinedFunction()\n")
+      assert(s.compile().getStatusCode == StatusCode.ERROR)
+      assert(s.diagnostics.exists(_.getDiagnostics.asScala.nonEmpty), "the failure published nothing")
+
+      s.clear()
+      Files.writeString(main, original)
+      assert(s.compile().getStatusCode == StatusCode.OK)
+
+      val cleared = s.diagnostics.filter(_.getDiagnostics.asScala.isEmpty).map(_.getTextDocument.getUri)
+      assert(cleared.exists(_.endsWith("Main.flix")),
+        s"a compile with nothing to do left the error marker in place: ${s.diagnostics.map(_.getTextDocument.getUri)}")
+    }
+  }
+
   test("concurrent compiles that arrive before a build starts share it") {
     withSession { s =>
       // Broken on purpose: a diagnostic batch is published once per build that actually ran, which is
@@ -211,6 +248,14 @@ class TestBspCompile extends AnyFunSuite {
   }
 
   // ── Harness ──────────────────────────────────────────────────────────────────
+
+  /** The class files of the project, with the time each was last written. */
+  private def classStamps(s: Session): Map[String, Long] = {
+    val classDir = s.project.resolve("build").resolve("development").resolve("class")
+    FileOps.getFilesWithExtIn(classDir, "class", Int.MaxValue)
+      .map(f => classDir.relativize(f.normalize()).toString -> f.toFile.lastModified())
+      .toMap
+  }
 
   /** A connected client, with everything the server sent it. */
   private class Session(val project: Path, val client: BuildServer, val target: BuildTargetIdentifier,

@@ -411,8 +411,7 @@ class BspSession(val projectPath: Path, options: Options, log: BspLogStream) {
       return statusOf(new RunResult(StatusCode.ERROR), originId)
     }
 
-    val hasMain = outcome.root.exists(_.mainEntryPoint.isDefined)
-    if (!hasMain) {
+    if (!outcome.hasMain) {
       showMessage(MessageType.ERROR,
         s"${view.packageName} has no main function, so there is nothing to run.")
       return statusOf(new RunResult(StatusCode.ERROR), originId)
@@ -616,7 +615,20 @@ class BspSession(val projectPath: Path, options: Options, log: BspLogStream) {
     if (lastCompileHadMain) List(new JvmMainClass(BspRunner.MainClass, List.empty[String].asJava))
     else Nil
 
-  /** Compiles under an already-held lock. */
+  /**
+    * Compiles under an already-held lock, or does nothing if the output is already current.
+    *
+    * The skip is asked for here and nowhere else in this file, because this is the path whose callers
+    * do not need a `CompilationResult`: a compile request needs a status and diagnostics, and a run
+    * needs class files on disk and whether there is a main. Running the tests needs the compilation
+    * itself -- a test is a function this process reflects and calls -- so `test` goes through
+    * `Bootstrap.testWith`, which always compiles.
+    *
+    * An up-to-date build carries no messages, and it does not have to: a build is only recorded when it
+    * succeeded, and a successful compile in this compiler has no diagnostics at all. So the ordinary
+    * publishing path clears whatever the client was last told and sends nothing, which is exactly right
+    * for a project that now compiles cleanly.
+    */
   private def compileWith(b: Bootstrap, view: ProjectView): Bootstrap.CompileOutcome = {
     val configured = flix.options.copy(
       build = Build.Development,
@@ -625,8 +637,8 @@ class BspSession(val projectPath: Path, options: Options, log: BspLogStream) {
       loadClassFiles = false,
       progress = false)
     flix.setOptions(configured)
-    val outcome = b.compileProjectOutcome(flix, clean = false)
-    lastCompileHadMain = outcome.root.exists(_.mainEntryPoint.isDefined)
+    val outcome = b.compileProjectOutcome(flix, clean = false, skipIfUpToDate = true)
+    lastCompileHadMain = outcome.hasMain
     outcome
   }
 

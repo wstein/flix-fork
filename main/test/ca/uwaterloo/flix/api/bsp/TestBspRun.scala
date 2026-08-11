@@ -83,6 +83,22 @@ class TestBspRun extends AnyFunSuite {
     }
   }
 
+  test("a run after a compile that had nothing to do still finds main") {
+    withSession("""def main(): Unit \ IO = println("PROGRAM-RAN")""") { s =>
+      assert(s.compile().getStatusCode == StatusCode.OK)
+      // The second compile has nothing to do, so it produces no typed AST to ask about the entry
+      // point -- the answer comes from what the recorded build wrote down. Getting that wrong reports
+      // "there is no main function" for a program that has one, which is the failure this pins.
+      assert(s.compile().getStatusCode == StatusCode.OK)
+
+      val result = s.run()
+      assert(result.getStatusCode == StatusCode.OK, s"unexpected status: ${result.getStatusCode}")
+      assert(s.logs.exists(_.contains("PROGRAM-RAN")), s"the program did not run: ${s.logs}")
+      assert(s.jvmRunEnvironment().getMainClasses.asScala.map(_.getClassName).toList == List(BspRunner.MainClass),
+        "the main class was forgotten by a compile that had nothing to do")
+    }
+  }
+
   test("the reported classpath actually starts the program") {
     withSession("""def main(): Unit \ IO = println("PROGRAM-RAN")""") { s =>
       s.compile()

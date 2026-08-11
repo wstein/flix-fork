@@ -127,7 +127,9 @@ back to a full build. Three details are load-bearing:
 
 - Source changes are deliberately **not** in the fingerprint. They are handled by
   recompiling and diffing the product set; putting them there would force a full
-  build on every edit and defeat the point.
+  build on every edit and defeat the point. The manifest does carry a *digest* of
+  the sources' contents, which answers a different question — see below — and is
+  compared against, never reset from.
 - Thread count is not in it either, and must not be. A few generated names carry a
   symbol counter whose allocation order depends on scheduling, so two builds of
   one program can disagree about a handful of closure class *names*. Reconciling
@@ -142,6 +144,26 @@ has its own directory: a manifest is only ever compared against one written for
 the same mode, so the check cannot fire. It stays because the fingerprint is meant
 to describe *every* non-source input, and a reader who finds mode missing from it
 would reasonably conclude modes are interchangeable.
+
+**A build with nothing to do is skipped, and the condition is content-based.**
+`BuildManifest` records a digest of every source's *content* (`digestOfSources`) plus whether
+the program had a `main`, and `Bootstrap.buildIfNeeded` / `compileProjectOutcome(skipIfUpToDate
+= true)` answer without compiling when the digest matches, the fingerprint matches, and the
+class directory holds *exactly* the recorded products. `flix build` on an unchanged project
+goes from 4.4 s to 0.44 s. Four things to know before touching it:
+
+- **A digest, never an mtime.** `Source` equality is by path and mtimes are whole seconds on
+  some filesystems, so a clock cannot license this. A touched-but-identical file has nothing to
+  do, which is a test.
+- **A stray file in the class directory forces a build**, not just a missing one: a directory
+  holding something no build wrote is what the manifest exists to prevent.
+- **A caller that needs the `CompilationResult` must not ask for the skip** — `build`, `run`
+  and `test` on the command line, and `Bootstrap.testWith`, all still compile. `CompileOutcome`
+  carries `hasMain` for exactly this reason: a skipped build has no typed AST, and BSP's `run`
+  still has to know whether there is an entry point.
+- **`--lib` jars are invisible to `Bootstrap`**, so they are not in the fingerprint; `Main`
+  refuses the fast path when one is given rather than reporting an output as current with
+  respect to an input nothing recorded.
 
 **A modification time may not license reusing a cached AST.** `Source` equality is
 by path, not by content, and `ChangeSet.partition` hands back the *cached* result
@@ -290,6 +312,10 @@ so `FlixBuildServer` dispatches to the connection's executor; builds stay serial
 than a late answer), and work can outlive the `shutdown` that ended the session — so every
 notification goes through one accessor that returns no client once shut down, and
 `shutdown` bumps the generation so an in-flight build's result is discarded.
+
+**`buildTarget/compile` skips a build with nothing to do** — see *Building a Project* for the
+condition. `buildTarget/run` takes that path too, since it forks against the class directory;
+`buildTarget/test` never can, because a test is a function this process reflects and calls.
 
 **Concurrent compiles are coalesced, and the condition is what makes it sound.** A request
 may share another's build only while that build **has not started**: the slot is claimed

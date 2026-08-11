@@ -295,7 +295,22 @@ object Main {
           val runBuild = () => Bootstrap.bootstrap(cwd, options.githubToken).flatMap { bootstrap =>
             val flix = new Flix().setFormatter(formatter)
             flix.setOptions(options.copy(loadClassFiles = false))
-            addLibs(flix, cmdOpts.libs).flatMap(_ => bootstrap.build(flix, clean = cmdOpts.clean))
+            addLibs(flix, cmdOpts.libs).flatMap { _ =>
+              if (cmdOpts.libs.nonEmpty) {
+                // A `--lib` jar is given to the `Flix` instance and never reaches `Bootstrap`, so it is
+                // not in the build fingerprint. An output cannot be shown to be up to date with respect
+                // to an input nothing recorded, so this build compiles.
+                bootstrap.build(flix, clean = cmdOpts.clean).map(_ => ())
+              } else {
+                bootstrap.buildIfNeeded(flix, clean = cmdOpts.clean).map { compiled =>
+                  // Said out loud, because a build that prints nothing and a build that did nothing look
+                  // the same. Not on the JSON path, which carries diagnostics and nothing else.
+                  if (!compiled && !cmdOpts.jsonDiagnostics) {
+                    println("Nothing to do: the build output is up to date.")
+                  }
+                }
+              }
+            }
           }
           if (cmdOpts.jsonDiagnostics) exitWithJson(runBuild()) else exitOnResult(runBuild())
 

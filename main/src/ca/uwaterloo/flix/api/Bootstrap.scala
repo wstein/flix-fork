@@ -37,7 +37,7 @@ import java.nio.file.{FileSystems, Files, Path, StandardCopyOption}
 import java.util.zip.{ZipInputStream, ZipOutputStream}
 import scala.collection.mutable
 import scala.io.StdIn.readLine
-import scala.jdk.CollectionConverters.IterableHasAsScala
+import scala.jdk.CollectionConverters.{IterableHasAsScala, ListHasAsScala}
 import scala.util.matching.Regex
 import scala.util.{Failure, Success, Using}
 
@@ -581,12 +581,26 @@ object Bootstrap {
   case class CompileOutcome(result: Option[CompilationResult],
                             root: Option[TypedAst.Root],
                             messages: List[CompilationMessage],
-                            error: Option[BootstrapError] = None) {
+                            error: Option[BootstrapError] = None,
+                            upToDate: Boolean = false,
+                            hasMain: Boolean = false) {
 
-    /** Returns `true` if the program compiled and the build finished. */
-    def isSuccess: Boolean = result.isDefined && error.isEmpty
+    /**
+      * Returns `true` if the output is current: the program compiled and the build finished, or there
+      * was nothing to do.
+      *
+      * A skipped build is a success with no compilation, which is the one case where `result` is empty
+      * and nothing went wrong. Only a caller that asked for the skip can see it.
+      */
+    def isSuccess: Boolean = error.isEmpty && (result.isDefined || upToDate)
 
-    /** Collapses to the shape a command wants: the compilation, or what prevented it. */
+    /**
+      * Collapses to the shape a command wants: the compilation, or what prevented it.
+      *
+      * A caller that needs the compilation -- to run the program, to reflect its tests -- must not ask
+      * for a skipped build, because a skip produces no `CompilationResult` to give it. The commands
+      * that do are the ones that never pass `skipIfUpToDate`.
+      */
     def toResult: Result[CompilationResult, BootstrapError] = (result, error) match {
       // A build failure outranks a successful compile: a class directory that was not reconciled is
       // one whose contents nobody can describe, whatever the compiler managed.
@@ -847,9 +861,40 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
     * @see [[compileProject]]
     */
   def build(flix: Flix, build: Build = Build.Development, clean: Boolean = false): Result[CompilationResult, BootstrapError] = {
-    val newOptions = flix.options.copy(build = build, outputJvm = true, outputPath = Bootstrap.getOutputDirectory(projectPath, build))
-    flix.setOptions(newOptions)
+    configureBuild(flix, build)
     compileProject(flix, clean)
+  }
+
+  /**
+    * Brings the output of `build` up to date, doing nothing if it already is.
+    *
+    * The difference from [[build]] is what it promises. `build` promises a compilation, so it always
+    * compiles; this promises only that the output describes the sources, which is what `flix build` and
+    * a build server's compile request actually ask for -- and a whole-program compile is seconds, most
+    * of it a back end that runs whatever changed. Repeating it to produce the bytes that are already
+    * there is the most common thing a build server is asked to do.
+    *
+    * The conditions are in `Steps.isRecordedBuildCurrent`, and they are content-based: a clock cannot
+    * license this. `clean` still empties the directory and rebuilds, since that is a request to build
+    * from nothing.
+    *
+    * A caller with a `--lib` jar must not use this. Those are added to the `Flix` instance directly and
+    * never reach `Bootstrap`, so they are absent from the fingerprint: a changed one would leave this
+    * reporting an output that is up to date with respect to everything it can see.
+    *
+    * @return whether anything was compiled. `false` means the output was already current.
+    */
+  def buildIfNeeded(flix: Flix, build: Build = Build.Development, clean: Boolean = false): Result[Boolean, BootstrapError] = {
+    configureBuild(flix, build)
+    val outcome = compileProjectOutcome(flix, clean, skipIfUpToDate = true)
+    if (outcome.upToDate) Ok(false) else outcome.toResult.map(_ => true)
+  }
+
+  /** Points `flix` at the output directory of `build`, which every build path needs first. */
+  private def configureBuild(flix: Flix, build: Build): Unit = {
+    val newOptions = flix.options.copy(
+      build = build, outputJvm = true, outputPath = Bootstrap.getOutputDirectory(projectPath, build))
+    flix.setOptions(newOptions)
   }
 
   /**
@@ -959,7 +1004,8 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
     * On failure the messages are returned and nothing on disk is touched, so a caller can publish
     * diagnostics for a program that does not compile without the class directory being disturbed.
     */
-  private[api] def compileProjectOutcome(flix: Flix, clean: Boolean): Bootstrap.CompileOutcome = {
+  private[api] def compileProjectOutcome(flix: Flix, clean: Boolean,
+                                         skipIfUpToDate: Boolean = false): Bootstrap.CompileOutcome = {
     val build = flix.options.build
     val fingerprint = BuildManifest.fingerprintOf(flix.options, dependencyPaths)
     val recorded = Steps.readBuildManifest(build)
@@ -983,6 +1029,23 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
     // compiles a new source, and never stops compiling a deleted one. The scan happens once per
     // build and costs a directory walk against a whole-program compile.
     Steps.rescanSources()
+
+    // Nothing to do, when the caller is one that can be told so. The scan above has to come first:
+    // the question is about the sources the project *has*, and a file created since the last build is
+    // not in the list until it is rescanned.
+    if (skipIfUpToDate && !clean) {
+      recorded match {
+        case Some(m) if !staleInputs && Steps.isRecordedBuildCurrent(build, m) =>
+          return Bootstrap.CompileOutcome(None, None, Nil, None, upToDate = true, hasMain = m.hasMain)
+        case _ => ()
+      }
+    }
+
+    // Computed before the compile, not after, and the direction matters: a source edited *while* the
+    // build runs then differs from what is recorded, so the next build recompiles. Recording what the
+    // sources became would call that build current when it had not read them.
+    val sourcesDigest = BuildManifest.digestOfSources(projectPath, sourcePaths)
+
     Steps.updateStaleSources(flix)
 
     val outcome = Steps.compileOutcome(flix)
@@ -995,7 +1058,7 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
       case Some(result) =>
         val recorded = for {
           _ <- Steps.reconcileClassDirectory(build, result.products)
-          _ <- Steps.writeBuildManifest(build, fingerprint, result.products)
+          _ <- Steps.writeBuildManifest(build, fingerprint, result.products, sourcesDigest, outcome.hasMain)
         } yield ()
         recorded match {
           case Ok(()) => outcome
@@ -1863,10 +1926,13 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
       */
     def compileOutcome(flix: Flix): Bootstrap.CompileOutcome = {
       val (optRoot, errors) = flix.check()
+      // One definition of whether the program has an entry point, so that a caller asking what to run
+      // gets the same answer from a build and from a build that was skipped.
+      val hasMain = optRoot.exists(_.mainEntryPoint.isDefined)
       if (errors.isEmpty) {
-        Bootstrap.CompileOutcome(Some(flix.codeGen(optRoot.get)), optRoot, errors)
+        Bootstrap.CompileOutcome(Some(flix.codeGen(optRoot.get)), optRoot, errors, hasMain = hasMain)
       } else {
-        Bootstrap.CompileOutcome(None, optRoot, errors)
+        Bootstrap.CompileOutcome(None, optRoot, errors, hasMain = hasMain)
       }
     }
 
@@ -2378,6 +2444,53 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
     }
 
     /**
+      * Returns `true` if `recorded` still describes this project, so that building would rewrite
+      * exactly what is already there.
+      *
+      * Three conditions, and each one closes a way of being wrong about it:
+      *
+      *   - the *contents* of every source hash to what the build read. A modification time would not
+      *     do: two writes inside one filesystem tick are ordinary, and a build that trusted a clock
+      *     would report success over the previous program's class files.
+      *   - the class directory holds exactly the products the build wrote -- no more and no fewer.
+      *     Existence alone is not enough: a stray class file left by something else is a directory
+      *     nobody can describe, which is the state the manifest exists to prevent, and a rebuild is
+      *     how it gets described again.
+      *   - the caller has already checked the fingerprint, which covers the compiler, the back-end
+      *     options and the dependencies.
+      *
+      * Note what is *not* checked: whether the class files are the bytes this compiler would emit. A
+      * hand-edited class file of the right name is not detected, and detecting it would mean hashing
+      * every product on every build to catch something nothing does.
+      */
+    def isRecordedBuildCurrent(build: Build, recorded: BuildManifest): Boolean = {
+      val digest = BuildManifest.digestOfSources(projectPath, sourcePaths)
+      if (digest != recorded.sourcesDigest) {
+        return false
+      }
+      currentProducts(build) == recorded.products.toSet
+    }
+
+    /** Returns every file under the class directory of `build`, as manifest names. */
+    private def currentProducts(build: Build): Set[String] = {
+      val classDir = Bootstrap.getClassDirectory(projectPath, build)
+      if (!Files.isDirectory(classDir)) {
+        return Set.empty
+      }
+      val stream = Files.walk(classDir)
+      try {
+        stream.filter(Files.isRegularFile(_))
+          .map[String](p => BuildManifest.relativeName(classDir, p))
+          .toList.asScala.toSet
+      } catch {
+        // An unreadable directory is one nothing can be concluded about, so nothing is.
+        case _: Exception => Set.empty
+      } finally {
+        stream.close()
+      }
+    }
+
+    /**
       * Returns the recorded manifest of the previous build in the mode `build`, if there is one
       * this compiler can read.
       */
@@ -2390,14 +2503,17 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
       * Written after the class directory has been reconciled, so that a manifest exists only
       * once it describes the directory.
       */
-    def writeBuildManifest(build: Build, fingerprint: String, products: Set[Path]): Result[Unit, BootstrapError] = {
+    def writeBuildManifest(build: Build, fingerprint: String, products: Set[Path],
+                           sourcesDigest: String, hasMain: Boolean): Result[Unit, BootstrapError] = {
       // Only sources that exist. A deleted path stays in `sourcePaths` on purpose - so that a file
       // which comes back is noticed - but recording it here would describe the build as having read
       // a file that is not there.
       val manifest = BuildManifest(
         fingerprint,
         products.toList.map(BuildManifest.nameOf).sorted,
-        sourcePaths.filter(Files.isRegularFile(_)).map(p => BuildManifest.relativeName(projectPath, p)).sorted
+        sourcePaths.filter(Files.isRegularFile(_)).map(p => BuildManifest.relativeName(projectPath, p)).sorted,
+        sourcesDigest,
+        hasMain
       )
       BuildManifest.write(Bootstrap.getBuildManifestFile(projectPath, build), manifest)
         .mapErr(e => BootstrapError.FileError(s"Failed to write the build manifest: ${e.getMessage}"))

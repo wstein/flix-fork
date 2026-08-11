@@ -249,6 +249,123 @@ class TestBootstrap extends AnyFunSuite {
     assert(!Files.exists(stale), "stale class file survived the rebuild")
   }
 
+  test("a second build has nothing to do") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out)
+    val b = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
+
+    assert(b.buildIfNeeded(mkDeterministicFlix).unsafeGet, "the first build did not compile anything")
+    val stamps = classStampsOf(p, Build.Development)
+    assert(stamps.nonEmpty, "the first build wrote no class files")
+
+    // The point of the whole exercise. A whole-program compile is seconds and most of it is a back end
+    // that runs whatever changed, so repeating it to produce the bytes that are already on disk is the
+    // most common thing a build is asked to do.
+    assert(!b.buildIfNeeded(mkDeterministicFlix).unsafeGet, "a build with nothing changed compiled anyway")
+    assert(classStampsOf(p, Build.Development) == stamps, "a build with nothing to do rewrote the output")
+  }
+
+  test("a source whose content changed is built again") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out)
+    val b = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
+    assert(b.buildIfNeeded(mkDeterministicFlix).unsafeGet)
+
+    Files.writeString(p.resolve("src").resolve("Main.flix"),
+      """def main(): Unit \ IO = println("changed")
+        |""".stripMargin)
+
+    assert(b.buildIfNeeded(mkDeterministicFlix).unsafeGet, "an edited source was not compiled")
+  }
+
+  test("a source that was touched but not changed still has nothing to do") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out)
+    val b = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
+    assert(b.buildIfNeeded(mkDeterministicFlix).unsafeGet)
+
+    // A content hash rather than a modification time, and this is the case that tells them apart. It is
+    // not exotic: a checkout, a formatter that reformats to the same text, an editor that saves an
+    // unchanged buffer all land here, and each would otherwise pay for a full compile.
+    val main = p.resolve("src").resolve("Main.flix")
+    Files.setLastModifiedTime(main, java.nio.file.attribute.FileTime.fromMillis(System.currentTimeMillis() + 10_000))
+
+    assert(!b.buildIfNeeded(mkDeterministicFlix).unsafeGet, "a touched but unchanged source forced a build")
+  }
+
+  test("a created or deleted source is built again") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out)
+    val b = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
+    assert(b.buildIfNeeded(mkDeterministicFlix).unsafeGet)
+
+    // The digest covers the *names* as well as the contents, so a file appearing changes it even when
+    // nothing that already existed did.
+    val added = p.resolve("src").resolve("Added.flix")
+    Files.writeString(added, "mod Added { pub def value(): Int32 = 42 }\n")
+    assert(b.buildIfNeeded(mkDeterministicFlix).unsafeGet, "a created source was not compiled")
+    assert(!b.buildIfNeeded(mkDeterministicFlix).unsafeGet)
+
+    Files.delete(added)
+    assert(b.buildIfNeeded(mkDeterministicFlix).unsafeGet, "a deleted source was not compiled")
+  }
+
+  test("a missing product is built again") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out)
+    val b = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
+    assert(b.buildIfNeeded(mkDeterministicFlix).unsafeGet)
+
+    // Sources unchanged, output not. Anything else -- a partial copy, a stray delete, a jar packaged
+    // from a directory someone cleaned by hand -- would be reported as up to date over an output that
+    // cannot run.
+    val victim = FileOps.getFilesWithExtIn(classDirOf(p, Build.Development), "class", Int.MaxValue).head
+    Files.delete(victim)
+
+    assert(b.buildIfNeeded(mkDeterministicFlix).unsafeGet, "a missing class file was not rebuilt")
+    assert(Files.exists(victim), "the rebuild did not restore it")
+  }
+
+  test("an unexpected product is built again") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out)
+    val b = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
+    assert(b.buildIfNeeded(mkDeterministicFlix).unsafeGet)
+
+    // A class directory holding something no build wrote is one nobody can describe, which is the state
+    // the manifest exists to prevent. Rebuilding is how it becomes describable again -- and the rebuild
+    // reconciles the stray file away.
+    val stray = classDirOf(p, Build.Development).resolve("Stray.class")
+    Files.write(stray, Array[Byte](0xCA.toByte, 0xFE.toByte, 0xBA.toByte, 0xBE.toByte))
+
+    assert(b.buildIfNeeded(mkDeterministicFlix).unsafeGet, "a stray class file did not force a build")
+    assert(!Files.exists(stray), "the rebuild left the stray file behind")
+  }
+
+  test("a changed non-source input is built again") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out)
+    val b = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
+    assert(b.buildIfNeeded(mkDeterministicFlix).unsafeGet)
+
+    // The fingerprint's job, unchanged by any of this: an option that reaches the back end makes the
+    // recorded products the wrong ones even though every source is identical.
+    val instrumented = mkDeterministicFlix
+    instrumented.setOptions(instrumented.options.copy(coverage = true))
+    assert(b.buildIfNeeded(instrumented).unsafeGet, "a changed back-end option did not force a build")
+  }
+
+  test("--clean builds even when there is nothing to do") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out)
+    val b = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
+    assert(b.buildIfNeeded(mkDeterministicFlix).unsafeGet)
+
+    // `--clean` is a request to build from nothing, so being up to date is not an answer to it.
+    assert(b.buildIfNeeded(mkDeterministicFlix, clean = true).unsafeGet, "--clean did not build")
+    assert(classFilesOf(p, Build.Development).nonEmpty)
+  }
+
   test("build-jar") {
     val p = Files.createTempDirectory(ProjectPrefix)
     Bootstrap.init(p)(System.out)
