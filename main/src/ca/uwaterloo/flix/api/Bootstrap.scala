@@ -1476,6 +1476,57 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
   }
 
   /**
+    * Type checks the project, unless a recorded build already answers for these sources.
+    *
+    * ==Why a build manifest can answer a question about type checking==
+    *
+    * Because a build *is* a check followed by code generation: `Steps.compileOutcome` runs
+    * `flix.check()` and stops if it reports anything, so a manifest exists only if the check passed.
+    * A manifest whose fingerprint and source digest still match therefore proves the current sources
+    * type check, without a new record to keep or a new thing to trust -- and without weakening the
+    * guard, since it is the same one a skipped build uses.
+    *
+    * That is also why the fingerprint now covers front-end options. A recorded build answering for a
+    * check makes any option that changes what the front end *reports* part of what the record depends
+    * on, which `xnodeprecated` was not.
+    *
+    * ==What it costs==
+    *
+    * Being conservative in one direction: the condition requires the class directory to match the
+    * manifest, which a check does not otherwise care about. A project whose build output was deleted
+    * type checks for real again. That is one predicate rather than two, and the wrong answer it can
+    * give is a check that happened.
+    *
+    * A caller with a `--lib` jar must not use this, for the reason `buildIfNeeded` gives: those jars
+    * reach the typer and never reach `Bootstrap`, so nothing recorded describes them.
+    *
+    * @param reuse pass `false` to check regardless, which is what `--clean` asks for.
+    * @return whether the check ran. `false` means a recorded build already answered.
+    */
+  def checkIfNeeded(flix: Flix, reuse: Boolean = true): Result[Boolean, BootstrapError] = {
+    if (reuse && isRecordedBuildCurrent(flix)) {
+      return Ok(false)
+    }
+    check(flix).map(_ => true)
+  }
+
+  /**
+    * Returns `true` if the build recorded for `flix`'s configuration still describes this project.
+    *
+    * Public because a *check* consults it, which is a question about the sources rather than about the
+    * output. The conditions are in `Steps.isRecordedBuildCurrent`.
+    */
+  private def isRecordedBuildCurrent(flix: Flix): Boolean = {
+    val build = flix.options.build
+    val fingerprint = BuildManifest.fingerprintOf(flix.options, dependencyPaths)
+    Steps.rescanSources()
+    Steps.readBuildManifest(build) match {
+      case Some(m) if m.fingerprint == fingerprint => Steps.isRecordedBuildCurrent(build, m)
+      case _ => false
+    }
+  }
+
+  /**
     * Generates API documentation.
     */
   def doc(flix: Flix): Result[Unit, BootstrapError] = {

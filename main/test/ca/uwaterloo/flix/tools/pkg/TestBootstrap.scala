@@ -366,6 +366,68 @@ class TestBootstrap extends AnyFunSuite {
     assert(classFilesOf(p, Build.Development).nonEmpty)
   }
 
+  test("a check after a successful build has nothing to do") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out)
+    val b = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
+    assert(b.buildIfNeeded(mkDeterministicFlix).unsafeGet)
+
+    // A build *is* a check followed by code generation, and it stops if the check reports anything --
+    // so a manifest whose digest still matches proves these sources type check. No new record, and the
+    // same guard a skipped build uses.
+    assert(!b.checkIfNeeded(mkDeterministicFlix).unsafeGet, "a check after a successful build ran anyway")
+  }
+
+  test("a check after an edit runs for real") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out)
+    val b = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
+    assert(b.buildIfNeeded(mkDeterministicFlix).unsafeGet)
+
+    Files.writeString(p.resolve("src").resolve("Main.flix"),
+      """def main(): Unit \ IO = println("edited")
+        |""".stripMargin)
+
+    assert(b.checkIfNeeded(mkDeterministicFlix).unsafeGet, "an edited source was not checked")
+  }
+
+  test("a check reports an error that a recorded build cannot answer for") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out)
+    val b = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
+    assert(b.buildIfNeeded(mkDeterministicFlix).unsafeGet)
+
+    // The failure mode worth naming: a stale record must never turn a broken program into a clean
+    // report. The digest is what prevents it -- the sources are no longer the ones that were built.
+    Files.writeString(p.resolve("src").resolve("Main.flix"), "def main(): Unit = undefinedFunction()\n")
+
+    assert(b.checkIfNeeded(mkDeterministicFlix).isInstanceOf[Result.Err[?, ?]], "a broken project checked clean")
+  }
+
+  test("a check whose build output was deleted runs for real") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out)
+    val b = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
+    assert(b.buildIfNeeded(mkDeterministicFlix).unsafeGet)
+
+    // Conservative in the direction that costs time rather than correctness: a check does not care
+    // about class files, but it consults one predicate rather than two, and that predicate does.
+    b.cleanOutput(mkDeterministicFlix, Build.Development).unsafeGet
+
+    assert(b.checkIfNeeded(mkDeterministicFlix).unsafeGet, "a check reused a build whose output is gone")
+  }
+
+  test("a check asked not to reuse runs for real") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out)
+    val b = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
+    assert(b.buildIfNeeded(mkDeterministicFlix).unsafeGet)
+
+    // What `flix check --clean` asks for. Without a way to say it, the only escape from a wrong answer
+    // would be deleting the build directory by hand.
+    assert(b.checkIfNeeded(mkDeterministicFlix, reuse = false).unsafeGet, "--clean did not force a check")
+  }
+
   test("build-jar") {
     val p = Files.createTempDirectory(ProjectPrefix)
     Bootstrap.init(p)(System.out)

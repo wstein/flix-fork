@@ -264,7 +264,7 @@ object Main {
                 Bootstrap.bootstrap(cwd, options.githubToken).flatMap { bootstrap =>
                   val flix = new Flix().setFormatter(formatter)
                   flix.setOptions(options)
-                  addLibs(flix, cmdOpts.libs).flatMap(_ => bootstrap.check(flix))
+                  addLibs(flix, cmdOpts.libs).flatMap(_ => runCheck(bootstrap, flix, cmdOpts, quiet = true))
                 }
               }
             }
@@ -273,7 +273,7 @@ object Main {
               Bootstrap.bootstrap(cwd, options.githubToken).flatMap { bootstrap =>
                 val flix = new Flix().setFormatter(formatter)
                 flix.setOptions(options)
-                addLibs(flix, cmdOpts.libs).flatMap(_ => bootstrap.check(flix))
+                addLibs(flix, cmdOpts.libs).flatMap(_ => runCheck(bootstrap, flix, cmdOpts, quiet = false))
               }
             }
           } else {
@@ -772,6 +772,8 @@ object Main {
           text("adds a jar to the classpath. Repeatable."),
         opt[Unit]("diagnostics-json").action((_, c) => c.copy(jsonDiagnostics = true)).
           text("writes diagnostics to stdout as JSON, for a build tool to read."),
+        opt[Unit]("clean").action((_, c) => c.copy(clean = true)).
+          text("checks even when a successful build already answers for these sources."),
       )
 
       cmd("capabilities").action((_, c) => c.copy(command = Command.Capabilities)).text("  reports the tooling contract this compiler speaks.").children(
@@ -1104,6 +1106,27 @@ object Main {
     }
     Console.out.println(JsonMethods.pretty(JsonMethods.render(CliContract.result(errors, None))))
     System.exit(if (errors.isEmpty) 0 else 1)
+  }
+
+  /**
+    * Type checks the project, reusing a recorded build when one answers for the current sources.
+    *
+    * Two things are decided here rather than in `Bootstrap`, because only the command line knows them:
+    * that `--lib` was given -- those jars reach the typer and are invisible to the build record, so
+    * nothing about them can be up to date -- and that `--clean` was asked for, which is a request to
+    * do the work regardless.
+    *
+    * @param quiet suppresses the note, for `--diagnostics-json`, whose output is a document.
+    */
+  private def runCheck(bootstrap: Bootstrap, flix: Flix, cmdOpts: CmdOpts, quiet: Boolean): Result[Unit, BootstrapError] = {
+    if (cmdOpts.libs.nonEmpty) {
+      return bootstrap.check(flix)
+    }
+    bootstrap.checkIfNeeded(flix, reuse = !cmdOpts.clean).map { checked =>
+      if (!checked && !quiet) {
+        println("Nothing to do: the sources have not changed since the last successful build.")
+      }
+    }
   }
 
   private def addLibs(flix: Flix, libs: Seq[String]): Result[Unit, BootstrapError] = {

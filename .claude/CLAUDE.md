@@ -157,6 +157,11 @@ goes from 4.4 s to 0.44 s. Four things to know before touching it:
   do, which is a test.
 - **A stray file in the class directory forces a build**, not just a missing one: a directory
   holding something no build wrote is what the manifest exists to prevent.
+- **`flix check` consults the same record**, because a build *is* a check followed by code
+  generation and stops if the check reports anything: a manifest whose digest matches proves
+  the sources type check. `Bootstrap.checkIfNeeded` — 3.2 s to 0.44 s. This is why the
+  fingerprint now has to cover front-end options as well as back-end ones, and why
+  `xnodeprecated` was added to it: it reaches `Weeder2`.
 - **A caller that needs the `CompilationResult` must not ask for the skip** — `build`, `run`
   and `test` on the command line, and `Bootstrap.testWith`, all still compile. `CompileOutcome`
   carries `hasMain` for exactly this reason: a skipped build has no typed AST, and BSP's `run`
@@ -164,6 +169,9 @@ goes from 4.4 s to 0.44 s. Four things to know before touching it:
 - **`--lib` jars are invisible to `Bootstrap`**, so they are not in the fingerprint; `Main`
   refuses the fast path when one is given rather than reporting an output as current with
   respect to an input nothing recorded.
+- **`--clean` is the escape hatch, and it is per-subcommand.** It has to be declared on each
+  command that can skip — `check` gained it — because a flag the parser does not know is
+  rejected, and a flag it knows but nothing reads is worse: it looks like an escape and is not.
 
 **A modification time may not license reusing a cached AST.** `Source` equality is
 by path, not by content, and `ChangeSet.partition` hands back the *cached* result

@@ -114,8 +114,10 @@ object BuildManifest {
     * change forcing a full reset would defeat the point.
     *
     * The option list is conservative in the safe direction - an option included here that
-    * turns out not to reach the back end costs an occasional full rebuild, where one left out
-    * that does reach it would let a build reuse state produced under different settings.
+    * turns out to change nothing costs an occasional full rebuild, where one left out that does
+    * change something would let a build reuse state produced under different settings. "Something"
+    * means the front end as well as the back end: a recorded build also answers `flix check`, so an
+    * option that changes what type checking reports belongs here too.
     * Jars added with `--lib` are not visible here: they are passed to the `Flix` instance per
     * invocation and never reach `Bootstrap`.
     */
@@ -132,6 +134,10 @@ object BuildManifest {
       s"newmono=${options.xnewmono}",
       s"debug=${options.xdebug}",
       s"chaosMonkey=${options.xchaosMonkey}",
+      // Reaches `Weeder2`, so it changes whether a program compiles at all -- and now also whether a
+      // recorded build may answer for a *type check*, which is the reason it was noticed. An option
+      // that decides what the front end reports has to be here, not only one that reaches the back end.
+      s"noDeprecated=${options.xnodeprecated}",
     )
     // A dependency is identified the way `Bootstrap` identifies a stale source - by size and
     // modification time - rather than by hashing it. Hashing every dependency jar on every
