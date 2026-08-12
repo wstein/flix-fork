@@ -122,7 +122,7 @@ class TestMetrics extends AnyFunSuite {
   test("csv names every definition, and quotes what would break a column") {
     val csv = Metrics.render(report, Metrics.Format.Csv, Formatter.NoFormatter)
     val header :: rows = csv.trim.split("\n").toList: @unchecked
-    assertResult("name,module,file,line,lines,parameters,returnWidth,traitConstraints,datalogRules,datalogFacts,localDefs,maxLocalParameters,nesting,cognitive,public,test,documented,pure,effects,smells")(header)
+    assertResult("name,module,file,line,lines,parameters,returnWidth,traitConstraints,datalogRules,datalogFacts,localDefs,maxLocalParameters,nesting,cognitive,maxLineTokens,maxLineLength,public,test,documented,pure,effects,smells")(header)
     assertResult(report.defs.map(_.name).sorted)(rows.map(_.takeWhile(_ != ',')).sorted)
   }
 
@@ -397,6 +397,47 @@ class TestMetrics extends AnyFunSuite {
           s"a region must start at line 1 or later, found $line")
       }
     }
+  }
+
+  test("a crammed line is told from the same code wrapped, which structure cannot do") {
+    // Both have cognitive complexity 3 and nesting 1: every structural metric calls them the same
+    // function. Buse and Weimer found tokens per line predicts reading time, and it is the only
+    // thing here that separates them.
+    val program = List(
+      "mod K {",
+      "    pub def crammed(x: Int32): Int32 = match x { case 0 => 1 case n if n > 0 and n < 9 => n + 1 case _ => 0 }",
+      "    pub def wrapped(x: Int32): Int32 = match x {",
+      "        case 0 => 1",
+      "        case n if n > 0 and n < 9 => n + 1",
+      "        case _ => 0",
+      "    }",
+      "}"
+    )
+    val m = measure(program)
+    val crammed = m.defs.find(_.name == "K.crammed").getOrElse(fail("not measured"))
+    val wrapped = m.defs.find(_.name == "K.wrapped").getOrElse(fail("not measured"))
+
+    assertResult(crammed.cognitive)(wrapped.cognitive)
+    assertResult(crammed.nesting)(wrapped.nesting)
+    assert(crammed.maxLineTokens > wrapped.maxLineTokens,
+      s"${crammed.maxLineTokens} should exceed ${wrapped.maxLineTokens}")
+    assert(crammed.maxLineLength > wrapped.maxLineLength)
+    assert(crammed.cognitiveDensity > wrapped.cognitiveDensity)
+
+    // And only the crammed one is reported.
+    val vs = Metrics.violations(m, Metrics.Thresholds(maxLineTokens = Some(25)))
+    assertResult(List("K.crammed"))(vs.map(_.subject))
+    assertResult(List("density"))(vs.map(_.category))
+  }
+
+  test("a token spanning lines is counted once, where it starts") {
+    // A multi-line string is one token. Counted on every line it covers, each of those lines would
+    // be charged for it; counted where it starts, only the declaration line carries any tokens at
+    // all, which is what the count below shows -- the three lines of string contribute none.
+    val m = measure(List("mod K {", "    pub def s(): String = \"\"\"", "abc", "def", "\"\"\"", "}"))
+    val d = m.defs.find(_.name == "K.s").getOrElse(fail("not measured"))
+    // Ten on the declaration line, and nothing charged to the three lines of string it opens.
+    assertResult(10)(d.maxLineTokens)
   }
 
   test("an empty program measures as empty rather than as a failure") {

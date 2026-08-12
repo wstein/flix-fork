@@ -441,12 +441,13 @@ object Main {
               // knows is a report someone will forget to ask.
               val asked = Metrics.Thresholds(
                 cmdOpts.metricMaxLines, cmdOpts.metricMaxParams, cmdOpts.metricMaxNesting,
-                cmdOpts.metricMaxComplexity, cmdOpts.metricMinDocCoverage)
+                cmdOpts.metricMaxComplexity, cmdOpts.metricMaxLineTokens, cmdOpts.metricMinDocCoverage)
               val reporting = Metrics.Thresholds(
                 asked.maxLines.orElse(Metrics.SmellThresholds.maxLines),
                 asked.maxParameters.orElse(Metrics.SmellThresholds.maxParameters),
                 asked.maxNesting.orElse(Metrics.SmellThresholds.maxNesting),
                 asked.maxComplexity.orElse(Metrics.SmellThresholds.maxComplexity),
+                asked.maxLineTokens.orElse(Metrics.SmellThresholds.maxLineTokens),
                 asked.minDocCoverage.orElse(Metrics.SmellThresholds.minDocCoverage))
               val smells = Metrics.violations(report, reporting)
               print(Metrics.render(report, format, reportFormatter, smells))
@@ -681,6 +682,7 @@ object Main {
     metricMaxNesting: Option[Int] = None,
     metricMaxComplexity: Option[Int] = None,
     metricMinDocCoverage: Option[Double] = None,
+    metricMaxLineTokens: Option[Int] = None,
     entryPoint: Option[String] = None,
     installDeps: Boolean = true,
     githubToken: Option[String] = None,
@@ -873,6 +875,8 @@ object Main {
             .text("fails if any function nests branches deeper than this."),
           opt[Int]("max-complexity").action((arg, c) => c.copy(metricMaxComplexity = Some(arg)))
             .text("fails if any function has a cognitive complexity above this."),
+          opt[Int]("max-line-tokens").action((arg, c) => c.copy(metricMaxLineTokens = Some(arg)))
+            .text("fails if any line holds more tokens than this."),
           opt[Double]("min-doc-coverage").action((arg, c) => c.copy(metricMinDocCoverage = Some(arg)))
             .text("fails if less than this fraction of the public API is documented, e.g. 0.8."),
         )

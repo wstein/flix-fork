@@ -82,7 +82,17 @@ object Metrics {
                         localDefs: Int,
                         maxLocalParameters: Int,
                         cognitive: Int,
+                        maxLineTokens: Int,
+                        maxLineLength: Int,
                         effects: List[String]) {
+
+    /**
+      * Complexity per line.
+      *
+      * Separates a hundred readable lines scoring ten from five dense ones scoring the same. The
+      * second is the one worth looking at, and length alone calls it the better of the two.
+      */
+    def cognitiveDensity: Double = if (lines == 0) 0.0 else cognitive.toDouble / lines
 
     /** Whether it has no effect at all. */
     def isPure: Boolean = effects.isEmpty
@@ -184,6 +194,11 @@ object Metrics {
     val sources = root.sources.keys.filter(isProjectSource).toList
     val analysis = analyse(root)
 
+    // Built once while the sources are lexed anyway. A structural metric cannot see a line holding
+    // fifty tokens -- the snippet that prompted this scored complexity 3 and nesting 1 while being
+    // unreadable -- and tokens per line is what Buse and Weimer found predicts reading time.
+    val lineWidths = sources.map(src => src.name -> lineWidthsOf(src)).toMap
+
     val defs = root.defs.values.toList
       .filter(d => isProjectSource(d.loc.source))
       .map { d =>
@@ -206,6 +221,8 @@ object Metrics {
           localDefs = analysis.locals.getOrElse(d.sym.toString, Nil).length,
           maxLocalParameters = analysis.locals.getOrElse(d.sym.toString, Nil).map(_._2).maxOption.getOrElse(0),
           cognitive = analysis.cognitive.getOrElse(d.sym.toString, 0),
+          maxLineTokens = widest(lineWidths, d, _._1),
+          maxLineLength = widest(lineWidths, d, _._2),
           effects = d.spec.eff.effects.toList.map(_.toString).sorted
         )
       }
@@ -338,6 +355,37 @@ object Metrics {
     case Input.VirtualUri(_, _, _) => false
     case Input.PkgFile(_, _) => false
     case Input.FileInPackage(_, _, _, _) => false
+  }
+
+  /**
+    * Returns, for each line of `src`, how many tokens it holds and how long it is.
+    */
+  private def lineWidthsOf(src: Source): Map[Int, (Int, Int)] = {
+    val text = new String(src.data)
+    val lines = if (text.isEmpty) Array.empty[String] else text.split("\n", -1)
+    val lengths = lines.zipWithIndex.map { case (l, i) => (i + 1) -> l.length }.toMap
+
+    val counts = scala.collection.mutable.Map.empty[Int, Int]
+    val (tokens, _) = Lexer.lex(src)
+    tokens.foreach { t =>
+      if (t.kind != TokenKind.Eof) {
+        // A token spanning lines is counted on the line it starts, so a long string literal does
+        // not report every line it covers as dense.
+        counts.update(t.start.lineOneIndexed, counts.getOrElse(t.start.lineOneIndexed, 0) + 1)
+      }
+    }
+
+    lengths.map { case (line, len) => line -> (counts.getOrElse(line, 0), len) }
+  }
+
+  /**
+    * Returns the widest line of a definition, by whichever measure `of` selects.
+    */
+  private def widest(widths: Map[String, Map[Int, (Int, Int)]], d: TypedAst.Def, of: ((Int, Int)) => Int): Int = {
+    val perLine = widths.getOrElse(d.loc.source.name, Map.empty)
+    val from = firstDeclarationLine(d)
+    val to = d.loc.end.lineOneIndexed
+    (from to to).flatMap(perLine.get).map(of).maxOption.getOrElse(0)
   }
 
   /**
@@ -573,11 +621,13 @@ object Metrics {
                         maxParameters: Option[Int] = None,
                         maxNesting: Option[Int] = None,
                         maxComplexity: Option[Int] = None,
+                        maxLineTokens: Option[Int] = None,
                         minDocCoverage: Option[Double] = None) {
 
     /** Whether anything at all was asked for. */
     def isEmpty: Boolean =
-      maxLines.isEmpty && maxParameters.isEmpty && maxNesting.isEmpty && maxComplexity.isEmpty && minDocCoverage.isEmpty
+      maxLines.isEmpty && maxParameters.isEmpty && maxNesting.isEmpty && maxComplexity.isEmpty &&
+        maxLineTokens.isEmpty && minDocCoverage.isEmpty
   }
 
   /**
@@ -592,7 +642,9 @@ object Metrics {
     maxLines = Some(40),
     maxParameters = Some(5),
     maxNesting = Some(4),
-    maxComplexity = Some(15)
+    maxComplexity = Some(15),
+    // Buse and Weimer found reading time degrades sharply past roughly this many tokens on a line.
+    maxLineTokens = Some(25)
   )
 
   /**
@@ -647,7 +699,8 @@ object Metrics {
         // excused by a two-parameter signature.
         thresholds.maxParameters.filter(d.widestParameterList > _).map(l => Violation("parameters", d.name, d.file, d.line, d.widestParameterList, l)),
         thresholds.maxNesting.filter(d.nesting > _).map(l => Violation("nesting", d.name, d.file, d.line, d.nesting, l)),
-        thresholds.maxComplexity.filter(d.cognitive > _).map(l => Violation("complexity", d.name, d.file, d.line, d.cognitive, l))
+        thresholds.maxComplexity.filter(d.cognitive > _).map(l => Violation("complexity", d.name, d.file, d.line, d.cognitive, l)),
+        thresholds.maxLineTokens.filter(d.maxLineTokens > _).map(l => Violation("density", d.name, d.file, d.line, d.maxLineTokens, l))
       ).flatten
     }
 
@@ -732,6 +785,7 @@ object Metrics {
     * Returns what to do about a category, in one line.
     */
   def action(category: String): String = category match {
+    case "density" => "break the line: one expression, arm or argument list per line"
     case "nesting" => "match on a tuple or enum, or extract the inner branch"
     case "complexity" => "name the predicate; a repeated guard is a missing case"
     case "parameters" => "group the accumulators into a record and thread one value"
@@ -841,6 +895,7 @@ object Metrics {
     * Returns the tags a category carries, which is how a dashboard groups it.
     */
   def tagsFor(category: String): List[String] = category match {
+    case "density" => List("readability", "metrics")
     case "docCoverage" => List("documentation", "maintainability")
     case "orphan" => List("dead-code", "maintainability")
     case _ => List("maintainability", "metrics")
@@ -850,6 +905,7 @@ object Metrics {
     * Returns what a rule is about, in one line.
     */
   def ruleDescription(category: String): String = category match {
+    case "density" => "A line holding more tokens than the limit."
     case "nesting" => "Branches nested more deeply than the limit."
     case "complexity" => "More decisions to hold in mind at once than the limit."
     case "parameters" => "A parameter list wider than the limit, counting local definitions."
@@ -867,7 +923,7 @@ object Metrics {
     * a comma cannot shift every column after it.
     */
   private def csv(report: Report, smells: List[Violation]): String = {
-    val header = "name,module,file,line,lines,parameters,returnWidth,traitConstraints,datalogRules,datalogFacts,localDefs,maxLocalParameters,nesting,cognitive,public,test,documented,pure,effects,smells"
+    val header = "name,module,file,line,lines,parameters,returnWidth,traitConstraints,datalogRules,datalogFacts,localDefs,maxLocalParameters,nesting,cognitive,maxLineTokens,maxLineLength,public,test,documented,pure,effects,smells"
     // A definition's smells go in its own row rather than in a second table, because a CSV holds
     // one table and a consumer sorting by complexity should be able to filter by verdict too.
     val bySubject = smells.groupBy(_.subject)
@@ -887,6 +943,8 @@ object Metrics {
         d.maxLocalParameters.toString,
         d.nesting.toString,
         d.cognitive.toString,
+        d.maxLineTokens.toString,
+        d.maxLineLength.toString,
         d.isPublic.toString,
         d.isTest.toString,
         d.hasDoc.toString,
@@ -947,6 +1005,9 @@ object Metrics {
         ("maxLocalParameters" -> d.maxLocalParameters) ~
         ("nesting" -> d.nesting) ~
         ("cognitive" -> d.cognitive) ~
+        ("cognitiveDensity" -> d.cognitiveDensity) ~
+        ("maxLineTokens" -> d.maxLineTokens) ~
+        ("maxLineLength" -> d.maxLineLength) ~
         ("public" -> d.isPublic) ~
         ("test" -> d.isTest) ~
         ("documented" -> d.hasDoc) ~
