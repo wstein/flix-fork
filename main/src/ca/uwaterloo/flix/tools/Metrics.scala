@@ -1038,19 +1038,22 @@ object Metrics {
         sb.append(f"| `${m.name}` | ${m.definitions} | ${m.lines} | ${m.fanIn} | ${m.fanOut} | ${m.instability}%.2f |\n"))
     }
 
-    val longest = report.functions.sortBy(-_.lines).take(FindingsShown)
+    // Every row, not the first few. This is written to a file and read as the record of what a
+    // project looks like; a list silently cut at five reads as the whole of it, which is how a
+    // third of the undocumented API comes to be called all of it.
+    val longest = report.functions.sortBy(-_.lines)
     if (longest.nonEmpty) {
       sb.append("\n## Longest functions\n\n| function | lines | at |\n| --- | --- | --- |\n")
       longest.foreach(d => sb.append(s"| `${d.name}` | ${d.lines} | ${d.file}:${d.line} |\n"))
     }
 
-    val nested = report.functions.filter(_.nesting > 1).sortBy(-_.nesting).take(FindingsShown)
+    val nested = report.functions.filter(_.nesting > 1).sortBy(-_.nesting)
     if (nested.nonEmpty) {
       sb.append("\n## Most deeply nested\n\n| function | levels | at |\n| --- | --- | --- |\n")
       nested.foreach(d => sb.append(s"| `${d.name}` | ${d.nesting} | ${d.file}:${d.line} |\n"))
     }
 
-    val widest = report.functions.filter(_.widestParameterList > 3).sortBy(-_.widestParameterList).take(FindingsShown)
+    val widest = report.functions.filter(_.widestParameterList > 3).sortBy(-_.widestParameterList)
     if (widest.nonEmpty) {
       sb.append("\n## Widest parameter lists\n\n| function | parameters | where | at |\n| --- | --- | --- | --- |\n")
       widest.foreach { d =>
@@ -1059,13 +1062,13 @@ object Metrics {
       }
     }
 
-    val locals = report.locals.filter(l => l.lines > 10 || l.parameters > 3).sortBy(-_.lines).take(FindingsShown)
+    val locals = report.locals.filter(l => l.lines > 10 || l.parameters > 3).sortBy(-_.lines)
     if (locals.nonEmpty) {
       sb.append("\n## Local definitions\n\n| local | inside | lines | parameters | nesting | at |\n| --- | --- | --- | --- | --- | --- |\n")
       locals.foreach(l => sb.append(s"| `${l.name}` | `${l.owner}` | ${l.lines} | ${l.parameters} | ${l.nesting} | ${l.file}:${l.line} |\n"))
     }
 
-    val undocumented = report.publicApi.filterNot(_.hasDoc).sortBy(_.name).take(FindingsShown)
+    val undocumented = report.publicApi.filterNot(_.hasDoc).sortBy(_.name)
     if (undocumented.nonEmpty) {
       sb.append("\n## Undocumented public functions\n\n| function | at |\n| --- | --- |\n")
       undocumented.foreach(d => sb.append(s"| `${d.name}` | ${d.file}:${d.line} |\n"))
@@ -1117,13 +1120,13 @@ object Metrics {
     val functions = report.functions
     if (functions.nonEmpty) {
       sb.append(f.bold("Findings") + "\n")
-      sb.append(finding(f, "longest", functions.sortBy(-_.lines).take(FindingsShown), d => s"${d.lines} lines"))
-      sb.append(finding(f, "most deeply nested", functions.filter(_.nesting > 1).sortBy(-_.nesting).take(FindingsShown), d => s"${d.nesting} levels"))
-      sb.append(finding(f, "hardest to follow", functions.filter(_.cognitive > 4).sortBy(-_.cognitive).take(FindingsShown), d => s"cognitive ${d.cognitive}"))
-      sb.append(finding(f, "widest returned shape", functions.filter(_.returnWidth > 5).sortBy(-_.returnWidth).take(FindingsShown), d => s"${d.returnWidth} fields returned"))
-      sb.append(finding(f, "widest parameter lists", functions.filter(_.widestParameterList > 3).sortBy(-_.widestParameterList).take(FindingsShown),
+      sb.append(finding(f, "longest", functions.sortBy(-_.lines), d => s"${d.lines} lines"))
+      sb.append(finding(f, "most deeply nested", functions.filter(_.nesting > 1).sortBy(-_.nesting), d => s"${d.nesting} levels"))
+      sb.append(finding(f, "hardest to follow", functions.filter(_.cognitive > 4).sortBy(-_.cognitive), d => s"cognitive ${d.cognitive}"))
+      sb.append(finding(f, "widest returned shape", functions.filter(_.returnWidth > 5).sortBy(-_.returnWidth), d => s"${d.returnWidth} fields returned"))
+      sb.append(finding(f, "widest parameter lists", functions.filter(_.widestParameterList > 3).sortBy(-_.widestParameterList),
         d => if (d.maxLocalParameters > d.parameters) s"${d.maxLocalParameters} parameters, in a local definition" else s"${d.parameters} parameters"))
-      sb.append(finding(f, "undocumented public", api.filterNot(_.hasDoc).sortBy(_.name).take(FindingsShown), _ => "no doc comment"))
+      sb.append(finding(f, "undocumented public", api.filterNot(_.hasDoc).sortBy(_.name), _ => "no doc comment"))
     }
 
     val wideLocals = report.locals.filter(l => l.lines > 10 || l.parameters > 3).sortBy(-_.lines).take(FindingsShown)
@@ -1169,12 +1172,16 @@ object Metrics {
   /**
     * Renders one group of findings, or nothing when there is nothing to report.
     */
-  private def finding(f: Formatter, label: String, items: List[DefMetrics], measure: DefMetrics => String): String = {
-    if (items.isEmpty) return ""
+  private def finding(f: Formatter, label: String, all: List[DefMetrics], measure: DefMetrics => String): String = {
+    if (all.isEmpty) return ""
+    val items = all.take(FindingsShown)
     val sb = new StringBuilder
     sb.append(s"  $label\n")
     items.foreach { d =>
       sb.append(s"    ${f.blue(d.name)} -- ${measure(d)}  ${f.cyan(s"${d.file}:${d.line}")}\n")
+    }
+    if (all.length > items.length) {
+      sb.append(s"    ... and ${all.length - items.length} more; --format md lists them all\n")
     }
     sb.toString
   }
