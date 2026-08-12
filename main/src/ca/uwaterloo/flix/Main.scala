@@ -398,7 +398,7 @@ object Main {
             case Some(root) =>
               // Reported even when the project does not type check, because the numbers are still
               // true of the code as written, and a beginner asking for them is often mid-repair.
-              print(Metrics.render(Metrics.compute(root), format, formatter))
+              print(Metrics.render(Metrics.compute(root, Some(cwd)), format, formatter))
               System.exit(if (errors.isEmpty) 0 else 1)
             case None => exitWithErrors(flix, errors, optRoot)
           }

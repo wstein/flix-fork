@@ -122,13 +122,15 @@ class TestMetrics extends AnyFunSuite {
   test("csv names every definition, and quotes what would break a column") {
     val csv = Metrics.render(report, Metrics.Format.Csv, Formatter.NoFormatter)
     val header :: rows = csv.trim.split("\n").toList: @unchecked
-    assertResult("name,file,line,lines,parameters,nesting,public,test,documented,pure")(header)
+    assertResult("name,module,file,line,lines,parameters,nesting,cognitive,public,test,documented,pure,effects")(header)
     assertResult(report.defs.map(_.name).sorted)(rows.map(_.takeWhile(_ != ',')).sorted)
   }
 
   test("json is a document a program can read") {
     val parsed = org.json4s.native.JsonMethods.parse(Metrics.render(report, Metrics.Format.Json, Formatter.NoFormatter))
-    val defs = (parsed \\ "definitions").children
+    // Addressed directly rather than searched for: a deep search would also match a field of the
+    // same name nested elsewhere in the document.
+    val defs = (parsed \ "definitions").children
     assertResult(report.defs.length)(defs.length)
   }
 
@@ -136,6 +138,56 @@ class TestMetrics extends AnyFunSuite {
     // `double` is written on line 3, under its doc comment on line 2. Sending a reader to line 2
     // makes them count lines from where the report pointed.
     assertResult(Some(3))(report.defs.find(_.name == "Demo.double").map(_.line))
+  }
+
+  test("no key in the report is ambiguous under a deep search") {
+    // A consumer that searches the document for a name must not find two different things. This
+    // caught `modules[].definitions` colliding with the top-level `definitions` array.
+    val parsed = org.json4s.native.JsonMethods.parse(Metrics.render(report, Metrics.Format.Json, Formatter.NoFormatter))
+    assertResult((parsed \ "definitions").children.length)((parsed \\ "definitions").children.length)
+  }
+
+  test("effects are reported as the set the compiler inferred") {
+    // `pure` alone throws away which effects a function has, which is the thing Flix knows and
+    // other languages do not.
+    val effectful = measure(List(
+      "mod Demo {",
+      "    pub def shout(): Unit \\ IO = println(\"hi\")",
+      "    pub def quiet(): Int32 = 1",
+      "}"
+    ))
+    assertResult(Some(List("IO")))(effectful.defs.find(_.name == "Demo.shout").map(_.effects))
+    assertResult(Some(Nil))(effectful.defs.find(_.name == "Demo.quiet").map(_.effects))
+  }
+
+  test("cognitive complexity charges for nesting, not for the number of arms") {
+    // A wide but flat match is easy to read; the same branches nested are not. McCabe scores the
+    // first higher, which is why it is not what is reported.
+    val wide = measure(List(
+      "mod Demo {",
+      "    pub def wide(x: Int32): Int32 = match x {",
+      "        case 0 => 0",
+      "        case 1 => 1",
+      "        case 2 => 2",
+      "        case 3 => 3",
+      "        case _ => 4",
+      "    }",
+      "}"
+    ))
+    val deep = measure(List(
+      "mod Demo {",
+      "    pub def deep(x: Int32): Int32 =",
+      "        if (x > 0)",
+      "            if (x > 1)",
+      "                if (x > 2) 3 else 2",
+      "            else 1",
+      "        else 0",
+      "}"
+    ))
+    val wideScore = wide.defs.find(_.name == "Demo.wide").map(_.cognitive).getOrElse(0)
+    val deepScore = deep.defs.find(_.name == "Demo.deep").map(_.cognitive).getOrElse(0)
+    assertResult(1)(wideScore)
+    assert(deepScore > wideScore, s"nesting ($deepScore) should cost more than arms ($wideScore)")
   }
 
   test("an empty program measures as empty rather than as a failure") {

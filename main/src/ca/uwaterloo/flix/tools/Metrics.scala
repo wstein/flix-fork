@@ -18,9 +18,12 @@ package ca.uwaterloo.flix.tools
 import ca.uwaterloo.flix.api.lsp.{Acceptor, Consumer, Visitor}
 import ca.uwaterloo.flix.language.ast.TypedAst.{Expr, Root}
 import ca.uwaterloo.flix.language.ast.shared.{Input, Source}
-import ca.uwaterloo.flix.language.ast.{SourceLocation, TokenKind, Type, TypeConstructor, TypedAst}
+import ca.uwaterloo.flix.language.ast.shared.SymUse.DefSymUse
+import ca.uwaterloo.flix.language.ast.{SemanticOp, SourceLocation, Symbol, TokenKind, Type, TypeConstructor, TypedAst}
 import ca.uwaterloo.flix.language.phase.Lexer
 import ca.uwaterloo.flix.util.Formatter
+
+import java.nio.file.{Path, Paths}
 import org.json4s.JsonDSL.*
 import org.json4s.JValue
 import org.json4s.native.JsonMethods
@@ -62,6 +65,8 @@ object Metrics {
     * @param effect     the effect it has, as the compiler inferred or checked it.
     */
   case class DefMetrics(name: String,
+                        module: String,
+                        file: String,
                         loc: SourceLocation,
                         line: Int,
                         lines: Int,
@@ -70,7 +75,30 @@ object Metrics {
                         isPublic: Boolean,
                         isTest: Boolean,
                         hasDoc: Boolean,
-                        effect: Type)
+                        cognitive: Int,
+                        effects: List[String]) {
+
+    /** Whether it has no effect at all. */
+    def isPure: Boolean = effects.isEmpty
+  }
+
+  /**
+    * A module, and what it depends on.
+    *
+    * @param fanIn  how many modules depend on this one.
+    * @param fanOut how many modules this one depends on.
+    */
+  case class ModuleMetrics(name: String, definitions: Int, lines: Int, fanIn: Int, fanOut: Int) {
+
+    /**
+      * Martin's instability: 0 is depended upon and depends on nothing, 1 is the reverse.
+      *
+      * A module coupled to nothing at all has no instability to speak of, so it is reported as 0
+      * rather than as a division by zero.
+      */
+    def instability: Double =
+      if (fanIn + fanOut == 0) 0.0 else fanOut.toDouble / (fanIn + fanOut)
+  }
 
   /**
     * How the lines of a file divide up.
@@ -90,7 +118,8 @@ object Metrics {
                     enums: Int,
                     structs: Int,
                     effects: Int,
-                    typeAliases: Int) {
+                    typeAliases: Int,
+                    modules: List[ModuleMetrics]) {
 
     /** The definitions that are not tests. */
     def functions: List[DefMetrics] = defs.filterNot(_.isTest)
@@ -100,29 +129,48 @@ object Metrics {
 
     /** The public, non-test definitions: what someone else would use. */
     def publicApi: List[DefMetrics] = functions.filter(_.isPublic)
+
+    /** How much of the public surface is documented, between 0 and 1. */
+    def docCoverage: Double = ratio(publicApi.count(_.hasDoc), publicApi.length)
+
+    /** How much of the public surface is pure, between 0 and 1. */
+    def purity: Double = ratio(publicApi.count(_.isPure), publicApi.length)
+
+    /** How much of the code is comment, between 0 and 1. */
+    def commentDensity: Double = ratio(lines.comment, lines.total)
+
+    /** Code lines per test, or nothing when there are no tests to divide by. */
+    def codeLinesPerTest: Option[Double] =
+      if (tests.isEmpty) None else Some(lines.code.toDouble / tests.length)
   }
+
+  /** A ratio that is 0 rather than undefined when there is nothing to divide. */
+  private def ratio(part: Int, whole: Int): Double = if (whole == 0) 0.0 else part.toDouble / whole
 
   /**
     * Measures the project's own code in `root`.
     */
-  def compute(root: Root): Report = {
+  def compute(root: Root, base: Option[Path] = None): Report = {
     val sources = root.sources.keys.filter(isProjectSource).toList
-    val nesting = nestingDepths(root)
+    val analysis = analyse(root)
 
     val defs = root.defs.values.toList
       .filter(d => isProjectSource(d.loc.source))
       .map { d =>
         DefMetrics(
           name = d.sym.toString,
+          module = moduleOf(d.sym),
+          file = relativise(d.loc.source.name, base),
           loc = d.loc,
           line = firstDeclarationLine(d),
           lines = declarationLines(d),
           parameters = declaredParameters(d.spec.fparams),
-          nesting = nesting.getOrElse(d.sym.toString, 0),
+          nesting = analysis.nesting.getOrElse(d.sym.toString, 0),
           isPublic = d.spec.mod.isPublic,
           isTest = d.spec.ann.isTest,
           hasDoc = d.spec.doc.text.trim.nonEmpty,
-          effect = d.spec.eff
+          cognitive = analysis.cognitive.getOrElse(d.sym.toString, 0),
+          effects = d.spec.eff.effects.toList.map(_.toString).sorted
         )
       }
       .sortBy(_.name)
@@ -138,8 +186,45 @@ object Metrics {
       enums = root.enums.values.count(e => isProjectSource(e.loc.source)),
       structs = root.structs.values.count(s => isProjectSource(s.loc.source)),
       effects = root.effects.values.count(e => isProjectSource(e.loc.source)),
-      typeAliases = root.typeAliases.values.count(a => isProjectSource(a.loc.source))
+      typeAliases = root.typeAliases.values.count(a => isProjectSource(a.loc.source)),
+      modules = moduleMetrics(defs, analysis.edges)
     )
+  }
+
+  /**
+    * Returns the module a definition belongs to, or `""` for one at the top level.
+    */
+  private def moduleOf(sym: Symbol.DefnSym): String = sym.namespace.mkString(".")
+
+  /**
+    * Returns `name` relative to `base`, when it is underneath it.
+    *
+    * An absolute path is particular to the machine that produced it, so a report full of them
+    * cannot be compared between a laptop and a build server, or committed and diffed. Anything
+    * outside the project is left as it is rather than turned into a chain of `..`.
+    */
+  private def relativise(name: String, base: Option[Path]): String = {
+    val path = try Paths.get(name) catch { case _: Exception => return name }
+    base match {
+      case Some(b) if path.isAbsolute && path.startsWith(b) => b.relativize(path).toString
+      case _ => name
+    }
+  }
+
+  /**
+    * Aggregates definitions into modules, and counts what depends on what.
+    */
+  private def moduleMetrics(defs: List[DefMetrics], edges: Set[(String, String)]): List[ModuleMetrics] = {
+    val byModule = defs.groupBy(_.module)
+    byModule.toList.map { case (name, ds) =>
+      ModuleMetrics(
+        name = if (name.isEmpty) "(top level)" else name,
+        definitions = ds.length,
+        lines = ds.map(_.lines).sum,
+        fanIn = edges.count { case (from, to) => to == name && from != name },
+        fanOut = edges.count { case (from, to) => from == name && to != name }
+      )
+    }.sortBy(m => (-m.fanIn, m.name))
   }
 
   /**
@@ -237,38 +322,86 @@ object Metrics {
   }
 
   /**
-    * Returns, for each definition, how deeply its branches nest.
+    * What one pass over the tree yields.
     *
-    * Depth is the greatest number of branching expressions enclosing any one of them: a `match`
-    * inside an `if` inside a `match` is three. It is computed from the containment of source
-    * locations rather than by walking the tree with a counter, because a location contains exactly
-    * what the expression contains -- and asking the compiler's own visitor for the expressions
-    * means a new kind of expression cannot be silently missed.
-    *
-    * Nesting is preferred to counting branches. A total `match` over a twelve-case enum is not
-    * hard to read, and a metric that scores it twelve says more about the enum than the code; four
-    * levels of nested conditionals is hard to read whatever it is written over.
+    * @param nesting   how deeply each definition's branches nest.
+    * @param cognitive how hard each definition is to follow. See [[cognitiveComplexity]].
+    * @param edges     which module depends on which, from resolved references.
     */
-  private def nestingDepths(root: Root): Map[String, Int] = {
+  private case class Analysis(nesting: Map[String, Int],
+                              cognitive: Map[String, Int],
+                              edges: Set[(String, String)])
+
+  /**
+    * Walks the tree once, collecting everything that needs the tree.
+    *
+    * The compiler's own visitor is used rather than a hand-written traversal, so that an
+    * expression added to the language cannot be silently skipped here.
+    */
+  private def analyse(root: Root): Analysis = {
     // Collected per definition, so that two definitions in one file cannot be confused for one.
     val branches = scala.collection.mutable.Map.empty[String, List[SourceLocation]]
-    var current: Option[String] = None
+    val booleans = scala.collection.mutable.Map.empty[String, Int]
+    val guards = scala.collection.mutable.Map.empty[String, Int]
+    val edges = scala.collection.mutable.Set.empty[(String, String)]
+    var current: Option[TypedAst.Def] = None
 
     val consumer = new Consumer {
-      override def consumeDef(defn: TypedAst.Def): Unit = {
-        current = Some(defn.sym.toString)
+      override def consumeDef(defn: TypedAst.Def): Unit = current = Some(defn)
+
+      override def consumeDefSymUse(symUse: DefSymUse): Unit = current.foreach { from =>
+        // Only the project's own modules: a call into the standard library says nothing about how
+        // this project is put together.
+        if (isProjectSource(symUse.sym.loc.source)) {
+          edges += ((moduleOf(from.sym), moduleOf(symUse.sym)))
+        }
       }
 
-      override def consumeExpr(exp: Expr): Unit = exp match {
-        case _: Expr.IfThenElse | _: Expr.Match | _: Expr.ExtMatch | _: Expr.RestrictableChoose =>
-          current.foreach(name => branches.update(name, exp.loc :: branches.getOrElse(name, Nil)))
-        case _ => ()
+      override def consumeMatchRule(rule: TypedAst.MatchRule): Unit = current.foreach { defn =>
+        if (rule.guard.isDefined) {
+          val name = defn.sym.toString
+          guards.update(name, guards.getOrElse(name, 0) + 1)
+        }
+      }
+
+      override def consumeExpr(exp: Expr): Unit = current.foreach { defn =>
+        val name = defn.sym.toString
+        exp match {
+          case _: Expr.IfThenElse | _: Expr.Match | _: Expr.ExtMatch | _: Expr.RestrictableChoose =>
+            branches.update(name, exp.loc :: branches.getOrElse(name, Nil))
+          case Expr.Binary(SemanticOp.BoolOp.And | SemanticOp.BoolOp.Or, _, _, _, _, _) =>
+            booleans.update(name, booleans.getOrElse(name, 0) + 1)
+          case _ => ()
+        }
       }
     }
 
     Visitor.visitRoot(root, consumer, Everything)
 
-    branches.map { case (name, locs) => name -> deepestChain(locs) }.toMap
+    Analysis(
+      nesting = branches.map { case (name, locs) => name -> deepestChain(locs) }.toMap,
+      cognitive = branches.keySet.++(booleans.keySet).++(guards.keySet).map { name =>
+        name -> cognitiveComplexity(branches.getOrElse(name, Nil), booleans.getOrElse(name, 0), guards.getOrElse(name, 0))
+      }.toMap,
+      edges = edges.toSet
+    )
+  }
+
+  /**
+    * Returns how hard a definition is to follow.
+    *
+    * Not McCabe. A total `match` over a twelve-case enum has a cyclomatic complexity of twelve and
+    * is perfectly readable -- that number describes the enum, not the code -- whereas three
+    * conditionals inside one another are hard however few cases each has. So a branch costs one
+    * plus however many branches enclose it, which charges for nesting rather than for arity, and
+    * a `match` costs the same whether it has two arms or twenty.
+    *
+    * A guard and a boolean operator each cost one: both are decisions that nesting cannot see,
+    * which is the gap in reporting nesting alone.
+    */
+  private def cognitiveComplexity(branches: List[SourceLocation], booleans: Int, guards: Int): Int = {
+    val nested = branches.map(loc => branches.count(other => contains(other, loc)))
+    nested.sum + booleans + guards
   }
 
   /**
@@ -344,20 +477,23 @@ object Metrics {
     * a comma cannot shift every column after it.
     */
   private def csv(report: Report): String = {
-    val header = "name,file,line,lines,parameters,nesting,public,test,documented,pure"
+    val header = "name,module,file,line,lines,parameters,nesting,cognitive,public,test,documented,pure,effects"
     val rows = report.defs.map { d =>
       List(
         d.name,
-        d.loc.source.name,
+        d.module,
+        d.file,
         d.line.toString,
         d.lines.toString,
         d.parameters.toString,
         d.nesting.toString,
+        d.cognitive.toString,
         d.isPublic.toString,
         d.isTest.toString,
         d.hasDoc.toString,
-        isPure(d.effect).toString
-      ).map(quote).mkString(",")
+        d.isPure.toString,
+        d.effects.mkString(" ")
+      ).map(f => quote(f)).mkString(",")
     }
     (header :: rows).mkString("\n") + "\n"
   }
@@ -382,29 +518,48 @@ object Metrics {
         ("functions" -> report.functions.length) ~
         ("publicFunctions" -> report.publicApi.length) ~
         ("documentedPublicFunctions" -> report.publicApi.count(_.hasDoc)) ~
-        ("purePublicFunctions" -> report.publicApi.count(d => isPure(d.effect))) ~
+        ("purePublicFunctions" -> report.publicApi.count(_.isPure)) ~
         ("tests" -> report.tests.length) ~
         ("enums" -> report.enums) ~
         ("structs" -> report.structs) ~
         ("traits" -> report.traits) ~
         ("instances" -> report.instances) ~
         ("effects" -> report.effects) ~
-        ("typeAliases" -> report.typeAliases)
+        ("typeAliases" -> report.typeAliases) ~
+        ("docCoverage" -> report.docCoverage) ~
+        ("purity" -> report.purity) ~
+        ("commentDensity" -> report.commentDensity) ~
+        ("codeLinesPerTest" -> report.codeLinesPerTest)
 
     val definitions: JValue = report.defs.map { d =>
       ("name" -> d.name) ~
-        ("file" -> d.loc.source.name) ~
+        ("module" -> d.module) ~
+        ("file" -> d.file) ~
         ("line" -> d.line) ~
         ("lines" -> d.lines) ~
         ("parameters" -> d.parameters) ~
         ("nesting" -> d.nesting) ~
+        ("cognitive" -> d.cognitive) ~
         ("public" -> d.isPublic) ~
         ("test" -> d.isTest) ~
         ("documented" -> d.hasDoc) ~
-        ("pure" -> isPure(d.effect))
+        ("pure" -> d.isPure) ~
+        ("effects" -> d.effects)
     }
 
-    pretty(JsonMethods.render(("summary" -> summary) ~ ("definitions" -> definitions)))
+    val modules: JValue = report.modules.map { m =>
+      ("name" -> m.name) ~
+        // Not "definitions": the report already has a `definitions` array, and a consumer
+        // searching the document for that name would find both and silently mix a count with a
+        // list.
+        ("definitionCount" -> m.definitions) ~
+        ("lines" -> m.lines) ~
+        ("fanIn" -> m.fanIn) ~
+        ("fanOut" -> m.fanOut) ~
+        ("instability" -> m.instability)
+    }
+
+    pretty(JsonMethods.render(("summary" -> summary) ~ ("modules" -> modules) ~ ("definitions" -> definitions)))
   }
 
   /**
@@ -431,7 +586,13 @@ object Metrics {
 
     if (report.publicApi.nonEmpty) {
       sb.append(s"| documented public | ${share(report.publicApi.count(_.hasDoc), report.publicApi.length)} |\n")
-      sb.append(s"| pure public | ${share(report.publicApi.count(d => isPure(d.effect)), report.publicApi.length)} |\n")
+      sb.append(s"| pure public | ${share(report.publicApi.count(_.isPure), report.publicApi.length)} |\n")
+    }
+
+    if (report.modules.length > 1) {
+      sb.append("\n## Modules\n\n| module | definitions | lines | fan-in | fan-out | instability |\n| --- | --- | --- | --- | --- | --- |\n")
+      report.modules.foreach(m =>
+        sb.append(f"| `${m.name}` | ${m.definitions} | ${m.lines} | ${m.fanIn} | ${m.fanOut} | ${m.instability}%.2f |\n"))
     }
 
     val longest = report.functions.sortBy(-_.lines).take(FindingsShown)
@@ -486,7 +647,8 @@ object Metrics {
       val documented = api.count(_.hasDoc)
       sb.append(f.bold("Public API") + "\n")
       sb.append(row("documented", share(documented, api.length)))
-      sb.append(row("pure", share(api.count(d => isPure(d.effect)), api.length)))
+      sb.append(row("pure", share(api.count(_.isPure), api.length)))
+      sb.append(row("effects", api.flatMap(_.effects).distinct.sorted.take(8).mkString(", ")))
       sb.append("\n")
     }
 
@@ -495,8 +657,16 @@ object Metrics {
       sb.append(f.bold("Findings") + "\n")
       sb.append(finding(f, "longest", functions.sortBy(-_.lines).take(FindingsShown), d => s"${d.lines} lines"))
       sb.append(finding(f, "most deeply nested", functions.filter(_.nesting > 1).sortBy(-_.nesting).take(FindingsShown), d => s"${d.nesting} levels"))
+      sb.append(finding(f, "hardest to follow", functions.filter(_.cognitive > 4).sortBy(-_.cognitive).take(FindingsShown), d => s"cognitive ${d.cognitive}"))
       sb.append(finding(f, "most parameters", functions.filter(_.parameters > 3).sortBy(-_.parameters).take(FindingsShown), d => s"${d.parameters} parameters"))
       sb.append(finding(f, "undocumented public", api.filterNot(_.hasDoc).sortBy(_.name).take(FindingsShown), _ => "no doc comment"))
+    }
+
+    if (report.modules.length > 1) {
+      sb.append("\n" + f.bold("Modules") + "\n")
+      report.modules.take(FindingsShown).foreach { m =>
+        sb.append(f"    ${f.blue(m.name)} -- ${m.definitions} definitions, fan-in ${m.fanIn}, fan-out ${m.fanOut}, instability ${m.instability}%.2f\n")
+      }
     }
 
     if (report.tests.isEmpty) {
@@ -505,11 +675,6 @@ object Metrics {
 
     sb.toString
   }
-
-  /**
-    * Returns `true` if `eff` is the pure effect.
-    */
-  private def isPure(eff: Type): Boolean = eff == Type.Pure
 
   private def row(label: String, value: String): String =
     f"  ${label}%-14s $value%s\n"
