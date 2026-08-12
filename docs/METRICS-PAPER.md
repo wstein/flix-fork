@@ -28,7 +28,7 @@ This paper introduces a compiler-driven software measurement architecture implem
 
 * **Exact Compiler AST & Lexer Integration**: Measures software strictly from the compiler's `TypedAst.Root` and raw `Lexer` tokens, eliminating heuristic errors in parameter counting, lines of code, and symbol resolution.
 * **Cognitive Complexity over Cyclomatic Complexity**: Replaces McCabe’s $v(G)$ with Cognitive Complexity ($C_{\text{cog}}$) tailored for functional pattern matching, `if` guards, and boolean operator chains.
-* **Module Coupling & Instability Graphs**: Computes fan-in, fan-out, and Martin’s Instability ($I$) using compiler-resolved symbol usage (`DefSymUse`, `TypeSymUse`) rather than string-matched identifier prefixes.
+* **Module Coupling & Instability Graphs**: Computes fan-in, fan-out, and Martin’s Instability ($I$) using compiler-resolved symbol usage (`DefSymUse`, `TraitSymUse`, `EffSymUse`) rather than string-matched identifier prefixes.
 * **Fine-Grained Micro-Metrics**: Measures local function definitions (`let` defs), parameter shape widths, return shape arities (tuples and records), and purity ratios.
 * **Standardized SARIF v2.1.0 Export**: Provides native interchange support for GitHub Security / Code Scanning and IDE problem panels.
 
@@ -105,7 +105,9 @@ Given a source file $S$ decomposed by `Lexer` into tokens $T$, lines are classif
 
 $$\text{Comment Density} = \frac{L_{\text{comment}}}{L_{\text{total}}}$$
 
-$$\text{Token Density per Line} = \frac{|T|}{L_{\text{code}}}$$
+Token density per line, $|T| / L_{\text{code}}$, is *not* currently computed; see §7. It is
+recorded here because the tokens are already available and the measurement is the obvious next one,
+not because the tool reports it.
 
 ### 3.2 Cognitive Complexity ($C_{\text{cog}}$)
 Unlike McCabe’s Cyclomatic Complexity ($v(G) = E - N + 2P$), which charges equally for flat multi-case `match` statements and deeply nested control flow, Cognitive Complexity charges for **nesting depth** and **breaks in linear reading flow**:
@@ -120,7 +122,7 @@ Where:
 
 ### 3.3 Module Coupling & Martin's Instability ($I$)
 For a module $M$, let:
-* $\text{Fan-In}(M)$ be the number of external project modules that depend on symbols in $M$.
+* $\text{Fan-In}(M)$ be the number of external project modules that depend on symbols in $M$, counting references to its functions, traits and effects.
 * $\text{Fan-Out}(M)$ be the number of external project modules that $M$ depends on.
 
 Martin's Instability Index $I(M) \in [0, 1]$ is defined as:
@@ -149,18 +151,37 @@ k & \text{if } T_{\text{ret}} = \text{Tuple}(k) \\
 
 ## 4. SARIF v2.1.0 Integration
 
-To enable automated code scanning in GitHub Actions and IDE integrations, `flix metric` exports findings using the SARIF v2.1.0 JSON schema (`--format sarif`).
+Findings are exported as SARIF v2.1.0 from two entry points, which share one renderer so that they
+cannot drift into disagreeing about a schema where disagreement means a consumer discards the file:
+
+* `flix metric --format sarif` — the smells alone, on standard output.
+* `flix check --sarif <file>` — compiler diagnostics *and* smells, in one run, written to a file
+  beside the ordinary human-readable output. This is the form CI uses, because
+  `github/codeql-action/upload-sarif` reads a file. The exit code is unchanged, so a failing check
+  still fails the build.
 
 ### SARIF Rule Mapping
 
-| Finding ID | Rule Name | Severity Level | Description |
-| :--- | :--- | :--- | :--- |
-| `FLIX-M001` | `HighCognitiveComplexity` | `warning` | Definition exceeds cognitive complexity threshold ($\ge 15$). |
-| `FLIX-M002` | `ExcessiveParameterCount` | `warning` | Definition parameter list exceeds width threshold ($\ge 6$). |
-| `FLIX-M003` | `UndocumentedPublicApi` | `note` | Public API definition missing doc comment. |
-| `FLIX-M004` | `OvercrowdedLineTokenDensity` | `warning` | Single line token density exceeds threshold ($\ge 35$). |
+A rule's identifier is the name of what was measured rather than an opaque code, because `ruleId`
+is what a consumer displays and what a project suppresses by. Compiler diagnostics use the
+compiler's own error code, which is already stable and already printed.
 
----
+| Rule ID | Source | Default level | Fires when |
+| :--- | :--- | :--- | :--- |
+| `complexity` | metric | `warning` | cognitive complexity above the limit (default 15) |
+| `nesting` | metric | `warning` | enclosing branches above the limit (default 4) |
+| `parameters` | metric | `warning` | widest parameter list, including local definitions, above the limit (default 5) |
+| `length` | metric | `warning` | a definition *with control flow* longer than the limit (default 40) |
+| `docCoverage` | metric | `note` | less of the public API documented than asked for |
+| `orphan` | metric | `note` | a module nothing else depends on, excluding test modules |
+| `E….` | compiler | `error` | any compiler diagnostic, keyed by its own error code |
+
+Every limit is exclusive: a definition at exactly the limit does not fire. A metric result is
+raised to `error` at twice its limit; `docCoverage` and `orphan` remain notes however far past,
+being facts worth knowing rather than defects. A diagnostic carries the span the compiler pointed
+at — start line and column through end line and column — and the other locations it refers to as
+`relatedLocations`. A metric result carries a line only; the definition's full span is not yet
+threaded through.
 
 ## 5. Empirical Evaluation
 
@@ -189,13 +210,32 @@ We evaluated `flix metric` across three open-source Flix codebases:
 
 ## 7. Conclusion & Future Work
 
-`flix metric` demonstrates that integrating code measurement directly inside the compiler eliminates systemic inaccuracies inherent in external text and AST tools. Future work will extend `flix metric` with:
+`flix metric` demonstrates that integrating code measurement directly inside the compiler
+eliminates systemic inaccuracies inherent in external text and AST tools.
 
-1. **Datalog Rule & Fact Metrics**: Quantitative measurement of embedded Datalog rules (`#{ ... }`) and lattice operations.
-2. **Region & Mutability Footprint Analysis**: Tracking the ratio of immutable data structure operations (`List`, `Map`) to scoped mutable region operations (`Ref`, `MutList`).
-3. **CI Threshold Gating**: Automated non-zero exit codes when maintainability thresholds are violated in pull requests.
+Datalog rule and fact counts, and CI threshold gating with non-zero exit codes, were future work in
+an earlier draft and are implemented: a constraint with a body is counted as a rule and one without
+as a fact, and `--max-lines`, `--max-params`, `--max-nesting`, `--max-complexity` and
+`--min-doc-coverage` fail a build when exceeded. Smells are reported unconditionally; only a limit
+someone set can fail a build, since a default limit is a suggestion and a suggestion that breaks a
+build is not one.
 
----
+What remains:
+
+1. **Line-level micro-metrics.** Token density per line and expressions per line, following Buse &
+   Weimer (2010) and Scalabrino et al. (2018), are not implemented. They are the natural next
+   measurement, because the tool already re-lexes every source and therefore holds the tokens: a
+   definition whose cognitive complexity is 3 may still be unreadable at 52 tokens on one line, and
+   nothing currently reported would say so.
+2. **Region and mutability footprint.** The ratio of scoped mutable operations (`Ref`, `MutList`) to
+   immutable ones. Counting these by name would be string matching, so it awaits a representation
+   the compiler can be asked about directly.
+3. **Full spans for metric results.** A smell currently annotates a line; the definition's start and
+   end columns are known and would let an editor highlight the definition rather than its first
+   line.
+4. **Declared versus inferred effects.** Flix checks that a declared effect set is sufficient, not
+   that it is tight, so a definition may over-declare. Comparing the two would measure the precision
+   of an API's effect surface, which is a question this language can answer and others cannot.
 
 ## References
 
