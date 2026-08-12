@@ -361,7 +361,9 @@ class TestMetrics extends AnyFunSuite {
 
     assertResult(JString("2.1.0"))(doc \ "version")
     val run = (doc \ "runs").children.head
-    assertResult(JString("flix metric"))(run \ "tool" \ "driver" \ "name")
+    // One driver for both halves of the tool: diagnostics and smells share a run, so the name is
+    // the compiler's rather than the subcommand's.
+    assertResult(JString("flix"))(run \ "tool" \ "driver" \ "name")
 
     // Every rule a result names is also declared, or the result is dropped.
     def text(v: org.json4s.JValue): Option[String] = v match {
