@@ -655,7 +655,10 @@ object Metrics {
     // dependents is what it is for. Decided from the annotation the compiler recorded rather than
     // from where the file sits.
     val testOnly = report.defs.groupBy(_.module).collect {
-      case (module, ds) if ds.nonEmpty && ds.forall(_.isTest) => module
+      // Any test, not every definition: a test module with a helper beside its tests is still
+      // reached by the runner and by nothing else, and requiring purity here put every such module
+      // back on the list with the advice to delete it.
+      case (module, ds) if ds.exists(_.isTest) => module
     }.toSet
 
     val orphans = report.modules
@@ -712,6 +715,13 @@ object Metrics {
     *
     * A shortfall is expressed the same way round as an excess, so that one ordering serves both.
     */
+  private def overByRatio(v: Violation): Double = {
+    val r = overBy(v)
+    // Reported as a number a script can compare. Unbounded becomes -1, which no ordering mistakes
+    // for a mild excess the way a very large number would.
+    if (r >= 100.0) -1.0 else r
+  }
+
   private def overBy(v: Violation): Double = v.category match {
     case "docCoverage" => if (v.actual == 0) Double.MaxValue else v.limit / v.actual
     case "orphan" => 1.0
@@ -906,7 +916,7 @@ object Metrics {
     val smellsJson: JValue = smells.map { v =>
       ("category" -> v.category) ~ ("subject" -> v.subject) ~
         ("file" -> v.file) ~ ("line" -> v.line) ~ ("where" -> v.where) ~
-        ("actual" -> v.actual) ~ ("limit" -> v.limit)
+        ("actual" -> v.actual) ~ ("limit" -> v.limit) ~ ("overBy" -> overByRatio(v))
     }
 
     pretty(JsonMethods.render(("summary" -> summary) ~ ("modules" -> modules) ~

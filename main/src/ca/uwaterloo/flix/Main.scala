@@ -375,9 +375,18 @@ object Main {
           // Progress goes to stderr whenever the report is meant for a program: "Resolving Flix
           // dependencies..." ahead of a JSON document makes it unparseable, and the point of these
           // formats is that something else reads them.
+          // Only the text report is written for a terminal. Everything else is redirected into a
+          // file or a pipe often enough that progress on stdout ends up inside the document --
+          // which is how a Markdown report came to begin with an escape sequence.
           val progress = format match {
-            case Metrics.Format.Text | Metrics.Format.Markdown => System.out
-            case Metrics.Format.Json | Metrics.Format.Csv => System.err
+            case Metrics.Format.Text => System.out
+            case Metrics.Format.Json | Metrics.Format.Csv | Metrics.Format.Markdown => System.err
+          }
+          // And nothing but the text report is coloured, since an escape sequence in a document is
+          // not a colour, it is a character someone has to strip.
+          val reportFormatter = format match {
+            case Metrics.Format.Text => formatter
+            case _ => Formatter.NoFormatter
           }
           val flix =
             if (cmdOpts.files.isEmpty) {
@@ -411,7 +420,7 @@ object Main {
                 asked.maxComplexity.orElse(Metrics.SmellThresholds.maxComplexity),
                 asked.minDocCoverage.orElse(Metrics.SmellThresholds.minDocCoverage))
               val smells = Metrics.violations(report, reporting)
-              print(Metrics.render(report, format, formatter, smells))
+              print(Metrics.render(report, format, reportFormatter, smells))
 
               // Failing is still asked for. A default limit is a suggestion, and a suggestion that
               // breaks a build is not a suggestion -- so only a limit someone set can fail one.
