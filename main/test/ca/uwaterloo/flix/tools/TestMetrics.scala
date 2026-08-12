@@ -122,7 +122,7 @@ class TestMetrics extends AnyFunSuite {
   test("csv names every definition, and quotes what would break a column") {
     val csv = Metrics.render(report, Metrics.Format.Csv, Formatter.NoFormatter)
     val header :: rows = csv.trim.split("\n").toList: @unchecked
-    assertResult("name,module,file,line,lines,parameters,nesting,cognitive,public,test,documented,pure,effects")(header)
+    assertResult("name,module,file,line,lines,parameters,localDefs,maxLocalParameters,nesting,cognitive,public,test,documented,pure,effects")(header)
     assertResult(report.defs.map(_.name).sorted)(rows.map(_.takeWhile(_ != ',')).sorted)
   }
 
@@ -188,6 +188,32 @@ class TestMetrics extends AnyFunSuite {
     val deepScore = deep.defs.find(_.name == "Demo.deep").map(_.cognitive).getOrElse(0)
     assertResult(1)(wideScore)
     assert(deepScore > wideScore, s"nesting ($deepScore) should cost more than arms ($wideScore)")
+  }
+
+  test("a wide local definition is not hidden by a narrow outer signature") {
+    // The case this was written for: a two-parameter function whose body threads eight
+    // accumulators through a recursive local definition. Measuring only the outer signature reports
+    // two, and the widest function in the project goes unnoticed.
+    val wide = measure(List(
+      "mod Demo {",
+      "    pub def one(seed: Int32, budget: Int32): Int32 = {",
+      "        def loop(left, acc, a, b, c, d, e, f) =",
+      "            if (left <= 0) acc + a + b + c + d + e + f",
+      "            else loop(left - 1, acc + 1, a, b, c, d, e, f);",
+      "        loop(budget, seed, 0, 0, 0, 0, 0, 0)",
+      "    }",
+      "}"
+    ))
+    val one = wide.defs.find(_.name == "Demo.one").getOrElse(fail("the definition was not measured"))
+    assertResult(2)(one.parameters)
+    assertResult(1)(one.localDefs)
+    assertResult(8)(one.maxLocalParameters)
+    assertResult(8)(one.widestParameterList)
+  }
+
+  test("a definition with no local definitions reports none") {
+    assertResult(Some(0))(report.defs.find(_.name == "Demo.double").map(_.localDefs))
+    assertResult(Some(1))(report.defs.find(_.name == "Demo.double").map(_.widestParameterList))
   }
 
   test("an empty program measures as empty rather than as a failure") {

@@ -75,11 +75,22 @@ object Metrics {
                         isPublic: Boolean,
                         isTest: Boolean,
                         hasDoc: Boolean,
+                        localDefs: Int,
+                        maxLocalParameters: Int,
                         cognitive: Int,
                         effects: List[String]) {
 
     /** Whether it has no effect at all. */
     def isPure: Boolean = effects.isEmpty
+
+    /**
+      * The widest parameter list anywhere in this definition.
+      *
+      * A recursive loop written as a local definition carries its state in its parameters, so the
+      * outer signature says nothing about how wide the function really is: a `def one(tuning, seed)`
+      * whose body threads eight accumulators through a local `loop` reads as taking two.
+      */
+    def widestParameterList: Int = parameters.max(maxLocalParameters)
   }
 
   /**
@@ -169,6 +180,8 @@ object Metrics {
           isPublic = d.spec.mod.isPublic,
           isTest = d.spec.ann.isTest,
           hasDoc = d.spec.doc.text.trim.nonEmpty,
+          localDefs = analysis.locals.getOrElse(d.sym.toString, Nil).length,
+          maxLocalParameters = analysis.locals.getOrElse(d.sym.toString, Nil).maxOption.getOrElse(0),
           cognitive = analysis.cognitive.getOrElse(d.sym.toString, 0),
           effects = d.spec.eff.effects.toList.map(_.toString).sorted
         )
@@ -330,6 +343,7 @@ object Metrics {
     */
   private case class Analysis(nesting: Map[String, Int],
                               cognitive: Map[String, Int],
+                              locals: Map[String, List[Int]],
                               edges: Set[(String, String)])
 
   /**
@@ -343,6 +357,7 @@ object Metrics {
     val branches = scala.collection.mutable.Map.empty[String, List[SourceLocation]]
     val booleans = scala.collection.mutable.Map.empty[String, Int]
     val guards = scala.collection.mutable.Map.empty[String, Int]
+    val locals = scala.collection.mutable.Map.empty[String, List[Int]]
     val edges = scala.collection.mutable.Set.empty[(String, String)]
     var current: Option[TypedAst.Def] = None
 
@@ -369,6 +384,10 @@ object Metrics {
         exp match {
           case _: Expr.IfThenElse | _: Expr.Match | _: Expr.ExtMatch | _: Expr.RestrictableChoose =>
             branches.update(name, exp.loc :: branches.getOrElse(name, Nil))
+          case Expr.LocalDef(_, _, fparams, _, _, _, _, _) =>
+            // A local definition is a function too, and an invisible one: it is not in `root.defs`,
+            // so without this a project's widest and longest function can be one nobody counted.
+            locals.update(name, declaredParameters(fparams) :: locals.getOrElse(name, Nil))
           case Expr.Binary(SemanticOp.BoolOp.And | SemanticOp.BoolOp.Or, _, _, _, _, _) =>
             booleans.update(name, booleans.getOrElse(name, 0) + 1)
           case _ => ()
@@ -380,6 +399,7 @@ object Metrics {
 
     Analysis(
       nesting = branches.map { case (name, locs) => name -> deepestChain(locs) }.toMap,
+      locals = locals.toMap,
       cognitive = branches.keySet.++(booleans.keySet).++(guards.keySet).map { name =>
         name -> cognitiveComplexity(branches.getOrElse(name, Nil), booleans.getOrElse(name, 0), guards.getOrElse(name, 0))
       }.toMap,
@@ -477,7 +497,7 @@ object Metrics {
     * a comma cannot shift every column after it.
     */
   private def csv(report: Report): String = {
-    val header = "name,module,file,line,lines,parameters,nesting,cognitive,public,test,documented,pure,effects"
+    val header = "name,module,file,line,lines,parameters,localDefs,maxLocalParameters,nesting,cognitive,public,test,documented,pure,effects"
     val rows = report.defs.map { d =>
       List(
         d.name,
@@ -486,6 +506,8 @@ object Metrics {
         d.line.toString,
         d.lines.toString,
         d.parameters.toString,
+        d.localDefs.toString,
+        d.maxLocalParameters.toString,
         d.nesting.toString,
         d.cognitive.toString,
         d.isPublic.toString,
@@ -538,6 +560,8 @@ object Metrics {
         ("line" -> d.line) ~
         ("lines" -> d.lines) ~
         ("parameters" -> d.parameters) ~
+        ("localDefs" -> d.localDefs) ~
+        ("maxLocalParameters" -> d.maxLocalParameters) ~
         ("nesting" -> d.nesting) ~
         ("cognitive" -> d.cognitive) ~
         ("public" -> d.isPublic) ~
@@ -658,7 +682,8 @@ object Metrics {
       sb.append(finding(f, "longest", functions.sortBy(-_.lines).take(FindingsShown), d => s"${d.lines} lines"))
       sb.append(finding(f, "most deeply nested", functions.filter(_.nesting > 1).sortBy(-_.nesting).take(FindingsShown), d => s"${d.nesting} levels"))
       sb.append(finding(f, "hardest to follow", functions.filter(_.cognitive > 4).sortBy(-_.cognitive).take(FindingsShown), d => s"cognitive ${d.cognitive}"))
-      sb.append(finding(f, "most parameters", functions.filter(_.parameters > 3).sortBy(-_.parameters).take(FindingsShown), d => s"${d.parameters} parameters"))
+      sb.append(finding(f, "widest parameter lists", functions.filter(_.widestParameterList > 3).sortBy(-_.widestParameterList).take(FindingsShown),
+        d => if (d.maxLocalParameters > d.parameters) s"${d.maxLocalParameters} parameters, in a local definition" else s"${d.parameters} parameters"))
       sb.append(finding(f, "undocumented public", api.filterNot(_.hasDoc).sortBy(_.name).take(FindingsShown), _ => "no doc comment"))
     }
 
