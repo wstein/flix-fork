@@ -440,6 +440,34 @@ class TestMetrics extends AnyFunSuite {
     assertResult(10)(d.maxLineTokens)
   }
 
+  test("a long line is reported at a hundred characters, and a short one is not") {
+    val m = measure(List(
+      "mod K {",
+      "    pub def long(x: Int32): Int32 = if (x > 0) x + 1 else if (x < 0) x - 1 else if (x == 0) 0 else x + 2",
+      "    pub def short(x: Int32): Int32 = x + 1",
+      "}"
+    ))
+    assert(m.defs.find(_.name == "K.long").exists(_.maxLineLength > 100))
+    assert(m.defs.find(_.name == "K.short").exists(_.maxLineLength < 100))
+    val vs = Metrics.violations(m, Metrics.Thresholds(maxLineLength = Some(100)))
+    assertResult(List("K.long"))(vs.map(_.subject))
+    assertResult(List("lineLength"))(vs.map(_.category))
+  }
+
+  test("a local definition is measured for density too, being a function") {
+    val m = measure(List(
+      "mod K {",
+      "    pub def outer(n: Int32): Int32 = {",
+      "        def loop(a, b, c, d) = if (a <= 0) b + c + d else loop(a - 1, b + 1, c, d);",
+      "        loop(n, 0, 0, 0)",
+      "    }",
+      "}"
+    ))
+    val loop = m.locals.find(_.name == "loop").getOrElse(fail("not measured"))
+    assert(loop.maxLineTokens > 0, "a local definition must carry its own token count")
+    assert(loop.maxLineLength > 0, "a local definition must carry its own line length")
+  }
+
   test("an empty program measures as empty rather than as a failure") {
     val empty = measure(List("mod Demo {", "}"))
     assertResult(0)(empty.defs.length)

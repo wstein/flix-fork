@@ -119,7 +119,9 @@ object Metrics {
                           lines: Int,
                           parameters: Int,
                           nesting: Int,
-                          cognitive: Int)
+                          cognitive: Int,
+                          maxLineTokens: Int,
+                          maxLineLength: Int)
 
   /**
     * A module, and what it depends on.
@@ -241,7 +243,7 @@ object Metrics {
       effects = root.effects.values.count(e => isProjectSource(e.loc.source)),
       typeAliases = root.typeAliases.values.count(a => isProjectSource(a.loc.source)),
       modules = moduleMetrics(defs, analysis.edges),
-      locals = localMetrics(root, analysis, base)
+      locals = localMetrics(root, analysis, base, lineWidths)
     )
   }
 
@@ -273,7 +275,7 @@ object Metrics {
     * same collection its enclosing definition uses -- so a local definition is charged for what it
     * contains, and is not merely a line in its parent's total.
     */
-  private def localMetrics(root: Root, analysis: Analysis, base: Option[Path]): List[LocalMetrics] = {
+  private def localMetrics(root: Root, analysis: Analysis, base: Option[Path], widths: Map[String, Map[Int, (Int, Int)]]): List[LocalMetrics] = {
     root.defs.values.toList.filter(d => isProjectSource(d.loc.source)).flatMap { d =>
       val owner = d.sym.toString
       val enclosing = analysis.branches.getOrElse(owner, Nil)
@@ -287,7 +289,9 @@ object Metrics {
           lines = loc.end.lineOneIndexed - loc.start.lineOneIndexed + 1,
           parameters = parameters,
           nesting = deepestChain(inside),
-          cognitive = cognitiveComplexity(inside, 0, 0)
+          cognitive = cognitiveComplexity(inside, 0, 0),
+          maxLineTokens = widestIn(widths, loc, _._1),
+          maxLineLength = widestIn(widths, loc, _._2)
         )
       }
     }.sortBy(l => (-l.lines, l.owner))
@@ -381,10 +385,17 @@ object Metrics {
   /**
     * Returns the widest line of a definition, by whichever measure `of` selects.
     */
-  private def widest(widths: Map[String, Map[Int, (Int, Int)]], d: TypedAst.Def, of: ((Int, Int)) => Int): Int = {
-    val perLine = widths.getOrElse(d.loc.source.name, Map.empty)
-    val from = firstDeclarationLine(d)
-    val to = d.loc.end.lineOneIndexed
+  private def widest(widths: Map[String, Map[Int, (Int, Int)]], d: TypedAst.Def, of: ((Int, Int)) => Int): Int =
+    widestBetween(widths, d.loc.source.name, firstDeclarationLine(d), d.loc.end.lineOneIndexed, of)
+
+  /**
+    * Returns the widest line a location spans.
+    */
+  private def widestIn(widths: Map[String, Map[Int, (Int, Int)]], loc: SourceLocation, of: ((Int, Int)) => Int): Int =
+    widestBetween(widths, loc.source.name, loc.start.lineOneIndexed, loc.end.lineOneIndexed, of)
+
+  private def widestBetween(widths: Map[String, Map[Int, (Int, Int)]], source: String, from: Int, to: Int, of: ((Int, Int)) => Int): Int = {
+    val perLine = widths.getOrElse(source, Map.empty)
     (from to to).flatMap(perLine.get).map(of).maxOption.getOrElse(0)
   }
 
@@ -622,12 +633,13 @@ object Metrics {
                         maxNesting: Option[Int] = None,
                         maxComplexity: Option[Int] = None,
                         maxLineTokens: Option[Int] = None,
+                        maxLineLength: Option[Int] = None,
                         minDocCoverage: Option[Double] = None) {
 
     /** Whether anything at all was asked for. */
     def isEmpty: Boolean =
       maxLines.isEmpty && maxParameters.isEmpty && maxNesting.isEmpty && maxComplexity.isEmpty &&
-        maxLineTokens.isEmpty && minDocCoverage.isEmpty
+        maxLineTokens.isEmpty && maxLineLength.isEmpty && minDocCoverage.isEmpty
   }
 
   /**
@@ -644,7 +656,8 @@ object Metrics {
     maxNesting = Some(4),
     maxComplexity = Some(15),
     // Buse and Weimer found reading time degrades sharply past roughly this many tokens on a line.
-    maxLineTokens = Some(25)
+    maxLineTokens = Some(25),
+    maxLineLength = Some(100)
   )
 
   /**
@@ -700,7 +713,8 @@ object Metrics {
         thresholds.maxParameters.filter(d.widestParameterList > _).map(l => Violation("parameters", d.name, d.file, d.line, d.widestParameterList, l)),
         thresholds.maxNesting.filter(d.nesting > _).map(l => Violation("nesting", d.name, d.file, d.line, d.nesting, l)),
         thresholds.maxComplexity.filter(d.cognitive > _).map(l => Violation("complexity", d.name, d.file, d.line, d.cognitive, l)),
-        thresholds.maxLineTokens.filter(d.maxLineTokens > _).map(l => Violation("density", d.name, d.file, d.line, d.maxLineTokens, l))
+        thresholds.maxLineTokens.filter(d.maxLineTokens > _).map(l => Violation("density", d.name, d.file, d.line, d.maxLineTokens, l)),
+        thresholds.maxLineLength.filter(d.maxLineLength > _).map(l => Violation("lineLength", d.name, d.file, d.line, d.maxLineLength, l))
       ).flatten
     }
 
@@ -786,6 +800,7 @@ object Metrics {
     */
   def action(category: String): String = category match {
     case "density" => "break the line: one expression, arm or argument list per line"
+    case "lineLength" => "wrap it: a line read by scrolling sideways is read twice"
     case "nesting" => "match on a tuple or enum, or extract the inner branch"
     case "complexity" => "name the predicate; a repeated guard is a missing case"
     case "parameters" => "group the accumulators into a record and thread one value"
@@ -895,7 +910,7 @@ object Metrics {
     * Returns the tags a category carries, which is how a dashboard groups it.
     */
   def tagsFor(category: String): List[String] = category match {
-    case "density" => List("readability", "metrics")
+    case "density" | "lineLength" => List("readability", "metrics")
     case "docCoverage" => List("documentation", "maintainability")
     case "orphan" => List("dead-code", "maintainability")
     case _ => List("maintainability", "metrics")
@@ -906,6 +921,7 @@ object Metrics {
     */
   def ruleDescription(category: String): String = category match {
     case "density" => "A line holding more tokens than the limit."
+    case "lineLength" => "A line longer than the limit."
     case "nesting" => "Branches nested more deeply than the limit."
     case "complexity" => "More decisions to hold in mind at once than the limit."
     case "parameters" => "A parameter list wider than the limit, counting local definitions."
@@ -1035,7 +1051,9 @@ object Metrics {
         ("lines" -> l.lines) ~
         ("parameters" -> l.parameters) ~
         ("nesting" -> l.nesting) ~
-        ("cognitive" -> l.cognitive)
+        ("cognitive" -> l.cognitive) ~
+        ("maxLineTokens" -> l.maxLineTokens) ~
+        ("maxLineLength" -> l.maxLineLength)
     }
 
     // Emitted so that whatever reads the report reads the verdict too, rather than reimplementing
