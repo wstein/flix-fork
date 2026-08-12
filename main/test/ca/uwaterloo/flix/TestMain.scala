@@ -485,6 +485,27 @@ class TestMain extends AnyFunSuite {
     assert(Main.parseCmdOpts(Array("metric", "--format", "csv", "--json")).get.metricFormat == "json")
   }
 
+  test("`--json` names two different options, and position decides which") {
+    // `--json` is declared twice: globally, where it sets `json`, and under `metric`, where it
+    // selects the report format. Which one a word means depends on whether it comes before or after
+    // the command, so each spelling does half of what it reads as -- `flix --json metric` prints a
+    // text report, and `flix metric --json` leaves `json` false. Nobody chose this; two options
+    // were given the same name three hundred lines apart.
+    //
+    // Pinned as it stands so that resolving it is a visible change. A parser that refuses duplicate
+    // names cannot express this at all, which is the argument for replacing this one.
+    val afterCommand = Main.parseCmdOpts(Array("metric", "--json")).get
+    assert(afterCommand.metricFormat == "json")
+    assert(!afterCommand.json)
+
+    val beforeCommand = Main.parseCmdOpts(Array("--json", "metric")).get
+    assert(beforeCommand.metricFormat == "text")
+    assert(beforeCommand.json)
+
+    // Everywhere else there is only one `--json`, and it means what it says in either position.
+    assert(Main.parseCmdOpts(Array("build", "--json")).get.json)
+  }
+
   test("metric thresholds") {
     val args = Array(
       "metric",
