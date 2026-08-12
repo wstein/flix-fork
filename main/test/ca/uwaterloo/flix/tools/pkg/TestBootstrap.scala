@@ -42,6 +42,58 @@ class TestBootstrap extends AnyFunSuite {
       s"init wrote '$declared'; a manifest version must be three numbers and nothing else.")
   }
 
+  test("a project requiring a newer compiler is refused, and says what it wants") {
+    // The `flix` field states the oldest compiler a package builds with. It was parsed, written by
+    // `init`, and never read, so a project needing a feature this compiler lacks failed somewhere
+    // in the middle of type checking rather than at the line that stated the requirement.
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out).unsafeGet
+    requireFlixVersion(p, "999.0.0")
+
+    Bootstrap.bootstrap(p, None)(Formatter.NoFormatter, System.out) match {
+      case Result.Err(e: BootstrapError.IncompatibleFlixVersion) =>
+        val text = e.message(Formatter.NoFormatter)
+        assert(text.contains("999.0.0"), s"the error does not say what was required:\n$text")
+        assert(text.contains(Version.CurrentVersion.toString), s"the error does not say what is running:\n$text")
+      case other => fail(s"Expected the project to be refused, but found: $other")
+    }
+  }
+
+  test("a project requiring this compiler exactly is accepted") {
+    // The floor is a minimum, not an exact match: equal must pass, or every project would have to
+    // be re-pinned on every release.
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out).unsafeGet
+    requireFlixVersion(p, Version.CurrentVersion.manifestString)
+
+    Bootstrap.bootstrap(p, None)(Formatter.NoFormatter, System.out) match {
+      case Result.Err(e: BootstrapError.IncompatibleFlixVersion) =>
+        fail(s"Expected the project to build, but found: ${e.message(Formatter.NoFormatter)}")
+      case _ => succeed
+    }
+  }
+
+  test("a project requiring an older compiler is accepted") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out).unsafeGet
+    requireFlixVersion(p, "0.1.0")
+
+    Bootstrap.bootstrap(p, None)(Formatter.NoFormatter, System.out) match {
+      case Result.Err(e: BootstrapError.IncompatibleFlixVersion) =>
+        fail(s"Expected the project to build, but found: ${e.message(Formatter.NoFormatter)}")
+      case _ => succeed
+    }
+  }
+
+  /** Rewrites the `flix` field of the manifest at `p` to `version`. */
+  private def requireFlixVersion(p: Path, version: String): Unit = {
+    val manifest = p.resolve("flix.toml")
+    val rewritten = Files.readAllLines(manifest).asScala
+      .map(line => if (line.trim.startsWith("flix")) s"""flix        = "$version"""" else line)
+      .mkString(System.lineSeparator())
+    Files.writeString(manifest, rewritten + System.lineSeparator())
+  }
+
   test("init creates a missing project directory") {
     val p = Files.createTempDirectory(ProjectPrefix).resolve("new-project")
     Bootstrap.init(p)(System.out).unsafeGet
