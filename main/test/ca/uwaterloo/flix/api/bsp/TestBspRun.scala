@@ -16,7 +16,7 @@
 package ca.uwaterloo.flix.api.bsp
 
 import ca.uwaterloo.flix.api.{Bootstrap, ProgramRunner}
-import ca.uwaterloo.flix.util.Options
+import ca.uwaterloo.flix.util.{Build, Options}
 import ch.epfl.scala.bsp4j.*
 import org.eclipse.lsp4j.jsonrpc.Launcher
 import org.scalatest.DoNotDiscover
@@ -127,6 +127,82 @@ class TestBspRun extends AnyFunSuite {
     }
   }
 
+  test("a cancelled run stops its program") {
+    withSession(
+      """def main(): Unit \ IO = loop()
+        |
+        |def loop(): Unit \ IO = loop()
+        |""".stripMargin) { s =>
+      assert(s.compile().getStatusCode == StatusCode.OK)
+
+      // The compile above announced a task of its own, so this waits for one *more* -- the run's. A
+      // cancellation that arrives before the handler is dispatched is dropped before the body runs,
+      // which is correct and reports nothing, and would make this test about a different path.
+      val before = s.taskStarts.size
+      val running = s.runFuture()
+      val waitingSince = System.nanoTime()
+      while (s.taskStarts.sizeIs <= before &&
+        java.time.Duration.ofNanos(System.nanoTime() - waitingSince).toSeconds < 60) {
+        Thread.sleep(50)
+      }
+      assert(s.taskStarts.sizeIs > before, "the run never started")
+
+      running.cancel(true)
+
+      // The evidence, and the reason this is not a timing test: the program's timeout is ten minutes and
+      // it holds the build lock while it runs, so a compile that answers at all proves the process was
+      // killed rather than waited for.
+      assert(s.compile().getStatusCode == StatusCode.OK, "the session was still held by a cancelled run")
+      assert(s.taskFinishes.exists(_.getStatus == StatusCode.CANCELLED),
+        s"no task reported the cancellation: ${s.taskFinishes.map(_.getStatus)}")
+    }
+  }
+
+  test("a program that never ends is stopped by the timeout") {
+    // Silent and endless, which is the case the supervision has to survive: draining output to
+    // end-of-stream before consulting the clock is a timeout that can never fire, because a program
+    // that prints nothing holds the reader forever.
+    withSession(
+      """def main(): Unit \ IO = loop()
+        |
+        |def loop(): Unit \ IO = loop()
+        |""".stripMargin) { s =>
+      assert(s.compile().getStatusCode == StatusCode.OK)
+
+      val started = System.nanoTime()
+      val outcome = BspRunner.run(s.view, Build.Development, Nil, _ => (), java.time.Duration.ofSeconds(3))
+      val elapsed = java.time.Duration.ofNanos(System.nanoTime() - started)
+
+      assert(outcome.timedOut, "an endless program was not reported as timed out")
+      assert(!outcome.isSuccess, "a program that was killed was reported as successful")
+      // Generously bounded: the point is that it returned at all, on the timeout rather than never.
+      assert(elapsed.toSeconds < 60, s"the timeout took ${elapsed.toSeconds}s to fire")
+    }
+  }
+
+  test("output with no newline is reported, and does not hold the timeout open") {
+    // The other half of the same defect: a line that is never terminated is a read that never returns.
+    withSession(
+      """use Sys.Console
+        |
+        |def main(): Unit \ { Console, IO } =
+        |    Console.print("UNTERMINATED");
+        |    loop()
+        |
+        |def loop(): Unit \ IO = loop()
+        |""".stripMargin) { s =>
+      assert(s.compile().getStatusCode == StatusCode.OK)
+
+      val lines = new ConcurrentLinkedQueue[String]()
+      val outcome = BspRunner.run(s.view, Build.Development, Nil, lines.add(_), java.time.Duration.ofSeconds(3))
+
+      assert(outcome.timedOut, "the program was not stopped")
+      // Reported even though it was never terminated: a program killed mid-line has still said
+      // something, and it is usually the thing a user is looking for.
+      assert(lines.asScala.exists(_.contains("UNTERMINATED")), s"the partial line was dropped: ${lines.asScala.toList}")
+    }
+  }
+
   test("the reported classpath actually starts the program") {
     withSession("""def main(): Unit \ IO = println("PROGRAM-RAN")""") { s =>
       s.compile()
@@ -208,11 +284,19 @@ class TestBspRun extends AnyFunSuite {
     def compile(): CompileResult =
       client.buildTargetCompile(new CompileParams(List(target).asJava)).get(Timeout, TimeUnit.SECONDS)
 
-    def run(arguments: List[String] = Nil): RunResult = {
+    def run(arguments: List[String] = Nil): RunResult =
+      runFuture(arguments).get(Timeout, TimeUnit.SECONDS)
+
+    /** Issues a run without waiting for it, so that it can be cancelled. */
+    def runFuture(arguments: List[String] = Nil): java.util.concurrent.CompletableFuture[RunResult] = {
       val params = new RunParams(target)
       if (arguments.nonEmpty) params.setArguments(arguments.asJava)
-      client.buildTargetRun(params).get(Timeout, TimeUnit.SECONDS)
+      client.buildTargetRun(params)
     }
+
+    def taskStarts: List[TaskStartParams] = received.taskStarts.asScala.toList
+
+    def taskFinishes: List[TaskFinishParams] = received.taskFinishes.asScala.toList
 
     def jvmRunEnvironment(): JvmEnvironmentItem =
       client.buildTargetJvmRunEnvironment(new JvmRunEnvironmentParams(List(target).asJava))
@@ -222,6 +306,10 @@ class TestBspRun extends AnyFunSuite {
       client.buildTargetJvmTestEnvironment(new JvmTestEnvironmentParams(List(target).asJava))
         .get(Timeout, TimeUnit.SECONDS).getItems.asScala.head
 
+    /** A snapshot of the project, for a test that drives the runner directly. */
+    def view: ca.uwaterloo.flix.api.ProjectView =
+      Bootstrap.bootstrap(project, None)(ca.uwaterloo.flix.util.Formatter.NoFormatter, System.out).unsafeGet.view
+
     def logs: List[String] = received.logs.asScala.toList
 
     def shown: List[String] = received.shown.asScala.toList
@@ -230,6 +318,8 @@ class TestBspRun extends AnyFunSuite {
   }
 
   private class Received {
+    val taskStarts = new ConcurrentLinkedQueue[TaskStartParams]()
+    val taskFinishes = new ConcurrentLinkedQueue[TaskFinishParams]()
     val logs = new ConcurrentLinkedQueue[String]()
     val shown = new ConcurrentLinkedQueue[String]()
     val diagnostics = new ConcurrentLinkedQueue[PublishDiagnosticsParams]()
@@ -288,8 +378,8 @@ class TestBspRun extends AnyFunSuite {
     override def onBuildShowMessage(params: ShowMessageParams): Unit = received.shown.add(params.getMessage)
     override def onBuildPublishDiagnostics(params: PublishDiagnosticsParams): Unit = received.diagnostics.add(params)
     override def onBuildTargetDidChange(params: DidChangeBuildTarget): Unit = ()
-    override def onBuildTaskStart(params: TaskStartParams): Unit = ()
+    override def onBuildTaskStart(params: TaskStartParams): Unit = received.taskStarts.add(params)
     override def onBuildTaskProgress(params: TaskProgressParams): Unit = ()
-    override def onBuildTaskFinish(params: TaskFinishParams): Unit = ()
+    override def onBuildTaskFinish(params: TaskFinishParams): Unit = received.taskFinishes.add(params)
   }
 }

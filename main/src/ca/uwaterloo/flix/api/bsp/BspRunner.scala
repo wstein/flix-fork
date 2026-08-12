@@ -54,6 +54,7 @@ object BspRunner {
     *
     * @param arguments  passed to the program, after the class name.
     * @param onOutput   called for each line the program writes.
+    * @param onStart    called with the process as soon as it exists, so a caller can stop it.
     * @param timeout    how long to wait before giving up and killing the process. A server must not
     *                   be held open forever by a program that does not end.
     */
@@ -61,7 +62,8 @@ object BspRunner {
           build: Build,
           arguments: List[String],
           onOutput: String => Unit,
-          timeout: java.time.Duration): Outcome = {
+          timeout: java.time.Duration,
+          onStart: Process => Unit = _ => ()): Outcome = {
     val process = new ProcessBuilder(ProgramRunner.command(view, build, arguments)*)
       // In the project, so a program that reads a relative path finds what the user would expect.
       .directory(view.projectPath.toFile)
@@ -73,18 +75,33 @@ object BspRunner {
     // end of it rather than blocking until the timeout.
     process.getOutputStream.close()
 
-    try {
-      val reader = new BufferedReader(new InputStreamReader(process.getInputStream, StandardCharsets.UTF_8))
-      var line = reader.readLine()
-      while (line != null) {
-        onOutput(line)
-        line = reader.readLine()
-      }
+    // Handed over before anything is waited on, so that a client which gives up while the program is
+    // starting can still reach it. A cancellation that arrives a moment too late would otherwise leave
+    // the program running for the length of the timeout.
+    onStart(process)
 
+    // The output is drained on a thread of its own, and that is the whole point of this shape rather
+    // than a detail of it. Reading to end-of-stream on *this* thread and only then waiting with a
+    // timeout is a timeout that cannot fire: a program that loops without printing, or prints a line it
+    // never terminates, holds the reader forever and the clock is never consulted. The process's
+    // lifetime has to be supervised independently of its output.
+    val reader = new Thread(() => pump(process, onOutput), "flix-bsp-run-output")
+    reader.setDaemon(true)
+    reader.start()
+
+    try {
       if (process.waitFor(timeout.toMillis, TimeUnit.MILLISECONDS)) {
+        // Ended on its own. Give the reader the moment it needs to finish the bytes already written --
+        // bounded, because a child of the program could hold the pipe open after the program itself is
+        // gone, and a run that has finished must not wait on a grandchild.
+        reader.join(DrainGrace.toMillis)
         Outcome(process.exitValue(), timedOut = false)
       } else {
+        // Kill, reap, then join: destroying closes the pipe, which is what ends the reader, and waiting
+        // for the exit before joining means the reader is not still being fed while we wait for it.
         process.destroyForcibly()
+        process.waitFor()
+        reader.join(DrainGrace.toMillis)
         Outcome(process.exitValue(), timedOut = true)
       }
     } catch {
@@ -94,4 +111,54 @@ object BspRunner {
         Outcome(exitCode = -1, timedOut = true)
     }
   }
+
+  /**
+    * Reports each line the program writes, until its output ends.
+    *
+    * A partial last line is reported too. A program killed mid-line, or one whose final write has no
+    * newline, has still said something, and dropping it loses exactly the output a user is looking for
+    * when a run had to be stopped.
+    */
+  private def pump(process: Process, onOutput: String => Unit): Unit = {
+    val reader = new BufferedReader(new InputStreamReader(process.getInputStream, StandardCharsets.UTF_8))
+    val partial = new StringBuilder
+    try {
+      var c = reader.read()
+      while (c != -1) {
+        if (c == '\n') {
+          onOutput(partial.toString.stripSuffix("\r"))
+          partial.setLength(0)
+        } else {
+          partial.append(c.toChar)
+          // A program that writes megabytes without a newline must not be able to grow this without
+          // bound; it is reported in pieces instead.
+          if (partial.length >= MaxLineLength) {
+            onOutput(partial.toString)
+            partial.setLength(0)
+          }
+        }
+        c = reader.read()
+      }
+    } catch {
+      // The pipe was closed under us, which is what killing the process does. Whatever was buffered is
+      // still worth reporting.
+      case _: java.io.IOException => ()
+    } finally {
+      if (partial.nonEmpty) {
+        onOutput(partial.toString)
+      }
+    }
+  }
+
+  /**
+    * How long to wait for the output reader after the process has gone.
+    *
+    * Short: the bytes are already in the pipe, and the only reason this is not zero is that the reader
+    * needs to be scheduled to hand them over.
+    */
+  private val DrainGrace: java.time.Duration = java.time.Duration.ofSeconds(5)
+
+  /** The longest run of output without a newline that is reported as one line. */
+  private val MaxLineLength: Int = 8 * 1024
+
 }

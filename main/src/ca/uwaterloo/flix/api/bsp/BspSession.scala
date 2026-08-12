@@ -73,6 +73,38 @@ class BspSession(val projectPath: Path, options: Options, log: BspLogStream) {
   private val buildLock: AnyRef = new AnyRef
 
   /**
+    * How many requests may be waiting to build at once.
+    *
+    * A bound rather than a queue, and an explicit one. Requests are dispatched off the connection's
+    * thread and builds are serialised, so a client that sends work faster than it completes leaves the
+    * surplus parked on a platform thread each -- and the pool they come from is unbounded on purpose, so
+    * that a ten-minute run cannot starve a query. Something has to say no, and saying it here is
+    * cheaper than discovering the limit as an `OutOfMemoryError`.
+    *
+    * Generous: no editor asks for this much, and the coalescing above already collapses a burst of
+    * compiles into two builds. A client that reaches it is malfunctioning, and a refusal it can read is
+    * the most useful thing to hand it.
+    */
+  private val MaxBuildRequestsInFlight: Int = 32
+
+  /** Permits for [[MaxBuildRequestsInFlight]]. */
+  private val admission: java.util.concurrent.Semaphore = new java.util.concurrent.Semaphore(MaxBuildRequestsInFlight)
+
+  /**
+    * Runs `body` if the server is not already saturated with build work, and refuses it if it is.
+    *
+    * The permit covers the wait as well as the work, because waiting is what costs the thread.
+    */
+  private def admitted[T](what: String)(body: => T): T = {
+    if (!admission.tryAcquire()) {
+      throw invalidRequest(
+        s"too many build requests in flight ($MaxBuildRequestsInFlight); $what was refused rather than queued")
+    }
+    try body
+    finally admission.release()
+  }
+
+  /**
     * Guards [[joinable]] only, and is never held across a build.
     *
     * A separate monitor from [[buildLock]] on purpose: the whole point of the slot is to be readable
@@ -112,6 +144,9 @@ class BspSession(val projectPath: Path, options: Options, log: BspLogStream) {
     */
   @volatile private var lastCompileHadMain: Boolean = false
 
+  /** Whether `build/exit` arrived, and whether a shutdown preceded it. */
+  @volatile private var exitAfterShutdown: Option[Boolean] = None
+
   /** Everything the compiler would have printed, as client log messages. */
   private val out: PrintStream = new PrintStream(log, true, "UTF-8")
 
@@ -141,7 +176,7 @@ class BspSession(val projectPath: Path, options: Options, log: BspLogStream) {
     */
   def initialize(params: InitializeBuildParams): InitializeBuildResult = synchronized {
     state match {
-      case State.Initialized => throw invalidRequest("this connection is already initialized")
+      case State.AwaitingAck | State.Ready => throw invalidRequest("this connection is already initialized")
       case State.ShutDown => throw invalidRequest("this connection has been shut down")
       case State.Uninitialized => ()
     }
@@ -158,7 +193,7 @@ class BspSession(val projectPath: Path, options: Options, log: BspLogStream) {
     Bootstrap.bootstrap(projectPath, options.githubToken) match {
       case Result.Ok(b) =>
         bootstrap = Some(b)
-        state = State.Initialized
+        state = State.AwaitingAck
         new InitializeBuildResult(
           ServerName, Version.CurrentVersion.toString, Bsp4j.PROTOCOL_VERSION,
           BspCapabilities.mkServerCapabilities())
@@ -172,12 +207,23 @@ class BspSession(val projectPath: Path, options: Options, log: BspLogStream) {
   }
 
   /**
-    * Records the client's acknowledgement.
+    * Records the client's acknowledgement, after which requests are served.
     *
-    * Idempotent on purpose: a second one is a client bug, and dropping the connection over it would
-    * turn a harmless mistake into a broken editor.
+    * A notification, so there is no reply to put an error in: a duplicate cannot be refused and
+    * dropping the connection over one would turn a client's harmless mistake into a broken editor. It
+    * is reported to the client's log instead, which is the only channel a notification has, and the
+    * state does not move -- so a second acknowledgement cannot resurrect a session that has since been
+    * shut down.
     */
-  def initialized(): Unit = ()
+  def initialized(): Unit = synchronized {
+    state match {
+      case State.AwaitingAck =>
+        state = State.Ready
+      case other =>
+        logMessage(s"build/initialized received while $other; ignored. It is sent exactly once, " +
+          "after the reply to build/initialize.")
+    }
+  }
 
   /** Moves to `ShutDown`, after which no request is served and no notification is published. */
   def shutdown(): Unit = synchronized {
@@ -190,6 +236,25 @@ class BspSession(val projectPath: Path, options: Options, log: BspLogStream) {
 
   /** Returns `true` once `build/shutdown` has been received. */
   def isShutDown: Boolean = state == State.ShutDown
+
+  /** Records that `build/exit` arrived, so the process can exit with the status the client earned. */
+  def exited(): Unit = synchronized {
+    exitAfterShutdown = Some(state == State.ShutDown)
+    state = State.ShutDown
+  }
+
+  /**
+    * The status this process should exit with.
+    *
+    * The specification is exact about it: after `build/exit`, success only if `build/shutdown` came
+    * first, and an error otherwise. A connection that simply ended -- an editor that was killed, a pipe
+    * that closed -- asked for nothing and gets 0, since there is no client left to report a failure to.
+    */
+  def exitStatus: Int = exitAfterShutdown match {
+    case Some(true) => 0
+    case Some(false) => 1
+    case None => 0
+  }
 
   /**
     * Returns the view a request should be answered from, or fails.
@@ -204,9 +269,15 @@ class BspSession(val projectPath: Path, options: Options, log: BspLogStream) {
         // retries the first.
         throw new ResponseErrorException(
           new ResponseError(ResponseErrorCode.ServerNotInitialized, "build/initialize has not been received", null))
+      case State.AwaitingAck =>
+        // Also -32002, and for the same reason: the handshake is not finished until the client
+        // acknowledges it, and a client that jumped the gun should retry rather than conclude the
+        // server is broken.
+        throw new ResponseErrorException(new ResponseError(ResponseErrorCode.ServerNotInitialized,
+          "build/initialized has not been received; a client may not send requests before it", null))
       case State.ShutDown =>
         throw invalidRequest("this connection has been shut down")
-      case State.Initialized =>
+      case State.Ready =>
         bootstrap match {
           case Some(b) => b.view
           case None => throw invalidRequest("the project is not loaded")
@@ -256,15 +327,18 @@ class BspSession(val projectPath: Path, options: Options, log: BspLogStream) {
     * condition that makes that sound; the visible consequence here is that only the request whose
     * build ran publishes the diagnostics.
     */
-  def compile(target: BuildTargetIdentifier, originId: Option[String]): CompileResult = {
+  def compile(target: BuildTargetIdentifier, originId: Option[String]): CompileResult = admitted("a compile") {
     val startedAt = currentGeneration
 
     val (outcome, ran) = compileOrJoin()
 
     if (!isCurrent(startedAt)) {
       // Discarded rather than published. The request still answers, because a client is waiting on
-      // it, and `CANCELLED` says the answer is not about the project it asked about.
-      return new CompileResult(StatusCode.CANCELLED)
+      // it, and `CANCELLED` says the answer is not about the project it asked about -- with the origin
+      // id it arrived with, since a client correlates every answer by it, cancelled ones included.
+      val cancelled = new CompileResult(StatusCode.CANCELLED)
+      originId.foreach(cancelled.setOriginId)
+      return cancelled
     }
 
     // Only the request whose build actually ran publishes. The ledger is the record of what the client
@@ -390,7 +464,8 @@ class BspSession(val projectPath: Path, options: Options, log: BspLogStream) {
     * The compile lock is released before the program starts. A user program may run for minutes, and
     * holding the lock across it would block every later compile behind it.
     */
-  def run(target: BuildTargetIdentifier, arguments: List[String], originId: Option[String]): RunResult = {
+  def run(target: BuildTargetIdentifier, arguments: List[String], originId: Option[String],
+          cancellation: Cancellation): RunResult = admitted("a run") {
     val startedAt = currentGeneration
 
     val (outcome, view) = buildLock.synchronized {
@@ -422,7 +497,15 @@ class BspSession(val projectPath: Path, options: Options, log: BspLogStream) {
       // The program's own output, as log messages. A client shows these in its run console; they are
       // not diagnostics and must not be mistaken for them.
       line => logMessage(line),
-      RunTimeout)
+      RunTimeout,
+      // A cancelled run stops its program. Dropping the reply and leaving the process running would
+      // hold the terminal, the build lock and the output stream until it happened to end, which is not
+      // cancellation in any sense a user would recognise.
+      onStart = process => cancellation.onCancel(() => process.destroyForcibly()))
+
+    if (cancellation.isCancelled) {
+      return statusOf(new RunResult(StatusCode.CANCELLED), originId)
+    }
 
     if (result.timedOut) {
       showMessage(MessageType.ERROR, s"${view.packageName} did not finish within ${RunTimeout.toMinutes} minutes and was stopped.")
@@ -446,7 +529,8 @@ class BspSession(val projectPath: Path, options: Options, log: BspLogStream) {
     * descriptor, which here carries the protocol. The events go to a [[BspTestSink]] instead, and both
     * renderings agree about pass and fail because both watch the same runner.
     */
-  def test(target: BuildTargetIdentifier, filters: List[Regex], originId: Option[String]): TestResult = {
+  def test(target: BuildTargetIdentifier, filters: List[Regex], originId: Option[String],
+           cancellation: Cancellation): TestResult = admitted("a test run") {
     val startedAt = currentGeneration
     val view = requireView()
 
@@ -462,11 +546,12 @@ class BspSession(val projectPath: Path, options: Options, log: BspLogStream) {
     try {
       val (outcome, ran) = buildLock.synchronized {
         val b = requireBootstrapForBuild()
-        b.testWith(flix, filters, sink)
+        b.testWith(flix, filters, sink, isCancelled = () => cancellation.isCancelled)
       }
 
       status =
-        if (!isCurrent(startedAt)) StatusCode.CANCELLED
+        if (cancellation.isCancelled) StatusCode.CANCELLED
+        else if (!isCurrent(startedAt)) StatusCode.CANCELLED
         else {
           publish(target, outcome)
           ran match {
@@ -480,8 +565,13 @@ class BspSession(val projectPath: Path, options: Options, log: BspLogStream) {
       originId.foreach(result.setOriginId)
       result
     } finally {
+      // The report carries the origin id, like a compile report does: it is how a client ties an
+      // aggregate back to the request that asked for it. `TaskStart` and `TaskFinish` themselves have no
+      // such field in this protocol version, so the payload is where it can go.
+      val report = sink.report()
+      originId.foreach(report.setOriginId)
       tasks.finish(parent, s"Tested ${view.packageName}", status,
-        Some((TaskFinishDataKind.TEST_REPORT, sink.report())))
+        Some((TaskFinishDataKind.TEST_REPORT, report)))
     }
   }
 
@@ -736,8 +826,18 @@ object BspSession {
     /** No `build/initialize` yet. Requests are refused with `ServerNotInitialized`. */
     case object Uninitialized extends State
 
+    /**
+      * `build/initialize` answered, `build/initialized` not yet received.
+      *
+      * A state of its own rather than a detail of being initialized, because the specification puts a
+      * rule here: a client may not send requests until it has acknowledged the handshake. Collapsing
+      * this into `Ready` makes the server accept a sequence no client is allowed to send, which is the
+      * kind of leniency that lets a real client's bug reach production undetected.
+      */
+    case object AwaitingAck extends State
+
     /** Serving. */
-    case object Initialized extends State
+    case object Ready extends State
 
     /** `build/shutdown` received. Requests are refused and nothing is published. */
     case object ShutDown extends State

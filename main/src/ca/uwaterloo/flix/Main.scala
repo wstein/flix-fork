@@ -481,8 +481,11 @@ object Main {
           }
           // `cwd` and not a flag: a client starts the server with the workspace as its working
           // directory, which is exactly the project it means.
-          BspServer.run(options, cwd)
-          System.exit(0)
+          //
+          // The status is the server's, not a constant: the specification asks for 0 after an orderly
+          // shutdown and 1 for a `build/exit` without one, and a client reads it to tell a server that
+          // went away cleanly from one that was told to stop and had not been shut down.
+          System.exit(BspServer.run(options, cwd))
 
         case Command.BspInstall =>
           if (cmdOpts.files.nonEmpty) {

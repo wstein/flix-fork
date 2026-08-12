@@ -71,7 +71,7 @@ object Tester {
     * is still current can be tested from the class files it wrote, and the runner is the same either
     * way. Filtering has already happened -- whoever produced the cases decided which ones they are.
     */
-  def run(tests: Vector[TestCase], sink: TestEventSink)(implicit flix: Flix): Result[Unit, Int] = {
+  def run(tests: Vector[TestCase], sink: TestEventSink, isCancelled: () => Boolean = () => false)(implicit flix: Flix): Result[Unit, Int] = {
     //
     // Reset coverage before running tests.
     //
@@ -80,7 +80,7 @@ object Tester {
     // Start the TestRunner and TestReporter.
     val queue = new ConcurrentLinkedQueue[TestEvent]()
     val reporter = new TestReporter(queue, tests, sink)
-    val runner = new TestRunner(queue, tests)
+    val runner = new TestRunner(queue, tests, isCancelled)
     reporter.start()
     runner.start()
 
@@ -235,14 +235,25 @@ object Tester {
   /**
     * A class that runs all the given tests emitting test events.
     */
-  private class TestRunner(queue: ConcurrentLinkedQueue[TestEvent], tests: Vector[TestCase])(implicit flix: Flix) extends Thread {
+  private class TestRunner(queue: ConcurrentLinkedQueue[TestEvent], tests: Vector[TestCase],
+                           isCancelled: () => Boolean)(implicit flix: Flix) extends Thread {
     /**
-      * Runs all the given tests.
+      * Runs all the given tests, stopping if the caller has given up.
+      *
+      * Checked between tests and not inside one, which is the honest guarantee: a test is a compiled
+      * function called by reflection, and a JVM cannot safely stop a method in the middle -- `Thread.stop`
+      * was removed because it left locks and objects in states nothing could reason about. So the test
+      * in flight finishes and no further one starts.
+      *
+      * The terminal event is emitted either way. A reporter waits for it, and a run that stopped without
+      * one would leave it waiting forever.
       */
     override def run(): Unit = {
       val start = System.nanoTime()
       for (testCase <- tests) {
-        runTest(testCase)
+        if (!isCancelled()) {
+          runTest(testCase)
+        }
       }
       val elapsed = System.nanoTime() - start
       queue.add(TestEvent.Finished(Duration(elapsed)))
@@ -394,7 +405,7 @@ object Tester {
   /**
     * Returns all test cases from the given compilation `result` which satisfy at least one filter.
     */
-  private def getTestCases(filters: List[Regex], compilationResult: CompilationResult): Vector[TestCase] = {
+  def getTestCases(filters: List[Regex], compilationResult: CompilationResult): Vector[TestCase] = {
     /**
       * Returns `true` if at least one filter matches the given symbol _OR_ if there are no filters.
       */

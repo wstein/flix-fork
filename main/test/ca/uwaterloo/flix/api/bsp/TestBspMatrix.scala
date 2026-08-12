@@ -111,6 +111,29 @@ class TestBspMatrix extends AnyFunSuite {
     }
   }
 
+  test("a flood of requests is refused rather than exhausting the server") {
+    withSession { s =>
+      assert(s.compile(s.target).getStatusCode == StatusCode.OK)
+
+      // Requests are dispatched off the connection's thread and builds are serialised, so surplus work
+      // parks a platform thread each. The pool is unbounded on purpose -- a ten-minute run must not
+      // starve a query -- so the bound has to be here, and it has to be a refusal a client can read.
+      val flood = List.fill(80)(s.compileFuture(s.target))
+      val outcomes = flood.map { future =>
+        try Some(future.get(Timeout, TimeUnit.SECONDS).getStatusCode)
+        catch { case _: ExecutionException => None }
+      }
+
+      // Every request is answered one way or the other. A hang would be the failure this prevents, and
+      // it is what an unbounded pile-up eventually produces.
+      assert(outcomes.sizeIs == flood.size)
+      assert(outcomes.exists(_.contains(StatusCode.OK)), "no request in the flood was served")
+
+      // And the session is still usable afterwards, which is the property a load policy exists for.
+      assert(s.compile(s.target).getStatusCode == StatusCode.OK, "the flood left the session broken")
+    }
+  }
+
   test("nothing is published after shutdown") {
     withSession { s =>
       assert(s.compile(s.target).getStatusCode == StatusCode.OK)

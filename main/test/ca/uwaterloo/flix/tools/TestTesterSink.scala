@@ -111,6 +111,30 @@ class TestTesterSink extends AnyFunSuite {
       s"unexpected: ${announced.map(t => simpleName(t.id))}")
   }
 
+  test("a cancelled run starts no further test, and still ends") {
+    implicit val flix: Flix = new Flix().setOptions(Options.DefaultTest)
+    implicit val sctx: SecurityContext = SecurityContext.Unrestricted
+    flix.addVirtualPath(java.nio.file.Path.of("Fixture.flix"), MixedTests)
+    val compiled = flix.compile().toResult match {
+      case Result.Ok(r) => r
+      case Result.Err(errors) => fail(s"the fixture did not compile: ${errors.map(_.summary).mkString(", ")}")
+    }
+
+    val sink = new RecordingSink
+    val result = Tester.run(Tester.getTestCases(Nil, compiled), sink, isCancelled = () => true)
+
+    // Between tests and not inside one, which is the honest guarantee: a JVM cannot safely stop a method
+    // in the middle. Cancelled before the first one, nothing runs at all.
+    val started = sink.events.collect { case Tester.TestEvent.Before(id) => id.name }
+    assert(started.isEmpty, s"a cancelled run started tests: $started")
+
+    // And it still ends. A reporter waits for the terminal event, so a run that stopped without one
+    // would leave it waiting forever -- which is a hang rather than a cancellation.
+    assert(sink.events.sizeIs == 1, s"unexpected events: ${sink.events.toList}")
+    assert(sink.events.head.isInstanceOf[Tester.TestEvent.Finished])
+    assert(result == Result.Ok(()), "a run that never failed a test reported failure")
+  }
+
   // ── Harness ──────────────────────────────────────────────────────────────────
 
   /** The last segment of a test's qualified name, which is what these assertions are about. */

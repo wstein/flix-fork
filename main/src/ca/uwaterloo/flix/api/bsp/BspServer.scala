@@ -57,7 +57,7 @@ object BspServer {
     *                    draws on the channel the protocol needs.
     * @param projectPath the project this server is about. A client asking about another is refused.
     */
-  def run(options: Options, projectPath: Path): Unit = {
+  def run(options: Options, projectPath: Path): Int = {
     // Before anything else. `System.out` is still the real descriptor at this point, and this is the
     // last moment at which taking it is guaranteed to be safe.
     val protocolOut = new PrintStream(new FileOutputStream(FileDescriptor.out), true, StandardCharsets.UTF_8)
@@ -105,7 +105,7 @@ object BspServer {
                          log: BspLogStream,
                          in: InputStream,
                          out: OutputStream,
-                         executor: ExecutorService): Unit = {
+                         executor: ExecutorService): Int = {
     val session = new BspSession(projectPath, options, log)
 
     // `build/exit` has to stop the listener, and the listener does not exist until after the server
@@ -139,5 +139,9 @@ object BspServer {
       case _: java.util.concurrent.CancellationException => ()
       case _: InterruptedException => ()
     }
+
+    // What the client earned: 0 after an orderly shutdown, 1 for an exit without one. A client reads
+    // this to decide whether the server went away cleanly.
+    session.exitStatus
   }
 }

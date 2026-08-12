@@ -121,10 +121,14 @@ object BuildTargets {
   /**
     * Returns `true` if a client that advertised `clientLanguageIds` may be told about Flix targets.
     *
-    * The specification requires this: a server must not answer with targets for a language the
-    * client did not say it supports. A client that asked for nothing is treated as asking for
-    * everything, since several send an empty list and mean "whatever you have".
+    * The specification requires this: a server must not answer with targets for a language the client
+    * did not say it supports.
+    *
+    * An empty list is therefore *no* languages rather than all of them, however much it looks like a
+    * client saying "whatever you have". Absent from an empty list is every language, and the reading is
+    * the safe one besides: a client that said nothing about itself is not one to hand a target it may
+    * not be able to interpret.
     */
   def servesClient(clientLanguageIds: List[String]): Boolean =
-    clientLanguageIds.isEmpty || clientLanguageIds.contains(LanguageId)
+    clientLanguageIds.contains(LanguageId)
 }

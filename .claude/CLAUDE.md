@@ -351,6 +351,42 @@ descriptor, which is the protocol channel. Three traps here:
   calls `System.exit` therefore takes the server with it. `jvmTestEnvironment` is the way
   out for a client that wants isolation.
 
+**Cancellation has to reach the work, and `Cancellation` is what carries it.** Dropping the
+reply is enough for a compile, which must finish anyway; it is not enough for a request that
+started something. A cancelled `buildTarget/run` kills its process — otherwise it holds the
+build lock and the output stream until it happens to end — and a cancelled `buildTarget/test`
+stops between tests, the honest limit being that the test in flight finishes because a JVM
+cannot safely stop a method in the middle. Both report a `CANCELLED` task finish so a client's
+progress display agrees with what happened.
+
+**`BspRunner` supervises the process, never the output.** Draining stdout to end-of-stream and
+*then* waiting with a timeout is a timeout that can never fire: a program that loops without
+printing, or writes a line it never terminates, holds the reader forever. The output is pumped
+on its own thread; the main thread waits with the timeout, then kills, reaps, and joins the
+pump. A partial final line is still reported — a program killed mid-line has said something,
+usually the thing you wanted.
+
+**Three lifecycle states, and the exit status is the client's.** `initialize` moves to
+*awaiting acknowledgement*, where requests are refused with `ServerNotInitialized`, because the
+specification does not let a client send anything before `build/initialized`. A duplicate
+acknowledgement is logged and ignored (a notification has no reply to refuse with) and must not
+move the state, or it could revive a shut-down session. `build/exit` exits 0 after a shutdown
+and 1 without one, so `BspServer.run` returns a status and `Main` uses it.
+
+**An empty `languageIds` list means no targets.** Absent from an empty list is every language.
+It reads like "whatever you have" and the specification says the opposite.
+
+**Two bounds exist because unbounded is a failure mode.** At most 32 build requests in flight,
+refused beyond that rather than parked — surplus work costs a platform thread each, and the pool
+is deliberately unbounded so a long run cannot starve a query. And `BspLogStream` truncates a
+line past 32 KB once, then discards the rest of it.
+
+**Two things the pinned wire model cannot express**, both documented rather than half-done:
+bsp4j 2.1.1's `RunParams`/`TestParams` have no `workingDirectory` or `environmentVariables`, so
+a client sending them is sending fields gson drops before this code sees them; and
+`TaskStartParams`/`TaskFinishParams` have no `originId`, so it goes on the `CompileReport` and
+`TestReport` payloads, which do.
+
 **Requests do not run on lsp4j's message thread, and that has two consequences.** A
 handler that ran there would stop the connection being read for the length of a compile,
 so `FlixBuildServer` dispatches to the connection's executor; builds stay serialised by

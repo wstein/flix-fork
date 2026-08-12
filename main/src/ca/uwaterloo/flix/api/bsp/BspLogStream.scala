@@ -48,6 +48,18 @@ class BspLogStream(maxBufferedLines: Int = 512) extends OutputStream {
   /** The client, once there is one. Read from any thread that writes a log line. */
   @volatile private var client: Option[BuildClient] = None
 
+  /** Whether the rest of the current line is being discarded, having already been reported truncated. */
+  private var dropping: Boolean = false
+
+  /**
+    * The longest line this will hold before reporting it truncated.
+    *
+    * Generous enough for a stack frame or a long path, and small enough that a program printing without
+    * newlines cannot exhaust the server's memory -- which is the only thing that made this a bound
+    * rather than a preference.
+    */
+  private val MaxLineLength: Int = 32 * 1024
+
   /** The current line, up to the newline that will send it. */
   private val line: ByteArrayOutputStream = new ByteArrayOutputStream()
 
@@ -77,9 +89,23 @@ class BspLogStream(maxBufferedLines: Int = 512) extends OutputStream {
 
   override def write(b: Int): Unit = synchronized {
     if (b == '\n') {
-      emit()
+      if (dropping) {
+        // The marker was already sent for this line; the newline just ends it.
+        dropping = false
+        line.reset()
+      } else {
+        emit()
+      }
+    } else if (dropping) {
+      () // The rest of an over-long line, discarded so that one line cannot become a flood of them.
     } else if (b != '\r') {
       line.write(b)
+      if (line.size() >= MaxLineLength) {
+        // Bounded here and not only in the pre-connect buffer, which is the gap this closes: a write
+        // with no newline in it -- a progress bar, a stack trace rendered without breaks, a program
+        // printing megabytes -- grew this without limit however long the connection had been up.
+        emitTruncated()
+      }
     }
   }
 
@@ -94,6 +120,27 @@ class BspLogStream(maxBufferedLines: Int = 512) extends OutputStream {
   /** Sends whatever is buffered, so a prompt written without a newline is not held forever. */
   override def flush(): Unit = synchronized {
     if (line.size() > 0) emit()
+  }
+
+  /**
+    * Sends what has accumulated with a marker, and starts discarding the rest of the line.
+    *
+    * One marker per over-long line rather than one per chunk: a program that writes a megabyte without
+    * a newline has said one thing badly, and turning it into a hundred log notifications would replace
+    * a memory problem with a traffic problem.
+    */
+  private def emitTruncated(): Unit = {
+    val text = new String(line.toByteArray, StandardCharsets.UTF_8)
+    line.reset()
+    dropping = true
+    client match {
+      case Some(c) => send(c, s"$text …[line truncated at $MaxLineLength bytes]")
+      case None =>
+        pending.enqueue(s"$text …[line truncated at $MaxLineLength bytes]")
+        while (pending.sizeIs > maxBufferedLines) {
+          pending.dequeue()
+        }
+    }
   }
 
   /** Sends the current line, or holds it if no client has connected yet. */

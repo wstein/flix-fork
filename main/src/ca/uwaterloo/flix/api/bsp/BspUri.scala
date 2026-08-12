@@ -52,6 +52,21 @@ object BspUri {
   def ofFile(p: Path): String = p.toAbsolutePath.normalize().toUri.toString
 
   /**
+    * Returns `path` with everything a URI path may not carry percent-encoded.
+    *
+    * The archive entry and the bundled library's virtual path are the two places this file *builds* a
+    * URI from a string instead of asking `Path.toUri`, and they need the same discipline it applies: a
+    * space, a `#`, a `%` or anything outside ASCII in an entry name would otherwise produce a string
+    * that is not a URI, which a client either rejects or -- worse -- reads as something else, since `#`
+    * begins a fragment.
+    *
+    * `java.net.URI`'s multi-argument constructor quotes for us, and it is given the *decoded* path, so a
+    * literal `%` becomes `%25` rather than being mistaken for an escape that was already there.
+    */
+  private def encodePath(path: String): String =
+    new URI(null, null, s"/$path", null).getRawPath.stripPrefix("/")
+
+  /**
     * Returns the URI of the directory `d`, with the trailing slash the protocol expects.
     *
     * `Path.toUri` appends it for a directory that exists and omits it for one that does not, which
@@ -105,13 +120,13 @@ object BspUri {
         case -1 => virtualPath
         case i => virtualPath.substring(i + 1)
       }
-      s"jar:${ofFile(packagePath)}!/${entry.stripPrefix("/")}"
+      s"jar:${ofFile(packagePath)}!/${encodePath(entry.stripPrefix("/"))}"
 
     // The standard library, which is compiled from text bundled in the compiler and has no path on
     // this machine at all. A scheme of its own says that plainly, where a `file:` URI would name
     // something that is not there.
     case Input.BundledLibraryFile(virtualPath, _, _) =>
-      s"$BundledScheme:/${virtualPath.toString.replace('\\', '/').stripPrefix("/")}"
+      s"$BundledScheme:/${encodePath(virtualPath.toString.replace('\\', '/').stripPrefix("/"))}"
 
     case Input.Unknown => s"$BundledScheme:/unknown"
   }

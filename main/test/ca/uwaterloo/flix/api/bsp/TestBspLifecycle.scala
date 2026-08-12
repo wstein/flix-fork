@@ -135,6 +135,7 @@ class TestBspLifecycle extends AnyFunSuite {
         val params = initializeParams(project)
         params.setCapabilities(new BuildClientCapabilities(List("scala").asJava))
         client.buildInitialize(params).get(Timeout, TimeUnit.SECONDS)
+        client.onBuildInitialized()
 
         // Required rather than polite: a server must not answer with targets for a language the
         // client did not advertise.
@@ -187,6 +188,59 @@ class TestBspLifecycle extends AnyFunSuite {
     }
   }
 
+  test("a request before the client acknowledges initialize is refused") {
+    withProject { project =>
+      withServer(project) { client =>
+        client.buildInitialize(initializeParams(project)).get(Timeout, TimeUnit.SECONDS)
+
+        // The specification does not allow a client to send anything between the reply to
+        // `build/initialize` and its own `build/initialized`. Serving here anyway would accept a
+        // sequence no client may send, which is how a client's bug reaches production undetected.
+        val code = errorCodeOf(client.workspaceBuildTargets())
+        assert(code.contains(ResponseErrorCode.ServerNotInitialized.getValue), s"got $code")
+
+        // And the same request is served once the handshake is finished.
+        client.onBuildInitialized()
+        assert(client.workspaceBuildTargets().get(Timeout, TimeUnit.SECONDS).getTargets.asScala.sizeIs == 1)
+      }
+    }
+  }
+
+  test("a duplicate acknowledgement is reported and changes nothing") {
+    withProject { project =>
+      withServer(project) { client =>
+        initialize(client, project)
+        client.onBuildInitialized()
+
+        // A notification has no reply to put an error in, so the only honest thing is to say so on the
+        // one channel it has -- and to leave the state alone, so that a stray acknowledgement cannot
+        // resurrect a session that has been shut down.
+        client.buildShutdown().get(Timeout, TimeUnit.SECONDS)
+        client.onBuildInitialized()
+        val code = errorCodeOf(client.workspaceBuildTargets())
+        assert(code.contains(ResponseErrorCode.InvalidRequest.getValue),
+          s"an acknowledgement after shutdown revived the session: $code")
+      }
+    }
+  }
+
+  test("a client that advertises no language at all is told about no targets") {
+    withProject { project =>
+      withServer(project) { client =>
+        // Empty is *no* languages, not all of them: absent from an empty list is every language. It
+        // reads like a client saying "whatever you have", and the specification says the opposite.
+        val params = new InitializeBuildParams(
+          "test-client", "1.0", Bsp4j.PROTOCOL_VERSION, BspUri.ofDirectory(project),
+          new BuildClientCapabilities(List.empty[String].asJava))
+        client.buildInitialize(params).get(Timeout, TimeUnit.SECONDS)
+        client.onBuildInitialized()
+
+        val targets = client.workspaceBuildTargets().get(Timeout, TimeUnit.SECONDS).getTargets.asScala.toList
+        assert(targets.isEmpty, s"a client that advertised nothing was given $targets")
+      }
+    }
+  }
+
   test("a request the server does not implement is refused, not answered emptily") {
     withProject { project =>
       withServer(project) { client =>
@@ -220,8 +274,17 @@ class TestBspLifecycle extends AnyFunSuite {
       "test-client", "1.0", Bsp4j.PROTOCOL_VERSION, BspUri.ofDirectory(project),
       new BuildClientCapabilities(List("flix").asJava))
 
-  private def initialize(client: BuildServer, project: Path): InitializeBuildResult =
-    client.buildInitialize(initializeParams(project)).get(Timeout, TimeUnit.SECONDS)
+  /**
+    * Completes the whole handshake: the request, and the acknowledgement a client owes afterwards.
+    *
+    * Both halves, because the server serves requests only once the acknowledgement arrives -- which is
+    * what the specification requires of a client and what this helper used to skip.
+    */
+  private def initialize(client: BuildServer, project: Path): InitializeBuildResult = {
+    val result = client.buildInitialize(initializeParams(project)).get(Timeout, TimeUnit.SECONDS)
+    client.onBuildInitialized()
+    result
+  }
 
   /** Returns the JSON-RPC error code a failed request carried, or `None` if it succeeded. */
   private def errorCodeOf(future: java.util.concurrent.CompletableFuture[?]): Option[Int] =

@@ -73,7 +73,12 @@ class FlixBuildServer(session: BspSession, onExit: () => Unit, executor: Executo
     * A client is entitled to send this without a preceding `shutdown`, and a server that only exited
     * from the orderly path would hang around forever after an editor crashed.
     */
-  override def onBuildExit(): Unit = onExit()
+  override def onBuildExit(): Unit = {
+    // Recorded before the listener stops, because it decides the process's exit status and there is
+    // nobody left to ask afterwards.
+    session.exited()
+    onExit()
+  }
 
   // ── Discovery ────────────────────────────────────────────────────────────────
 
@@ -207,7 +212,7 @@ class FlixBuildServer(session: BspSession, onExit: () => Unit, executor: Executo
     * Bracketed like a compile so a client can show that something is happening, and the program's own
     * output arrives as log messages rather than as diagnostics -- it is not a problem with the code.
     */
-  override def buildTargetRun(params: RunParams): CompletableFuture[RunResult] = completing {
+  override def buildTargetRun(params: RunParams): CompletableFuture[RunResult] = completingCancellable { cancellation =>
     val view = session.requireView()
     requireKnownTarget(view, params.getTarget)
     val target = params.getTarget
@@ -219,7 +224,7 @@ class FlixBuildServer(session: BspSession, onExit: () => Unit, executor: Executo
       startData = _ => None,
       finishData = (_, _) => None,
       statusOf = _.getStatusCode
-    )(_ => session.run(target, arguments, originId))
+    )(_ => session.run(target, arguments, originId, cancellation))
   }
 
   /**
@@ -232,13 +237,13 @@ class FlixBuildServer(session: BspSession, onExit: () => Unit, executor: Executo
     * `params.getArguments` is read as regular expressions selecting which tests to run, which is what
     * `Tester` already accepts; a client that sends none runs them all.
     */
-  override def buildTargetTest(params: TestParams): CompletableFuture[TestResult] = completing {
+  override def buildTargetTest(params: TestParams): CompletableFuture[TestResult] = completingCancellable { cancellation =>
     val view = session.requireView()
     val targets = requireKnownTargets(view, params.getTargets)
     val target = targets.headOption.getOrElse(BuildTargets.id(view))
     val filters = Option(params.getArguments).map(_.asScala.toList).getOrElse(Nil).map(_.r)
 
-    session.test(target, filters, Option(params.getOriginId))
+    session.test(target, filters, Option(params.getOriginId), cancellation)
   }
 
   /**
@@ -376,6 +381,25 @@ class FlixBuildServer(session: BspSession, onExit: () => Unit, executor: Executo
     * `ServerNotInitialized` and `InvalidParams` codes the lifecycle depends on never reach the
     * client.
     */
+  /**
+    * As [[completing]], for work that has to be told when the client gives up.
+    *
+    * The distinction is not decoration. Dropping a reply is enough for a compile, which has to finish
+    * anyway; it is not enough for a request that started a process or a test run, where cancelling has
+    * to reach the work. lsp4j cancels the future, this turns that into a signal the body can act on.
+    */
+  private def completingCancellable[T](body: Cancellation => T): CompletableFuture[T] = {
+    val cancellation = new Cancellation
+    val future = completing(body(cancellation))
+    // Fires on cancellation as well as on an ordinary completion, which is why it asks which happened.
+    future.whenComplete { (_, _) =>
+      if (future.isCancelled) {
+        cancellation.cancel()
+      }
+    }
+    future
+  }
+
   private def completing[T](body: => T): CompletableFuture[T] = {
     val future = new CompletableFuture[T]()
     val work: Runnable = { () =>

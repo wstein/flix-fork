@@ -34,6 +34,29 @@ class TestBspUri extends AnyFunSuite {
 
   private implicit val sctx: SecurityContext = SecurityContext.Unrestricted
 
+  test("an archive entry with awkward characters is encoded, not pasted in") {
+    val pkg = Paths.get("/tmp/p/lib/dep.fpkg")
+    val awkward = "src/a dir/Odd#Name %s ünïcode.flix"
+    val input = Input.FileInPackage(pkg, s"dep.fpkg:$awkward", "", SecurityContext.Plain)
+    val uri = BspUri.ofSource(Source(input, Array.emptyCharArray))
+
+    // Built by hand rather than by `Path.toUri`, so it needs the same discipline: a raw `#` would turn
+    // the rest of the entry into a fragment, a raw space is not legal in a URI at all, and a raw `%`
+    // reads as the start of an escape.
+    assert(!uri.contains(' '), s"a space survived: $uri")
+    assert(!uri.contains('#'), s"a '#' survived, which would begin a fragment: $uri")
+    assert(uri.contains("%20"), s"the space was not encoded: $uri")
+    assert(uri.contains("%23"), s"the '#' was not encoded: $uri")
+    assert(uri.contains("%25s"), s"the '%' was not encoded: $uri")
+
+    // And the whole thing is still a URI whose decoded path is the entry we started from.
+    val parsed = new java.net.URI(uri)
+    assert(parsed.getScheme == "jar", s"unexpected scheme: ${parsed.getScheme}")
+    val entry = uri.substring(uri.indexOf("!/") + 2)
+    assert(java.net.URLDecoder.decode(entry, java.nio.charset.StandardCharsets.UTF_8) == awkward,
+      s"the entry did not survive the round trip: $entry")
+  }
+
   test("every kind of input gets a parseable uri") {
     // A table rather than a case each, so that adding an `Input` case and forgetting it here is the
     // visible kind of omission. `ofSource` is total, so there is no `None` to forget to handle.

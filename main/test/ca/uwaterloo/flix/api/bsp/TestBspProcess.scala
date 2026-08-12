@@ -154,6 +154,45 @@ class TestBspProcess extends AnyFunSuite {
     }
   }
 
+  test("exit after shutdown is a success, and exit without one is not") {
+    val project = newProject()
+    install(project)
+
+    // The specification is exact about this, and a client reads it to tell a server that went away
+    // cleanly from one that was told to stop while still serving. Only a real process can be asked.
+    val orderly = new ProcessBuilder(connectionArgv(project)*).directory(project.toFile).start()
+    try {
+      val in = new BufferedInputStream(orderly.getInputStream)
+      writeFrame(orderly.getOutputStream, initializeRequest(project))
+      awaitId(in, 1)
+      writeFrame(orderly.getOutputStream, """{"jsonrpc":"2.0","method":"build/initialized","params":{}}""")
+      request(orderly.getOutputStream, in, 2, """{"jsonrpc":"2.0","id":2,"method":"build/shutdown","params":null}""")
+      writeFrame(orderly.getOutputStream, """{"jsonrpc":"2.0","method":"build/exit","params":null}""")
+
+      assert(orderly.waitFor(Timeout, TimeUnit.SECONDS), "the server did not exit when told to")
+      assert(orderly.exitValue() == 0, s"an orderly shutdown exited ${orderly.exitValue()}")
+    } finally {
+      orderly.destroyForcibly()
+      orderly.waitFor(Timeout, TimeUnit.SECONDS)
+    }
+
+    val abrupt = new ProcessBuilder(connectionArgv(project)*).directory(project.toFile).start()
+    try {
+      val in = new BufferedInputStream(abrupt.getInputStream)
+      writeFrame(abrupt.getOutputStream, initializeRequest(project))
+      awaitId(in, 1)
+      writeFrame(abrupt.getOutputStream, """{"jsonrpc":"2.0","method":"build/initialized","params":{}}""")
+      // No shutdown. The client is ending the session the wrong way round, and the status says so.
+      writeFrame(abrupt.getOutputStream, """{"jsonrpc":"2.0","method":"build/exit","params":null}""")
+
+      assert(abrupt.waitFor(Timeout, TimeUnit.SECONDS), "the server did not exit when told to")
+      assert(abrupt.exitValue() == 1, s"an exit without a shutdown exited ${abrupt.exitValue()}")
+    } finally {
+      abrupt.destroyForcibly()
+      abrupt.waitFor(Timeout, TimeUnit.SECONDS)
+    }
+  }
+
   test("a connection file this server did not write is left alone") {
     val project = newProject()
     val file = BspDiscovery.connectionFile(project)

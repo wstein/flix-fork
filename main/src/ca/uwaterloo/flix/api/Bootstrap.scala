@@ -1697,7 +1697,8 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
     * unlike a compile there is no version of this that leaves the classes on disk.
     */
   def testWith(flix: Flix, filters: List[Regex], sink: Tester.TestEventSink,
-               reuse: Boolean = true): (Bootstrap.CompileOutcome, Option[Boolean]) = {
+               reuse: Boolean = true,
+               isCancelled: () => Boolean = () => false): (Bootstrap.CompileOutcome, Option[Boolean]) = {
     val configured = flix.options.copy(
       build = Build.Development,
       outputJvm = true,
@@ -1710,7 +1711,7 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
     if (reuse) {
       recordedTestCases(flix, filters) match {
         case Some(cases) =>
-          val passed = Tester.run(cases, sink)(flix).isInstanceOf[Ok[?, ?]]
+          val passed = Tester.run(cases, sink, isCancelled)(flix).isInstanceOf[Ok[?, ?]]
           return (Bootstrap.CompileOutcome(None, None, Nil, None, upToDate = true, hasMain = false), Some(passed))
         case None => ()
       }
@@ -1721,7 +1722,8 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
       case None => (outcome, None)
       case Some(compiled) =>
         recordTests(flix, compiled)
-        (outcome, Some(Tester.run(filters, compiled, sink)(flix).isInstanceOf[Ok[?, ?]]))
+        val cases = Tester.getTestCases(filters, compiled)
+        (outcome, Some(Tester.run(cases, sink, isCancelled)(flix).isInstanceOf[Ok[?, ?]]))
     }
   }
 

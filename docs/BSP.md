@@ -320,6 +320,18 @@ Stated plainly, because each is a real limitation rather than an oversight:
 - **`languageIds` is `["flix"]`**, which no stock client knows, so none will route
   Flix files to semantic features. Claiming `"java"` would invite
   `buildTarget/javacOptions`, which is not implemented — a worse trade.
+- **`workingDirectory` and `environmentVariables` on a run or test request are not honoured, and
+  cannot be.** They do not exist in the wire model this server is built against: bsp4j 2.1.1's
+  `RunParams` and `TestParams` carry a target, an `originId`, `arguments`, and a `data` payload, and
+  nothing else. A client that sends them is sending fields gson drops before this code sees them, so
+  they can be neither honoured nor rejected — there is nothing to reject. A run uses the project
+  directory and the server's environment; a client that needs otherwise forks with
+  `jvmRunEnvironment`, which reports the classpath for exactly that purpose. Honouring them means
+  moving to a bsp4j that has them, which today means a 2.2 milestone; §3 says why the version is
+  pinned.
+- **`originId` appears on the reports, not on the task notifications.** `CompileReport` and
+  `TestReport` carry it and do; `TaskStartParams` and `TaskFinishParams` have no such field in this
+  protocol version, so a client correlates a task through its `taskId` and the report payload.
 - **Some sources cannot be opened.** A diagnostic in the standard library or inside a
   `.fpkg` dependency is reported against a `flix-lib:` or `jar:` URI. That is
   deliberate; see §13.
@@ -473,18 +485,55 @@ diagnostics; a second publication of the same reports would resend every marker 
 nothing. `buildTarget/run` and `buildTarget/test` are not coalesced: they have effects their
 caller asked for, so sharing one between two requests would answer a question nobody asked.
 
-**Cancellation is soft.** `$/cancelRequest` marks the request cancelled and the work
-finishes anyway: the compiler's ForkJoin pool and `JvmWriter`'s writes are not
-interrupt-safe, and the class directory must be reconciled and its manifest written or the
-build directory describes nothing. The result is then dropped and lsp4j answers the request
-with `RequestCancelled`. A late answer is recoverable; a half-reconciled output directory is
-the failure `compileProject` exists to prevent.
+**Cancellation reaches the work, and how far depends on the request.**
+
+  - **A compile** is soft-cancelled: the build finishes and its result is dropped. The compiler's
+    ForkJoin pool and `JvmWriter`'s writes are not interrupt-safe, and the class directory must be
+    reconciled and its manifest written or the build directory describes nothing. A late answer is
+    recoverable; a half-reconciled output directory is the failure `compileProject` exists to
+    prevent.
+  - **A run** is killed. Dropping the reply and leaving the program running would hold the build
+    lock, the output stream and the program's own resources until it happened to end, which is not
+    cancellation in any sense a user would recognise. `Cancellation` carries the signal to the
+    process handle, and it handles the race where the client gives up while the process is starting.
+  - **A test run** stops between tests. The test in flight finishes, because a test is a compiled
+    function called by reflection and a JVM cannot safely stop a method in the middle -- `Thread.stop`
+    was removed because it left locks in states nothing could reason about. So the guarantee is that
+    no *further* test starts, and it is a real one: a run of a thousand tests stops in milliseconds
+    rather than minutes. A client that needs a hard stop forks with `jvmTestEnvironment`.
+
+In every case lsp4j answers the cancelled request with `RequestCancelled`, and the task pair
+finishes as `CANCELLED` so a client's progress display agrees with what happened.
+
+**There is a limit, and it says no rather than queueing forever.** At most 32 build requests may
+be in flight; beyond that a request is refused with a message rather than parked. Requests are
+dispatched off the connection's thread and builds are serialised, so surplus work costs a platform
+thread each -- and the pool is deliberately unbounded, because a ten-minute run must not starve a
+query. Something has to be the bound, and a refusal a client can read is more useful than
+discovering the limit as an `OutOfMemoryError`. No editor comes close; the coalescing above already
+collapses a burst of compiles into two builds.
+
+**A log line is bounded too.** `BspLogStream` reports a line longer than 32 KB truncated, once, and
+discards the rest of it. A program writing megabytes without a newline -- a progress bar, a stack
+trace rendered without breaks -- would otherwise grow the buffer without limit, and turning it into
+a hundred notifications would replace a memory problem with a traffic problem.
 
 **Nothing is published after `build/shutdown`.** One accessor decides whether a client may
 still be told anything, and every notification goes through it, because asynchronous
 dispatch makes "work that outlives the shutdown that cancelled it" a real window rather
 than a theoretical one. Shutdown also bumps the generation, so an in-flight build's result
 is discarded rather than published.
+
+**The handshake has three states, not two.** `build/initialize` moves to *awaiting
+acknowledgement*, and requests are refused with `ServerNotInitialized` until `build/initialized`
+arrives — which is what the specification requires of a client, and collapsing it into "ready"
+would accept a sequence no client may send. A duplicate acknowledgement cannot be refused, since a
+notification has no reply; it is reported on the client's log and changes nothing, so a stray one
+cannot revive a session that has been shut down.
+
+**The exit status is the client's, not a constant.** `build/exit` after `build/shutdown` exits 0;
+`build/exit` without one exits 1. A connection that simply ended asked for nothing and exits 0.
+`TestBspProcess` asserts both, against real processes, because nothing smaller can.
 
 ## 15. Acceptance criteria
 
@@ -612,7 +661,25 @@ Each names the test that pins it.
     run does no work, and reports the same thing" — no class file rewritten, the same three
     outcomes reported again, and every result still clickable, which is what the recorded
     location is for.
-44. **A real server process completes the whole cycle.** `TestBspProcess`, "a scripted
+44. **A cancelled run stops its program.** `TestBspRun`, "a cancelled run stops its program" — and
+    the evidence is not a timing measurement: the program's timeout is ten minutes and it holds the
+    build lock, so a compile that answers at all proves the process was killed.
+45. **A run that never ends is stopped by its timeout.** `TestBspRun`, "a program that never ends is
+    stopped by the timeout", and "output with no newline is reported, and does not hold the timeout
+    open" — the two shapes that made the previous supervision unable to ever fire.
+46. **A cancelled test run starts no further test and still ends.** `TestTesterSink`, "a cancelled run
+    starts no further test, and still ends" — including the terminal event, without which a reporter
+    waits forever and a cancellation becomes a hang.
+47. **The handshake and the exit status are wire-exact.** `TestBspLifecycle`, "a request before the
+    client acknowledges initialize is refused", "a duplicate acknowledgement is reported and changes
+    nothing", "a client that advertises no language at all is told about no targets";
+    `TestBspProcess`, "exit after shutdown is a success, and exit without one is not".
+48. **A flood of requests is refused, not queued forever.** `TestBspMatrix`, "a flood of requests is
+    refused rather than exhausting the server".
+49. **A package entry with awkward characters is encoded.** `TestBspUri`, "an archive entry with
+    awkward characters is encoded, not pasted in" — a raw `#` would turn the rest of an entry into a
+    fragment.
+50. **A real server process completes the whole cycle.** `TestBspProcess`, "a scripted
     session drives a real server through the whole cycle" — the assembled jar, started from
     the connection file it wrote, driven over hand-written frames through initialize,
     targets, sources, compile, run, test, shutdown and exit. The only case where nothing is
