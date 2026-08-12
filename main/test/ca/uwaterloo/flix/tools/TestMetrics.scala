@@ -373,6 +373,20 @@ class TestMetrics extends AnyFunSuite {
     assert(used.nonEmpty, "expected results")
     assert(used.subsetOf(declared), s"undeclared rules: ${used -- declared}")
 
+    // An index, where given, addresses the same rule the id names.
+    val ruleIds = (run \ "tool" \ "driver" \ "rules").children.flatMap(r => text(r \ "id"))
+    (run \ "results").children.foreach { r =>
+      (r \ "ruleIndex", r \ "ruleId") match {
+        case (JInt(i), JString(id)) => assertResult(id)(ruleIds(i.toInt))
+        case _ => fail("a result must carry both a ruleId and a ruleIndex")
+      }
+    }
+
+    // Documentation is worth knowing and is not a defect.
+    (run \ "results").children.filter(r => text(r \ "ruleId").contains("docCoverage")).foreach { r =>
+      assertResult(Some("note"))(text(r \ "level"))
+    }
+
     // A region is one-based, so a smell with no line carries no location rather than line zero.
     (run \ "results").children.foreach { r =>
       (r \ "locations").children.foreach { l =>

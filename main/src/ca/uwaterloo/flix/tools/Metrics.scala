@@ -818,13 +818,16 @@ object Metrics {
         ("shortDescription" -> ("text" -> ruleDescription(c))) ~
         ("fullDescription" -> ("text" -> s"${ruleDescription(c)} ${action(c)}.")) ~
         ("help" -> ("text" -> s"${action(c)}. See docs/METRIC-SMELLS.md.")) ~
-        ("defaultConfiguration" -> ("level" -> "warning"))
+        ("defaultConfiguration" -> ("level" -> defaultLevel(c))) ~
+        ("properties" -> ("tags" -> tagsFor(c)) ~ ("precision" -> "very-high"))
     }
 
     val results: JValue = smells.map { v =>
       val message = s"${v.subject}: ${v.measure} ${v.actualText}, over ${v.limitText}. ${action(v.category)}."
       val base =
         ("ruleId" -> v.category) ~
+          // The index into `rules` as well as the id: some consumers resolve one, some the other.
+          ("ruleIndex" -> categories.indexOf(v.category)) ~
           ("level" -> level(v)) ~
           ("message" -> ("text" -> message))
       // A result may have no location. One is better than a location that is not real.
@@ -842,6 +845,7 @@ object Metrics {
         ("runs" -> List[JValue](
           ("tool" -> ("driver" ->
             ("name" -> "flix metric") ~
+              ("semanticVersion" -> ca.uwaterloo.flix.api.Version.CurrentVersion.toString) ~
               ("informationUri" -> "https://flix.dev") ~
               ("rules" -> rules))) ~
             ("results" -> results)
@@ -858,7 +862,30 @@ object Metrics {
     */
   private def level(v: Violation): String = {
     val ratio = overBy(v)
-    if (ratio >= 2.0 && ratio < 100.0) "error" else "warning"
+    if (defaultLevel(v.category) == "note") "note"
+    else if (ratio >= 2.0 && ratio < 100.0) "error"
+    else "warning"
+  }
+
+  /**
+    * Returns how serious a category is by nature.
+    *
+    * Missing documentation and an unreferenced module are worth knowing and are not defects: a
+    * consumer that paints them the same colour as a function nobody can read has made both
+    * meaningless. They are notes however far past the limit they are.
+    */
+  private def defaultLevel(category: String): String = category match {
+    case "docCoverage" | "orphan" => "note"
+    case _ => "warning"
+  }
+
+  /**
+    * Returns the tags a category carries, which is how a dashboard groups it.
+    */
+  private def tagsFor(category: String): List[String] = category match {
+    case "docCoverage" => List("documentation", "maintainability")
+    case "orphan" => List("dead-code", "maintainability")
+    case _ => List("maintainability", "metrics")
   }
 
   /**
