@@ -1008,7 +1008,7 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
   private[api] def compileProjectOutcome(flix: Flix, clean: Boolean,
                                          skipIfUpToDate: Boolean = false): Bootstrap.CompileOutcome = {
     val build = flix.options.build
-    val fingerprint = BuildManifest.fingerprintOf(flix.options, dependencyPaths)
+    val fingerprint = fingerprintOf(flix)
     val recorded = Steps.readBuildManifest(build)
     val staleInputs = !recorded.exists(_.fingerprint == fingerprint)
 
@@ -1069,6 +1069,22 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
         }
     }
   }
+
+  /**
+    * Returns the fingerprint of everything but the sources for a build with `flix`.
+    *
+    * One place, because the value has to be identical wherever it is computed -- the check that a
+    * recorded build still applies, and the record that build writes. Two spellings of "the inputs" would
+    * make a build permanently stale against its own manifest.
+    *
+    * `flix.jarPaths` is what closes the last gap in it. A jar handed to the compiler with `--lib` is an
+    * input to the typer -- it is where the Java classes a program calls come from -- and it used to
+    * reach `Flix` without ever reaching here, so a recorded build could be reported as current with
+    * respect to an input nothing had recorded. Every command that reuses a build refused to do so
+    * whenever `--lib` was given, which was a carve-out around the hole rather than a fix for it.
+    */
+  private def fingerprintOf(flix: Flix): String =
+    BuildManifest.fingerprintOf(flix.options, dependencyPaths ::: flix.jarPaths)
 
   /** Returns every dependency this project resolves against: flix packages, maven and url jars. */
   private def dependencyPaths: List[Path] =
@@ -1519,7 +1535,7 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
     */
   private def isRecordedBuildCurrent(flix: Flix): Boolean = {
     val build = flix.options.build
-    val fingerprint = BuildManifest.fingerprintOf(flix.options, dependencyPaths)
+    val fingerprint = fingerprintOf(flix)
     Steps.rescanSources()
     Steps.readBuildManifest(build) match {
       case Some(m) if m.fingerprint == fingerprint => Steps.isRecordedBuildCurrent(build, m)
@@ -1697,7 +1713,7 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
     }
 
     val build = flix.options.build
-    val fingerprint = BuildManifest.fingerprintOf(flix.options, dependencyPaths)
+    val fingerprint = fingerprintOf(flix)
     val recorded = TestManifest.read(TestManifest.fileIn(Bootstrap.getOutputDirectory(projectPath, build)))
 
     recorded match {
@@ -1729,7 +1745,7 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
   /** Records where the tests of `compiled` are, so a later run can reach them without compiling. */
   private def recordTests(flix: Flix, compiled: CompilationResult): Unit = {
     val build = flix.options.build
-    val fingerprint = BuildManifest.fingerprintOf(flix.options, dependencyPaths)
+    val fingerprint = fingerprintOf(flix)
     val digest = BuildManifest.digestOfSources(projectPath, sourcePaths)
     val manifest = TestManifest.of(fingerprint, digest, compiled.getTests.values)
     // A failure here costs the next run a compile and nothing else, so it is not worth failing the run

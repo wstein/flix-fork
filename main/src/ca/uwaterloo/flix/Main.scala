@@ -295,19 +295,14 @@ object Main {
           val runBuild = () => Bootstrap.bootstrap(cwd, options.githubToken).flatMap { bootstrap =>
             val flix = new Flix().setFormatter(formatter)
             flix.setOptions(options.copy(loadClassFiles = false))
+            // The `--lib` jars are added before the fingerprint is computed, and they are part of it, so
+            // a build given one is up to date or not on the same terms as any other.
             addLibs(flix, cmdOpts.libs).flatMap { _ =>
-              if (cmdOpts.libs.nonEmpty) {
-                // A `--lib` jar is given to the `Flix` instance and never reaches `Bootstrap`, so it is
-                // not in the build fingerprint. An output cannot be shown to be up to date with respect
-                // to an input nothing recorded, so this build compiles.
-                bootstrap.build(flix, clean = cmdOpts.clean).map(_ => ())
-              } else {
-                bootstrap.buildIfNeeded(flix, clean = cmdOpts.clean).map { compiled =>
-                  // Said out loud, because a build that prints nothing and a build that did nothing look
-                  // the same. Not on the JSON path, which carries diagnostics and nothing else.
-                  if (!compiled && !cmdOpts.jsonDiagnostics) {
-                    println("Nothing to do: the build output is up to date.")
-                  }
+              bootstrap.buildIfNeeded(flix, clean = cmdOpts.clean).map { compiled =>
+                // Said out loud, because a build that prints nothing and a build that did nothing look
+                // the same. Not on the JSON path, which carries diagnostics and nothing else.
+                if (!compiled && !cmdOpts.jsonDiagnostics) {
+                  println("Nothing to do: the build output is up to date.")
                 }
               }
             }
@@ -1118,17 +1113,14 @@ object Main {
   /**
     * Type checks the project, reusing a recorded build when one answers for the current sources.
     *
-    * Two things are decided here rather than in `Bootstrap`, because only the command line knows them:
-    * that `--lib` was given -- those jars reach the typer and are invisible to the build record, so
-    * nothing about them can be up to date -- and that `--clean` was asked for, which is a request to
-    * do the work regardless.
+    * `--clean` is decided here because only the command line knows it: it is a request to do the work
+    * regardless. The `--lib` jars need no decision -- they are added to the `Flix` instance before this
+    * runs and are part of the fingerprint, so a check given one is answerable from a record or not on
+    * the same terms as any other.
     *
     * @param quiet suppresses the note, for `--diagnostics-json`, whose output is a document.
     */
   private def runCheck(bootstrap: Bootstrap, flix: Flix, cmdOpts: CmdOpts, quiet: Boolean): Result[Unit, BootstrapError] = {
-    if (cmdOpts.libs.nonEmpty) {
-      return bootstrap.check(flix)
-    }
     bootstrap.checkIfNeeded(flix, reuse = !cmdOpts.clean).map { checked =>
       if (!checked && !quiet) {
         println("Nothing to do: the sources have not changed since the last successful build.")

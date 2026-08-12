@@ -72,8 +72,9 @@ What a build tool should know about that:
 
 - **The diagnostics are empty because there are none, not because nothing ran.** A project
   that does not type check has no matching record, so it is checked and reported.
-- **`--lib` disables it.** Those jars reach the typer and never reach the build record, so a
-  check that was given one always runs.
+- **`--lib` does not disable it.** Those jars reach the typer, and they are part of the
+  fingerprint the record is compared against: a check given the same jars as the last build is
+  answered from it, and one given a changed, added or removed jar runs.
 - **`--clean` forces it.** `flix check --clean` type checks regardless, which is what a
   release pipeline that trusts nothing on disk should pass.
 - **A clean build directory disables it too**, since the record's products must still be

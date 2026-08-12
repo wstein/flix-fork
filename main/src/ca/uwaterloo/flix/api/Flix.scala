@@ -36,7 +36,7 @@ import ca.uwaterloo.flix.util.tc.Debug
 
 import java.net.URI
 import java.nio.charset.Charset
-import java.nio.file.{Files, Path}
+import java.nio.file.{Files, Path, Paths}
 import java.util.concurrent.ForkJoinPool
 import java.util.zip.ZipFile
 import scala.collection.mutable
@@ -377,6 +377,24 @@ class Flix {
         jarLoader.addURL(p1.toUri.toURL)
         extendKnownJavaClassesAndInterfaces(p1)
         this
+    }
+  }
+
+  /**
+    * Returns every jar this instance has been given, normalised.
+    *
+    * Read back from the class loader rather than kept in a second list beside it: the loader is where a
+    * jar has an effect, so anything it holds is an input to this compilation, and a list maintained
+    * alongside it could disagree. Both kinds are here -- the project's resolved Maven and url
+    * dependencies, which `Bootstrap` adds, and the jars a `--lib` flag added -- and the caller that
+    * fingerprints a build wants exactly that union.
+    */
+  def jarPaths: List[Path] = jarLoader.getURLs.toList.flatMap { url =>
+    try Some(Paths.get(url.toURI).normalize())
+    catch {
+      // A URL that is not a file path cannot be stamped, and no caller adds one; if one ever does,
+      // leaving it out of a fingerprint is the unsafe direction, so it is worth not being silent.
+      case _: Exception => None
     }
   }
 

@@ -571,6 +571,45 @@ class TestBootstrap extends AnyFunSuite {
     assert(classStampsOf(p, Build.Development) != stamps, "--clean did not rebuild")
   }
 
+  test("a build given a --lib jar can be up to date") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out)
+    val jar = mkJar(p.resolve("helper.jar"), "one")
+    val b = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
+
+    // Those jars reach the typer -- they are where the Java classes a program calls come from -- and
+    // they used to reach `Flix` without reaching the fingerprint, so every command that reuses a build
+    // had to refuse whenever one was given. They are in it now, so this is an ordinary build.
+    assert(b.buildIfNeeded(flixWith(jar)).unsafeGet, "the first build did not compile")
+    assert(!b.buildIfNeeded(flixWith(jar)).unsafeGet, "a build with an unchanged --lib jar compiled again")
+    assert(!b.checkIfNeeded(flixWith(jar)).unsafeGet, "a check with an unchanged --lib jar ran again")
+  }
+
+  test("a changed --lib jar forces a build") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out)
+    val jar = mkJar(p.resolve("helper.jar"), "one")
+    val b = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
+    assert(b.buildIfNeeded(flixWith(jar)).unsafeGet)
+
+    // The failure this closes: an output reported as current with respect to an input nothing recorded.
+    mkJar(jar, "a different and longer marker")
+
+    assert(b.buildIfNeeded(flixWith(jar)).unsafeGet, "a changed --lib jar did not force a build")
+  }
+
+  test("adding or dropping a --lib jar forces a build") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out)
+    val jar = mkJar(p.resolve("helper.jar"), "one")
+    val b = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
+    assert(b.buildIfNeeded(mkDeterministicFlix).unsafeGet)
+
+    // The set of jars is part of the fingerprint, not just the contents of the ones that are there.
+    assert(b.buildIfNeeded(flixWith(jar)).unsafeGet, "adding a --lib jar did not force a build")
+    assert(b.buildIfNeeded(mkDeterministicFlix).unsafeGet, "dropping a --lib jar did not force a build")
+  }
+
   test("build-jar") {
     val p = Files.createTempDirectory(ProjectPrefix)
     Bootstrap.init(p)(System.out)
@@ -1438,6 +1477,31 @@ class TestBootstrap extends AnyFunSuite {
     * differ in the *names* of a handful of closure classes, which is indistinguishable from a
     * stale product when comparing class directories.
     */
+  /** Returns a compiler instance that has been given `jars`, the way `--lib` does. */
+  private def flixWith(jars: Path*): Flix = {
+    val flix = mkDeterministicFlix
+    jars.foreach(flix.addJar)
+    flix
+  }
+
+  /**
+    * Writes a jar at `p` holding one entry with `content`, and returns it.
+    *
+    * A real archive, because `Flix.addJar` refuses anything that is not one -- and different content
+    * gives a different size, which is what the fingerprint stamps.
+    */
+  private def mkJar(p: Path, content: String): Path = {
+    val out = new java.util.zip.ZipOutputStream(Files.newOutputStream(p))
+    try {
+      out.putNextEntry(new java.util.zip.ZipEntry("marker.txt"))
+      out.write(content.getBytes)
+      out.closeEntry()
+    } finally {
+      out.close()
+    }
+    p
+  }
+
   private def mkDeterministicFlix: Flix = {
     val flix = PkgTestUtils.mkFlix
     flix.setOptions(flix.options.copy(threads = 1))

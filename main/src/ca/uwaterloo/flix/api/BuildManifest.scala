@@ -118,8 +118,9 @@ object BuildManifest {
     * change something would let a build reuse state produced under different settings. "Something"
     * means the front end as well as the back end: a recorded build also answers `flix check`, so an
     * option that changes what type checking reports belongs here too.
-    * Jars added with `--lib` are not visible here: they are passed to the `Flix` instance per
-    * invocation and never reach `Bootstrap`.
+    * Jars are passed in rather than read from `options`, because that is where they live: the
+    * project's resolved dependencies and the jars a `--lib` flag added are both inputs to a build,
+    * and both are on the `Flix` instance's class loader. See `Bootstrap.fingerprintOf`.
     */
   def fingerprintOf(options: Options, dependencies: List[Path]): String = {
     val settings = List(
@@ -142,7 +143,13 @@ object BuildManifest {
     // A dependency is identified the way `Bootstrap` identifies a stale source - by size and
     // modification time - rather than by hashing it. Hashing every dependency jar on every
     // build costs more than the rebuild it would occasionally save.
-    val deps = dependencies.map(stampOf).sorted
+    //
+    // Deduplicated after stamping, not before: callers union lists that overlap - a project's Maven
+    // jars are also in the class loader they were added to - and the same file can arrive under two
+    // spellings of its path. Two identical stamps would otherwise make one build's fingerprint differ
+    // from another's over nothing, and a build that is permanently stale against its own manifest
+    // never reuses anything.
+    val deps = dependencies.map(stampOf).distinct.sorted
     hash((settings ::: deps).mkString("\n"))
   }
 

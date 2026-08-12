@@ -191,9 +191,12 @@ goes from 4.4 s to 0.44 s. Four things to know before touching it:
   and `test` on the command line, and `Bootstrap.testWith`, all still compile. `CompileOutcome`
   carries `hasMain` for exactly this reason: a skipped build has no typed AST, and BSP's `run`
   still has to know whether there is an entry point.
-- **`--lib` jars are invisible to `Bootstrap`**, so they are not in the fingerprint; `Main`
-  refuses the fast path when one is given rather than reporting an output as current with
-  respect to an input nothing recorded.
+- **The fingerprint covers `--lib` jars too**, via `Flix.jarPaths` — read back from the class
+  loader rather than kept in a list beside it, since the loader is where a jar has an effect.
+  `Bootstrap.fingerprintOf` is the one place that computes the value, because the check that a
+  recorded build applies and the record that build writes must agree exactly. Stamps are
+  deduplicated *after* stamping: callers union overlapping lists, and two identical stamps would
+  otherwise leave a build permanently stale against its own manifest.
 - **`--clean` is the escape hatch, and it is per-subcommand.** It has to be declared on each
   command that can skip — `check` gained it — because a flag the parser does not know is
   rejected, and a flag it knows but nothing reads is worse: it looks like an escape and is not.
