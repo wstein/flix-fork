@@ -35,7 +35,15 @@ object Tester {
     * Runs all tests, printing the results to the terminal.
     */
   def run(filters: List[Regex], compilationResult: CompilationResult)(implicit flix: Flix): Result[Unit, Int] =
-    run(filters, compilationResult, new ConsoleSink)
+    run(filters, compilationResult, consoleSink)
+
+  /**
+    * Returns the rendering `flix test` prints.
+    *
+    * A fresh one per run: it counts what it has seen, and a shared instance would carry one run's totals
+    * into the next.
+    */
+  def consoleSink: TestEventSink = new ConsoleSink
 
   /**
     * Runs all tests, reporting each event to `sink`.
@@ -53,16 +61,21 @@ object Tester {
     * sounds, because it builds a *system* terminal and writes to the real file descriptor. In a
     * process where that descriptor carries a protocol, printing there is not a cosmetic problem.
     */
-  def run(filters: List[Regex], compilationResult: CompilationResult, sink: TestEventSink)(implicit flix: Flix): Result[Unit, Int] = {
+  def run(filters: List[Regex], compilationResult: CompilationResult, sink: TestEventSink)(implicit flix: Flix): Result[Unit, Int] =
+    run(getTestCases(filters, compilationResult), sink)
+
+  /**
+    * Runs `tests`, reporting each event to `sink`.
+    *
+    * Takes the cases rather than a compilation, because they do not always come from one: a build that
+    * is still current can be tested from the class files it wrote, and the runner is the same either
+    * way. Filtering has already happened -- whoever produced the cases decided which ones they are.
+    */
+  def run(tests: Vector[TestCase], sink: TestEventSink)(implicit flix: Flix): Result[Unit, Int] = {
     //
     // Reset coverage before running tests.
     //
     Coverage.reset()
-
-    //
-    // Find all test cases (both active and ignored).
-    //
-    val tests = getTestCases(filters, compilationResult)
 
     // Start the TestRunner and TestReporter.
     val queue = new ConcurrentLinkedQueue[TestEvent]()
@@ -391,7 +404,7 @@ object Tester {
     }
 
     val allTests = compilationResult.getTests.map {
-      case (sym, TestFn(_, skip, run)) => TestCase(TestId.of(sym), skip, run)
+      case (sym, TestFn(_, skip, run, _, _)) => TestCase(TestId.of(sym), skip, run)
     }
 
     allTests.filter(isMatch).toVector.sorted

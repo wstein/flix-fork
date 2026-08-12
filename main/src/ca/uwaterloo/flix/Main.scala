@@ -434,7 +434,7 @@ object Main {
               Bootstrap.bootstrap(cwd, options.githubToken).flatMap { bootstrap =>
                 val flix = new Flix().setFormatter(formatter)
                 flix.setOptions(options.copy(progress = false))
-                bootstrap.test(flix)
+                bootstrap.test(flix, reuse = !cmdOpts.clean)
               },
               options
             )
@@ -826,7 +826,10 @@ object Main {
           text("empties the output directory and rebuilds before running."),
       )
 
-      cmd("test").action((_, c) => c.copy(command = Command.Test)).text("  runs the tests for the current project.")
+      cmd("test").action((_, c) => c.copy(command = Command.Test)).text("  runs the tests for the current project.").children(
+        opt[Unit]("clean").action((_, c) => c.copy(clean = true)).
+          text("empties the output directory and rebuilds before testing."),
+      )
 
       cmd("repl").action((_, c) => c.copy(command = Command.Repl)).text("  starts a repl for the current project, or provided Flix source files.")
 

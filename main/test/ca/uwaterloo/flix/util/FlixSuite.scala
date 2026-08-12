@@ -142,7 +142,7 @@ class FlixSuite(incremental: Boolean) extends AnyFunSuite {
       val testsByName = tests.toList.sortBy(_._1.name)
 
       // Evaluate each tests with a clue of its source location.
-      for ((sym, TestFn(_, skip, run)) <- testsByName) {
+      for ((sym, TestFn(_, skip, run, _, _)) <- testsByName) {
         if (!skip) {
           withClue(sym.loc.format) {
             // Evaluate the function.

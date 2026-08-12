@@ -22,6 +22,7 @@ import ca.uwaterloo.flix.language.CompilationMessage
 import ca.uwaterloo.flix.language.ast.shared.SecurityContext
 import ca.uwaterloo.flix.language.ast.{Scheme, SourceLocation, Symbol, TypedAst}
 import ca.uwaterloo.flix.language.phase.Documentor
+import ca.uwaterloo.flix.language.phase.jvm.JvmLoader
 import ca.uwaterloo.flix.runtime.CompilationResult
 import ca.uwaterloo.flix.runtime.shell.FileWatcher
 import ca.uwaterloo.flix.tools.Tester
@@ -1626,13 +1627,14 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
   /**
     * Runs all tests in the flix package for the project.
     */
-  def test(flix: Flix, filters: List[Regex] = Nil): Result[Unit, BootstrapError] =
-    for {
-      compilationResult <- build(flix)
-      res <- Tester.run(filters, compilationResult)(flix).mapErr(_ => BootstrapError.GeneralError("Tester Error"))
-    } yield {
-      res
+  def test(flix: Flix, filters: List[Regex] = Nil, reuse: Boolean = true): Result[Unit, BootstrapError] = {
+    val (outcome, ran) = testWith(flix, filters, Tester.consoleSink, reuse)
+    ran match {
+      case Some(true) => Ok(())
+      case Some(false) => Err(BootstrapError.GeneralError("Tester Error"))
+      case None => outcome.toResult.map(_ => ())
     }
+  }
 
   /**
     * Runs the project's tests, reporting each event to `sink`.
@@ -1644,7 +1646,8 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
     * `loadClassFiles` is forced on. A test is a compiled function this process reflects and calls, so
     * unlike a compile there is no version of this that leaves the classes on disk.
     */
-  def testWith(flix: Flix, filters: List[Regex], sink: Tester.TestEventSink): (Bootstrap.CompileOutcome, Option[Boolean]) = {
+  def testWith(flix: Flix, filters: List[Regex], sink: Tester.TestEventSink,
+               reuse: Boolean = true): (Bootstrap.CompileOutcome, Option[Boolean]) = {
     val configured = flix.options.copy(
       build = Build.Development,
       outputJvm = true,
@@ -1653,11 +1656,103 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
       progress = false)
     flix.setOptions(configured)
 
-    val outcome = compileProjectOutcome(flix, clean = false)
+    // Nothing to compile, and the tests are where the last run said they were.
+    if (reuse) {
+      recordedTestCases(flix, filters) match {
+        case Some(cases) =>
+          val passed = Tester.run(cases, sink)(flix).isInstanceOf[Ok[?, ?]]
+          return (Bootstrap.CompileOutcome(None, None, Nil, None, upToDate = true, hasMain = false), Some(passed))
+        case None => ()
+      }
+    }
+
+    val outcome = compileProjectOutcome(flix, clean = !reuse)
     outcome.result match {
       case None => (outcome, None)
-      case Some(compiled) => (outcome, Some(Tester.run(filters, compiled, sink)(flix).isInstanceOf[Ok[?, ?]]))
+      case Some(compiled) =>
+        recordTests(flix, compiled)
+        (outcome, Some(Tester.run(filters, compiled, sink)(flix).isInstanceOf[Ok[?, ?]]))
     }
+  }
+
+  /**
+    * Returns the tests of the build on disk, if it can answer for the current sources.
+    *
+    * ==What has to hold, and why each part is checked==
+    *
+    * The build must be current by the same test a skipped build uses, the recorded table must have been
+    * written by *that* build, and every method it names must resolve in the class files that are there
+    * now. The last of those is what makes this a confirmation rather than a cache: the record is never
+    * believed on its own, because the failure it would otherwise produce is the worst one a test runner
+    * has -- tests that someone believes ran and did not.
+    *
+    * A table with no tests is refused whenever the project has test sources, because "no tests" and
+    * "the tests were not recorded" look identical from here and only one of them should report success.
+    *
+    * A refusal is said out loud rather than inferred from a build that took longer than expected.
+    */
+  private def recordedTestCases(flix: Flix, filters: List[Regex]): Option[Vector[Tester.TestCase]] = {
+    if (!isRecordedBuildCurrent(flix)) {
+      return None
+    }
+
+    val build = flix.options.build
+    val fingerprint = BuildManifest.fingerprintOf(flix.options, dependencyPaths)
+    val recorded = TestManifest.read(TestManifest.fileIn(Bootstrap.getOutputDirectory(projectPath, build)))
+
+    recorded match {
+      case None => None
+
+      case Some(manifest) if manifest.fingerprint != fingerprint => None
+
+      case Some(manifest) if manifest.sourcesDigest != BuildManifest.digestOfSources(projectPath, sourcePaths) =>
+        None
+
+      case Some(manifest) if manifest.tests.isEmpty && hasTestSources =>
+        println("Recompiling: the build on disk records no tests, but this project has test sources.")
+        None
+
+      case Some(manifest) =>
+        val selected = manifest.tests.filter(t => filters.isEmpty || filters.exists(_.matches(t.name)))
+        val requested = selected.map(t => (t.name, t.className, t.methodName))
+        JvmLoader.loadTests(readClassFiles(build), requested)(flix) match {
+          case None =>
+            println("Recompiling: the tests the last build recorded are not in the class files it left.")
+            None
+          case Some(runnable) =>
+            val cases = selected.map(t => Tester.TestCase(TestManifest.idOf(t), t.skip, runnable(t.name)))
+            Some(cases.toVector.sorted)
+        }
+    }
+  }
+
+  /** Records where the tests of `compiled` are, so a later run can reach them without compiling. */
+  private def recordTests(flix: Flix, compiled: CompilationResult): Unit = {
+    val build = flix.options.build
+    val fingerprint = BuildManifest.fingerprintOf(flix.options, dependencyPaths)
+    val digest = BuildManifest.digestOfSources(projectPath, sourcePaths)
+    val manifest = TestManifest.of(fingerprint, digest, compiled.getTests.values)
+    // A failure here costs the next run a compile and nothing else, so it is not worth failing the run
+    // that just passed.
+    TestManifest.write(TestManifest.fileIn(Bootstrap.getOutputDirectory(projectPath, build)), manifest)
+    ()
+  }
+
+  /** Returns every class file of `build`, by binary name. */
+  private def readClassFiles(build: Build): Map[String, Array[Byte]] = {
+    val classDir = Bootstrap.getClassDirectory(projectPath, build)
+    FileOps.getFilesWithExtIn(classDir, "class", Int.MaxValue).flatMap { file =>
+      val relative = classDir.relativize(file.normalize()).toString
+      val binary = relative.stripSuffix(".class").replace(java.io.File.separatorChar, '.').replace('/', '.')
+      try Some(binary -> Files.readAllBytes(file))
+      catch { case _: Exception => None }
+    }.toMap
+  }
+
+  /** Returns `true` if the project has any source under `test/`. */
+  private def hasTestSources: Boolean = {
+    val testDir = Bootstrap.getTestDirectory(projectPath)
+    Files.isDirectory(testDir) && FileOps.getFilesWithExtIn(testDir, "flix", Int.MaxValue).nonEmpty
   }
 
   /**

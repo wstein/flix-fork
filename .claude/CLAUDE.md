@@ -174,6 +174,19 @@ goes from 4.4 s to 0.44 s. Four things to know before touching it:
 - **`--coverage` keeps the in-process path**, because the report is written from
   `Coverage.getSession` in the *compiler's* process; a forked program's hits would be recorded
   in a JVM nobody reads and the report would come out empty.
+- **`flix test` and `buildTarget/test` reuse a build too, through a second artifact.** Reaching
+  a test without compiling means knowing which generated class and method carry its shim, which
+  only a run with `loadClassFiles` knows — so `build/<mode>/tests.json` (`TestManifest`) is
+  written by a test run, and is deliberately *not* part of `BuildManifest`: that one records
+  products, this one describes the program. A wrong product record costs a rebuild; a wrong test
+  table means the tests someone believes ran did not. 4.6 s to 0.73 s, and ~1.3 s to ~0.3 s in a
+  warm BSP session. Four conditions, all tested: the build must be current, the record must
+  match that build, **every recorded method must resolve in the class files** (confirmed, not
+  believed), and an empty table is refused while the project has test sources. Both fallbacks
+  print why — a silent one is indistinguishable from a slow day.
+- **`Tester` identifies a test by `TestId(name, location)`**, not by `Symbol.DefnSym`, because a
+  test does not always come from a compilation and fabricating a hollow symbol around an empty
+  `Source` would put a half-built compiler object where the real thing is expected.
 - **A caller that needs the `CompilationResult` must not ask for the skip** — `build`, `run`
   and `test` on the command line, and `Bootstrap.testWith`, all still compile. `CompileOutcome`
   carries `hasMain` for exactly this reason: a skipped build has no typed AST, and BSP's `run`

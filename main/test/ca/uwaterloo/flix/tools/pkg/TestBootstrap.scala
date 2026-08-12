@@ -1,6 +1,6 @@
 package ca.uwaterloo.flix.tools.pkg
 
-import ca.uwaterloo.flix.api.{Bootstrap, BootstrapError, BuildManifest, Flix, Version}
+import ca.uwaterloo.flix.api.{Bootstrap, BootstrapError, BuildManifest, Flix, TestManifest, Version}
 import ca.uwaterloo.flix.util.{Build, FileOps, Formatter, LibLevel, Options, Result}
 import org.scalatest.DoNotDiscover
 import org.scalatest.funsuite.AnyFunSuite
@@ -487,6 +487,88 @@ class TestBootstrap extends AnyFunSuite {
     val b = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
 
     assert(b.run(mkDeterministicFlix, Array.empty).isInstanceOf[Result.Err[?, ?]], "a broken program ran")
+  }
+
+  test("a second test run does not compile") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out)
+    val b = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
+    assert(b.test(mkDeterministicFlix).isInstanceOf[Result.Ok[?, ?]], "the first test run failed")
+
+    val stamps = classStampsOf(p, Build.Development)
+    assert(stamps.nonEmpty, "the first test run wrote no class files")
+    assert(Files.isRegularFile(outputDirOf(p, Build.Development).resolve(TestManifest.FileName)),
+      "the first test run recorded no tests")
+
+    // A test is a compiled function this process reflects and calls, so the run used to need a
+    // compilation and therefore compiled every time. It now reaches the same shims through the class
+    // files the last run left.
+    assert(b.test(mkDeterministicFlix).isInstanceOf[Result.Ok[?, ?]])
+    assert(classStampsOf(p, Build.Development) == stamps, "a second test run recompiled")
+  }
+
+  test("an edited test is compiled and its new outcome reported") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out)
+    val b = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
+    assert(b.test(mkDeterministicFlix).isInstanceOf[Result.Ok[?, ?]])
+
+    // The failure a recorded table can introduce: running yesterday's tests and reporting them as
+    // today's. The digest is what prevents it, and a now-failing test is the evidence.
+    Files.writeString(p.resolve("test").resolve("TestMain.flix"),
+      """use Assert.assertEq
+        |
+        |@Test
+        |def testFails(): Unit \ Assert = assertEq(expected = 3, 1 + 1)
+        |""".stripMargin)
+
+    assert(b.test(mkDeterministicFlix).isInstanceOf[Result.Err[?, ?]], "an edited test was not compiled")
+  }
+
+  test("a recorded test that is not in the class files is not trusted") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out)
+    val b = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
+    assert(b.test(mkDeterministicFlix).isInstanceOf[Result.Ok[?, ?]])
+
+    // The record is confirmed against the products rather than believed. Point it at a class that is
+    // not there and the run must compile instead of quietly testing whatever it could resolve.
+    val recordFile = outputDirOf(p, Build.Development).resolve(TestManifest.FileName)
+    val record = TestManifest.read(recordFile).getOrElse(fail("no record was written"))
+    val doctored = record.copy(tests = record.tests.map(_.copy(className = "dev.flix.gen.Def$notThere")))
+    TestManifest.write(recordFile, doctored).unsafeGet
+
+    assert(b.test(mkDeterministicFlix).isInstanceOf[Result.Ok[?, ?]], "the run did not recover by compiling")
+    // And the record is rewritten by the run that compiled, so the next one is fast again.
+    assert(TestManifest.read(recordFile).exists(_.tests.forall(_.className != "dev.flix.gen.Def$notThere")))
+  }
+
+  test("an empty recorded table is refused while the project has test sources") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out)
+    val b = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
+    assert(b.test(mkDeterministicFlix).isInstanceOf[Result.Ok[?, ?]])
+
+    // "No tests" and "the tests were not recorded" look identical from here, and only one of them
+    // should report a green run over a project that has tests in it.
+    val recordFile = outputDirOf(p, Build.Development).resolve(TestManifest.FileName)
+    val record = TestManifest.read(recordFile).getOrElse(fail("no record was written"))
+    TestManifest.write(recordFile, record.copy(tests = Nil)).unsafeGet
+
+    assert(b.test(mkDeterministicFlix).isInstanceOf[Result.Ok[?, ?]])
+    assert(TestManifest.read(recordFile).exists(_.tests.nonEmpty), "the emptied record was not replaced")
+  }
+
+  test("a test run asked not to reuse compiles") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out)
+    val b = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
+    assert(b.test(mkDeterministicFlix).isInstanceOf[Result.Ok[?, ?]])
+    val stamps = classStampsOf(p, Build.Development)
+
+    // `flix test --clean`, for a person who does not believe the record.
+    assert(b.test(mkDeterministicFlix, reuse = false).isInstanceOf[Result.Ok[?, ?]])
+    assert(classStampsOf(p, Build.Development) != stamps, "--clean did not rebuild")
   }
 
   test("build-jar") {

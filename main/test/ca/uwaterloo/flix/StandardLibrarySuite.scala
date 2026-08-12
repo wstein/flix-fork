@@ -79,7 +79,7 @@ class StandardLibrarySuite extends AnyFunSuite {
       val testsByName = tests.toList.sortBy(_._1.name)
 
       // Dynamically create a ScalaTest unit test for each @Test function.
-      for ((sym, TestFn(_, skip, run)) <- testsByName) {
+      for ((sym, TestFn(_, skip, run, _, _)) <- testsByName) {
         val testName = sym.toString
         if (skip){
           ignore(testName) {}

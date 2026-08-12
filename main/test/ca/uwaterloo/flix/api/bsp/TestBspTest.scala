@@ -16,12 +16,12 @@
 package ca.uwaterloo.flix.api.bsp
 
 import ca.uwaterloo.flix.api.Bootstrap
-import ca.uwaterloo.flix.util.Options
+import ca.uwaterloo.flix.util.{FileOps, Options}
 import ch.epfl.scala.bsp4j.*
 import org.eclipse.lsp4j.jsonrpc.Launcher
 import org.scalatest.funsuite.AnyFunSuite
 
-import java.nio.file.Files
+import java.nio.file.{Files, Path}
 import java.util.concurrent.{ConcurrentLinkedQueue, Executors, TimeUnit}
 import scala.jdk.CollectionConverters.*
 
@@ -107,6 +107,37 @@ class TestBspTest extends AnyFunSuite {
     }
   }
 
+  test("a second test run does no work, and reports the same thing") {
+    withSession(MixedTests) { s =>
+      val first = s.test()
+      val stamps = classStamps(s)
+      assert(stamps.nonEmpty, "the first run wrote no class files")
+
+      val second = s.test()
+
+      // The one place BSP was still compiling unconditionally. A client's test button is the most
+      // repeated request after a compile, and a test is reached through the class files the last run
+      // left rather than through a new compilation of the whole program.
+      assert(second.getStatusCode == first.getStatusCode, "the two runs disagreed")
+      assert(classStamps(s) == stamps, "a second test run recompiled")
+
+      val finishes = s.testFinishes
+      // Twice three: the same three tests, with the same outcomes, reported again.
+      assert(finishes.sizeIs == 6, s"expected six results over two runs, got ${finishes.size}")
+      val byName = finishes.groupBy(_.getDisplayName.split('.').last).view.mapValues(_.map(_.getStatus).distinct)
+      assert(byName("testPasses") == List(TestStatus.PASSED), s"unexpected: ${byName("testPasses")}")
+      assert(byName("testFails") == List(TestStatus.FAILED), s"unexpected: ${byName("testFails")}")
+      assert(byName("testSkipped") == List(TestStatus.SKIPPED), s"unexpected: ${byName("testSkipped")}")
+
+      // And a result loaded from the record is still clickable, which is what the recorded location is
+      // for -- a client shows a tree either way or the feature is only half there.
+      for (finish <- finishes) {
+        assert(finish.getLocation != null, s"${finish.getDisplayName} lost its location")
+        assert(finish.getLocation.getUri.endsWith("TestMain.flix"), s"unexpected: ${finish.getLocation.getUri}")
+      }
+    }
+  }
+
   test("a filter selects which tests run") {
     withSession(MixedTests) { s =>
       val result = s.test(List("testPasses"))
@@ -144,7 +175,15 @@ class TestBspTest extends AnyFunSuite {
 
   // ── Harness ──────────────────────────────────────────────────────────────────
 
-  private class Session(client: BuildServer, target: BuildTargetIdentifier, received: Received) {
+  /** The class files of the project, with the time each was last written. */
+  private def classStamps(s: Session): Map[String, Long] = {
+    val classDir = s.project.resolve("build").resolve("development").resolve("class")
+    FileOps.getFilesWithExtIn(classDir, "class", Int.MaxValue)
+      .map(f => classDir.relativize(f.normalize()).toString -> f.toFile.lastModified())
+      .toMap
+  }
+
+  private class Session(val project: Path, client: BuildServer, target: BuildTargetIdentifier, received: Received) {
     def test(filters: List[String] = Nil): TestResult = {
       val params = new TestParams(List(target).asJava)
       if (filters.nonEmpty) params.setArguments(filters.asJava)
@@ -230,7 +269,7 @@ class TestBspTest extends AnyFunSuite {
       client.onBuildInitialized()
 
       val target = client.workspaceBuildTargets().get(Timeout, TimeUnit.SECONDS).getTargets.asScala.head.getId
-      f(new Session(client, target, received))
+      f(new Session(project, client, target, received))
     } finally {
       channel.close()
       executor.shutdownNow()

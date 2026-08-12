@@ -443,11 +443,23 @@ because a class directory holding something no build wrote is the state the mani
 prevent. What is not checked is whether the class files are the bytes this compiler would
 emit; a hand-edited class file of the right name is not detected.
 
-`buildTarget/test` never takes this path. A test is a function the compiler reflects and calls,
-so it needs the compilation itself and not just its output on disk. `buildTarget/run` does take
-it — it forks against the class directory — which is why `hasMain` is recorded in the manifest:
-a build that was skipped produces no typed AST to ask about the entry point, and a client asking
-what to run must still be told.
+`buildTarget/run` takes that path too — it forks against the class directory — which is why
+`hasMain` is recorded in the manifest: a build that was skipped produces no typed AST to ask
+about the entry point, and a client asking what to run must still be told.
+
+`buildTarget/test` takes it as well, and needs one more thing to do so. A test is a function
+this process reflects and calls, so reaching it means knowing which generated class and method
+carry its shim — which only a run that loaded the classes knows. That table is written to
+`build/development/tests.json` after a test run, and it is deliberately *not* in
+`BuildManifest`: that manifest is a record of products, and this is a description of the
+program. A wrong manifest costs a rebuild; a wrong test table means the tests someone believes
+ran did not.
+
+So the table is confirmed rather than believed. Beyond the up-to-date conditions above, every
+method it names must resolve in the class files that are on disk now, or the run compiles — and
+says so, rather than testing whatever it could resolve. A table with no tests is refused
+outright while the project has test sources, because "no tests" and "the tests were not
+recorded" look identical from here and only one of them should report a green run.
 
 **Concurrent compiles are coalesced, under one condition.** An editor compiles on save, and
 a person saving repeatedly used to queue one whole-program compile per keystroke — each
@@ -596,7 +608,11 @@ Each names the test that pins it.
     is the case a naive skip gets wrong: a failed compile writes no manifest, so restoring the
     sources puts the project back into the recorded state with the failure's markers still on
     screen. `TestBspRun`, "a run after a compile that had nothing to do still finds main".
-43. **A real server process completes the whole cycle.** `TestBspProcess`, "a scripted
+43. **A second test run does no work and reports the same thing.** `TestBspTest`, "a second test
+    run does no work, and reports the same thing" — no class file rewritten, the same three
+    outcomes reported again, and every result still clickable, which is what the recorded
+    location is for.
+44. **A real server process completes the whole cycle.** `TestBspProcess`, "a scripted
     session drives a real server through the whole cycle" — the assembled jar, started from
     the connection file it wrote, driven over hand-written frames through initialize,
     targets, sources, compile, run, test, shutdown and exit. The only case where nothing is
