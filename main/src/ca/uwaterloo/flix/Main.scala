@@ -364,6 +364,45 @@ object Main {
             } else exitWithErrors(flix, errors, optRoot)
           }
 
+        case Command.Metric =>
+          val format = Metrics.Format.ofString(cmdOpts.metricFormat) match {
+            case Some(fmt) => fmt
+            case None =>
+              println(s"Unknown metric format '${cmdOpts.metricFormat}'. Expected one of: ${Metrics.Format.names}.")
+              System.exit(1)
+              return
+          }
+          // Progress goes to stderr whenever the report is meant for a program: "Resolving Flix
+          // dependencies..." ahead of a JSON document makes it unparseable, and the point of these
+          // formats is that something else reads them.
+          val progress = format match {
+            case Metrics.Format.Text | Metrics.Format.Markdown => System.out
+            case Metrics.Format.Json | Metrics.Format.Csv => System.err
+          }
+          val flix =
+            if (cmdOpts.files.isEmpty) {
+              Bootstrap.bootstrap(cwd, options.githubToken)(formatter, progress) match {
+                case Result.Ok(bootstrap) =>
+                  val f = new Flix().setFormatter(formatter)
+                  f.setOptions(options)
+                  bootstrap.check(f)
+                  f
+                case Result.Err(e) =>
+                  println(e.message(formatter))
+                  System.exit(1)
+                  return
+              }
+            } else mkFlixWithFiles(cmdOpts.files, options)
+          val (optRoot, errors) = flix.check()
+          optRoot match {
+            case Some(root) =>
+              // Reported even when the project does not type check, because the numbers are still
+              // true of the code as written, and a beginner asking for them is often mid-repair.
+              print(Metrics.render(Metrics.compute(root), format, formatter))
+              System.exit(if (errors.isEmpty) 0 else 1)
+            case None => exitWithErrors(flix, errors, optRoot)
+          }
+
         case Command.Format =>
           // The canonical policy chooses spacing from the tokens alone; the default
           // reproduces the spacing the source had.
@@ -579,6 +618,7 @@ object Main {
     coverageLcovOutput: Option[String] = None,
     canonical: Boolean = false,
     docFormat: DocFormat = Options.Default.docFormat,
+    metricFormat: String = "text",
     entryPoint: Option[String] = None,
     installDeps: Boolean = true,
     githubToken: Option[String] = None,
@@ -631,6 +671,8 @@ object Main {
     case object Clean extends Command
 
     case object Doc extends Command
+
+    case object Metric extends Command
 
     case object Format extends Command
 
@@ -748,6 +790,14 @@ object Main {
       cmd("build-pkg").action((_, c) => c.copy(command = Command.BuildPkg)).text("  builds a fpkg-file from the current project.")
 
       cmd("clean").action((_, c) => c.copy(command = Command.Clean)).text("  recursively removes class files from the build directory.")
+
+      cmd("metric")
+        .action((_, c) => c.copy(command = Command.Metric))
+        .text("  displays code or compiler metrics for the project.")
+        .children(
+          opt[String]("metric-format").action((arg, c) => c.copy(metricFormat = arg))
+            .text("selects the format that 'metric' emits (text, json, csv, md). Defaults to text."),
+        )
 
       cmd("doc").action((_, c) => c.copy(command = Command.Doc)).text("  generates API documentation.").children(
         opt[DocFormat]("doc-format").action((arg, c) => c.copy(docFormat = arg)).
