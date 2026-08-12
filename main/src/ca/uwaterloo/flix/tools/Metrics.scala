@@ -675,6 +675,63 @@ object Metrics {
   }
 
   /**
+    * Renders the smells as work to be done, worst first.
+    *
+    * Ordered by how far over the limit each is rather than by file, because that is the order the
+    * work is worth doing in, and a list in file order invites fixing whatever is at the top of the
+    * file. Each carries what to do, so that the plan can be acted on without the reader first
+    * having to know what the category means.
+    */
+  private def workPlan(smells: List[Violation]): String = {
+    if (smells.isEmpty) return ""
+    val sb = new StringBuilder
+    sb.append("\n## Work plan\n\n")
+    sb.append(s"${smells.length} to address, worst first. See `docs/METRIC-SMELLS.md` for what not to do.\n\n")
+    sb.append("| over by | what | where | action |\n| --- | --- | --- | --- |\n")
+    smells.sortBy(v => -overBy(v)).foreach { v =>
+      val where = if (v.where.isEmpty) "—" else v.where
+      sb.append(s"| ${overByText(v)} | `${v.subject}` ${v.measure} ${v.actualText} (limit ${v.limitText}) | $where | ${action(v.category)} |\n")
+    }
+    sb.toString
+  }
+
+  /**
+    * Returns how far over the limit a violation is, for reading.
+    *
+    * A ratio against nothing is unbounded -- no documentation at all is not "infinitely" short of
+    * a target, it is simply all of it -- so it is named rather than printed as a number that
+    * happens to be the largest one a double can hold.
+    */
+  private def overByText(v: Violation): String = {
+    val ratio = overBy(v)
+    if (ratio >= 100.0) "all" else f"$ratio%.1fx"
+  }
+
+  /**
+    * Returns how far over its limit a violation is, as a multiple.
+    *
+    * A shortfall is expressed the same way round as an excess, so that one ordering serves both.
+    */
+  private def overBy(v: Violation): Double = v.category match {
+    case "docCoverage" => if (v.actual == 0) Double.MaxValue else v.limit / v.actual
+    case "orphan" => 1.0
+    case _ => if (v.limit == 0) Double.MaxValue else v.actual / v.limit
+  }
+
+  /**
+    * Returns what to do about a category, in one line.
+    */
+  private def action(category: String): String = category match {
+    case "nesting" => "match on a tuple or enum, or extract the inner branch"
+    case "complexity" => "name the predicate; a repeated guard is a missing case"
+    case "parameters" => "group the accumulators into a record and thread one value"
+    case "length" => "extract a step that has a name worth giving"
+    case "docCoverage" => "document the least obvious functions first"
+    case "orphan" => "delete it, or find what duplicates it"
+    case _ => "see docs/METRIC-SMELLS.md"
+  }
+
+  /**
     * Renders violations for reading.
     */
   def formatViolations(vs: List[Violation], f: Formatter): String = {
@@ -723,7 +780,7 @@ object Metrics {
     case Format.Text => text(report, f)
     case Format.Json => json(report, smells)
     case Format.Csv => csv(report)
-    case Format.Markdown => markdown(report)
+    case Format.Markdown => markdown(report, smells)
   }
 
   /**
@@ -855,7 +912,7 @@ object Metrics {
   /**
     * Renders the report as Markdown.
     */
-  private def markdown(report: Report): String = {
+  private def markdown(report: Report, smells: List[Violation]): String = {
     val sb = new StringBuilder
     sb.append("# Metrics\n\n")
     sb.append("| measure | value |\n| --- | --- |\n")
@@ -905,6 +962,7 @@ object Metrics {
     }
 
     if (report.tests.isEmpty) sb.append("\nThis project has no tests.\n")
+    sb.append(workPlan(smells))
     sb.toString
   }
 
