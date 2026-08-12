@@ -701,6 +701,21 @@ object Metrics {
     * cannot be acted on, and one that reports only the first hides how much work is left.
     */
   def violations(report: Report, thresholds: Thresholds): List[Violation] = {
+    /**
+      * Returns the local definition inside `d` that a line measurement belongs to, if one does.
+      *
+      * A crammed line inside a local definition was reported against whatever contained it, which
+      * names the wrong function and sends a reader to the wrong line. The most specific subject
+      * wins: if a local shares the measurement, it is the local's line.
+      */
+    def attribute(d: DefMetrics, measured: Int, of: LocalMetrics => Int): (String, String, Int) =
+      report.locals
+        .filter(l => l.owner == d.name && of(l) == measured)
+        .sortBy(l => -l.line)
+        .headOption
+        .map(l => (s"${d.name}/${l.name}", l.file, l.line))
+        .getOrElse((d.name, d.file, d.line))
+
     val perDefinition = report.functions.flatMap { d =>
       // A function with no branching at all is a table, not logic: a hundred lines of record
       // literal are a hundred lines of data, and splitting them in two makes nothing easier to
@@ -713,8 +728,14 @@ object Metrics {
         thresholds.maxParameters.filter(d.widestParameterList > _).map(l => Violation("parameters", d.name, d.file, d.line, d.widestParameterList, l)),
         thresholds.maxNesting.filter(d.nesting > _).map(l => Violation("nesting", d.name, d.file, d.line, d.nesting, l)),
         thresholds.maxComplexity.filter(d.cognitive > _).map(l => Violation("complexity", d.name, d.file, d.line, d.cognitive, l)),
-        thresholds.maxLineTokens.filter(d.maxLineTokens > _).map(l => Violation("density", d.name, d.file, d.line, d.maxLineTokens, l)),
-        thresholds.maxLineLength.filter(d.maxLineLength > _).map(l => Violation("lineLength", d.name, d.file, d.line, d.maxLineLength, l))
+        thresholds.maxLineTokens.filter(d.maxLineTokens > _).map { l =>
+          val (subject, file, line) = attribute(d, d.maxLineTokens, _.maxLineTokens)
+          Violation("density", subject, file, line, d.maxLineTokens, l)
+        },
+        thresholds.maxLineLength.filter(d.maxLineLength > _).map { l =>
+          val (subject, file, line) = attribute(d, d.maxLineLength, _.maxLineLength)
+          Violation("lineLength", subject, file, line, d.maxLineLength, l)
+        }
       ).flatten
     }
 

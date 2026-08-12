@@ -468,6 +468,32 @@ class TestMetrics extends AnyFunSuite {
     assert(loop.maxLineLength > 0, "a local definition must carry its own line length")
   }
 
+  test("a crammed line inside a local definition is reported against the local") {
+    // Reported against the enclosing function, it names the wrong function and points at the wrong
+    // line, so whoever follows it looks at the signature rather than at the line to break.
+    val m = measure(List(
+      "mod K {",
+      "    pub def outer(n: Int32): Int32 = {",
+      "        def loop(a, b, c, d) = if (a <= 0) b + c + d else if (a > 9) loop(a - 2, b, c, d) else loop(a - 1, b + 1, c, d);",
+      "        loop(n, 0, 0, 0)",
+      "    }",
+      "}"
+    ))
+    val vs = Metrics.violations(m, Metrics.Thresholds(maxLineTokens = Some(25)))
+    assertResult(List("K.outer/loop"))(vs.map(_.subject))
+    // The local's line, not the function's.
+    assertResult(List(3))(vs.map(_.line))
+  }
+
+  test("a crammed line outside any local is still reported against the definition") {
+    val m = measure(List(
+      "mod K {",
+      "    pub def plain(x: Int32): Int32 = if (x > 0) x + 1 else if (x < 0) x - 1 else if (x == 0) 0 else x + 2",
+      "}"
+    ))
+    assertResult(List("K.plain"))(Metrics.violations(m, Metrics.Thresholds(maxLineTokens = Some(25))).map(_.subject))
+  }
+
   test("an empty program measures as empty rather than as a failure") {
     val empty = measure(List("mod Demo {", "}"))
     assertResult(0)(empty.defs.length)
