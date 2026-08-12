@@ -4,7 +4,7 @@ import ca.uwaterloo.flix.api.{CompilerConstants, Flix}
 import ca.uwaterloo.flix.language.ast.TypedAst.Root
 import ca.uwaterloo.flix.language.ast.shared.SecurityContext
 import ca.uwaterloo.flix.util.{Formatter, Options}
-import org.json4s.jvalue2monadic
+import org.json4s.{JInt, JString, jvalue2monadic}
 import org.scalatest.funsuite.AnyFunSuite
 
 /**
@@ -351,6 +351,36 @@ class TestMetrics extends AnyFunSuite {
     assert(v.file.nonEmpty, "a definition's smell must say which file")
     assertResult(s"${v.file}:${v.line}")(v.where)
     assert(v.actual > v.limit, s"${v.actual} should exceed ${v.limit}")
+  }
+
+  test("sarif is a document the tools that read sarif accept") {
+    // A schema, not a rendering: the three things below are what decide whether GitHub shows the
+    // annotations or silently drops the file.
+    val smells = Metrics.violations(report, Metrics.Thresholds(maxNesting = Some(1), minDocCoverage = Some(0.9)))
+    val doc = org.json4s.native.JsonMethods.parse(Metrics.render(report, Metrics.Format.Sarif, Formatter.NoFormatter, smells))
+
+    assertResult(JString("2.1.0"))(doc \ "version")
+    val run = (doc \ "runs").children.head
+    assertResult(JString("flix metric"))(run \ "tool" \ "driver" \ "name")
+
+    // Every rule a result names is also declared, or the result is dropped.
+    def text(v: org.json4s.JValue): Option[String] = v match {
+      case JString(x) => Some(x)
+      case _ => None
+    }
+    val declared = (run \ "tool" \ "driver" \ "rules").children.flatMap(r => text(r \ "id")).toSet
+    val used = (run \ "results").children.flatMap(r => text(r \ "ruleId")).toSet
+    assert(used.nonEmpty, "expected results")
+    assert(used.subsetOf(declared), s"undeclared rules: ${used -- declared}")
+
+    // A region is one-based, so a smell with no line carries no location rather than line zero.
+    (run \ "results").children.foreach { r =>
+      (r \ "locations").children.foreach { l =>
+        val line = l \ "physicalLocation" \ "region" \ "startLine"
+        assert(line match { case JInt(n) => n >= 1; case _ => false },
+          s"a region must start at line 1 or later, found $line")
+      }
+    }
   }
 
   test("an empty program measures as empty rather than as a failure") {

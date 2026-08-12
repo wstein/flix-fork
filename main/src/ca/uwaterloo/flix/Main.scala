@@ -380,7 +380,7 @@ object Main {
           // which is how a Markdown report came to begin with an escape sequence.
           val progress = format match {
             case Metrics.Format.Text => System.out
-            case Metrics.Format.Json | Metrics.Format.Csv | Metrics.Format.Markdown => System.err
+            case Metrics.Format.Json | Metrics.Format.Csv | Metrics.Format.Markdown | Metrics.Format.Sarif => System.err
           }
           // And nothing but the text report is coloured, since an escape sequence in a document is
           // not a colour, it is a character someone has to strip.

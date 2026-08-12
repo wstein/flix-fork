@@ -769,6 +769,7 @@ object Metrics {
     case object Json extends Format
     case object Csv extends Format
     case object Markdown extends Format
+    case object Sarif extends Format
 
     /** Parses a format by name, as it is written on the command line. */
     def ofString(s: String): Option[Format] = s.toLowerCase match {
@@ -776,11 +777,12 @@ object Metrics {
       case "json" => Some(Json)
       case "csv" => Some(Csv)
       case "md" | "markdown" => Some(Markdown)
+      case "sarif" => Some(Sarif)
       case _ => None
     }
 
     /** The names accepted, for a message that has to list them. */
-    val names: String = "text, json, csv, md"
+    val names: String = "text, json, csv, md, sarif"
   }
 
   /**
@@ -791,6 +793,85 @@ object Metrics {
     case Format.Json => json(report, smells)
     case Format.Csv => csv(report, smells)
     case Format.Markdown => markdown(report, smells)
+    case Format.Sarif => sarif(smells)
+  }
+
+  /**
+    * Renders the smells as SARIF 2.1.0.
+    *
+    * A schema rather than a rendering: a static analysis result format that GitHub, GitLab and
+    * editors read to place annotations on a pull request. Only the smells appear -- the
+    * measurements are not results and have nowhere to go in it.
+    *
+    * Three details decide whether it is accepted rather than silently dropped. A result names a
+    * rule that the driver also declares, so `rules` and `ruleId` are generated from one list. A
+    * location's URI is relative to the repository, which is why paths are relativised. And a
+    * region's `startLine` is one-based, so a smell with no line -- one about a whole public API --
+    * carries no location at all rather than a location at line zero.
+    */
+  private def sarif(smells: List[Violation]): String = {
+    val categories = smells.map(_.category).distinct.sorted
+
+    val rules: JValue = categories.map { c =>
+      ("id" -> c) ~
+        ("name" -> c) ~
+        ("shortDescription" -> ("text" -> ruleDescription(c))) ~
+        ("fullDescription" -> ("text" -> s"${ruleDescription(c)} ${action(c)}.")) ~
+        ("help" -> ("text" -> s"${action(c)}. See docs/METRIC-SMELLS.md.")) ~
+        ("defaultConfiguration" -> ("level" -> "warning"))
+    }
+
+    val results: JValue = smells.map { v =>
+      val message = s"${v.subject}: ${v.measure} ${v.actualText}, over ${v.limitText}. ${action(v.category)}."
+      val base =
+        ("ruleId" -> v.category) ~
+          ("level" -> level(v)) ~
+          ("message" -> ("text" -> message))
+      // A result may have no location. One is better than a location that is not real.
+      if (v.file.isEmpty) base
+      else base ~ ("locations" -> List[JValue](
+        ("physicalLocation" ->
+          ("artifactLocation" -> ("uri" -> v.file) ~ ("uriBaseId" -> "%SRCROOT%")) ~
+            ("region" -> ("startLine" -> v.line.max(1))))
+      ))
+    }
+
+    val sarif: JValue =
+      ("$schema" -> "https://json.schemastore.org/sarif-2.1.0.json") ~
+        ("version" -> "2.1.0") ~
+        ("runs" -> List[JValue](
+          ("tool" -> ("driver" ->
+            ("name" -> "flix metric") ~
+              ("informationUri" -> "https://flix.dev") ~
+              ("rules" -> rules))) ~
+            ("results" -> results)
+        ))
+
+    pretty(JsonMethods.render(sarif))
+  }
+
+  /**
+    * Returns how serious a violation is, in the words SARIF uses.
+    *
+    * Twice the limit is where something stops being a matter of taste. Unbounded -- no
+    * documentation at all -- is not an error about a line, so it stays a warning.
+    */
+  private def level(v: Violation): String = {
+    val ratio = overBy(v)
+    if (ratio >= 2.0 && ratio < 100.0) "error" else "warning"
+  }
+
+  /**
+    * Returns what a rule is about, in one line.
+    */
+  private def ruleDescription(category: String): String = category match {
+    case "nesting" => "Branches nested more deeply than the limit."
+    case "complexity" => "More decisions to hold in mind at once than the limit."
+    case "parameters" => "A parameter list wider than the limit, counting local definitions."
+    case "length" => "A function with control flow longer than the limit."
+    case "docCoverage" => "Less of the public API documented than the limit."
+    case "orphan" => "A module that nothing else depends on."
+    case other => other
   }
 
   /**
