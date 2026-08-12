@@ -595,8 +595,39 @@ object Metrics {
     maxComplexity = Some(15)
   )
 
-  /** Something measured that exceeded what was asked for. */
-  case class Violation(measure: String, subject: String, where: String, actual: String, limit: String)
+  /**
+    * Something measured that exceeded what was asked for.
+    *
+    * The numbers are numbers, and the category is a fixed word rather than a sentence, because
+    * what reads this is usually a program: a CI script comparing magnitudes, or an editor placing
+    * a marker, neither of which should have to parse prose or convert a string to compare it.
+    *
+    * @param category one of `length`, `parameters`, `nesting`, `complexity`, `docCoverage`, `orphan`.
+    */
+  case class Violation(category: String, subject: String, file: String, line: Int, actual: Double, limit: Double) {
+
+    /** Where it is, as a person writes it. Empty when nothing locates it. */
+    def where: String = if (file.isEmpty) "" else s"$file:$line"
+
+    /** What the category is called in prose. */
+    def measure: String = category match {
+      case "docCoverage" => "doc coverage"
+      case "orphan" => "no module depends on it"
+      case other => other
+    }
+
+    /** The measurement, written as its kind is written. */
+    def actualText: String = quantity(actual)
+
+    /** The limit, written as its kind is written. */
+    def limitText: String = quantity(limit)
+
+    private def quantity(value: Double): String = category match {
+      case "docCoverage" => f"${value * 100}%.1f%%"
+      case "orphan" => s"${value.toInt} dependents"
+      case _ => value.toInt.toString
+    }
+  }
 
   /**
     * Returns everything in `report` that exceeds `thresholds`.
@@ -606,18 +637,17 @@ object Metrics {
     */
   def violations(report: Report, thresholds: Thresholds): List[Violation] = {
     val perDefinition = report.functions.flatMap { d =>
-      val where = s"${d.file}:${d.line}"
       // A function with no branching at all is a table, not logic: a hundred lines of record
       // literal are a hundred lines of data, and splitting them in two makes nothing easier to
       // read. Length is charged against code that does something.
       val isData = d.cognitive == 0 && d.nesting == 0
       List(
-        thresholds.maxLines.filterNot(_ => isData).filter(d.lines > _).map(l => Violation("lines", d.name, where, d.lines.toString, l.toString)),
+        thresholds.maxLines.filterNot(_ => isData).filter(d.lines > _).map(l => Violation("length", d.name, d.file, d.line, d.lines, l)),
         // The widest list anywhere inside, so that a loop carrying eight accumulators is not
         // excused by a two-parameter signature.
-        thresholds.maxParameters.filter(d.widestParameterList > _).map(l => Violation("parameters", d.name, where, d.widestParameterList.toString, l.toString)),
-        thresholds.maxNesting.filter(d.nesting > _).map(l => Violation("nesting", d.name, where, d.nesting.toString, l.toString)),
-        thresholds.maxComplexity.filter(d.cognitive > _).map(l => Violation("complexity", d.name, where, d.cognitive.toString, l.toString))
+        thresholds.maxParameters.filter(d.widestParameterList > _).map(l => Violation("parameters", d.name, d.file, d.line, d.widestParameterList, l)),
+        thresholds.maxNesting.filter(d.nesting > _).map(l => Violation("nesting", d.name, d.file, d.line, d.nesting, l)),
+        thresholds.maxComplexity.filter(d.cognitive > _).map(l => Violation("complexity", d.name, d.file, d.line, d.cognitive, l))
       ).flatten
     }
 
@@ -630,13 +660,18 @@ object Metrics {
 
     val orphans = report.modules
       .filter(m => m.fanIn == 0 && m.fanOut > 0 && m.name != "(top level)" && !testOnly.contains(m.name))
-      .map(m => Violation("no module depends on it", m.name, "", "0 dependents", "1"))
+      .map { m =>
+        // Located at the first definition it declares, so that an editor can put a marker on the
+        // module rather than leaving the one smell that points nowhere.
+        val at = report.defs.filter(_.module == m.name).minByOption(_.line)
+        Violation("orphan", m.name, at.map(_.file).getOrElse(""), at.map(_.line).getOrElse(1), 0, 1)
+      }
 
     val coverage = thresholds.minDocCoverage
       .filter(_ > report.docCoverage)
-      .map(l => Violation("doc coverage", "public API", "", f"${report.docCoverage * 100}%.1f%%", f"${l * 100}%.1f%%"))
+      .map(l => Violation("docCoverage", "public API", "", 0, report.docCoverage, l))
 
-    (perDefinition ++ orphans.filter(_ => thresholds.maxLines.isDefined) ++ coverage).sortBy(v => (v.measure, v.subject))
+    (perDefinition ++ orphans.filter(_ => thresholds.maxLines.isDefined) ++ coverage).sortBy(v => (v.category, v.subject))
   }
 
   /**
@@ -648,7 +683,7 @@ object Metrics {
     sb.append("\n" + f.red(s"${vs.length} over the limit") + "\n")
     vs.foreach { v =>
       val where = if (v.where.isEmpty) "" else s"  ${f.cyan(v.where)}"
-      sb.append(s"    ${f.blue(v.subject)} -- ${v.measure} ${v.actual}, limit ${v.limit}$where\n")
+      sb.append(s"    ${f.blue(v.subject)} -- ${v.measure} ${v.actualText}, limit ${v.limitText}$where\n")
     }
     sb.toString
   }
@@ -808,7 +843,8 @@ object Metrics {
     // Emitted so that whatever reads the report reads the verdict too, rather than reimplementing
     // the thresholds and disagreeing with the exit code.
     val smellsJson: JValue = smells.map { v =>
-      ("measure" -> v.measure) ~ ("subject" -> v.subject) ~ ("where" -> v.where) ~
+      ("category" -> v.category) ~ ("subject" -> v.subject) ~
+        ("file" -> v.file) ~ ("line" -> v.line) ~ ("where" -> v.where) ~
         ("actual" -> v.actual) ~ ("limit" -> v.limit)
     }
 

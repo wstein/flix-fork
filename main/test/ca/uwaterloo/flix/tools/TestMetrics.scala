@@ -262,9 +262,10 @@ class TestMetrics extends AnyFunSuite {
   test("a threshold names what exceeded it, by how much, and where") {
     val vs = Metrics.violations(report, Metrics.Thresholds(maxNesting = Some(1)))
     assertResult(List("Demo.classify"))(vs.map(_.subject))
-    assertResult(List("nesting"))(vs.map(_.measure))
-    assertResult(List("2"))(vs.map(_.actual))
-    assert(vs.head.where.endsWith(":5"), s"expected the location of the definition, got ${vs.head.where}")
+    assertResult(List("nesting"))(vs.map(_.category))
+    assertResult(List(2.0))(vs.map(_.actual))
+    assertResult(List(1.0))(vs.map(_.limit))
+    assertResult(List(5))(vs.map(_.line))
   }
 
   test("a parameter limit counts the widest list anywhere inside") {
@@ -277,7 +278,7 @@ class TestMetrics extends AnyFunSuite {
       "    }",
       "}"
     ))
-    assertResult(List("6"))(Metrics.violations(wide, Metrics.Thresholds(maxParameters = Some(4))).map(_.actual))
+    assertResult(List(6.0))(Metrics.violations(wide, Metrics.Thresholds(maxParameters = Some(4))).map(_.actual))
     assertResult(Nil)(Metrics.violations(wide, Metrics.Thresholds(maxParameters = Some(6))))
   }
 
@@ -285,8 +286,9 @@ class TestMetrics extends AnyFunSuite {
     // Half the public API here is documented.
     assertResult(Nil)(Metrics.violations(report, Metrics.Thresholds(minDocCoverage = Some(0.5))))
     val short = Metrics.violations(report, Metrics.Thresholds(minDocCoverage = Some(0.9)))
-    assertResult(List("doc coverage"))(short.map(_.measure))
-    assertResult(List("50.0%"))(short.map(_.actual))
+    assertResult(List("docCoverage"))(short.map(_.category))
+    assertResult(List(0.5))(short.map(_.actual))
+    assertResult(List("50.0%"))(short.map(_.actualText))
   }
 
   test("the effect budget says which effects are used, not merely how many are pure") {
@@ -338,6 +340,17 @@ class TestMetrics extends AnyFunSuite {
     assertResult(Nil)(Metrics.violations(data, Metrics.Thresholds(maxLines = Some(2))))
     // A function of the same length that branches is still charged.
     assert(Metrics.violations(report, Metrics.Thresholds(maxLines = Some(2))).nonEmpty)
+  }
+
+  test("a smell is addressed by a program, not parsed out of prose") {
+    // What reads this is usually a CI script or an editor: a fixed category, a file and a line, and
+    // numbers that are numbers.
+    val vs = Metrics.violations(report, Metrics.Thresholds(maxNesting = Some(1)))
+    val v = vs.headOption.getOrElse(fail("expected a violation"))
+    assert(Set("length", "parameters", "nesting", "complexity", "docCoverage", "orphan").contains(v.category), v.category)
+    assert(v.file.nonEmpty, "a definition's smell must say which file")
+    assertResult(s"${v.file}:${v.line}")(v.where)
+    assert(v.actual > v.limit, s"${v.actual} should exceed ${v.limit}")
   }
 
   test("an empty program measures as empty rather than as a failure") {
