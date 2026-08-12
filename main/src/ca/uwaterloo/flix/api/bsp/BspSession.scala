@@ -15,7 +15,7 @@
  */
 package ca.uwaterloo.flix.api.bsp
 
-import ca.uwaterloo.flix.api.{Bootstrap, Flix, ProjectView, Version}
+import ca.uwaterloo.flix.api.{Bootstrap, Flix, ProgramRunner, ProjectView, Version}
 import ca.uwaterloo.flix.util.{Build, Formatter, Options, Result}
 
 import scala.util.matching.Regex
@@ -612,7 +612,7 @@ class BspSession(val projectPath: Path, options: Options, log: BspLogStream) {
     * known about it yet.
     */
   private def mainClasses(): List[JvmMainClass] =
-    if (lastCompileHadMain) List(new JvmMainClass(BspRunner.MainClass, List.empty[String].asJava))
+    if (lastCompileHadMain) List(new JvmMainClass(ProgramRunner.MainClass, List.empty[String].asJava))
     else Nil
 
   /**

@@ -1552,7 +1552,66 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
   /**
     * Runs the main function in flix package for the project.
     */
-  def run(flix: Flix, args: Array[String]): Result[Unit, BootstrapError] = {
+  def run(flix: Flix, args: Array[String], reuse: Boolean = true): Result[Int, BootstrapError] = {
+    // Coverage is aggregated from `Coverage.getSession` in *this* process and written after the program
+    // returns, so a forked program's hits would be recorded in a JVM nobody reads and the report would
+    // come out empty. An empty coverage report is worse than a slow one, so this run stays in-process.
+    if (flix.options.coverage) {
+      return runInProcess(flix, args)
+    }
+
+    for {
+      _ <- buildIfNeeded(flix, clean = !reuse)
+      code <- runForked(args.toList)
+    } yield code
+  }
+
+  /**
+    * Runs the program in a JVM of its own and returns its exit code.
+    *
+    * ==Why forked, when it used to run here==
+    *
+    * Because the program has to be startable from what a build *left behind*, or `flix run` can never
+    * skip a compile: running in this process means reflecting over a `CompilationResult`, and only a
+    * compile produces one. Loading the classes from the directory instead is not the cheap alternative
+    * it appears to be -- `flix.jar` carries a *mock* `dev.flix.runtime.Global` whose `setArgs` throws,
+    * so a class loader that resolved the program's runtime classes through this process's would have to
+    * be child-first and exactly right, and the failure when it is not is a program that dies before
+    * `main`. Forking cannot make that mistake.
+    *
+    * What changes for a user: the program gets its own JVM, so its exit code is reported rather than
+    * inherited by accident, a `System.exit` no longer takes the compiler with it, and standard input,
+    * output and error are the terminal's -- inherited, not captured, so an interactive program still
+    * works.
+    */
+  private def runForked(arguments: List[String]): Result[Int, BootstrapError] = {
+    val snapshot = view
+    val command = ProgramRunner.command(snapshot, Build.Development, arguments)
+    try {
+      val process = new ProcessBuilder(command*)
+        // In the project, so a program that reads a relative path finds what a user would expect.
+        .directory(snapshot.projectPath.toFile)
+        // The terminal's, so that a program which prompts, reads a pipe or draws a progress bar behaves
+        // as it would if the user had started it.
+        .inheritIO()
+        .start()
+      Ok(process.waitFor())
+    } catch {
+      case e: java.io.IOException =>
+        Err(BootstrapError.GeneralError(s"Could not start the program: ${e.getMessage}"))
+      case _: InterruptedException =>
+        Thread.currentThread().interrupt()
+        Err(BootstrapError.GeneralError("Interrupted while running the program."))
+    }
+  }
+
+  /**
+    * Runs `main` by reflection in this process, which is what `--coverage` needs.
+    *
+    * The exit code is 0 unless the program calls `System.exit` itself, in which case this never
+    * returns -- the same behaviour every `flix run` had before forking.
+    */
+  private def runInProcess(flix: Flix, args: Array[String]): Result[Int, BootstrapError] = {
     for {
       compilationResult <- build(flix)
     } yield {
@@ -1560,6 +1619,7 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
         case None => ()
         case Some(main) => main(args)
       }
+      0
     }
   }
 

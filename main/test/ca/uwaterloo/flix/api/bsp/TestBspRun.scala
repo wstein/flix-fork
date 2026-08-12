@@ -15,7 +15,7 @@
  */
 package ca.uwaterloo.flix.api.bsp
 
-import ca.uwaterloo.flix.api.Bootstrap
+import ca.uwaterloo.flix.api.{Bootstrap, ProgramRunner}
 import ca.uwaterloo.flix.util.Options
 import ch.epfl.scala.bsp4j.*
 import org.eclipse.lsp4j.jsonrpc.Launcher
@@ -51,14 +51,42 @@ class TestBspRun extends AnyFunSuite {
     }
   }
 
-  test("a program that fails reports a failure") {
-    // `System.exit(3)` through Java interop: the exit status is what a client reports, and a run that
-    // returned OK for a program that failed would be worse than useless.
+  test("the program receives its arguments") {
     withSession(
-      """import java.lang.System
-        |def main(): Unit \ IO = unsafe System.exit(3)
+      """use Sys.Env
+        |
+        |def main(): Unit \ { Env, IO } =
+        |    Env.getArgs() |> List.forEach(a -> println("ARG:${a}"))
+        |""".stripMargin) { s =>
+      // Unverified until now, and about to become the default path for `flix run` as well: a forked
+      // program gets its arguments on the command line, and the generated `Main` hands them to
+      // `Global.setArgs` before calling into the program. If that link were broken, `Env.getArgs()`
+      // would quietly return an empty list and every argument a user passed would vanish.
+      val result = s.run(List("alpha", "beta gamma"))
+
+      assert(result.getStatusCode == StatusCode.OK, s"unexpected status: ${result.getStatusCode}")
+      assert(s.logs.exists(_.contains("ARG:alpha")), s"the first argument did not arrive: ${s.logs}")
+      // With a space in it, so that a runner joining arguments into one string is caught rather than
+      // passing by luck.
+      assert(s.logs.exists(_.contains("ARG:beta gamma")), s"the second argument did not arrive: ${s.logs}")
+    }
+  }
+
+  test("a program that fails reports a failure") {
+    // The exit status is what a client reports, and a run that returned OK for a program that failed
+    // would be worse than useless.
+    withSession(
+      """use Sys.Exit
+        |
+        |def main(): Unit \ { Exit, IO } =
+        |    println("PROGRAM-RAN");
+        |    Exit.exit(3)
         |""".stripMargin) { s =>
       assert(s.run().getStatusCode == StatusCode.ERROR, "a program that exited 3 was reported as OK")
+      // Falsifiable only with this. A program that never compiled also reports `ERROR`, so the earlier
+      // version of this test passed against a fixture whose syntax was wrong -- it proved that
+      // something went wrong, not that the program ran and failed.
+      assert(s.logs.exists(_.contains("PROGRAM-RAN")), s"the program never ran: ${s.logs}")
     }
   }
 
@@ -94,7 +122,7 @@ class TestBspRun extends AnyFunSuite {
       val result = s.run()
       assert(result.getStatusCode == StatusCode.OK, s"unexpected status: ${result.getStatusCode}")
       assert(s.logs.exists(_.contains("PROGRAM-RAN")), s"the program did not run: ${s.logs}")
-      assert(s.jvmRunEnvironment().getMainClasses.asScala.map(_.getClassName).toList == List(BspRunner.MainClass),
+      assert(s.jvmRunEnvironment().getMainClasses.asScala.map(_.getClassName).toList == List(ProgramRunner.MainClass),
         "the main class was forgotten by a compile that had nothing to do")
     }
   }
@@ -113,7 +141,7 @@ class TestBspRun extends AnyFunSuite {
       // it. Dropping the class directory from it must break this.
       val classpath = paths.map(_.toAbsolutePath.toString).mkString(File.pathSeparator)
       val java = Path.of(System.getProperty("java.home"), "bin", "java").toString
-      val process = new ProcessBuilder(java, "-cp", classpath, BspRunner.MainClass)
+      val process = new ProcessBuilder(java, "-cp", classpath, ProgramRunner.MainClass)
         .redirectErrorStream(true).start()
       val output = new String(process.getInputStream.readAllBytes())
       assert(process.waitFor(Timeout, TimeUnit.SECONDS))
@@ -150,7 +178,7 @@ class TestBspRun extends AnyFunSuite {
     withSession("""def main(): Unit \ IO = println("PROGRAM-RAN")""") { s =>
       s.compile()
       val mains = s.jvmRunEnvironment().getMainClasses.asScala.toList
-      assert(mains.map(_.getClassName) == List(BspRunner.MainClass), s"unexpected main classes: $mains")
+      assert(mains.map(_.getClassName) == List(ProgramRunner.MainClass), s"unexpected main classes: $mains")
     }
   }
 
@@ -180,8 +208,11 @@ class TestBspRun extends AnyFunSuite {
     def compile(): CompileResult =
       client.buildTargetCompile(new CompileParams(List(target).asJava)).get(Timeout, TimeUnit.SECONDS)
 
-    def run(): RunResult =
-      client.buildTargetRun(new RunParams(target)).get(Timeout, TimeUnit.SECONDS)
+    def run(arguments: List[String] = Nil): RunResult = {
+      val params = new RunParams(target)
+      if (arguments.nonEmpty) params.setArguments(arguments.asJava)
+      client.buildTargetRun(params).get(Timeout, TimeUnit.SECONDS)
+    }
 
     def jvmRunEnvironment(): JvmEnvironmentItem =
       client.buildTargetJvmRunEnvironment(new JvmRunEnvironmentParams(List(target).asJava))

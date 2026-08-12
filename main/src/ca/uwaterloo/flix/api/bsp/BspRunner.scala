@@ -15,12 +15,11 @@
  */
 package ca.uwaterloo.flix.api.bsp
 
-import ca.uwaterloo.flix.api.ProjectView
+import ca.uwaterloo.flix.api.{ProgramRunner, ProjectView}
 import ca.uwaterloo.flix.util.Build
 
-import java.io.{BufferedReader, File, InputStreamReader}
+import java.io.{BufferedReader, InputStreamReader}
 import java.nio.charset.StandardCharsets
-import java.nio.file.Paths
 import java.util.concurrent.TimeUnit
 
 /**
@@ -34,15 +33,11 @@ import java.util.concurrent.TimeUnit
   * that installs a shutdown hook or spawns threads would leave them behind. A forked process makes
   * each of those the program's own problem, and gives the exit status a client asked for.
   *
-  * ==The entry class==
-  *
-  * `Main`, in the root package, with a `public static void main(String[])`. That is what `CodeGen`
-  * emits for a program with an entry point, and it is why the classpath alone is enough to start one.
+  * The command itself -- which `java`, which classpath, which class -- comes from
+  * [[ProgramRunner]], which `flix run` uses as well. What differs between them is the input and
+  * output handling below, not the launching.
   */
 object BspRunner {
-
-  /** The class `CodeGen` emits for a program's entry point. */
-  val MainClass: String = "Main"
 
   /** What a run produced. */
   case class Outcome(exitCode: Int, timedOut: Boolean) {
@@ -67,10 +62,7 @@ object BspRunner {
           arguments: List[String],
           onOutput: String => Unit,
           timeout: java.time.Duration): Outcome = {
-    val classpath = view.runtimeClasspath(build).map(_.toAbsolutePath.toString).mkString(File.pathSeparator)
-    val command = javaBinary :: "-cp" :: classpath :: MainClass :: arguments
-
-    val process = new ProcessBuilder(command*)
+    val process = new ProcessBuilder(ProgramRunner.command(view, build, arguments)*)
       // In the project, so a program that reads a relative path finds what the user would expect.
       .directory(view.projectPath.toFile)
       // Merged, so the program's own interleaving survives.
@@ -101,11 +93,5 @@ object BspRunner {
         Thread.currentThread().interrupt()
         Outcome(exitCode = -1, timedOut = true)
     }
-  }
-
-  /** The `java` of the running JVM, which is the one this compiler's output was built for. */
-  private def javaBinary: String = {
-    val name = if (System.getProperty("os.name", "").toLowerCase.contains("win")) "java.exe" else "java"
-    Paths.get(System.getProperty("java.home"), "bin", name).toAbsolutePath.normalize().toString
   }
 }

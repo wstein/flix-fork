@@ -418,14 +418,15 @@ object Main {
             println("The 'run' command does not support file arguments.")
             System.exit(1)
           }
-          exitOnResult(
-            Bootstrap.bootstrap(cwd, options.githubToken).flatMap { bootstrap =>
-              val flix = new Flix().setFormatter(formatter)
-              flix.setOptions(options)
-              bootstrap.run(flix, cmdOpts.args.toArray)
-            },
-            options
-          )
+          val ran = Bootstrap.bootstrap(cwd, options.githubToken).flatMap { bootstrap =>
+            val flix = new Flix().setFormatter(formatter)
+            flix.setOptions(options)
+            bootstrap.run(flix, cmdOpts.args.toArray, reuse = !cmdOpts.clean)
+          }
+          // The program's own exit code, not the compiler's success. A program that failed and a
+          // compiler that could not build it are different outcomes, and a script has to tell them
+          // apart: 1 for the second, whatever the program said for the first.
+          exitWithCode(ran, options)
 
         case Command.Test =>
           if (cmdOpts.files.isEmpty) {
@@ -820,7 +821,10 @@ object Main {
             text("  imposes one spacing per syntax tree, instead of preserving the source's own.")
         )
 
-      cmd("run").action((_, c) => c.copy(command = Command.Run)).text("  runs main for the current project.")
+      cmd("run").action((_, c) => c.copy(command = Command.Run)).text("  runs main for the current project.").children(
+        opt[Unit]("clean").action((_, c) => c.copy(clean = true)).
+          text("empties the output directory and rebuilds before running."),
+      )
 
       cmd("test").action((_, c) => c.copy(command = Command.Test)).text("  runs the tests for the current project.")
 
@@ -1167,12 +1171,27 @@ object Main {
   /**
     * Exits with code 0 on success, or prints the error and exits with code 1 on failure.
     */
+  /**
+    * Exits with the code a successful command reports, or 1 if it failed.
+    *
+    * For `run`, whose success carries the program's own exit code. A program that failed and a compiler
+    * that could not build one are different outcomes and a script has to tell them apart.
+    */
+  private def exitWithCode(result: Result[Int, BootstrapError], options: Options)(implicit formatter: Formatter): Unit = {
+    if (options.coverage) {
+      writeCoverage(options)
+    }
+    result match {
+      case Result.Ok(code) => System.exit(code)
+      case Result.Err(error) =>
+        println(error.message(formatter))
+        System.exit(1)
+    }
+  }
+
   private def exitOnResult[T](result: Result[T, BootstrapError], options: Options)(implicit formatter: Formatter): Unit = {
     if (options.coverage) {
-      val session = Coverage.getSession
-      CoverageReporter.writeJsonReport(session, options.coverageOutput)
-      CoverageReporter.writeLcovReport(session, options.coverageLcovOutput)
-      println(CoverageReporter.formatSummary(session))
+      writeCoverage(options)
     }
     result match {
       case Result.Ok(_) => System.exit(0)
@@ -1180,6 +1199,14 @@ object Main {
         println(error.message(formatter))
         System.exit(1)
     }
+  }
+
+  /** Writes the coverage reports of this process's session. */
+  private def writeCoverage(options: Options): Unit = {
+    val session = Coverage.getSession
+    CoverageReporter.writeJsonReport(session, options.coverageOutput)
+    CoverageReporter.writeLcovReport(session, options.coverageLcovOutput)
+    println(CoverageReporter.formatSummary(session))
   }
 
   /**

@@ -428,6 +428,67 @@ class TestBootstrap extends AnyFunSuite {
     assert(b.checkIfNeeded(mkDeterministicFlix, reuse = false).unsafeGet, "--clean did not force a check")
   }
 
+  test("run reports the program's own exit code") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out)
+    Files.writeString(p.resolve("src").resolve("Main.flix"),
+      """use Sys.Exit
+        |
+        |def main(): Unit \ { Exit, IO } =
+        |    println("PROGRAM-RAN");
+        |    Exit.exit(3)
+        |""".stripMargin)
+    val b = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
+
+    // The program runs in a JVM of its own now, so what it says on the way out is reportable. In this
+    // process it was not: a `System.exit` would have taken the compiler with it and there would have
+    // been nothing left to report.
+    assert(b.run(mkDeterministicFlix, Array.empty).unsafeGet == 3, "the program's exit code was lost")
+  }
+
+  test("run does not rebuild when the output is current") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out)
+    val b = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
+
+    assert(b.run(mkDeterministicFlix, Array.empty).unsafeGet == 0)
+    val stamps = classStampsOf(p, Build.Development)
+    assert(stamps.nonEmpty, "the first run wrote no class files")
+
+    // The defect this closes: `run` compiled unconditionally, so the most repeated command in a project
+    // paid for a whole-program build every time, even with nothing to build.
+    assert(b.run(mkDeterministicFlix, Array.empty).unsafeGet == 0)
+    assert(classStampsOf(p, Build.Development) == stamps, "a run with nothing to build recompiled")
+  }
+
+  test("run compiles what changed before running it") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out)
+    val b = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
+    assert(b.run(mkDeterministicFlix, Array.empty).unsafeGet == 0)
+
+    // A stale program must never be the one that runs, which is the failure a fast path can introduce.
+    // The new source exits 3, so the exit code is the evidence that it was the one started.
+    Files.writeString(p.resolve("src").resolve("Main.flix"),
+      """use Sys.Exit
+        |
+        |def main(): Unit \ { Exit, IO } =
+        |    println("EDITED");
+        |    Exit.exit(3)
+        |""".stripMargin)
+
+    assert(b.run(mkDeterministicFlix, Array.empty).unsafeGet == 3, "an edited program was not recompiled")
+  }
+
+  test("run of a program that does not compile does not run anything") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out)
+    Files.writeString(p.resolve("src").resolve("Main.flix"), "def main(): Unit = undefinedFunction()\n")
+    val b = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
+
+    assert(b.run(mkDeterministicFlix, Array.empty).isInstanceOf[Result.Err[?, ?]], "a broken program ran")
+  }
+
   test("build-jar") {
     val p = Files.createTempDirectory(ProjectPrefix)
     Bootstrap.init(p)(System.out)

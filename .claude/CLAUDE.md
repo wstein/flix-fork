@@ -162,6 +162,18 @@ goes from 4.4 s to 0.44 s. Four things to know before touching it:
   the sources type check. `Bootstrap.checkIfNeeded` — 3.2 s to 0.44 s. This is why the
   fingerprint now has to cover front-end options as well as back-end ones, and why
   `xnodeprecated` was added to it: it reaches `Weeder2`.
+- **`flix run` forks, and that is what lets it skip.** Running in this process means reflecting
+  over a `CompilationResult`, and only a compile produces one — so `run` compiled every time.
+  `ProgramRunner` builds the command (`java -cp <runtimeClasspath> Main <args>`) for both
+  `flix run` and `buildTarget/run`; the CLI inherits the terminal's stdio and reports the
+  program's own exit code, the server pipes output into log messages. 5.4 s to 0.53 s.
+  Do *not* "optimise" this into an in-process class loader over the class directory:
+  `flix.jar` carries a mock `dev.flix.runtime.Global` whose `setArgs` throws, so the loader
+  would have to be child-first and exactly right, and the failure when it is not is a program
+  that dies before `main`.
+- **`--coverage` keeps the in-process path**, because the report is written from
+  `Coverage.getSession` in the *compiler's* process; a forked program's hits would be recorded
+  in a JVM nobody reads and the report would come out empty.
 - **A caller that needs the `CompilationResult` must not ask for the skip** — `build`, `run`
   and `test` on the command line, and `Bootstrap.testWith`, all still compile. `CompileOutcome`
   carries `hasMain` for exactly this reason: a skipped build has no typed AST, and BSP's `run`

@@ -216,6 +216,10 @@ Exception in thread "main" java.lang.RuntimeException: Global.setArgs should not
 called on the mock class
 ```
 
+The command itself — which `java`, which classpath, which class — is `ProgramRunner`, shared
+with `flix run`, which forks for the same reason: a program has to be startable from what a
+build left behind, or the command can never skip a compile.
+
 `buildTarget/jvmRunEnvironment` reports that classpath so a client can fork the program
 itself — its own console, its own environment, its own debugger. It is the escape hatch
 that makes the limits above acceptable. `jvmOptions` is empty because the compiler's own
