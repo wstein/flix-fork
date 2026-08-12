@@ -254,6 +254,35 @@ object Main {
           println(s"Wrote ${facades.length} stub(s) to $destination")
           System.exit(0)
 
+        case Command.Check if cmdOpts.sarifPath.isDefined =>
+          // The SARIF is written beside the ordinary output rather than instead of it: the file is
+          // for the pull request, and whoever ran the command still wants to read the errors.
+          val flix =
+            if (cmdOpts.files.isEmpty) {
+              Bootstrap.bootstrap(cwd, options.githubToken)(formatter, System.out) match {
+                case Result.Ok(bootstrap) =>
+                  val f = new Flix().setFormatter(formatter)
+                  f.setOptions(options)
+                  bootstrap.check(f)
+                  f
+                case Result.Err(e) =>
+                  println(e.message(formatter))
+                  System.exit(1)
+                  return
+              }
+            } else mkFlixWithFiles(cmdOpts.files, options)
+          val (optRoot, errors) = flix.check()
+          // A project that does not compile still has smells worth reporting, and a project that
+          // does has diagnostics worth none.
+          val smells = optRoot
+            .map(r => Metrics.violations(Metrics.compute(r, Some(cwd)), Metrics.SmellThresholds))
+            .getOrElse(Nil)
+          // Resolved against the working directory, so that a bare file name has a parent to
+          // create and lands where it was asked for rather than wherever the process started.
+          FileOps.writeString(cwd.resolve(cmdOpts.sarifPath.get),
+            DiagnosticSarif.format(errors, smells, Some(cwd)))
+          if (errors.isEmpty) System.exit(0) else exitWithErrors(flix, errors, optRoot)
+
         case Command.Check =>
           if (cmdOpts.jsonDiagnostics) {
             if (cmdOpts.files.nonEmpty) {
@@ -646,6 +675,7 @@ object Main {
     canonical: Boolean = false,
     docFormat: DocFormat = Options.Default.docFormat,
     metricFormat: String = "text",
+    sarifPath: Option[String] = None,
     metricMaxLines: Option[Int] = None,
     metricMaxParams: Option[Int] = None,
     metricMaxNesting: Option[Int] = None,
@@ -792,6 +822,8 @@ object Main {
       )
 
       cmd("check").action((_, c) => c.copy(command = Command.Check)).text("  checks the current project for errors.").children(
+        opt[String]("sarif").valueName("<file>").action((arg, c) => c.copy(sarifPath = Some(arg)))
+          .text("also writes the diagnostics, and what 'metric' would report, to <file> as SARIF 2.1.0."),
         opt[String]("lib").unbounded().action((arg, c) => c.copy(libs = c.libs :+ arg)).
           text("adds a jar to the classpath. Repeatable."),
         opt[Unit]("diagnostics-json").action((_, c) => c.copy(jsonDiagnostics = true)).

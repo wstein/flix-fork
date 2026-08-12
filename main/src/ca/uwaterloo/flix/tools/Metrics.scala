@@ -722,7 +722,7 @@ object Metrics {
     if (r >= 100.0) -1.0 else r
   }
 
-  private def overBy(v: Violation): Double = v.category match {
+  def overBy(v: Violation): Double = v.category match {
     case "docCoverage" => if (v.actual == 0) Double.MaxValue else v.limit / v.actual
     case "orphan" => 1.0
     case _ => if (v.limit == 0) Double.MaxValue else v.actual / v.limit
@@ -731,7 +731,7 @@ object Metrics {
   /**
     * Returns what to do about a category, in one line.
     */
-  private def action(category: String): String = category match {
+  def action(category: String): String = category match {
     case "nesting" => "match on a tuple or enum, or extract the inner branch"
     case "complexity" => "name the predicate; a repeated guard is a missing case"
     case "parameters" => "group the accumulators into a record and thread one value"
@@ -809,50 +809,8 @@ object Metrics {
     * region's `startLine` is one-based, so a smell with no line -- one about a whole public API --
     * carries no location at all rather than a location at line zero.
     */
-  private def sarif(smells: List[Violation]): String = {
-    val categories = smells.map(_.category).distinct.sorted
-
-    val rules: JValue = categories.map { c =>
-      ("id" -> c) ~
-        ("name" -> c) ~
-        ("shortDescription" -> ("text" -> ruleDescription(c))) ~
-        ("fullDescription" -> ("text" -> s"${ruleDescription(c)} ${action(c)}.")) ~
-        ("help" -> ("text" -> s"${action(c)}. See docs/METRIC-SMELLS.md.")) ~
-        ("defaultConfiguration" -> ("level" -> defaultLevel(c))) ~
-        ("properties" -> ("tags" -> tagsFor(c)) ~ ("precision" -> "very-high"))
-    }
-
-    val results: JValue = smells.map { v =>
-      val message = s"${v.subject}: ${v.measure} ${v.actualText}, over ${v.limitText}. ${action(v.category)}."
-      val base =
-        ("ruleId" -> v.category) ~
-          // The index into `rules` as well as the id: some consumers resolve one, some the other.
-          ("ruleIndex" -> categories.indexOf(v.category)) ~
-          ("level" -> level(v)) ~
-          ("message" -> ("text" -> message))
-      // A result may have no location. One is better than a location that is not real.
-      if (v.file.isEmpty) base
-      else base ~ ("locations" -> List[JValue](
-        ("physicalLocation" ->
-          ("artifactLocation" -> ("uri" -> v.file) ~ ("uriBaseId" -> "%SRCROOT%")) ~
-            ("region" -> ("startLine" -> v.line.max(1))))
-      ))
-    }
-
-    val sarif: JValue =
-      ("$schema" -> "https://json.schemastore.org/sarif-2.1.0.json") ~
-        ("version" -> "2.1.0") ~
-        ("runs" -> List[JValue](
-          ("tool" -> ("driver" ->
-            ("name" -> "flix metric") ~
-              ("semanticVersion" -> ca.uwaterloo.flix.api.Version.CurrentVersion.toString) ~
-              ("informationUri" -> "https://flix.dev") ~
-              ("rules" -> rules))) ~
-            ("results" -> results)
-        ))
-
-    pretty(JsonMethods.render(sarif))
-  }
+  private def sarif(smells: List[Violation]): String =
+    DiagnosticSarif.format(Nil, smells, None)
 
   /**
     * Returns how serious a violation is, in the words SARIF uses.
@@ -860,7 +818,7 @@ object Metrics {
     * Twice the limit is where something stops being a matter of taste. Unbounded -- no
     * documentation at all -- is not an error about a line, so it stays a warning.
     */
-  private def level(v: Violation): String = {
+  def level(v: Violation): String = {
     val ratio = overBy(v)
     if (defaultLevel(v.category) == "note") "note"
     else if (ratio >= 2.0 && ratio < 100.0) "error"
@@ -874,7 +832,7 @@ object Metrics {
     * consumer that paints them the same colour as a function nobody can read has made both
     * meaningless. They are notes however far past the limit they are.
     */
-  private def defaultLevel(category: String): String = category match {
+  def defaultLevel(category: String): String = category match {
     case "docCoverage" | "orphan" => "note"
     case _ => "warning"
   }
@@ -882,7 +840,7 @@ object Metrics {
   /**
     * Returns the tags a category carries, which is how a dashboard groups it.
     */
-  private def tagsFor(category: String): List[String] = category match {
+  def tagsFor(category: String): List[String] = category match {
     case "docCoverage" => List("documentation", "maintainability")
     case "orphan" => List("dead-code", "maintainability")
     case _ => List("maintainability", "metrics")
@@ -891,7 +849,7 @@ object Metrics {
   /**
     * Returns what a rule is about, in one line.
     */
-  private def ruleDescription(category: String): String = category match {
+  def ruleDescription(category: String): String = category match {
     case "nesting" => "Branches nested more deeply than the limit."
     case "complexity" => "More decisions to hold in mind at once than the limit."
     case "parameters" => "A parameter list wider than the limit, counting local definitions."
