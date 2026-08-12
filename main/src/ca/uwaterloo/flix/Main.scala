@@ -22,7 +22,7 @@ import ca.uwaterloo.flix.api.{Bootstrap, BootstrapError, CliContract, Flix, Vers
 import org.json4s.native.JsonMethods
 import ca.uwaterloo.flix.language.CompilationMessage
 import ca.uwaterloo.flix.language.ast.shared.{Input, SecurityContext}
-import ca.uwaterloo.flix.language.ast.{Symbol, TypedAst}
+import ca.uwaterloo.flix.language.ast.{SourceLocation, Symbol, TypedAst}
 import ca.uwaterloo.flix.language.phase.Documentor
 import ca.uwaterloo.flix.language.phase.unification.zhegalkin.ZhegalkinPerf
 import ca.uwaterloo.flix.runtime.Coverage
@@ -31,9 +31,13 @@ import ca.uwaterloo.flix.tools.*
 import ca.uwaterloo.flix.tools.pkg.PackageModules
 import ca.uwaterloo.flix.util.*
 
+import picocli.CommandLine
+import picocli.CommandLine.Model.{CommandSpec, OptionSpec, PositionalParamSpec}
+
 import java.io.{File, IOException, PrintStream}
 import java.net.BindException
 import java.nio.file.{Files, Paths}
+import scala.jdk.CollectionConverters.*
 
 object Main {
 
@@ -394,10 +398,13 @@ object Main {
           }
 
         case Command.Metric =>
-          val format = Metrics.Format.ofString(cmdOpts.metricFormat) match {
+          // `--format` when it was given, `--json` when it was not, and text otherwise. The global
+          // `--json` means "emit what a program reads", and for this command that is the report.
+          val requested = cmdOpts.metricFormat.getOrElse(if (cmdOpts.json) "json" else "text")
+          val format = Metrics.Format.ofString(requested) match {
             case Some(fmt) => fmt
             case None =>
-              println(s"Unknown metric format '${cmdOpts.metricFormat}'. Expected one of: ${Metrics.Format.names}.")
+              println(s"Unknown metric format '$requested'. Expected one of: ${Metrics.Format.names}.")
               System.exit(1)
               return
           }
@@ -677,7 +684,9 @@ object Main {
     coverageLcovOutput: Option[String] = None,
     canonical: Boolean = false,
     docFormat: DocFormat = Options.Default.docFormat,
-    metricFormat: String = "text",
+    // Absent rather than "text", so that `--json` can mean the report too without a second option
+    // of the same name deciding it by position.
+    metricFormat: Option[String] = None,
     sarifPath: Option[String] = None,
     metricMaxLines: Option[Int] = None,
     metricMaxParams: Option[Int] = None,
@@ -774,12 +783,15 @@ object Main {
   }
 
   /**
-    * Parse command line options.
+    * Reads `args` as a command line, or reports why it is not one.
     *
-    * @param args the arguments array.
+    * Returns `None` when a word cannot be read, having said which and why; the caller decides that
+    * this is fatal. `--help` and `--version` answer the line rather than describing it, so they
+    * print and leave rather than returning options nobody asked for.
     */
   def parseCmdOpts(args: Array[String]): Option[CmdOpts] = {
-    // Split at "--" separator: arguments before are for flix, arguments after are for the program
+    // Everything after "--" belongs to the program being run, not to the compiler, so it is taken
+    // out before the parser sees it. Only `run` reads it back -- it is what reaches `main`.
     val separatorIndex = args.indexOf("--")
     val (flixArgs, progArgs) = if (separatorIndex >= 0) {
       (args.take(separatorIndex), args.drop(separatorIndex + 1))
@@ -787,273 +799,374 @@ object Main {
       (args, Array.empty[String])
     }
 
-    implicit val readLibLevel: scopt.Read[LibLevel] = scopt.Read.reads {
-      case "nix" => LibLevel.Nix
-      case "min" => LibLevel.Min
-      case "all" => LibLevel.All
-      case arg => throw new IllegalArgumentException(s"'$arg' is not a valid library level. Valid options are 'all', 'min', and 'nix'.")
+    val cell = new OptsCell
+    val commandLine = new CommandLine(rootSpec(cell))
+    commandLine.registerConverter(classOf[LibLevel], converter(readLibLevel))
+    commandLine.registerConverter(classOf[DocFormat], converter(readDocFormat))
+    commandLine.registerConverter(classOf[DatalogDebug], converter(readDatalogDebug))
+    commandLine.registerConverter(classOf[Subeffecting], converter(readSubeffecting))
+    // `--format json --json` is a caller saying the same thing twice, not a mistake to report.
+    commandLine.setOverwrittenOptionsAllowed(true)
+
+    val parsed =
+      try commandLine.parseArgs(flixArgs *)
+      catch {
+        case e: CommandLine.ParameterException =>
+          Console.err.println(e.getMessage)
+          Console.err.println("Try --help for more information.")
+          return None
+      }
+
+    // Help and version answer the command line rather than running it, and say so by leaving.
+    // scopt did this from inside the parser; doing it here keeps the exit in one place.
+    if (CommandLine.printHelpIfRequested(parsed)) {
+      System.exit(0)
     }
 
-    implicit val readDatalogDebug: scopt.Read[DatalogDebug] = scopt.Read.reads {
-      case "rules" => DatalogDebug.Rules
-      case "facts" => DatalogDebug.Facts
-      case "ram" => DatalogDebug.Ram
-      case arg => throw new IllegalArgumentException(s"'$arg' is not a valid Datalog debug option. Valid options are comma-separated combinations of 'rules', 'facts', and 'ram'.")
+    Some(cell.value.copy(command = commandOf(parsed), args = progArgs.toList))
+  }
+
+  /**
+    * Returns the command the parsed line names, or `Command.None`.
+    *
+    * A command is read from the parse tree rather than set by an action, because it is the one
+    * thing about a line that is not a field somebody assigned: it is which branch of the parser was
+    * taken.
+    */
+  private def commandOf(parsed: CommandLine.ParseResult): Command = {
+    if (!parsed.hasSubcommand) return Command.None
+    val sub = parsed.subcommand()
+    sub.commandSpec().name() match {
+      case "init" => Command.Init
+      case "check" => Command.Check
+      case "capabilities" => Command.Capabilities
+      case "stubs" => Command.Stubs
+      case "build" => Command.Build
+      case "build-jar" => Command.BuildJar
+      case "build-fatjar" => Command.BuildFatJar
+      case "build-pkg" => Command.BuildPkg
+      case "clean" => Command.Clean
+      case "metric" => Command.Metric
+      case "doc" => Command.Doc
+      case "format" => Command.Format
+      case "run" => Command.Run
+      case "test" => Command.Test
+      case "repl" => Command.Repl
+      case "lsp" => Command.PlainLsp
+      // The only command carrying a value in its identity: there is no VSCode server without a port
+      // to serve it on, so the port is an argument of the command and not a field beside it.
+      case "lsp-vscode" => Command.VSCodeLsp(sub.matchedPositionalValue[Integer](0, Integer.valueOf(0)).intValue())
+      case "release" => Command.Release
+      case "outdated" => Command.Outdated
+      case "eff-check" => Command.EffCheck
+      case "eff-lock" => Command.EffLock
+      case "Xperf" => Command.CompilerPerf
+      case "Xmemory" => Command.CompilerMemory
+      case "Xzhegalkin" => Command.Zhegalkin
+      case other => throw new InternalCompilerException(s"Unknown command '$other'.", SourceLocation.Unknown)
+    }
+  }
+
+  /**
+    * The options accumulated so far, written by the setter of each option as it is matched.
+    *
+    * The order matters and is the reason this is a cell rather than a fold: `--format csv --json`
+    * and `--json --format csv` are different lines, and the difference is only expressible if each
+    * word is applied where it appears. picocli calls a setter once per occurrence, in that order.
+    */
+  private[flix] final class OptsCell {
+    var value: CmdOpts = CmdOpts()
+  }
+
+  /** Builds the setter that applies one matched option to the options so far. */
+  private def assign[A](cell: OptsCell)(f: (CmdOpts, A) => CmdOpts): CommandLine.Model.ISetter =
+    new CommandLine.Model.ISetter {
+      override def set[T](value: T): T = {
+        cell.value = f(cell.value, value.asInstanceOf[A])
+        null.asInstanceOf[T]
+      }
     }
 
-    implicit val readDocFormat: scopt.Read[DocFormat] = scopt.Read.reads {
-      case "html" => DocFormat.Html
-      case "md" => DocFormat.Markdown
-      case "all" => DocFormat.All
-      case arg => throw new IllegalArgumentException(s"'$arg' is not a valid documentation format. Valid options are 'html', 'md', and 'all'.")
-    }
+  /** Builds a converter from a partial reading of a word, which reports the words it does accept. */
+  private def converter[A](read: String => A): CommandLine.ITypeConverter[A] =
+    (value: String) => read(value)
 
-    implicit val readSubEffectLevel: scopt.Read[Subeffecting] = scopt.Read.reads {
-      case "mod-defs" => Subeffecting.ModDefs
-      case "ins-defs" => Subeffecting.InsDefs
-      case "lambdas" => Subeffecting.Lambdas
-      case arg => throw new IllegalArgumentException(s"'$arg' is not a valid subeffecting option. Valid options are comma-separated combinations of 'mod-defs', 'ins-defs', and 'lambdas'.")
-    }
+  private def readLibLevel(arg: String): LibLevel = arg match {
+    case "nix" => LibLevel.Nix
+    case "min" => LibLevel.Min
+    case "all" => LibLevel.All
+    case _ => throw new CommandLine.TypeConversionException(s"'$arg' is not a valid library level. Valid options are 'all', 'min', and 'nix'.")
+  }
 
-    val parser = new scopt.OptionParser[CmdOpts]("flix") {
+  private def readDocFormat(arg: String): DocFormat = arg match {
+    case "html" => DocFormat.Html
+    case "md" => DocFormat.Markdown
+    case "all" => DocFormat.All
+    case _ => throw new CommandLine.TypeConversionException(s"'$arg' is not a valid documentation format. Valid options are 'html', 'md', and 'all'.")
+  }
 
-      // Head
-      head("The Flix Programming Language", Version.CurrentVersion.toString)
+  private def readDatalogDebug(arg: String): DatalogDebug = arg match {
+    case "rules" => DatalogDebug.Rules
+    case "facts" => DatalogDebug.Facts
+    case "ram" => DatalogDebug.Ram
+    case _ => throw new CommandLine.TypeConversionException(s"'$arg' is not a valid Datalog debug option. Valid options are comma-separated combinations of 'rules', 'facts', and 'ram'.")
+  }
 
-      // Command
-      cmd("init").action((_, c) => c.copy(command = Command.Init)).text("  interactively creates a new project in an optional directory.").children(
-        opt[Unit]("refresh").action((_, c) => c.copy(refresh = true)).
-          text("rewrites the generated agent guide for this version of Flix. An edited guide is left alone."),
-      )
+  private def readSubeffecting(arg: String): Subeffecting = arg match {
+    case "mod-defs" => Subeffecting.ModDefs
+    case "ins-defs" => Subeffecting.InsDefs
+    case "lambdas" => Subeffecting.Lambdas
+    case _ => throw new CommandLine.TypeConversionException(s"'$arg' is not a valid subeffecting option. Valid options are comma-separated combinations of 'mod-defs', 'ins-defs', and 'lambdas'.")
+  }
 
-      cmd("check").action((_, c) => c.copy(command = Command.Check)).text("  checks the current project for errors.").children(
-        opt[String]("sarif").valueName("<file>").action((arg, c) => c.copy(sarifPath = Some(arg)))
-          .text("also writes the diagnostics, and what 'metric' would report, to <file> as SARIF 2.1.0."),
-        opt[String]("lib").unbounded().action((arg, c) => c.copy(libs = c.libs :+ arg)).
-          text("adds a jar to the classpath. Repeatable."),
-        opt[Unit]("diagnostics-json").action((_, c) => c.copy(jsonDiagnostics = true)).
-          text("writes diagnostics to stdout as JSON, for a build tool to read."),
-      )
+  /** A flag: present or absent, and worth nothing when absent. */
+  private def flag(cell: OptsCell, name: String, description: String)(f: CmdOpts => CmdOpts): OptionSpec =
+    OptionSpec.builder(name)
+      .description(description)
+      .`type`(classOf[Boolean])
+      .hasInitialValue(false)
+      .setter(assign[java.lang.Boolean](cell)((c, on) => if (on) f(c) else c))
+      .build()
 
-      cmd("capabilities").action((_, c) => c.copy(command = Command.Capabilities)).text("  reports the tooling contract this compiler speaks.").children(
-        opt[Int]("contract-version").action((arg, c) => c.copy(clientContractVersion = Some(arg))).
-          text("the contract version the caller speaks. Exits non-zero if it cannot be served."),
-      )
+  /** An option taking one value of type `A`. */
+  private def value[A](cell: OptsCell, name: String, label: String, cls: Class[?], description: String)(f: (CmdOpts, A) => CmdOpts): OptionSpec =
+    OptionSpec.builder(name)
+      .paramLabel(label)
+      .description(description)
+      .`type`(cls)
+      .hasInitialValue(false)
+      .setter(assign[A](cell)(f))
+      .build()
 
-      cmd("stubs").action((_, c) => c.copy(command = Command.Stubs)).text("  writes compile-only Java stubs for the @Export-ed defs.").children(
-        opt[String]("out").action((arg, c) => c.copy(stubsOut = Some(arg))).
-          text("where to write the stubs. Defaults to 'build/stubs'."),
-      )
+  /**
+    * An option taking several values, either by repetition or by commas.
+    *
+    * The setter is called once per value, in the order the values appear, and is handed only that
+    * value -- not the collection so far. So `f` is given what arrived and appends it: a `f` that
+    * assigns instead keeps the last jar of a classpath and drops the rest, which is a program that
+    * fails to find a class rather than a command line that reports an error.
+    */
+  private def values[A](cell: OptsCell, name: String, label: String, element: Class[?], split: Option[String], description: String)(f: (CmdOpts, Seq[A]) => CmdOpts): OptionSpec = {
+    val builder = OptionSpec.builder(name)
+      .paramLabel(label)
+      .description(description)
+      .`type`(classOf[java.util.List[?]])
+      .auxiliaryTypes(element)
+      .hasInitialValue(false)
+      .setter(assign[java.util.List[A]](cell)((c, xs) => f(c, xs.asScala.toSeq)))
+    split.foreach(builder.splitRegex)
+    builder.build()
+  }
 
-      cmd("build").action((_, c) => c.copy(command = Command.Build)).text("  builds (i.e. compiles) the current project.").children(
-        opt[String]("lib").unbounded().action((arg, c) => c.copy(libs = c.libs :+ arg)).
-          text("adds a jar to the classpath. Repeatable."),
-        opt[Unit]("diagnostics-json").action((_, c) => c.copy(jsonDiagnostics = true)).
-          text("writes diagnostics to stdout as JSON, for a build tool to read."),
-      )
+  /**
+    * The files named on the line, which every command that reads source accepts.
+    *
+    * A spec belongs to one command, so each command that takes files needs its own; they all write
+    * the same field.
+    */
+  private def files(cell: OptsCell): PositionalParamSpec =
+    PositionalParamSpec.builder()
+      .index("0..*")
+      .paramLabel("<file>")
+      .description("input Flix source code files, Flix packages, and Java archives.")
+      .`type`(classOf[java.util.List[?]])
+      .auxiliaryTypes(classOf[File])
+      .hasInitialValue(false)
+      .setter(assign[java.util.List[File]](cell)((c, fs) => c.copy(files = c.files ++ fs.asScala)))
+      .build()
 
-      cmd("build-jar").action((_, c) => c.copy(command = Command.BuildJar)).text("  builds a jar-file from the current project (full, clean build).")
+  /** Builds a command that takes files and nothing else. */
+  private def command(cell: OptsCell, name: String, description: String, takesFiles: Boolean = true): CommandSpec = {
+    val spec = CommandSpec.create().name(name)
+    // The globals are inherited by every command, so spelling them all into the synopsis buries the
+    // one line a reader came for -- what this command takes.
+    spec.usageMessage().description(description).abbreviateSynopsis(true)
+    if (takesFiles) spec.addPositional(files(cell))
+    spec
+  }
 
-      cmd("build-fatjar").action((_, c) => c.copy(command = Command.BuildFatJar)).text("  builds a fatjar-file from the current project (full, clean build).")
+  /**
+    * The whole command line, as a tree of commands.
+    *
+    * Global options are declared once and inherited, so `flix build --threads 4` and `flix
+    * --threads 4 build` are the same line -- and so that `flix build --help` lists them, which is
+    * the thing a single flat parser cannot do.
+    */
+  private[flix] def rootSpec(cell: OptsCell): CommandSpec = {
+    val root = CommandSpec.create().name("flix")
+    root.usageMessage()
+      .header("The Flix Programming Language", Version.CurrentVersion.toString)
+      .abbreviateSynopsis(true)
+      .synopsisSubcommandLabel("[COMMAND]")
+    // What `--version` prints. The release workflow runs the built jar and refuses to publish it
+    // unless this contains the tag being released, so a version option that prints nothing does not
+    // fail here -- it fails in CI, on the one run that matters.
+    root.version(s"The Flix Programming Language ${Version.CurrentVersion.toString}")
+    root.addPositional(files(cell))
 
-      cmd("build-pkg").action((_, c) => c.copy(command = Command.BuildPkg)).text("  builds a fpkg-file from the current project.")
+    val init = command(cell, "init", "interactively creates a new project in an optional directory.")
+    init.addOption(flag(cell, "--refresh",
+      "rewrites the generated agent guide for this version of Flix. An edited guide is left alone.")(_.copy(refresh = true)))
 
-      cmd("clean").action((_, c) => c.copy(command = Command.Clean)).text("  recursively removes class files from the build directory.")
+    val check = command(cell, "check", "checks the current project for errors.")
+    check.addOption(value[String](cell, "--sarif", "<file>", classOf[String],
+      "also writes the diagnostics, and what 'metric' would report, to <file> as SARIF 2.1.0.")((c, p) => c.copy(sarifPath = Some(p))))
+    check.addOption(libOption(cell))
+    check.addOption(diagnosticsJson(cell))
 
-      cmd("metric")
-        .action((_, c) => c.copy(command = Command.Metric))
-        .text("  displays code or compiler metrics for the project.")
-        .children(
-          opt[String]("format").action((arg, c) => c.copy(metricFormat = arg))
-            .text("selects the format that 'metric' emits (text, json, csv, md). Defaults to text."),
-          // A shorthand for the format a script asks for most often. Applied in the order given,
-          // so a later --format wins and vice versa.
-          opt[Unit]("json").action((_, c) => c.copy(metricFormat = "json"))
-            .text("shorthand for --format json."),
-          opt[Int]("max-lines").action((arg, c) => c.copy(metricMaxLines = Some(arg)))
-            .text("fails if any function is longer than this many lines."),
-          opt[Int]("max-params").action((arg, c) => c.copy(metricMaxParams = Some(arg)))
-            .text("fails if any parameter list, including a local definition's, is wider than this."),
-          opt[Int]("max-nesting").action((arg, c) => c.copy(metricMaxNesting = Some(arg)))
-            .text("fails if any function nests branches deeper than this."),
-          opt[Int]("max-complexity").action((arg, c) => c.copy(metricMaxComplexity = Some(arg)))
-            .text("fails if any function has a cognitive complexity above this."),
-          opt[Int]("max-line-tokens").action((arg, c) => c.copy(metricMaxLineTokens = Some(arg)))
-            .text("fails if any line holds more tokens than this."),
-          opt[Int]("max-line-length").action((arg, c) => c.copy(metricMaxLineLength = Some(arg)))
-            .text("fails if any line is longer than this many characters."),
-          opt[Double]("min-doc-coverage").action((arg, c) => c.copy(metricMinDocCoverage = Some(arg)))
-            .text("fails if less than this fraction of the public API is documented, e.g. 0.8."),
-        )
+    val capabilities = command(cell, "capabilities", "reports the tooling contract this compiler speaks.", takesFiles = false)
+    capabilities.addOption(value[Integer](cell, "--contract-version", "<n>", classOf[Integer],
+      "the contract version the caller speaks. Exits non-zero if it cannot be served.")((c, v) => c.copy(clientContractVersion = Some(v.intValue()))))
 
-      cmd("doc").action((_, c) => c.copy(command = Command.Doc)).text("  generates API documentation.").children(
-        opt[DocFormat]("doc-format").action((arg, c) => c.copy(docFormat = arg)).
-          text("selects the format that 'doc' emits (html, md, all). Defaults to html."),
-      )
+    val stubs = command(cell, "stubs", "writes compile-only Java stubs for the @Export-ed defs.")
+    stubs.addOption(value[String](cell, "--out", "<dir>", classOf[String],
+      "where to write the stubs. Defaults to 'build/stubs'.")((c, p) => c.copy(stubsOut = Some(p))))
 
-      cmd("format").action((_, c) => c.copy(command = Command.Format)).text("  formats Flix source code files.")
-        .children(
-          opt[Unit]("canonical").action((_, c) => c.copy(canonical = true)).
-            text("  imposes one spacing per syntax tree, instead of preserving the source's own.")
-        )
+    val build = command(cell, "build", "builds (i.e. compiles) the current project.")
+    build.addOption(libOption(cell))
+    build.addOption(diagnosticsJson(cell))
 
-      cmd("run").action((_, c) => c.copy(command = Command.Run)).text("  runs main for the current project.")
+    val metric = command(cell, "metric", "displays code or compiler metrics for the project.")
+    metric.addOption(value[String](cell, "--format", "<format>", classOf[String],
+      "selects the format that 'metric' emits (text, json, csv, md, sarif). Defaults to text.")((c, f) => c.copy(metricFormat = Some(f))))
+    metric.addOption(value[Integer](cell, "--max-lines", "<n>", classOf[Integer],
+      "fails if any function is longer than this many lines.")((c, n) => c.copy(metricMaxLines = Some(n.intValue()))))
+    metric.addOption(value[Integer](cell, "--max-params", "<n>", classOf[Integer],
+      "fails if any parameter list, including a local definition's, is wider than this.")((c, n) => c.copy(metricMaxParams = Some(n.intValue()))))
+    metric.addOption(value[Integer](cell, "--max-nesting", "<n>", classOf[Integer],
+      "fails if any function nests branches deeper than this.")((c, n) => c.copy(metricMaxNesting = Some(n.intValue()))))
+    metric.addOption(value[Integer](cell, "--max-complexity", "<n>", classOf[Integer],
+      "fails if any function has a cognitive complexity above this.")((c, n) => c.copy(metricMaxComplexity = Some(n.intValue()))))
+    metric.addOption(value[Integer](cell, "--max-line-tokens", "<n>", classOf[Integer],
+      "fails if any line holds more tokens than this.")((c, n) => c.copy(metricMaxLineTokens = Some(n.intValue()))))
+    metric.addOption(value[Integer](cell, "--max-line-length", "<n>", classOf[Integer],
+      "fails if any line is longer than this many characters.")((c, n) => c.copy(metricMaxLineLength = Some(n.intValue()))))
+    metric.addOption(value[java.lang.Double](cell, "--min-doc-coverage", "<fraction>", classOf[java.lang.Double],
+      "fails if less than this fraction of the public API is documented, e.g. 0.8.")((c, d) => c.copy(metricMinDocCoverage = Some(d.doubleValue()))))
 
-      cmd("test").action((_, c) => c.copy(command = Command.Test)).text("  runs the tests for the current project.")
+    val doc = command(cell, "doc", "generates API documentation.")
+    doc.addOption(value[DocFormat](cell, "--doc-format", "<format>", classOf[DocFormat],
+      "selects the format that 'doc' emits (html, md, all). Defaults to html.")((c, f) => c.copy(docFormat = f)))
 
-      cmd("repl").action((_, c) => c.copy(command = Command.Repl)).text("  starts a repl for the current project, or provided Flix source files.")
+    val format = command(cell, "format", "formats Flix source code files.")
+    format.addOption(flag(cell, "--canonical",
+      "imposes one spacing per syntax tree, instead of preserving the source's own.")(_.copy(canonical = true)))
 
-      cmd("lsp").text("  starts the Plain-LSP server.")
-        .action((_, c) => c.copy(command = Command.PlainLsp))
+    val lspVscode = command(cell, "lsp-vscode", "starts the VSCode-LSP server and listens on the given port.", takesFiles = false)
+    lspVscode.addPositional(PositionalParamSpec.builder()
+      .index("0")
+      .paramLabel("<port>")
+      .description("the port number to listen on.")
+      .`type`(classOf[Integer])
+      .required(true)
+      .build())
 
-      cmd("lsp-vscode").text("  starts the VSCode-LSP server and listens on the given port.")
-        .children(
-          arg[Int]("port").action((port, c) => c.copy(command = Command.VSCodeLsp(port)))
-            .required()
-            .text("the port number to listen on.")
-        )
+    val xperf = command(cell, "Xperf", "benchmarks the compiler.", takesFiles = false)
+    xperf.usageMessage().hidden(true)
+    xperf.addOption(flag(cell, "--frontend", "benchmark only frontend")(_.copy(XPerfFrontend = true)))
+    xperf.addOption(flag(cell, "--par", "benchmark only parallel evaluation")(_.copy(XPerfPar = true)))
+    xperf.addOption(perfN(cell))
 
-      cmd("release").text("  releases a new version to GitHub.")
-        .action((_, c) => c.copy(command = Command.Release))
+    val xmemory = command(cell, "Xmemory", "benchmarks compiler memory use.", takesFiles = false)
+    xmemory.usageMessage().hidden(true)
 
-      cmd("outdated").text("  shows dependencies which have newer versions available.")
-        .action((_, c) => c.copy(command = Command.Outdated))
+    val xzhegalkin = command(cell, "Xzhegalkin", "benchmarks Zhegalkin normal forms.", takesFiles = false)
+    xzhegalkin.usageMessage().hidden(true)
+    xzhegalkin.addOption(perfN(cell))
 
-      cmd("eff-check").text("  checks that dependencies respect the 'effects.lock' file.")
-        .action((_, c) => c.copy(command = Command.EffCheck))
+    root.addSubcommand("init", init)
+    root.addSubcommand("check", check)
+    root.addSubcommand("capabilities", capabilities)
+    root.addSubcommand("stubs", stubs)
+    root.addSubcommand("build", build)
+    root.addSubcommand("build-jar", command(cell, "build-jar", "builds a jar-file from the current project (full, clean build)."))
+    root.addSubcommand("build-fatjar", command(cell, "build-fatjar", "builds a fatjar-file from the current project (full, clean build)."))
+    root.addSubcommand("build-pkg", command(cell, "build-pkg", "builds a fpkg-file from the current project."))
+    root.addSubcommand("clean", command(cell, "clean", "recursively removes class files from the build directory."))
+    root.addSubcommand("metric", metric)
+    root.addSubcommand("doc", doc)
+    root.addSubcommand("format", format)
+    root.addSubcommand("run", command(cell, "run", "runs main for the current project."))
+    root.addSubcommand("test", command(cell, "test", "runs the tests for the current project."))
+    root.addSubcommand("repl", command(cell, "repl", "starts a repl for the current project, or provided Flix source files."))
+    root.addSubcommand("lsp", command(cell, "lsp", "starts the Plain-LSP server.", takesFiles = false))
+    root.addSubcommand("lsp-vscode", lspVscode)
+    root.addSubcommand("release", command(cell, "release", "releases a new version to GitHub.", takesFiles = false))
+    root.addSubcommand("outdated", command(cell, "outdated", "shows dependencies which have newer versions available.", takesFiles = false))
+    root.addSubcommand("eff-check", command(cell, "eff-check", "checks that dependencies respect the 'effects.lock' file.", takesFiles = false))
+    root.addSubcommand("eff-lock", command(cell, "eff-lock", "locks the current effect signatures.", takesFiles = false))
+    root.addSubcommand("Xperf", xperf)
+    root.addSubcommand("Xmemory", xmemory)
+    root.addSubcommand("Xzhegalkin", xzhegalkin)
 
-      cmd("eff-lock").text("  locks the current effect signatures.")
-        .action((_, c) => c.copy(command = Command.EffLock))
+    globalOptions(cell).foreach(root.addOption)
+    root
+  }
 
-      cmd("Xperf").action((_, c) => c.copy(command = Command.CompilerPerf)).children(
-        opt[Unit]("frontend")
-          .action((_, c) => c.copy(XPerfFrontend = true))
-          .text("benchmark only frontend"),
-        opt[Unit]("par")
-          .action((_, c) => c.copy(XPerfPar = true))
-          .text("benchmark only parallel evaluation"),
-        opt[Int]("n")
-          .action((v, c) => c.copy(XPerfN = Some(v)))
-          .text("number of compilations")
-      ).hidden()
+  /** Repeated on `build` and `check`, where a classpath is assembled. */
+  private def libOption(cell: OptsCell): OptionSpec =
+    values[String](cell, "--lib", "<jar>", classOf[String], None,
+      "adds a jar to the classpath. Repeatable.")((c, xs) => c.copy(libs = c.libs ++ xs))
 
-      cmd("Xmemory").action((_, c) => c.copy(command = Command.CompilerMemory)).hidden()
+  private def diagnosticsJson(cell: OptsCell): OptionSpec =
+    flag(cell, "--diagnostics-json",
+      "writes diagnostics to stdout as JSON, for a build tool to read.")(_.copy(jsonDiagnostics = true))
 
-      cmd("Xzhegalkin").action((_, c) => c.copy(command = Command.Zhegalkin)).children(
-        opt[Int]("n")
-          .action((v, c) => c.copy(XPerfN = Some(v)))
-          .text("number of compilations")
-      ).hidden()
+  private def perfN(cell: OptsCell): OptionSpec =
+    value[Integer](cell, "--n", "<n>", classOf[Integer], "number of compilations")((c, n) => c.copy(XPerfN = Some(n.intValue())))
 
-      note("")
+  /**
+    * The options every command takes, wherever they appear on the line.
+    *
+    * `ScopeType.INHERIT` is what makes position stop mattering, and it is also what forbids a
+    * command from declaring one of these names again -- which is the whole reason `metric` no
+    * longer has a `--json` of its own.
+    */
+  private def globalOptions(cell: OptsCell): List[OptionSpec] = {
+    def global(spec: OptionSpec): OptionSpec = spec.toBuilder.scopeType(CommandLine.ScopeType.INHERIT).build()
 
-      opt[Unit]("coverage").action((_, c) => c.copy(coverage = true)).
-        text("enables source-level coverage instrumentation for tests.")
+    List(
+      global(flag(cell, "--coverage", "enables source-level coverage instrumentation for tests.")(_.copy(coverage = true))),
+      global(value[String](cell, "--coverage-output", "<path>", classOf[String],
+        "path to write the coverage report (JSON format). Defaults to build/coverage.json.")((c, p) => c.copy(coverageOutput = Some(p)))),
+      global(value[String](cell, "--coverage-lcov-output", "<path>", classOf[String],
+        "path to write the LCOV coverage report (.info format). Defaults to build/coverage.info.")((c, p) => c.copy(coverageLcovOutput = Some(p)))),
+      global(value[String](cell, "--entrypoint", "<name>", classOf[String],
+        "specifies the main entry point.")((c, s) => c.copy(entryPoint = Some(s)))),
+      global(value[String](cell, "--github-token", "<token>", classOf[String],
+        "API key to use for GitHub dependency resolution.")((c, s) => c.copy(githubToken = Some(s)))),
+      global(OptionSpec.builder("--help").usageHelp(true).description("prints this usage information.").build()),
+      // One `--json`, meaning one thing: emit what a program reads rather than what a person does.
+      // `metric` had a second option of the same name selecting its report format, which scopt
+      // resolved by position -- so `flix --json metric` printed text and `flix metric --json` left
+      // `json` false. Both now do the whole of what they say.
+      global(flag(cell, "--json", "emits machine-readable output.")(_.copy(json = true))),
+      global(value[Integer](cell, "--listen", "<port>", classOf[Integer],
+        "starts the socket server and listens on the given port.")((c, p) => c.copy(listen = Some(p.intValue())))),
+      global(flag(cell, "--no-install", "disables automatic installation of dependencies.")(_.copy(installDeps = false))),
+      global(value[Integer](cell, "--threads", "<n>", classOf[Integer],
+        "number of threads to use for compilation.")((c, n) => c.copy(threads = Some(n.intValue())))),
+      global(flag(cell, "--top", "displays a live view of where the compiler spends its time.")(_.copy(top = true))),
+      global(flag(cell, "--yes", "automatically answer yes to all prompts.")(_.copy(assumeYes = true))),
+      global(OptionSpec.builder("--version").versionHelp(true).description("prints the version number.").build()),
 
-      opt[String]("coverage-output").action((p, c) => c.copy(coverageOutput = Some(p))).
-        valueName("<path>").
-        text("path to write the coverage report (JSON format). Defaults to build/coverage.json.")
-
-      opt[String]("coverage-lcov-output").action((p, c) => c.copy(coverageLcovOutput = Some(p))).
-        valueName("<path>").
-        text("path to write the LCOV coverage report (.info format). Defaults to build/coverage.info.")
-
-      opt[String]("entrypoint").action((s, c) => c.copy(entryPoint = Some(s))).
-        text("specifies the main entry point.")
-
-      opt[String]("github-token").action((s, c) => c.copy(githubToken = Some(s))).
-        text("API key to use for GitHub dependency resolution.")
-
-      help("help").text("prints this usage information.")
-
-      opt[Unit]("json").action((_, c) => c.copy(json = true)).
-        text("enables json output.")
-
-      opt[Int]("listen").action((s, c) => c.copy(listen = Some(s))).
-        valueName("<port>").
-        text("starts the socket server and listens on the given port.")
-
-      opt[Unit]("no-install").action((_, c) => c.copy(installDeps = false)).
-        text("disables automatic installation of dependencies.")
-
-      opt[Int]("threads").action((n, c) => c.copy(threads = Some(n))).
-        text("number of threads to use for compilation.")
-
-      opt[Unit]("top").action((_, c) => c.copy(top = true)).
-        text("displays a live view of where the compiler spends its time.")
-
-      opt[Unit]("yes").action((_, c) => c.copy(assumeYes = true)).
-        text("automatically answer yes to all prompts.")
-
-      version("version").text("prints the version number.")
-
-      // Experimental options:
-      note("")
-      note("The following options are experimental:")
-
-      // Xbenchmark-code-size
-      opt[Unit]("Xbenchmark-code-size").action((_, c) => c.copy(xbenchmarkCodeSize = true)).
-        text("[experimental] benchmarks the size of the generated JVM files.")
-
-      // Xbenchmark-incremental
-      opt[Unit]("Xbenchmark-incremental").action((_, c) => c.copy(xbenchmarkIncremental = true)).
-        text("[experimental] benchmarks the performance of each compiler phase in incremental mode.")
-
-      // Xbenchmark-phases
-      opt[Unit]("Xbenchmark-phases").action((_, c) => c.copy(xbenchmarkPhases = true)).
-        text("[experimental] benchmarks the performance of each compiler phase.")
-
-      // Xbenchmark-frontend
-      opt[Unit]("Xbenchmark-frontend").action((_, c) => c.copy(xbenchmarkFrontend = true)).
-        text("[experimental] benchmarks the performance of the frontend.")
-
-      // Xbenchmark-throughput
-      opt[Unit]("Xbenchmark-throughput").action((_, c) => c.copy(xbenchmarkThroughput = true)).
-        text("[experimental] benchmarks the performance of the entire compiler.")
-
-      // Xdatalog-debug
-      opt[Seq[DatalogDebug]]("Xdatalog-debug").action((choices, c) => c.copy(xdatalogDebug = choices.toSet)).
-        text("[experimental] traces the Datalog solver (rules, facts, ram).")
-
-      // Xdebug
-      opt[Unit]("Xdebug").action((_, c) => c.copy(xdebug = true)).
-        text("[experimental] emits full debug information so a debugger can step and inspect variables.")
-
-      // Xlib
-      opt[LibLevel]("Xlib").action((arg, c) => c.copy(xlib = arg)).
-        text("[experimental] controls the amount of std. lib. to include (nix, min, all).")
-
-      // Xno-deprecated
-      opt[Unit]("Xno-deprecated").action((_, c) => c.copy(xnodeprecated = true)).
-        text("[experimental] disables deprecated features.")
-
-      // Xprint-phase
-      opt[Unit]("Xprint-phases").action((_, c) => c.copy(xprintphases = true)).
-        text("[experimental] prints the ASTs after the each phase.")
-
-      // Xsummary
-      opt[Unit]("Xsummary").action((_, c) => c.copy(xsummary = true)).
-        text("[experimental] prints a summary of the compiled modules.")
-
-      // Xsubeffecting
-      opt[Seq[Subeffecting]]("Xsubeffecting").action((subeffectings, c) => c.copy(xsubeffecting = subeffectings.toSet)).
-        text("[experimental] enables sub-effecting in select places")
-
-      // Xnewmono
-      opt[Unit]("Xnewmono").action((_, c) => c.copy(xnewmono = true)).
-        text("[experimental] uses the constraint-based monomorphization pipeline instead of the demand-driven one.")
-
-      note("")
-
-      // Input files.
-      arg[File]("<file>...").action((x, c) => c.copy(files = c.files :+ x))
-        .optional()
-        .unbounded()
-        .text("input Flix source code files, Flix packages, and Java archives.")
-
-    }
-
-    parser.parse(flixArgs, CmdOpts()).map(_.copy(args = progArgs.toList))
+      global(flag(cell, "--Xbenchmark-code-size", "[experimental] benchmarks the size of the generated JVM files.")(_.copy(xbenchmarkCodeSize = true))),
+      global(flag(cell, "--Xbenchmark-incremental", "[experimental] benchmarks the performance of each compiler phase in incremental mode.")(_.copy(xbenchmarkIncremental = true))),
+      global(flag(cell, "--Xbenchmark-phases", "[experimental] benchmarks the performance of each compiler phase.")(_.copy(xbenchmarkPhases = true))),
+      global(flag(cell, "--Xbenchmark-frontend", "[experimental] benchmarks the performance of the frontend.")(_.copy(xbenchmarkFrontend = true))),
+      global(flag(cell, "--Xbenchmark-throughput", "[experimental] benchmarks the performance of the entire compiler.")(_.copy(xbenchmarkThroughput = true))),
+      global(values[DatalogDebug](cell, "--Xdatalog-debug", "<choices>", classOf[DatalogDebug], Some(","),
+        "[experimental] traces the Datalog solver (rules, facts, ram).")((c, xs) => c.copy(xdatalogDebug = c.xdatalogDebug ++ xs))),
+      global(flag(cell, "--Xdebug", "[experimental] emits full debug information so a debugger can step and inspect variables.")(_.copy(xdebug = true))),
+      global(value[LibLevel](cell, "--Xlib", "<level>", classOf[LibLevel],
+        "[experimental] controls the amount of std. lib. to include (nix, min, all).")((c, l) => c.copy(xlib = l))),
+      global(flag(cell, "--Xno-deprecated", "[experimental] disables deprecated features.")(_.copy(xnodeprecated = true))),
+      global(flag(cell, "--Xprint-phases", "[experimental] prints the ASTs after the each phase.")(_.copy(xprintphases = true))),
+      global(flag(cell, "--Xsummary", "[experimental] prints a summary of the compiled modules.")(_.copy(xsummary = true))),
+      global(values[Subeffecting](cell, "--Xsubeffecting", "<choices>", classOf[Subeffecting], Some(","),
+        "[experimental] enables sub-effecting in select places")((c, xs) => c.copy(xsubeffecting = c.xsubeffecting ++ xs))),
+      global(flag(cell, "--Xnewmono", "[experimental] uses the constraint-based monomorphization pipeline instead of the demand-driven one.")(_.copy(xnewmono = true)))
+    )
   }
 
   /** Collects the metadata that cannot be inferred from the project directory. */

@@ -20,6 +20,9 @@ flix metric --format md        # a ranked work plan
 flix metric --format sarif     # annotations, for a pull request
 ```
 
+`flix metric --json` and `flix --json metric` both mean `--format json`. An
+explicit `--format` wins over `--json` whichever order they are given in.
+
 Each smell is addressed by a program:
 
 ```json

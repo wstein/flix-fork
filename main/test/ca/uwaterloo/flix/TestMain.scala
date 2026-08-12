@@ -16,13 +16,14 @@
 
 package ca.uwaterloo.flix
 
-import ca.uwaterloo.flix.api.Bootstrap
+import ca.uwaterloo.flix.api.{Bootstrap, Version}
 import ca.uwaterloo.flix.tools.pkg.ManifestParser
 import ca.uwaterloo.flix.util.{DatalogDebug, DocFormat, LibLevel, Subeffecting}
 import org.scalatest.funsuite.AnyFunSuite
 
 import java.io.File
 import java.nio.file.{Files, Path}
+import scala.jdk.CollectionConverters.*
 
 class TestMain extends AnyFunSuite {
 
@@ -462,48 +463,51 @@ class TestMain extends AnyFunSuite {
   test("metric") {
     val opts = Main.parseCmdOpts(Array("metric")).get
     assert(opts.command == Main.Command.Metric)
-    assert(opts.metricFormat == "text")
+    // Absent, not "text": what an unasked-for format resolves to is the command's decision, and
+    // the parser recording a default here is what let `--json` be answered twice.
+    assert(opts.metricFormat.isEmpty)
   }
 
   test("metric --format") {
-    assert(Main.parseCmdOpts(Array("metric", "--format", "json")).get.metricFormat == "json")
-    assert(Main.parseCmdOpts(Array("metric", "--format", "csv")).get.metricFormat == "csv")
-    assert(Main.parseCmdOpts(Array("metric", "--format", "md")).get.metricFormat == "md")
-    assert(Main.parseCmdOpts(Array("metric", "--format", "sarif")).get.metricFormat == "sarif")
+    assert(Main.parseCmdOpts(Array("metric", "--format", "json")).get.metricFormat.contains("json"))
+    assert(Main.parseCmdOpts(Array("metric", "--format", "csv")).get.metricFormat.contains("csv"))
+    assert(Main.parseCmdOpts(Array("metric", "--format", "md")).get.metricFormat.contains("md"))
+    assert(Main.parseCmdOpts(Array("metric", "--format", "sarif")).get.metricFormat.contains("sarif"))
   }
 
   test("metric --format is checked when it runs, not when it parses") {
     // Unlike `--doc-format`, which is a typed option and fails here, `--format` is a string the
     // command validates itself. The reading is the same either way -- an unknown format is refused
     // and named -- but the two are inconsistent, and a parser that could type both should.
-    assert(Main.parseCmdOpts(Array("metric", "--format", "xml")).get.metricFormat == "xml")
+    assert(Main.parseCmdOpts(Array("metric", "--format", "xml")).get.metricFormat.contains("xml"))
   }
 
-  test("metric --json is a shorthand, and the last format given wins") {
-    assert(Main.parseCmdOpts(Array("metric", "--json")).get.metricFormat == "json")
-    assert(Main.parseCmdOpts(Array("metric", "--json", "--format", "csv")).get.metricFormat == "csv")
-    assert(Main.parseCmdOpts(Array("metric", "--format", "csv", "--json")).get.metricFormat == "json")
-  }
+  test("`--json` is one option, and means the same on either side of the command") {
+    // It used to be two options with one name -- a global setting `json`, and a child of `metric`
+    // selecting the report format -- which scopt resolved by position, so each spelling did half of
+    // what it reads as. There is now one, it is global, and `metric` reads it as the format to emit
+    // when no `--format` was given.
+    for (line <- List(Array("metric", "--json"), Array("--json", "metric"))) {
+      val opts = Main.parseCmdOpts(line).get
+      assert(opts.command == Main.Command.Metric)
+      assert(opts.json)
+      assert(opts.metricFormat.isEmpty)
+    }
 
-  test("`--json` names two different options, and position decides which") {
-    // `--json` is declared twice: globally, where it sets `json`, and under `metric`, where it
-    // selects the report format. Which one a word means depends on whether it comes before or after
-    // the command, so each spelling does half of what it reads as -- `flix --json metric` prints a
-    // text report, and `flix metric --json` leaves `json` false. Nobody chose this; two options
-    // were given the same name three hundred lines apart.
-    //
-    // Pinned as it stands so that resolving it is a visible change. A parser that refuses duplicate
-    // names cannot express this at all, which is the argument for replacing this one.
-    val afterCommand = Main.parseCmdOpts(Array("metric", "--json")).get
-    assert(afterCommand.metricFormat == "json")
-    assert(!afterCommand.json)
-
-    val beforeCommand = Main.parseCmdOpts(Array("--json", "metric")).get
-    assert(beforeCommand.metricFormat == "text")
-    assert(beforeCommand.json)
-
-    // Everywhere else there is only one `--json`, and it means what it says in either position.
     assert(Main.parseCmdOpts(Array("build", "--json")).get.json)
+  }
+
+  test("an explicit --format wins over --json, in either order") {
+    // Not "the last one wins". `--format` names a format and `--json` asks for something a program
+    // can read; the first is the more specific answer to the same question, so order does not come
+    // into it. Under scopt these two lines disagreed.
+    assert(Main.parseCmdOpts(Array("metric", "--json", "--format", "csv")).get.metricFormat.contains("csv"))
+    assert(Main.parseCmdOpts(Array("metric", "--format", "csv", "--json")).get.metricFormat.contains("csv"))
+  }
+
+  test("a repeated option takes the last value given") {
+    assert(Main.parseCmdOpts(Array("metric", "--format", "csv", "--format", "md")).get.metricFormat.contains("md"))
+    assert(Main.parseCmdOpts(Array("--threads", "2", "--threads", "8", "p.flix")).get.threads.contains(8))
   }
 
   test("metric thresholds") {
@@ -638,6 +642,27 @@ class TestMain extends AnyFunSuite {
     val opts = Main.parseCmdOpts(Array("run", "--", "--json")).get
     assert(opts.args == List("--json"))
     assert(!opts.json)
+  }
+
+  test("--version prints something containing the version") {
+    // `.github/workflows/release-jar.yaml` runs the built jar and refuses to publish it unless
+    // `--version` prints text containing the tag. A version option that prints nothing therefore
+    // fails nowhere until the release, which is the one run with no cheap way back. Asserted on the
+    // spec rather than by invoking it, since printing the version also exits the process.
+    val version = Main.rootSpec(new Main.OptsCell).version()
+    assert(version.length == 1)
+    assert(version.head.contains(Version.CurrentVersion.toString))
+  }
+
+  test("every command in the usage text is one the parser accepts") {
+    // The two are now the same list -- a command is a subcommand spec, and the help is printed from
+    // it -- so this cannot drift the way a hand-written usage string does. It can still be wrong in
+    // the direction that matters: a command nobody can run.
+    val commands = Main.rootSpec(new Main.OptsCell).subcommands().keySet().asScala
+    assert(commands.nonEmpty)
+    for (name <- commands) {
+      assert(Main.parseCmdOpts(Array(name)).isDefined || name == "lsp-vscode", s"'$name' is listed but does not parse")
+    }
   }
 
   test("input files are collected in the order given") {
