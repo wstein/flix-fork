@@ -643,12 +643,17 @@ object Metrics {
   }
 
   /**
-    * The limits `--smells` applies when nobody has said what failing means.
+    * The limits a report is written against when nobody has said what they should be.
     *
     * Round numbers chosen to be defensible rather than derived: 40 lines and 5 parameters are
     * where a function stops fitting on a screen or in a signature, and 15 is where nesting and
     * conditions stop being followable in one reading. They are a starting point for a conversation
-    * in a project, not a standard -- which is why they are only applied when asked for.
+    * in a project, not a standard -- which is why exceeding one of them is reported but never
+    * fails: only a limit somebody set does that.
+    *
+    * `minDocCoverage` is deliberately absent. Every other limit has a round number that can be
+    * argued for from how code is read; what fraction of an API should carry a doc comment is a
+    * decision a project makes, and a default here would be a number invented to have one.
     */
   val SmellThresholds: Thresholds = Thresholds(
     maxLines = Some(40),

@@ -1,6 +1,6 @@
-# Acting on `flix metric --smells`
+# Acting on what `flix metric` reports
 
-Instructions for an agent asked to fix what `flix metric --smells` reports.
+Instructions for an agent asked to fix the smells in a `flix metric` report.
 
 Read this before changing code. Each smell has one meaning, one or two fixes
 that work, and at least one fix that looks right and is not. The metric is
@@ -9,9 +9,15 @@ code — but a fact is not yet a reason to change it.
 
 ## How to get the list
 
+Smells are in every report, in every format. There is no flag to ask for them:
+a report that has to be asked for what it already knows is a report someone
+will forget to ask.
+
 ```sh
-flix metric --smells --json    # the report, with a "smells" array; exit 1 if any
-flix metric --smells           # the same, readable, reasons on stderr
+flix metric                    # readable, for a person
+flix metric --format json      # a "smells" array, for a program
+flix metric --format md        # a ranked work plan
+flix metric --format sarif     # annotations, for a pull request
 ```
 
 Each smell is addressed by a program:
@@ -22,7 +28,29 @@ Each smell is addressed by a program:
 ```
 
 `category` is one of `length`, `parameters`, `nesting`, `complexity`,
-`docCoverage`, `orphan`. Work from `category`, never from the prose.
+`density`, `lineLength`, `docCoverage`, `orphan`. Work from `category`, never
+from the prose.
+
+## Reporting is not failing
+
+The limits above are defaults, and a default limit **never fails a build**:
+
+| limit | default | fails the build |
+| --- | --- | --- |
+| `--max-lines` | 40 | only when given |
+| `--max-params` | 5 | only when given |
+| `--max-nesting` | 4 | only when given |
+| `--max-complexity` | 15 | only when given |
+| `--max-line-tokens` | 25 | only when given |
+| `--max-line-length` | 100 | only when given |
+| `--min-doc-coverage` | *none* | only when given |
+
+`flix metric` exits 1 when a limit **you passed** is exceeded, or when the
+project does not compile. Otherwise it exits 0 however many smells it printed.
+A suggestion that breaks a build is not a suggestion.
+
+`docCoverage` is the one category with no default, because no round number for
+it is defensible. It is reported only when `--min-doc-coverage` is given.
 
 ## The rule that governs all of them
 
@@ -38,7 +66,7 @@ believes it was addressed.
 If a limit is wrong for the project, change the limit and say why:
 
 ```sh
-flix metric --smells --max-nesting 6
+flix metric --max-nesting 6
 ```
 
 ## By category
@@ -94,10 +122,39 @@ check whether that conditional can move to the caller.
 
 **Do not:** extract halves called `part1` and `part2`.
 
+### `density` — tokens on one line
+
+**Means:** the most tokens on any single line of the definition, counted from
+the lexer, comments excluded. Buse and Weimer found reading time degrades
+sharply past roughly 25. When a local definition owns the line, the smell is
+reported against the local and not its enclosing `def`.
+
+**Do:** break the line — one expression, arm or argument list per line. A
+crammed line is usually several statements written as one, and naming the
+intermediate values is the fix.
+
+**Do not:** delete a comment to lower the count. Comments are not counted.
+
+### `lineLength` — characters on one line
+
+**Means:** the longest line of the definition, in characters, against 100.
+
+**Do:** wrap it. A line read by scrolling sideways is read twice, and a diff of
+it shows one changed line whatever changed in it.
+
+**Do not:** rename identifiers to shorten them. `n` is not an improvement on
+`accumulator` bought at 8 characters.
+
+**Note:** `flix format` will do this for you where it can. Run it before
+treating a `lineLength` smell as work — and if a line survives formatting, the
+formatter has decided it cannot break there, which is a stronger signal than
+the count.
+
 ### `docCoverage` — public API without a doc comment
 
 **Means:** the fraction of public, non-test definitions carrying `///`, from
-the doc the compiler recorded.
+the doc the compiler recorded. Reported only when `--min-doc-coverage` asks
+for it.
 
 **Do:** write what the function is for and what it returns for edge inputs.
 Prefer documenting the least obvious functions first, not the alphabetically
@@ -132,7 +189,7 @@ Every change must leave all three true:
 ```sh
 flix check                    # it still compiles
 flix test                     # behaviour is unchanged
-flix metric --smells          # the smell is gone, and no new one appeared
+flix metric                   # the smell is gone, and no new one appeared
 ```
 
 The third matters: extracting a function can move a smell rather than remove
