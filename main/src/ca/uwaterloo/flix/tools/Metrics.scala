@@ -307,6 +307,16 @@ object Metrics {
   }
 
   /**
+    * Returns how many public functions use each effect, commonest first.
+    *
+    * A single purity percentage says how much of an API is pure and nothing about what the rest
+    * does. Which effects a project actually reaches for is the thing this language can answer and
+    * others cannot.
+    */
+  def effectBudget(defs: List[DefMetrics]): List[(String, Int)] =
+    defs.flatMap(_.effects).groupBy(identity).view.mapValues(_.size).toList.sortBy { case (e, n) => (-n, e) }
+
+  /**
     * Returns `true` if `src` is the project's own code.
     *
     * The standard library arrives as [[Input.BundledLibraryFile]] and a dependency as a package
@@ -522,6 +532,68 @@ object Metrics {
   }
 
   /**
+    * Limits a project asks to be held to.
+    *
+    * Empty by default: a report describes, and only says a project has failed when someone has
+    * said what failing means. A limit on a *judgement* is worth being wary of -- a cap on function
+    * length is met by splitting a function at the line before the cap, which improves nothing --
+    * so these are supplied deliberately rather than defaulted to something round.
+    */
+  case class Thresholds(maxLines: Option[Int] = None,
+                        maxParameters: Option[Int] = None,
+                        maxNesting: Option[Int] = None,
+                        maxComplexity: Option[Int] = None,
+                        minDocCoverage: Option[Double] = None) {
+
+    /** Whether anything at all was asked for. */
+    def isEmpty: Boolean =
+      maxLines.isEmpty && maxParameters.isEmpty && maxNesting.isEmpty && maxComplexity.isEmpty && minDocCoverage.isEmpty
+  }
+
+  /** Something measured that exceeded what was asked for. */
+  case class Violation(measure: String, subject: String, where: String, actual: String, limit: String)
+
+  /**
+    * Returns everything in `report` that exceeds `thresholds`.
+    *
+    * Each violation names what exceeded, by how much, and where. A gate that reports only a count
+    * cannot be acted on, and one that reports only the first hides how much work is left.
+    */
+  def violations(report: Report, thresholds: Thresholds): List[Violation] = {
+    val perDefinition = report.functions.flatMap { d =>
+      val where = s"${d.file}:${d.line}"
+      List(
+        thresholds.maxLines.filter(d.lines > _).map(l => Violation("lines", d.name, where, d.lines.toString, l.toString)),
+        // The widest list anywhere inside, so that a loop carrying eight accumulators is not
+        // excused by a two-parameter signature.
+        thresholds.maxParameters.filter(d.widestParameterList > _).map(l => Violation("parameters", d.name, where, d.widestParameterList.toString, l.toString)),
+        thresholds.maxNesting.filter(d.nesting > _).map(l => Violation("nesting", d.name, where, d.nesting.toString, l.toString)),
+        thresholds.maxComplexity.filter(d.cognitive > _).map(l => Violation("complexity", d.name, where, d.cognitive.toString, l.toString))
+      ).flatten
+    }
+
+    val coverage = thresholds.minDocCoverage
+      .filter(_ > report.docCoverage)
+      .map(l => Violation("doc coverage", "public API", "", f"${report.docCoverage * 100}%.1f%%", f"${l * 100}%.1f%%"))
+
+    (perDefinition ++ coverage).sortBy(v => (v.measure, v.subject))
+  }
+
+  /**
+    * Renders violations for reading.
+    */
+  def formatViolations(vs: List[Violation], f: Formatter): String = {
+    if (vs.isEmpty) return ""
+    val sb = new StringBuilder
+    sb.append("\n" + f.red(s"${vs.length} over the limit") + "\n")
+    vs.foreach { v =>
+      val where = if (v.where.isEmpty) "" else s"  ${f.cyan(v.where)}"
+      sb.append(s"    ${f.blue(v.subject)} -- ${v.measure} ${v.actual}, limit ${v.limit}$where\n")
+    }
+    sb.toString
+  }
+
+  /**
     * How a report is written out.
     *
     * Four, because they answer four different questions: [[Format.Text]] for someone reading it
@@ -622,7 +694,8 @@ object Metrics {
         ("docCoverage" -> report.docCoverage) ~
         ("purity" -> report.purity) ~
         ("commentDensity" -> report.commentDensity) ~
-        ("codeLinesPerTest" -> report.codeLinesPerTest)
+        ("codeLinesPerTest" -> report.codeLinesPerTest) ~
+        ("effectBudget" -> effectBudget(report.publicApi).map { case (e, n) => ("effect" -> e) ~ ("definitions" -> n) })
 
     val definitions: JValue = report.defs.map { d =>
       ("name" -> d.name) ~
@@ -693,6 +766,7 @@ object Metrics {
 
     if (report.publicApi.nonEmpty) {
       sb.append(s"| documented public | ${share(report.publicApi.count(_.hasDoc), report.publicApi.length)} |\n")
+      effectBudget(report.publicApi).foreach { case (e, n) => sb.append(s"| effect `$e` | $n |\n") }
       sb.append(s"| pure public | ${share(report.publicApi.count(_.isPure), report.publicApi.length)} |\n")
     }
 
@@ -755,7 +829,10 @@ object Metrics {
       sb.append(f.bold("Public API") + "\n")
       sb.append(row("documented", share(documented, api.length)))
       sb.append(row("pure", share(api.count(_.isPure), api.length)))
-      sb.append(row("effects", api.flatMap(_.effects).distinct.sorted.take(8).mkString(", ")))
+      val budget = effectBudget(api)
+      if (budget.nonEmpty) {
+        sb.append(row("effects used", budget.map { case (e, n) => s"$e ($n)" }.mkString(", ")))
+      }
       sb.append("\n")
     }
 

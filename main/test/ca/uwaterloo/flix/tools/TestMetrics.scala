@@ -254,6 +254,52 @@ class TestMetrics extends AnyFunSuite {
     assertResult(Some(1))(shapes.defs.find(_.name == "Demo.plain").map(_.returnWidth))
   }
 
+  test("no thresholds means nothing is over the limit") {
+    // A report describes. It only says a project has failed once someone has said what failing is.
+    assertResult(Nil)(Metrics.violations(report, Metrics.Thresholds()))
+  }
+
+  test("a threshold names what exceeded it, by how much, and where") {
+    val vs = Metrics.violations(report, Metrics.Thresholds(maxNesting = Some(1)))
+    assertResult(List("Demo.classify"))(vs.map(_.subject))
+    assertResult(List("nesting"))(vs.map(_.measure))
+    assertResult(List("2"))(vs.map(_.actual))
+    assert(vs.head.where.endsWith(":5"), s"expected the location of the definition, got ${vs.head.where}")
+  }
+
+  test("a parameter limit counts the widest list anywhere inside") {
+    // Otherwise a loop carrying eight accumulators is excused by a two-parameter signature.
+    val wide = measure(List(
+      "mod Demo {",
+      "    pub def one(seed: Int32, budget: Int32): Int32 = {",
+      "        def loop(left, acc, a, b, c, d) = if (left <= 0) acc + a + b + c + d else loop(left - 1, acc, a, b, c, d);",
+      "        loop(budget, seed, 0, 0, 0, 0)",
+      "    }",
+      "}"
+    ))
+    assertResult(List("6"))(Metrics.violations(wide, Metrics.Thresholds(maxParameters = Some(4))).map(_.actual))
+    assertResult(Nil)(Metrics.violations(wide, Metrics.Thresholds(maxParameters = Some(6))))
+  }
+
+  test("a documentation floor is met or reported as a shortfall") {
+    // Half the public API here is documented.
+    assertResult(Nil)(Metrics.violations(report, Metrics.Thresholds(minDocCoverage = Some(0.5))))
+    val short = Metrics.violations(report, Metrics.Thresholds(minDocCoverage = Some(0.9)))
+    assertResult(List("doc coverage"))(short.map(_.measure))
+    assertResult(List("50.0%"))(short.map(_.actual))
+  }
+
+  test("the effect budget says which effects are used, not merely how many are pure") {
+    val effectful = measure(List(
+      "mod Demo {",
+      "    pub def a(): Unit \\ IO = println(\"a\")",
+      "    pub def b(): Unit \\ IO = println(\"b\")",
+      "    pub def c(): Int32 = 1",
+      "}"
+    ))
+    assertResult(List(("IO", 2)))(Metrics.effectBudget(effectful.publicApi))
+  }
+
   test("an empty program measures as empty rather than as a failure") {
     val empty = measure(List("mod Demo {", "}"))
     assertResult(0)(empty.defs.length)

@@ -398,8 +398,16 @@ object Main {
             case Some(root) =>
               // Reported even when the project does not type check, because the numbers are still
               // true of the code as written, and a beginner asking for them is often mid-repair.
-              print(Metrics.render(Metrics.compute(root, Some(cwd)), format, formatter))
-              System.exit(if (errors.isEmpty) 0 else 1)
+              val report = Metrics.compute(root, Some(cwd))
+              print(Metrics.render(report, format, formatter))
+              val thresholds = Metrics.Thresholds(
+                cmdOpts.metricMaxLines, cmdOpts.metricMaxParams, cmdOpts.metricMaxNesting,
+                cmdOpts.metricMaxComplexity, cmdOpts.metricMinDocCoverage)
+              val exceeded = Metrics.violations(report, thresholds)
+              // Printed to stderr so that a report piped into something else is still only the
+              // report, and the gate's reasons are still visible in a CI log.
+              if (exceeded.nonEmpty) System.err.print(Metrics.formatViolations(exceeded, formatter))
+              System.exit(if (errors.nonEmpty || exceeded.nonEmpty) 1 else 0)
             case None => exitWithErrors(flix, errors, optRoot)
           }
 
@@ -619,6 +627,11 @@ object Main {
     canonical: Boolean = false,
     docFormat: DocFormat = Options.Default.docFormat,
     metricFormat: String = "text",
+    metricMaxLines: Option[Int] = None,
+    metricMaxParams: Option[Int] = None,
+    metricMaxNesting: Option[Int] = None,
+    metricMaxComplexity: Option[Int] = None,
+    metricMinDocCoverage: Option[Double] = None,
     entryPoint: Option[String] = None,
     installDeps: Boolean = true,
     githubToken: Option[String] = None,
@@ -795,8 +808,18 @@ object Main {
         .action((_, c) => c.copy(command = Command.Metric))
         .text("  displays code or compiler metrics for the project.")
         .children(
-          opt[String]("metric-format").action((arg, c) => c.copy(metricFormat = arg))
+          opt[String]("format").action((arg, c) => c.copy(metricFormat = arg))
             .text("selects the format that 'metric' emits (text, json, csv, md). Defaults to text."),
+          opt[Int]("max-lines").action((arg, c) => c.copy(metricMaxLines = Some(arg)))
+            .text("fails if any function is longer than this many lines."),
+          opt[Int]("max-params").action((arg, c) => c.copy(metricMaxParams = Some(arg)))
+            .text("fails if any parameter list, including a local definition's, is wider than this."),
+          opt[Int]("max-nesting").action((arg, c) => c.copy(metricMaxNesting = Some(arg)))
+            .text("fails if any function nests branches deeper than this."),
+          opt[Int]("max-complexity").action((arg, c) => c.copy(metricMaxComplexity = Some(arg)))
+            .text("fails if any function has a cognitive complexity above this."),
+          opt[Double]("min-doc-coverage").action((arg, c) => c.copy(metricMinDocCoverage = Some(arg)))
+            .text("fails if less than this fraction of the public API is documented, e.g. 0.8."),
         )
 
       cmd("doc").action((_, c) => c.copy(command = Command.Doc)).text("  generates API documentation.").children(
