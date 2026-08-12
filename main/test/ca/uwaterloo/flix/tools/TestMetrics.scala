@@ -122,7 +122,7 @@ class TestMetrics extends AnyFunSuite {
   test("csv names every definition, and quotes what would break a column") {
     val csv = Metrics.render(report, Metrics.Format.Csv, Formatter.NoFormatter)
     val header :: rows = csv.trim.split("\n").toList: @unchecked
-    assertResult("name,module,file,line,lines,parameters,localDefs,maxLocalParameters,nesting,cognitive,public,test,documented,pure,effects")(header)
+    assertResult("name,module,file,line,lines,parameters,returnWidth,localDefs,maxLocalParameters,nesting,cognitive,public,test,documented,pure,effects")(header)
     assertResult(report.defs.map(_.name).sorted)(rows.map(_.takeWhile(_ != ',')).sorted)
   }
 
@@ -214,6 +214,44 @@ class TestMetrics extends AnyFunSuite {
   test("a definition with no local definitions reports none") {
     assertResult(Some(0))(report.defs.find(_.name == "Demo.double").map(_.localDefs))
     assertResult(Some(1))(report.defs.find(_.name == "Demo.double").map(_.widestParameterList))
+  }
+
+  test("a local definition is measured as the function it is") {
+    val wide = measure(List(
+      "mod Demo {",
+      "    pub def one(seed: Int32, budget: Int32): Int32 = {",
+      "        def loop(left, acc, a, b, c, d, e, f) =",
+      "            if (left <= 0)",
+      "                if (acc > 0) acc + a + b + c + d + e + f else 0",
+      "            else loop(left - 1, acc + 1, a, b, c, d, e, f);",
+      "        loop(budget, seed, 0, 0, 0, 0, 0, 0)",
+      "    }",
+      "}"
+    ))
+    val loop = wide.locals.find(_.name == "loop").getOrElse(fail("the local definition was not measured"))
+    assertResult("Demo.one")(loop.owner)
+    assertResult(8)(loop.parameters)
+    // Two conditionals, one inside the other, both written inside `loop`.
+    assertResult(2)(loop.nesting)
+    assertResult(3)(loop.cognitive)
+    // Its own span, not its parent's: it must not run to the end of the enclosing function.
+    assert(loop.lines < wide.defs.find(_.name == "Demo.one").map(_.lines).getOrElse(0),
+      s"a local definition spanning ${loop.lines} lines cannot be as long as the function holding it")
+  }
+
+  test("the width of what a function returns is measured") {
+    // A wide record is a parameter list in the other direction, and nothing else here sees it.
+    val shapes = measure(List(
+      "mod Demo {",
+      "    pub def wide(): { a = Int32, b = Int32, c = Int32, d = Int32, e = Int32, f = Int32 } =",
+      "        { a = 1, b = 2, c = 3, d = 4, e = 5, f = 6 }",
+      "    pub def pair(): (Int32, Int32) = (1, 2)",
+      "    pub def plain(): Int32 = 1",
+      "}"
+    ))
+    assertResult(Some(6))(shapes.defs.find(_.name == "Demo.wide").map(_.returnWidth))
+    assertResult(Some(2))(shapes.defs.find(_.name == "Demo.pair").map(_.returnWidth))
+    assertResult(Some(1))(shapes.defs.find(_.name == "Demo.plain").map(_.returnWidth))
   }
 
   test("an empty program measures as empty rather than as a failure") {

@@ -75,6 +75,7 @@ object Metrics {
                         isPublic: Boolean,
                         isTest: Boolean,
                         hasDoc: Boolean,
+                        returnWidth: Int,
                         localDefs: Int,
                         maxLocalParameters: Int,
                         cognitive: Int,
@@ -92,6 +93,20 @@ object Metrics {
       */
     def widestParameterList: Int = parameters.max(maxLocalParameters)
   }
+
+  /**
+    * A local definition, measured as the function it is.
+    *
+    * @param owner the definition it is written inside.
+    */
+  case class LocalMetrics(name: String,
+                          owner: String,
+                          file: String,
+                          line: Int,
+                          lines: Int,
+                          parameters: Int,
+                          nesting: Int,
+                          cognitive: Int)
 
   /**
     * A module, and what it depends on.
@@ -130,7 +145,8 @@ object Metrics {
                     structs: Int,
                     effects: Int,
                     typeAliases: Int,
-                    modules: List[ModuleMetrics]) {
+                    modules: List[ModuleMetrics],
+                    locals: List[LocalMetrics]) {
 
     /** The definitions that are not tests. */
     def functions: List[DefMetrics] = defs.filterNot(_.isTest)
@@ -180,8 +196,9 @@ object Metrics {
           isPublic = d.spec.mod.isPublic,
           isTest = d.spec.ann.isTest,
           hasDoc = d.spec.doc.text.trim.nonEmpty,
+          returnWidth = shapeWidth(d.spec.retTpe),
           localDefs = analysis.locals.getOrElse(d.sym.toString, Nil).length,
-          maxLocalParameters = analysis.locals.getOrElse(d.sym.toString, Nil).maxOption.getOrElse(0),
+          maxLocalParameters = analysis.locals.getOrElse(d.sym.toString, Nil).map(_._2).maxOption.getOrElse(0),
           cognitive = analysis.cognitive.getOrElse(d.sym.toString, 0),
           effects = d.spec.eff.effects.toList.map(_.toString).sorted
         )
@@ -200,8 +217,57 @@ object Metrics {
       structs = root.structs.values.count(s => isProjectSource(s.loc.source)),
       effects = root.effects.values.count(e => isProjectSource(e.loc.source)),
       typeAliases = root.typeAliases.values.count(a => isProjectSource(a.loc.source)),
-      modules = moduleMetrics(defs, analysis.edges)
+      modules = moduleMetrics(defs, analysis.edges),
+      locals = localMetrics(root, analysis, base)
     )
+  }
+
+  /**
+    * Returns how many parts the value a function returns has.
+    *
+    * A record of ten fields or a tuple of six is a parameter list in the other direction: it is
+    * wide for the same reason and read for the same reason, and nothing else here would notice it.
+    * A type that is neither is one part.
+    */
+  private def shapeWidth(tpe: Type): Int = {
+    def recordFields(t: Type): Int = t.typeConstructor match {
+      case Some(TypeConstructor.RecordRowExtend(_)) => 1 + t.typeArguments.map(recordFields).sum
+      case _ => t.typeArguments.map(recordFields).sum
+    }
+
+    tpe.typeConstructor match {
+      case Some(TypeConstructor.Tuple(arity)) => arity
+      case _ =>
+        val fields = recordFields(tpe)
+        if (fields == 0) 1 else fields
+    }
+  }
+
+  /**
+    * Measures every local definition as a function in its own right.
+    *
+    * Its nesting and complexity are computed from the branches written inside it, taken from the
+    * same collection its enclosing definition uses -- so a local definition is charged for what it
+    * contains, and is not merely a line in its parent's total.
+    */
+  private def localMetrics(root: Root, analysis: Analysis, base: Option[Path]): List[LocalMetrics] = {
+    root.defs.values.toList.filter(d => isProjectSource(d.loc.source)).flatMap { d =>
+      val owner = d.sym.toString
+      val enclosing = analysis.branches.getOrElse(owner, Nil)
+      analysis.locals.getOrElse(owner, Nil).map { case (name, parameters, loc) =>
+        val inside = enclosing.filter(b => contains(loc, b))
+        LocalMetrics(
+          name = name,
+          owner = owner,
+          file = relativise(loc.source.name, base),
+          line = loc.start.lineOneIndexed,
+          lines = loc.end.lineOneIndexed - loc.start.lineOneIndexed + 1,
+          parameters = parameters,
+          nesting = deepestChain(inside),
+          cognitive = cognitiveComplexity(inside, 0, 0)
+        )
+      }
+    }.sortBy(l => (-l.lines, l.owner))
   }
 
   /**
@@ -343,7 +409,8 @@ object Metrics {
     */
   private case class Analysis(nesting: Map[String, Int],
                               cognitive: Map[String, Int],
-                              locals: Map[String, List[Int]],
+                              branches: Map[String, List[SourceLocation]],
+                              locals: Map[String, List[(String, Int, SourceLocation)]],
                               edges: Set[(String, String)])
 
   /**
@@ -357,7 +424,7 @@ object Metrics {
     val branches = scala.collection.mutable.Map.empty[String, List[SourceLocation]]
     val booleans = scala.collection.mutable.Map.empty[String, Int]
     val guards = scala.collection.mutable.Map.empty[String, Int]
-    val locals = scala.collection.mutable.Map.empty[String, List[Int]]
+    val locals = scala.collection.mutable.Map.empty[String, List[(String, Int, SourceLocation)]]
     val edges = scala.collection.mutable.Set.empty[(String, String)]
     var current: Option[TypedAst.Def] = None
 
@@ -384,10 +451,12 @@ object Metrics {
         exp match {
           case _: Expr.IfThenElse | _: Expr.Match | _: Expr.ExtMatch | _: Expr.RestrictableChoose =>
             branches.update(name, exp.loc :: branches.getOrElse(name, Nil))
-          case Expr.LocalDef(_, _, fparams, _, _, _, _, _) =>
+          case Expr.LocalDef(_, bnd, fparams, body, _, _, _, _) =>
             // A local definition is a function too, and an invisible one: it is not in `root.defs`,
             // so without this a project's widest and longest function can be one nobody counted.
-            locals.update(name, declaredParameters(fparams) :: locals.getOrElse(name, Nil))
+            // Its own span is the body's, not the whole `let`-in expression, which runs to the end
+            // of the enclosing function and would make every local definition look enormous.
+            locals.update(name, (bnd.sym.text, declaredParameters(fparams), body.loc) :: locals.getOrElse(name, Nil))
           case Expr.Binary(SemanticOp.BoolOp.And | SemanticOp.BoolOp.Or, _, _, _, _, _) =>
             booleans.update(name, booleans.getOrElse(name, 0) + 1)
           case _ => ()
@@ -399,6 +468,7 @@ object Metrics {
 
     Analysis(
       nesting = branches.map { case (name, locs) => name -> deepestChain(locs) }.toMap,
+      branches = branches.toMap,
       locals = locals.toMap,
       cognitive = branches.keySet.++(booleans.keySet).++(guards.keySet).map { name =>
         name -> cognitiveComplexity(branches.getOrElse(name, Nil), booleans.getOrElse(name, 0), guards.getOrElse(name, 0))
@@ -497,7 +567,7 @@ object Metrics {
     * a comma cannot shift every column after it.
     */
   private def csv(report: Report): String = {
-    val header = "name,module,file,line,lines,parameters,localDefs,maxLocalParameters,nesting,cognitive,public,test,documented,pure,effects"
+    val header = "name,module,file,line,lines,parameters,returnWidth,localDefs,maxLocalParameters,nesting,cognitive,public,test,documented,pure,effects"
     val rows = report.defs.map { d =>
       List(
         d.name,
@@ -506,6 +576,7 @@ object Metrics {
         d.line.toString,
         d.lines.toString,
         d.parameters.toString,
+        d.returnWidth.toString,
         d.localDefs.toString,
         d.maxLocalParameters.toString,
         d.nesting.toString,
@@ -560,6 +631,7 @@ object Metrics {
         ("line" -> d.line) ~
         ("lines" -> d.lines) ~
         ("parameters" -> d.parameters) ~
+        ("returnWidth" -> d.returnWidth) ~
         ("localDefs" -> d.localDefs) ~
         ("maxLocalParameters" -> d.maxLocalParameters) ~
         ("nesting" -> d.nesting) ~
@@ -583,7 +655,18 @@ object Metrics {
         ("instability" -> m.instability)
     }
 
-    pretty(JsonMethods.render(("summary" -> summary) ~ ("modules" -> modules) ~ ("definitions" -> definitions)))
+    val locals: JValue = report.locals.map { l =>
+      ("name" -> l.name) ~
+        ("owner" -> l.owner) ~
+        ("file" -> l.file) ~
+        ("line" -> l.line) ~
+        ("lines" -> l.lines) ~
+        ("parameters" -> l.parameters) ~
+        ("nesting" -> l.nesting) ~
+        ("cognitive" -> l.cognitive)
+    }
+
+    pretty(JsonMethods.render(("summary" -> summary) ~ ("modules" -> modules) ~ ("definitions" -> definitions) ~ ("localDefinitions" -> locals)))
   }
 
   /**
@@ -622,19 +705,19 @@ object Metrics {
     val longest = report.functions.sortBy(-_.lines).take(FindingsShown)
     if (longest.nonEmpty) {
       sb.append("\n## Longest functions\n\n| function | lines | at |\n| --- | --- | --- |\n")
-      longest.foreach(d => sb.append(s"| `${d.name}` | ${d.lines} | ${d.loc.source.name}:${d.line} |\n"))
+      longest.foreach(d => sb.append(s"| `${d.name}` | ${d.lines} | ${d.file}:${d.line} |\n"))
     }
 
     val nested = report.functions.filter(_.nesting > 1).sortBy(-_.nesting).take(FindingsShown)
     if (nested.nonEmpty) {
       sb.append("\n## Most deeply nested\n\n| function | levels | at |\n| --- | --- | --- |\n")
-      nested.foreach(d => sb.append(s"| `${d.name}` | ${d.nesting} | ${d.loc.source.name}:${d.line} |\n"))
+      nested.foreach(d => sb.append(s"| `${d.name}` | ${d.nesting} | ${d.file}:${d.line} |\n"))
     }
 
     val undocumented = report.publicApi.filterNot(_.hasDoc).sortBy(_.name).take(FindingsShown)
     if (undocumented.nonEmpty) {
       sb.append("\n## Undocumented public functions\n\n| function | at |\n| --- | --- |\n")
-      undocumented.foreach(d => sb.append(s"| `${d.name}` | ${d.loc.source.name}:${d.line} |\n"))
+      undocumented.foreach(d => sb.append(s"| `${d.name}` | ${d.file}:${d.line} |\n"))
     }
 
     if (report.tests.isEmpty) sb.append("\nThis project has no tests.\n")
@@ -682,9 +765,18 @@ object Metrics {
       sb.append(finding(f, "longest", functions.sortBy(-_.lines).take(FindingsShown), d => s"${d.lines} lines"))
       sb.append(finding(f, "most deeply nested", functions.filter(_.nesting > 1).sortBy(-_.nesting).take(FindingsShown), d => s"${d.nesting} levels"))
       sb.append(finding(f, "hardest to follow", functions.filter(_.cognitive > 4).sortBy(-_.cognitive).take(FindingsShown), d => s"cognitive ${d.cognitive}"))
+      sb.append(finding(f, "widest returned shape", functions.filter(_.returnWidth > 5).sortBy(-_.returnWidth).take(FindingsShown), d => s"${d.returnWidth} fields returned"))
       sb.append(finding(f, "widest parameter lists", functions.filter(_.widestParameterList > 3).sortBy(-_.widestParameterList).take(FindingsShown),
         d => if (d.maxLocalParameters > d.parameters) s"${d.maxLocalParameters} parameters, in a local definition" else s"${d.parameters} parameters"))
       sb.append(finding(f, "undocumented public", api.filterNot(_.hasDoc).sortBy(_.name).take(FindingsShown), _ => "no doc comment"))
+    }
+
+    val wideLocals = report.locals.filter(l => l.lines > 10 || l.parameters > 3).sortBy(-_.lines).take(FindingsShown)
+    if (wideLocals.nonEmpty) {
+      sb.append("\n" + f.bold("Local definitions") + "\n")
+      wideLocals.foreach { l =>
+        sb.append(s"    ${f.blue(l.name)} in ${l.owner} -- ${l.lines} lines, ${l.parameters} parameters, nesting ${l.nesting}  ${f.cyan(s"${l.file}:${l.line}")}\n")
+      }
     }
 
     if (report.modules.length > 1) {
@@ -715,7 +807,7 @@ object Metrics {
     val sb = new StringBuilder
     sb.append(s"  $label\n")
     items.foreach { d =>
-      sb.append(s"    ${f.blue(d.name)} -- ${measure(d)}  ${f.cyan(s"${d.loc.source.name}:${d.line}")}\n")
+      sb.append(s"    ${f.blue(d.name)} -- ${measure(d)}  ${f.cyan(s"${d.file}:${d.line}")}\n")
     }
     sb.toString
   }
