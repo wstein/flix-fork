@@ -87,4 +87,19 @@ case class Version(major: Int, minor: Int, revision: Int, qualifier: Option[Stri
     case Some(q) => s"$major.$minor.$revision+$q"
     case None => s"$major.$minor.$revision"
   }
+
+  /**
+    * The version as a manifest may state it: three numbers and nothing else.
+    *
+    * `flix.toml` is read by whatever compiler opens the project, including a stock one, and stock
+    * Flix parses `x.x.x` and refuses anything else. This fork's own parser was widened to tolerate
+    * the `+fork...` qualifier that [[toString]] renders, which hides the difference locally -- so a
+    * manifest generated here and taken anywhere else would not open, and a package published from
+    * it would be unusable to anyone on a stock compiler.
+    *
+    * Everything that merely *reports* a version -- the banner, the crash handler, the generated
+    * documentation, `--json` output -- keeps [[toString]] and its qualifier, which is what the
+    * qualifier exists for.
+    */
+  def manifestString: String = s"$major.$minor.$revision"
 }

@@ -144,7 +144,7 @@ object Bootstrap {
         s"name        = \"$packageName\"",
         s"description = \"${escapeTomlString(options.description)}\"",
         "version     = \"0.1.0\"",
-        s"flix        = \"${Version.CurrentVersion}\""
+        s"flix        = \"${Version.CurrentVersion.manifestString}\""
       ) ++ options.license.spdxId.map(id => s"license     = \"$id\"") ++ List(
         s"authors     = [\"${escapeTomlString(options.author)}\"]"
       )

@@ -11,7 +11,7 @@ import java.security.{DigestInputStream, MessageDigest}
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.zip.ZipFile
-import scala.jdk.CollectionConverters.EnumerationHasAsScala
+import scala.jdk.CollectionConverters.{EnumerationHasAsScala, ListHasAsScala}
 import scala.util.Using
 
 @DoNotDiscover
@@ -22,6 +22,24 @@ class TestBootstrap extends AnyFunSuite {
   test("init") {
     val p = Files.createTempDirectory(ProjectPrefix)
     Bootstrap.init(p)(System.out)
+  }
+
+  test("init writes a version stock Flix can read") {
+    // `flix.toml` states the compiler version in three numbers and nothing else. This fork's own
+    // parser was widened to tolerate a `+fork...` qualifier, which hides the problem locally --
+    // upstream Flix has not been, so a manifest generated here would be unreadable there, and a
+    // package published from it unusable by anyone on a stock compiler.
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out).unsafeGet
+
+    val declared = Files.readAllLines(p.resolve("flix.toml")).asScala
+      .map(_.trim)
+      .find(_.startsWith("flix"))
+      .map(_.dropWhile(_ != '=').drop(1).trim.stripPrefix("\"").stripSuffix("\""))
+      .getOrElse(fail("The generated manifest declares no Flix version."))
+
+    assert(declared.matches("""\d+\.\d+\.\d+"""),
+      s"init wrote '$declared'; a manifest version must be three numbers and nothing else.")
   }
 
   test("init creates a missing project directory") {
