@@ -1059,7 +1059,8 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
       case Some(result) =>
         val recorded = for {
           _ <- Steps.reconcileClassDirectory(build, result.products)
-          _ <- Steps.writeBuildManifest(build, fingerprint, result.products, sourcesDigest, outcome.hasMain)
+          _ <- Steps.writeBuildManifest(
+            build, fingerprint, frontendFingerprintOf(flix), result.products, sourcesDigest, outcome.hasMain)
         } yield ()
         recorded match {
           case Ok(()) => outcome
@@ -1085,6 +1086,15 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
     */
   private def fingerprintOf(flix: Flix): String =
     BuildManifest.fingerprintOf(flix.options, dependencyPaths ::: flix.jarPaths)
+
+  /**
+    * Returns the fingerprint of the inputs that can change what the front end reports.
+    *
+    * The narrower of the two, for the narrower question: whether a recorded build's *verdict* still
+    * applies, rather than whether its products may be reused.
+    */
+  private def frontendFingerprintOf(flix: Flix): String =
+    BuildManifest.frontendFingerprintOf(flix.options, dependencyPaths ::: flix.jarPaths)
 
   /** Returns every dependency this project resolves against: flix packages, maven and url jars. */
   private def dependencyPaths: List[Path] =
@@ -1521,10 +1531,34 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
     * @return whether the check ran. `false` means a recorded build already answered.
     */
   def checkIfNeeded(flix: Flix, reuse: Boolean = true): Result[Boolean, BootstrapError] = {
-    if (reuse && isRecordedBuildCurrent(flix)) {
+    if (reuse && isCheckedByRecordedBuild(flix)) {
       return Ok(false)
     }
     check(flix).map(_ => true)
+  }
+
+  /**
+    * Returns `true` if a recorded build already type checked exactly these sources.
+    *
+    * Two conditions, and deliberately not three. The sources must hash to what the build read, and the
+    * inputs that can change what the front end *reports* must be the ones it read them under -- which
+    * is a narrower comparison than a build reuses, because an option that only changes what is emitted
+    * cannot change a verdict.
+    *
+    * The products are not required to still be there, which is the difference from
+    * `Steps.isRecordedBuildCurrent`. A type-checking verdict is a fact about sources; deleting class
+    * files does not make a program stop checking. `clean` removes the manifest along with them, so a
+    * project that was cleaned is checked for real anyway -- by the absence of a record rather than by a
+    * condition that pretends to be about one thing while being about another.
+    */
+  private def isCheckedByRecordedBuild(flix: Flix): Boolean = {
+    val expected = frontendFingerprintOf(flix)
+    Steps.rescanSources()
+    Steps.readBuildManifest(flix.options.build) match {
+      case Some(m) if m.frontendFingerprint == expected =>
+        m.sourcesDigest == BuildManifest.digestOfSources(projectPath, sourcePaths)
+      case _ => false
+    }
   }
 
   /**
@@ -2725,13 +2759,15 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
       * Written after the class directory has been reconciled, so that a manifest exists only
       * once it describes the directory.
       */
-    def writeBuildManifest(build: Build, fingerprint: String, products: Set[Path],
-                           sourcesDigest: String, hasMain: Boolean): Result[Unit, BootstrapError] = {
+    def writeBuildManifest(build: Build, fingerprint: String, frontendFingerprint: String,
+                           products: Set[Path], sourcesDigest: String,
+                           hasMain: Boolean): Result[Unit, BootstrapError] = {
       // Only sources that exist. A deleted path stays in `sourcePaths` on purpose - so that a file
       // which comes back is noticed - but recording it here would describe the build as having read
       // a file that is not there.
       val manifest = BuildManifest(
         fingerprint,
+        frontendFingerprint,
         products.toList.map(BuildManifest.nameOf).sorted,
         sourcePaths.filter(Files.isRegularFile(_)).map(p => BuildManifest.relativeName(projectPath, p)).sorted,
         sourcesDigest,

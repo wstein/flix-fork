@@ -65,6 +65,9 @@ import java.security.MessageDigest
   * writes inside one tick are ordinary. A digest cannot be fooled by a clock.
   *
   * @param fingerprint   the [[fingerprintOf]] hash of the non-source inputs of the build.
+  * @param frontendFingerprint the [[frontendFingerprintOf]] hash of those of them that can change what
+  *                            the front end reports, recorded separately so that a question about type
+  *                            checking is not answered by comparing what the back end was told.
   * @param products      every class file the build wrote, as a class-directory-relative,
   *                      `/`-separated name, sorted.
   * @param sources       the source files the build read, as project-relative where possible,
@@ -75,6 +78,7 @@ import java.security.MessageDigest
   *                      client asking what to run must still be told.
   */
 case class BuildManifest(fingerprint: String,
+                         frontendFingerprint: String,
                          products: List[String],
                          sources: List[String],
                          sourcesDigest: String,
@@ -98,7 +102,7 @@ object BuildManifest {
     * products this compiler cannot interpret, and discarding it costs one full rebuild while
     * misreading it packages the wrong files.
     */
-  private val FormatVersion: Int = 2
+  private val FormatVersion: Int = 3
 
   /** Returns the path of the manifest inside the build directory `buildDir`. */
   def fileIn(buildDir: Path): Path = buildDir.resolve(FileName).normalize()
@@ -122,36 +126,79 @@ object BuildManifest {
     * project's resolved dependencies and the jars a `--lib` flag added are both inputs to a build,
     * and both are on the `Flix` instance's class loader. See `Bootstrap.fingerprintOf`.
     */
-  def fingerprintOf(options: Options, dependencies: List[Path]): String = {
+  def fingerprintOf(options: Options, dependencies: List[Path]): String =
+    hash((frontendSettings(options, dependencies) ::: backendSettings(options)).mkString("\n"))
+
+  /**
+    * Returns a hash of only those inputs that can change what the *front end* reports.
+    *
+    * ==Why the fingerprint is split==
+    *
+    * Because two different questions are asked of a recorded build, and one of them is narrower. "May
+    * these products be reused" depends on everything, including what the back end was told to emit.
+    * "Do these sources type check" does not: an option that only changes instrumentation cannot change
+    * the verdict, and comparing the whole fingerprint made `flix check` do the work again after a
+    * `--coverage` build for no reason.
+    *
+    * That is the mild cost. The one that mattered is silent: every option added to the fingerprint from
+    * now on would have narrowed when a check could be answered, whether or not it had anything to do
+    * with checking, and nothing would have reported the loss -- a slow command looks like a slow
+    * command. Splitting the two makes the classification a decision someone has to make when adding an
+    * option, rather than a side effect of adding it.
+    *
+    * ==Which side an option goes on==
+    *
+    * The front end, unless it is *known* only to change what is emitted. Over-including costs an
+    * occasional real type check; under-including reports a program as clean that would not check clean,
+    * and a false clean is the worst answer this compiler can give. Note where that puts the build mode:
+    * it reaches the typer, which is lenient about the `Debug` effect in development, so the two modes do
+    * not check the same program and a development build cannot answer a production check.
+    */
+  def frontendFingerprintOf(options: Options, dependencies: List[Path]): String =
+    hash(frontendSettings(options, dependencies).mkString("\n"))
+
+  /** The inputs that can change what the front end reports. See [[frontendFingerprintOf]]. */
+  private def frontendSettings(options: Options, dependencies: List[Path]): List[String] = {
     val settings = List(
       s"format=$FormatVersion",
       s"compiler=${Version.CurrentVersion}",
       s"lib=${options.lib}",
+      // Reaches the typer: development is lenient about the `Debug` effect, so the modes do not check
+      // the same program.
       s"build=${options.build}",
-      s"coverage=${options.coverage}",
+      // Decides which def is the entry point, and so which errors `EntryPoints` reports about it.
       s"entryPoint=${options.entryPoint.map(_.toString).getOrElse("")}",
       s"subeffecting=${options.xsubeffecting.map(_.toString).toList.sorted.mkString(",")}",
       s"datalogDebug=${options.xdatalogDebug.map(_.toString).toList.sorted.mkString(",")}",
-      s"newmono=${options.xnewmono}",
-      s"debug=${options.xdebug}",
       s"chaosMonkey=${options.xchaosMonkey}",
-      // Reaches `Weeder2`, so it changes whether a program compiles at all -- and now also whether a
-      // recorded build may answer for a *type check*, which is the reason it was noticed. An option
-      // that decides what the front end reports has to be here, not only one that reaches the back end.
+      // Reaches `Weeder2`, so it changes whether a program compiles at all.
       s"noDeprecated=${options.xnodeprecated}",
     )
     // A dependency is identified the way `Bootstrap` identifies a stale source - by size and
     // modification time - rather than by hashing it. Hashing every dependency jar on every
-    // build costs more than the rebuild it would occasionally save.
+    // build costs more than the rebuild it would occasionally save. They are here rather than with the
+    // back-end settings because a jar is where the Java classes a program calls come from, so it
+    // reaches the typer.
     //
     // Deduplicated after stamping, not before: callers union lists that overlap - a project's Maven
     // jars are also in the class loader they were added to - and the same file can arrive under two
     // spellings of its path. Two identical stamps would otherwise make one build's fingerprint differ
     // from another's over nothing, and a build that is permanently stale against its own manifest
     // never reuses anything.
-    val deps = dependencies.map(stampOf).distinct.sorted
-    hash((settings ::: deps).mkString("\n"))
+    settings ::: dependencies.map(stampOf).distinct.sorted
   }
+
+  /**
+    * The inputs that change only what is emitted.
+    *
+    * Short by design, and it stays short only if each addition is argued for: anything that could
+    * change an error belongs on the other side.
+    */
+  private def backendSettings(options: Options): List[String] = List(
+    s"coverage=${options.coverage}",
+    s"newmono=${options.xnewmono}",
+    s"debug=${options.xdebug}",
+  )
 
   /**
     * Returns a hash of the *contents* of `sources`, together with their names.
@@ -226,6 +273,11 @@ object BuildManifest {
       case _ => return None
     }
 
+    val frontendFingerprint = (json \ "frontendFingerprint") match {
+      case JString(s) => s
+      case _ => return None
+    }
+
     val sourcesDigest = (json \ "sourcesDigest") match {
       case JString(s) => s
       case _ => return None
@@ -239,7 +291,7 @@ object BuildManifest {
     for {
       products <- stringsOf(json \ "products")
       sources <- stringsOf(json \ "sources")
-    } yield BuildManifest(fingerprint, products, sources, sourcesDigest, hasMain)
+    } yield BuildManifest(fingerprint, frontendFingerprint, products, sources, sourcesDigest, hasMain)
   }
 
   /** Writes `manifest` to `path`, creating the parent directory if needed. */
@@ -248,6 +300,7 @@ object BuildManifest {
       ("formatVersion" -> FormatVersion) ~
         ("compilerVersion" -> Version.CurrentVersion.toString) ~
         ("fingerprint" -> manifest.fingerprint) ~
+        ("frontendFingerprint" -> manifest.frontendFingerprint) ~
         ("products" -> manifest.products) ~
         ("sources" -> manifest.sources) ~
         ("sourcesDigest" -> manifest.sourcesDigest) ~

@@ -404,17 +404,51 @@ class TestBootstrap extends AnyFunSuite {
     assert(b.checkIfNeeded(mkDeterministicFlix).isInstanceOf[Result.Err[?, ?]], "a broken project checked clean")
   }
 
-  test("a check whose build output was deleted runs for real") {
+  test("a check does not need the products of the build that answered it") {
     val p = Files.createTempDirectory(ProjectPrefix)
     Bootstrap.init(p)(System.out)
     val b = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
     assert(b.buildIfNeeded(mkDeterministicFlix).unsafeGet)
 
-    // Conservative in the direction that costs time rather than correctness: a check does not care
-    // about class files, but it consults one predicate rather than two, and that predicate does.
-    b.cleanOutput(mkDeterministicFlix, Build.Development).unsafeGet
+    // A verdict is a fact about sources: deleting class files does not make a program stop type
+    // checking. This used to run for real, because the check borrowed the predicate a *build* uses,
+    // which is about the output. `clean` deletes the manifest along with the products, so a cleaned
+    // project is still checked -- by the absence of a record rather than by a condition pretending to
+    // be about one thing while being about another.
+    removeClassFiles(p, Build.Development)
 
-    assert(b.checkIfNeeded(mkDeterministicFlix).unsafeGet, "a check reused a build whose output is gone")
+    assert(!b.checkIfNeeded(mkDeterministicFlix).unsafeGet, "a check insisted on class files it does not use")
+  }
+
+  test("a check is answered by a build that differed only in what it emitted") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out)
+    val b = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
+
+    val instrumented = mkDeterministicFlix
+    instrumented.setOptions(instrumented.options.copy(coverage = true))
+    assert(b.buildIfNeeded(instrumented).unsafeGet)
+
+    // Coverage instrumentation cannot change what the front end reports, so the verdict of that build
+    // is this check's answer. Comparing the whole fingerprint made this do the work again for nothing --
+    // and would have done so for every option added to it from then on, silently, because a slow
+    // command looks like a slow command.
+    assert(!b.checkIfNeeded(mkDeterministicFlix).unsafeGet, "a check ignored a build that had checked it")
+  }
+
+  test("a check is not answered by a build with a different front-end option") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out)
+    val b = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
+    assert(b.buildIfNeeded(mkDeterministicFlix).unsafeGet)
+
+    // `xnodeprecated` reaches `Weeder2`, so it decides what the front end reports -- which is exactly
+    // the line the split is drawn along. A false clean is the worst answer this compiler can give, so
+    // anything that might change an error belongs on this side of it.
+    val lenient = mkDeterministicFlix
+    lenient.setOptions(lenient.options.copy(xnodeprecated = !lenient.options.xnodeprecated))
+
+    assert(b.checkIfNeeded(lenient).unsafeGet, "a check reused a verdict reached under other rules")
   }
 
   test("a check asked not to reuse runs for real") {
@@ -1477,6 +1511,10 @@ class TestBootstrap extends AnyFunSuite {
     * differ in the *names* of a handful of closure classes, which is indistinguishable from a
     * stale product when comparing class directories.
     */
+  /** Deletes the class files of the build mode `build` in the project at `p`, leaving the manifest. */
+  private def removeClassFiles(p: Path, build: Build): Unit =
+    FileOps.getFilesWithExtIn(classDirOf(p, build), "class", Int.MaxValue).foreach(Files.delete)
+
   /** Returns a compiler instance that has been given `jars`, the way `--lib` does. */
   private def flixWith(jars: Path*): Flix = {
     val flix = mkDeterministicFlix

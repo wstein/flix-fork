@@ -64,9 +64,16 @@ there.
 ## A check may be answered from the last build
 
 `flix check` and `flix check --diagnostics-json` answer without type checking when a
-recorded successful build already accounts for the current sources: same content digest,
-same fingerprint, same products present. A build runs the check first and stops if it
-reports anything, so the record is evidence rather than a cache of an opinion.
+recorded successful build already accounts for the current sources: the same content digest,
+and the same inputs *as far as they can change what the front end reports*. A build runs the
+check first and stops if it reports anything, so the record is evidence rather than a cache of
+an opinion.
+
+The second condition is narrower than the one a build uses, deliberately. An option that only
+changes what the back end emits — instrumentation, for instance — cannot change a verdict, so a
+build that differed only there still answers this. Anything that could change an error does
+not: the build mode counts, since development is lenient about the `Debug` effect, and so does
+every dependency jar, since that is where the Java classes a program calls come from.
 
 What a build tool should know about that:
 
@@ -77,8 +84,9 @@ What a build tool should know about that:
   answered from it, and one given a changed, added or removed jar runs.
 - **`--clean` forces it.** `flix check --clean` type checks regardless, which is what a
   release pipeline that trusts nothing on disk should pass.
-- **A clean build directory disables it too**, since the record's products must still be
-  there. A CI job that starts from an empty workspace therefore never takes this path.
+- **A clean build directory disables it too**, because `flix clean` deletes the record along
+  with the products. A CI job that starts from an empty workspace therefore never takes this
+  path. Deleting only the class files does not, since a verdict is a fact about sources.
 
 ## Why a contract and not a linked API
 

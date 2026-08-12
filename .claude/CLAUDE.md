@@ -159,9 +159,21 @@ goes from 4.4 s to 0.44 s. Four things to know before touching it:
   holding something no build wrote is what the manifest exists to prevent.
 - **`flix check` consults the same record**, because a build *is* a check followed by code
   generation and stops if the check reports anything: a manifest whose digest matches proves
-  the sources type check. `Bootstrap.checkIfNeeded` — 3.2 s to 0.44 s. This is why the
-  fingerprint now has to cover front-end options as well as back-end ones, and why
-  `xnodeprecated` was added to it: it reaches `Weeder2`.
+  the sources type check. `Bootstrap.checkIfNeeded` — 3.2 s to 0.44 s.
+- **The fingerprint is two fingerprints, and which side an option goes on is a decision.**
+  `BuildManifest.fingerprintOf` governs reusing *products*; `frontendFingerprintOf` governs
+  reusing a *verdict*, and covers only what can change what the front end reports. Both are
+  recorded. Put an option on the front-end side unless it is *known* to change nothing but what
+  is emitted: over-including costs an occasional real type check, under-including reports a
+  program as clean that would not check clean. Today the back-end-only side is `coverage`,
+  `xnewmono` and `xdebug` — everything else, including the build mode (development is lenient
+  about the `Debug` effect, so the modes do not check the same program) and every dependency
+  jar, is a front-end input. Without the split, every option added to the fingerprint would have
+  narrowed when a check could be answered whether or not it had anything to do with checking,
+  and nothing would have reported the loss.
+- **A check does not require the products to still be there.** A verdict is a fact about
+  sources. `clean` deletes the manifest with them, so a cleaned project is checked for real by
+  the absence of a record rather than by a condition that pretends to be about one thing.
 - **`flix run` forks, and that is what lets it skip.** Running in this process means reflecting
   over a `CompilationResult`, and only a compile produces one — so `run` compiled every time.
   `ProgramRunner` builds the command (`java -cp <runtimeClasspath> Main <args>`) for both
