@@ -97,10 +97,11 @@ object BspRunner {
         reader.join(DrainGrace.toMillis)
         Outcome(process.exitValue(), timedOut = false)
       } else {
-        // Kill, reap, then join: destroying closes the pipe, which is what ends the reader, and waiting
-        // for the exit before joining means the reader is not still being fed while we wait for it.
-        process.destroyForcibly()
-        process.waitFor()
+        // Kill the whole tree, reap, then join: destroying closes the pipe, which is what ends the
+        // reader, and waiting for the exit before joining means the reader is not still being fed while
+        // we wait for it. The *tree*, because a child the program started would otherwise keep the pipe
+        // open and go on writing after this run reported that it had been stopped.
+        ProgramRunner.terminateTree(process, DrainGrace)
         reader.join(DrainGrace.toMillis)
         Outcome(process.exitValue(), timedOut = true)
       }

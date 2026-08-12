@@ -154,6 +154,59 @@ class TestBspProcess extends AnyFunSuite {
     }
   }
 
+  test("a framed cancel request stops the run it names") {
+    val project = newProject()
+    Files.writeString(project.resolve("src").resolve("Main.flix"),
+      """def main(): Unit \ IO = loop()
+        |
+        |def loop(): Unit \ IO = loop()
+        |""".stripMargin)
+    install(project)
+
+    // The other cancellation test drives `CompletableFuture.cancel` on a local proxy, which exercises
+    // lsp4j's client side and this server's handler. This one writes the frame a real client writes, to a
+    // real process, and so covers the wiring between them -- the part neither side's own tests can see.
+    val process = new ProcessBuilder(connectionArgv(project)*).directory(project.toFile).start()
+    try {
+      val out = process.getOutputStream
+      val in = new BufferedInputStream(process.getInputStream)
+
+      writeFrame(out, initializeRequest(project))
+      awaitId(in, 1)
+      writeFrame(out, """{"jsonrpc":"2.0","method":"build/initialized","params":{}}""")
+      val targets = request(out, in, 2, """{"jsonrpc":"2.0","id":2,"method":"workspace/buildTargets","params":{}}""")
+      val target = (targets \ "targets" \ "id" \ "uri") match {
+        case JString(uri) => s"""{"uri":"$uri"}"""
+        case JArray(JString(uri) :: Nil) => s"""{"uri":"$uri"}"""
+        case other => fail(s"no single target in $other")
+      }
+
+      request(out, in, 3, s"""{"jsonrpc":"2.0","id":3,"method":"buildTarget/compile","params":{"targets":[$target]}}""")
+
+      // The program never ends, so this request never answers on its own.
+      writeFrame(out, s"""{"jsonrpc":"2.0","id":4,"method":"buildTarget/run","params":{"target":$target}}""")
+      // Wait until the run has actually begun before cancelling, so the cancellation lands on work in
+      // flight rather than on a request still being dispatched.
+      assert(awaitFrame(in, 30) { frame => frame.contains("build/taskStart") && frame.contains("\"id\":\"") },
+        "the run never announced itself")
+
+      writeFrame(out, """{"jsonrpc":"2.0","method":"$/cancelRequest","params":{"id":4}}""")
+
+      // Answered, and answered as cancelled: -32800 is `RequestCancelled`, which is lsp4j's reply to a
+      // future the client gave up on. A run that was merely abandoned would never answer at all.
+      val error = awaitError(in, 4, 60)
+      assert(error.contains(-32800), s"unexpected reply to the cancelled run: $error")
+
+      // And the program is gone rather than merely unreported: it holds the build lock while it runs and
+      // its own timeout is ten minutes, so a compile that answers proves the process was killed.
+      val after = request(out, in, 5, s"""{"jsonrpc":"2.0","id":5,"method":"buildTarget/compile","params":{"targets":[$target]}}""")
+      assert((after \ "statusCode") == JInt(1), s"the session was still held by the cancelled run: $after")
+    } finally {
+      process.destroyForcibly()
+      process.waitFor(Timeout, TimeUnit.SECONDS)
+    }
+  }
+
   test("exit after shutdown is a success, and exit without one is not") {
     val project = newProject()
     install(project)
@@ -260,6 +313,30 @@ class TestBspProcess extends AnyFunSuite {
       frames += 1
     }
     fail("the server never answered build/initialize")
+  }
+
+  /** Reads frames until `predicate` accepts one, or `seconds` elapse. */
+  private def awaitFrame(in: InputStream, seconds: Long)(predicate: String => Boolean): Boolean = {
+    val deadline = System.nanoTime() + java.time.Duration.ofSeconds(seconds).toNanos
+    while (System.nanoTime() < deadline) {
+      if (predicate(readFrame(in))) return true
+    }
+    false
+  }
+
+  /** Reads frames until the one answering `id` arrives, and returns its error code. */
+  private def awaitError(in: InputStream, id: Int, seconds: Long): Option[Int] = {
+    val deadline = System.nanoTime() + java.time.Duration.ofSeconds(seconds).toNanos
+    while (System.nanoTime() < deadline) {
+      val message = JsonMethods.parse(readFrame(in))
+      if ((message \ "id") == JInt(id)) {
+        return (message \ "error" \ "code") match {
+          case JInt(code) => Some(code.toInt)
+          case _ => None
+        }
+      }
+    }
+    None
   }
 
   /** Sends `body` and returns the result of the response carrying `id`. */

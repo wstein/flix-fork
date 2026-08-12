@@ -127,6 +127,40 @@ class TestBspRun extends AnyFunSuite {
     }
   }
 
+  test("stopping a program stops what it started") {
+    // Not through a Flix program, on purpose: the mechanism is what is under test, and a shell gives a
+    // child whose lifetime can be observed exactly. `/bin/sh` is present on both platforms this suite
+    // runs on; the assertion is skipped rather than faked anywhere else.
+    assume(java.io.File.separatorChar == '/')
+
+    val marker = Files.createTempFile("flix-child-", ".txt")
+    val process = new ProcessBuilder(
+      "/bin/sh", "-c", s"( while true; do echo alive >> '$marker'; sleep 0.1; done ) & wait")
+      .start()
+    try {
+      // The child is writing, so the marker grows. That is what makes "still running" observable.
+      val grew = waitUntil(30) {
+        val first = Files.size(marker)
+        Thread.sleep(300)
+        Files.size(marker) > first
+      }
+      assert(grew, "the child never started writing, so this test would prove nothing")
+
+      ProgramRunner.terminateTree(process, java.time.Duration.ofSeconds(5))
+
+      // Killing only the root would leave the loop running and the file growing: the shell's child is
+      // reparented rather than killed, which is exactly the leak a client sees as output arriving after
+      // the task it belonged to reported that it had stopped.
+      val size = Files.size(marker)
+      Thread.sleep(1000)
+      assert(Files.size(marker) == size, "a descendant survived and kept writing")
+      assert(!process.isAlive, "the root process survived")
+    } finally {
+      process.destroyForcibly()
+      Files.deleteIfExists(marker)
+    }
+  }
+
   test("a cancelled run stops its program") {
     withSession(
       """def main(): Unit \ IO = loop()
@@ -270,6 +304,16 @@ class TestBspRun extends AnyFunSuite {
   }
 
   // ── Harness ──────────────────────────────────────────────────────────────────
+
+  /** Returns `true` if `condition` held within `seconds`, polling. */
+  private def waitUntil(seconds: Long)(condition: => Boolean): Boolean = {
+    val deadline = System.nanoTime() + java.time.Duration.ofSeconds(seconds).toNanos
+    while (System.nanoTime() < deadline) {
+      if (condition) return true
+      Thread.sleep(100)
+    }
+    false
+  }
 
   /**
     * The two interfaces a Flix build server implements, as one.

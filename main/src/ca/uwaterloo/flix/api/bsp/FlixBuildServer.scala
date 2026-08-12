@@ -22,7 +22,7 @@ import org.eclipse.lsp4j.jsonrpc.ResponseErrorException
 import org.eclipse.lsp4j.jsonrpc.messages.{ResponseError, ResponseErrorCode}
 
 import java.nio.file.{Files, Path}
-import java.util.concurrent.{CompletableFuture, Executor, RejectedExecutionException}
+import java.util.concurrent.{CompletableFuture, Executor, RejectedExecutionException, Semaphore}
 import scala.jdk.CollectionConverters.*
 
 /**
@@ -52,6 +52,19 @@ import scala.jdk.CollectionConverters.*
   */
 class FlixBuildServer(session: BspSession, onExit: () => Unit, executor: Executor) extends BuildServer with JvmBuildServer {
 
+  /**
+    * How many build requests may be in flight at once.
+    *
+    * Requests are dispatched off the connection's thread and builds are serialised, so surplus work
+    * parks a platform thread each -- and the pool is unbounded on purpose, because a ten-minute run must
+    * not starve a query. Something has to be the bound. Generous: no editor comes close, and the
+    * coalescing in `BspSession` already collapses a burst of compiles into two builds.
+    */
+  private val MaxBuildRequestsInFlight: Int = 32
+
+  /** Permits for [[MaxBuildRequestsInFlight]], taken before a request is submitted. */
+  private val admission: Semaphore = new Semaphore(MaxBuildRequestsInFlight)
+
   /** Progress notifications, which read the client through the session so a late connect is fine. */
   private val tasks: BspTasks = new BspTasks(() => session.currentClient)
 
@@ -62,9 +75,23 @@ class FlixBuildServer(session: BspSession, onExit: () => Unit, executor: Executo
 
   override def onBuildInitialized(): Unit = session.initialized()
 
+  /**
+    * Ends the session.
+    *
+    * Answered on this thread rather than on the executor, deliberately: it must not be able to queue
+    * behind the very work it is stopping. The state check is the session's, and its failure is mapped
+    * the way every other request's is -- a shutdown that cannot be served has to say so, not succeed.
+    */
   override def buildShutdown(): CompletableFuture[Object] = {
-    session.shutdown()
-    CompletableFuture.completedFuture(null)
+    val future = new CompletableFuture[Object]()
+    try {
+      session.shutdown()
+      future.complete(null)
+    } catch {
+      case e: ResponseErrorException => future.completeExceptionally(e)
+      case e: Exception => future.completeExceptionally(internalError(e))
+    }
+    future
   }
 
   /**
@@ -192,7 +219,7 @@ class FlixBuildServer(session: BspSession, onExit: () => Unit, executor: Executo
     * that reports nothing looks like a hang. The status of the finish comes from the result, so a
     * compile that found errors finishes as `ERROR` while still being a request that was served.
     */
-  override def buildTargetCompile(params: CompileParams): CompletableFuture[CompileResult] = completing {
+  override def buildTargetCompile(params: CompileParams): CompletableFuture[CompileResult] = admitted("a compile") {
     val view = session.requireView()
     val targets = requireKnownTargets(view, params.getTargets)
     val target = targets.headOption.getOrElse(BuildTargets.id(view))
@@ -212,7 +239,7 @@ class FlixBuildServer(session: BspSession, onExit: () => Unit, executor: Executo
     * Bracketed like a compile so a client can show that something is happening, and the program's own
     * output arrives as log messages rather than as diagnostics -- it is not a problem with the code.
     */
-  override def buildTargetRun(params: RunParams): CompletableFuture[RunResult] = completingCancellable { cancellation =>
+  override def buildTargetRun(params: RunParams): CompletableFuture[RunResult] = admittedCancellable("a run") { cancellation =>
     val view = session.requireView()
     requireKnownTarget(view, params.getTarget)
     val target = params.getTarget
@@ -237,7 +264,7 @@ class FlixBuildServer(session: BspSession, onExit: () => Unit, executor: Executo
     * `params.getArguments` is read as regular expressions selecting which tests to run, which is what
     * `Tester` already accepts; a client that sends none runs them all.
     */
-  override def buildTargetTest(params: TestParams): CompletableFuture[TestResult] = completingCancellable { cancellation =>
+  override def buildTargetTest(params: TestParams): CompletableFuture[TestResult] = admittedCancellable("a test run") { cancellation =>
     val view = session.requireView()
     val targets = requireKnownTargets(view, params.getTargets)
     val target = targets.headOption.getOrElse(BuildTargets.id(view))
@@ -353,6 +380,7 @@ class FlixBuildServer(session: BspSession, onExit: () => Unit, executor: Executo
 
   /** Fails unless `target` is one this server has. */
   private def requireKnownTarget(view: ProjectView, target: BuildTargetIdentifier): Unit = {
+    requireTargetsOffered()
     if (!BuildTargets.isKnown(view, target)) {
       throw new ResponseErrorException(new ResponseError(
         ResponseErrorCode.InvalidParams,
@@ -363,6 +391,7 @@ class FlixBuildServer(session: BspSession, onExit: () => Unit, executor: Executo
 
   /** Returns `targets`, or fails naming the ones this server does not have. */
   private def requireKnownTargets(view: ProjectView, targets: java.util.List[BuildTargetIdentifier]): List[BuildTargetIdentifier] = {
+    requireTargetsOffered()
     val asked = Option(targets).map(_.asScala.toList).getOrElse(Nil)
     val unknown = asked.filterNot(BuildTargets.isKnown(view, _))
     if (unknown.nonEmpty) {
@@ -381,6 +410,47 @@ class FlixBuildServer(session: BspSession, onExit: () => Unit, executor: Executo
     * `ServerNotInitialized` and `InvalidParams` codes the lifecycle depends on never reach the
     * client.
     */
+  /**
+    * As [[completing]], but refused when too much build work is already in flight.
+    *
+    * The permit is taken *before* the work is submitted, and that ordering is the whole point. Taking it
+    * inside the body -- which is where this started -- means the thread has already been created and the
+    * task already queued by the time the limit is consulted, so a flood costs exactly what the limit was
+    * meant to prevent and the refusals arrive after the damage. Here a request that cannot be admitted
+    * never reaches the pool.
+    *
+    * Released on completion however the request ended, including cancellation: `whenComplete` runs for
+    * every terminal state, and a permit leaked on one path would shrink the server's capacity for the
+    * life of the connection.
+    */
+  private def admitted[T](what: String)(body: => T): CompletableFuture[T] = {
+    if (!admission.tryAcquire()) {
+      val future = new CompletableFuture[T]()
+      future.completeExceptionally(new ResponseErrorException(new ResponseError(
+        ResponseErrorCode.InvalidRequest,
+        s"too many build requests in flight ($MaxBuildRequestsInFlight); $what was refused rather than queued",
+        null)))
+      return future
+    }
+    val future = completing(body)
+    future.whenComplete((_, _) => admission.release())
+    future
+  }
+
+  /**
+    * As [[admitted]], for work that also has to be told when the client gives up.
+    */
+  private def admittedCancellable[T](what: String)(body: Cancellation => T): CompletableFuture[T] = {
+    val cancellation = new Cancellation
+    val future = admitted(what)(body(cancellation))
+    future.whenComplete { (_, _) =>
+      if (future.isCancelled) {
+        cancellation.cancel()
+      }
+    }
+    future
+  }
+
   /**
     * As [[completing]], for work that has to be told when the client gives up.
     *
@@ -442,6 +512,21 @@ class FlixBuildServer(session: BspSession, onExit: () => Unit, executor: Executo
   private def internalError(e: Exception): ResponseErrorException =
     new ResponseErrorException(
       new ResponseError(ResponseErrorCode.InternalError, Option(e.getMessage).getOrElse(e.toString), null))
+
+  /**
+    * Fails unless this client was offered a target.
+    *
+    * The language filter shapes `workspace/buildTargets`, and a client that was told about no targets can
+    * still derive the id -- it is built from the project path -- and ask for a compile with it. Without
+    * this the filter would be a formality that changed one reply and nothing else.
+    */
+  private def requireTargetsOffered(): Unit = {
+    if (!session.servesTargets) {
+      throw new ResponseErrorException(new ResponseError(ResponseErrorCode.InvalidParams,
+        s"this client advertised no support for '${BuildTargets.LanguageId}', so it was offered no target to operate on",
+        null))
+    }
+  }
 
   /** Refuses a request whose feature is not served, and reports one that is as the bug it is. */
   private def refuse[T](feature: BspFeature): CompletableFuture[T] =

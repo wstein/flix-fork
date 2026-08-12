@@ -73,38 +73,6 @@ class BspSession(val projectPath: Path, options: Options, log: BspLogStream) {
   private val buildLock: AnyRef = new AnyRef
 
   /**
-    * How many requests may be waiting to build at once.
-    *
-    * A bound rather than a queue, and an explicit one. Requests are dispatched off the connection's
-    * thread and builds are serialised, so a client that sends work faster than it completes leaves the
-    * surplus parked on a platform thread each -- and the pool they come from is unbounded on purpose, so
-    * that a ten-minute run cannot starve a query. Something has to say no, and saying it here is
-    * cheaper than discovering the limit as an `OutOfMemoryError`.
-    *
-    * Generous: no editor asks for this much, and the coalescing above already collapses a burst of
-    * compiles into two builds. A client that reaches it is malfunctioning, and a refusal it can read is
-    * the most useful thing to hand it.
-    */
-  private val MaxBuildRequestsInFlight: Int = 32
-
-  /** Permits for [[MaxBuildRequestsInFlight]]. */
-  private val admission: java.util.concurrent.Semaphore = new java.util.concurrent.Semaphore(MaxBuildRequestsInFlight)
-
-  /**
-    * Runs `body` if the server is not already saturated with build work, and refuses it if it is.
-    *
-    * The permit covers the wait as well as the work, because waiting is what costs the thread.
-    */
-  private def admitted[T](what: String)(body: => T): T = {
-    if (!admission.tryAcquire()) {
-      throw invalidRequest(
-        s"too many build requests in flight ($MaxBuildRequestsInFlight); $what was refused rather than queued")
-    }
-    try body
-    finally admission.release()
-  }
-
-  /**
     * Guards [[joinable]] only, and is never held across a build.
     *
     * A separate monitor from [[buildLock]] on purpose: the whole point of the slot is to be readable
@@ -155,6 +123,16 @@ class BspSession(val projectPath: Path, options: Options, log: BspLogStream) {
     client = Some(c)
     log.connect(c)
   }
+
+  /**
+    * Returns `true` if this client was offered a target at all.
+    *
+    * A client that advertised no support for Flix is told about no targets -- and can still *compute*
+    * the target's URI, since it is derived from the project path, and ask for a compile with it. The
+    * language filter would then be a formality that only shaped one reply. Every target-scoped request
+    * asks this, so a target that was never offered cannot be operated on.
+    */
+  def servesTargets: Boolean = BuildTargets.servesClient(clientLanguageIds)
 
   /** The current generation. Work started under one generation is void under any other. */
   def currentGeneration: Long = generation.get()
@@ -225,8 +203,27 @@ class BspSession(val projectPath: Path, options: Options, log: BspLogStream) {
     }
   }
 
-  /** Moves to `ShutDown`, after which no request is served and no notification is published. */
+  /**
+    * Moves to `ShutDown`, after which no request is served and no notification is published.
+    *
+    * A request like any other, so it answers to the same state machine: before the handshake it is
+    * `ServerNotInitialized`, and a second one is an `InvalidRequest`. Letting it through unchecked made
+    * this the one request that could shut down a session that had never started -- and the state model
+    * says only `Ready` serves requests, so the exception was silent rather than argued for.
+    */
   def shutdown(): Unit = synchronized {
+    state match {
+      case State.Uninitialized =>
+        throw new ResponseErrorException(new ResponseError(
+          ResponseErrorCode.ServerNotInitialized, "build/initialize has not been received", null))
+      case State.AwaitingAck =>
+        throw new ResponseErrorException(new ResponseError(ResponseErrorCode.ServerNotInitialized,
+          "build/initialized has not been received; a client may not send requests before it", null))
+      case State.ShutDown =>
+        throw invalidRequest("this connection has already been shut down")
+      case State.Ready => ()
+    }
+
     state = State.ShutDown
     // Work already in flight becomes void as well, not just future work: a compile that was running
     // when this arrived answers into a connection that is closing down, and its result describes a
@@ -327,7 +324,7 @@ class BspSession(val projectPath: Path, options: Options, log: BspLogStream) {
     * condition that makes that sound; the visible consequence here is that only the request whose
     * build ran publishes the diagnostics.
     */
-  def compile(target: BuildTargetIdentifier, originId: Option[String]): CompileResult = admitted("a compile") {
+  def compile(target: BuildTargetIdentifier, originId: Option[String]): CompileResult = {
     val startedAt = currentGeneration
 
     val (outcome, ran) = compileOrJoin()
@@ -465,7 +462,7 @@ class BspSession(val projectPath: Path, options: Options, log: BspLogStream) {
     * holding the lock across it would block every later compile behind it.
     */
   def run(target: BuildTargetIdentifier, arguments: List[String], originId: Option[String],
-          cancellation: Cancellation): RunResult = admitted("a run") {
+          cancellation: Cancellation): RunResult = {
     val startedAt = currentGeneration
 
     val (outcome, view) = buildLock.synchronized {
@@ -501,7 +498,7 @@ class BspSession(val projectPath: Path, options: Options, log: BspLogStream) {
       // A cancelled run stops its program. Dropping the reply and leaving the process running would
       // hold the terminal, the build lock and the output stream until it happened to end, which is not
       // cancellation in any sense a user would recognise.
-      onStart = process => cancellation.onCancel(() => process.destroyForcibly()))
+      onStart = process => cancellation.onCancel(() => ProgramRunner.terminateTree(process, KillGrace)))
 
     if (cancellation.isCancelled) {
       return statusOf(new RunResult(StatusCode.CANCELLED), originId)
@@ -530,7 +527,7 @@ class BspSession(val projectPath: Path, options: Options, log: BspLogStream) {
     * renderings agree about pass and fail because both watch the same runner.
     */
   def test(target: BuildTargetIdentifier, filters: List[Regex], originId: Option[String],
-           cancellation: Cancellation): TestResult = admitted("a test run") {
+           cancellation: Cancellation): TestResult = {
     val startedAt = currentGeneration
     val view = requireView()
 
@@ -815,6 +812,14 @@ object BspSession {
     * has no way to cancel a process it cannot see. Generous, because a legitimate program may be slow.
     */
   private val RunTimeout: java.time.Duration = java.time.Duration.ofMinutes(10)
+
+  /**
+    * How long to wait for a killed program and its children to be gone.
+    *
+    * A cancelled request has already answered, so this is only about not leaving processes behind. Short,
+    * because a process that ignores a forcible kill for five seconds is not going to be reasoned with.
+    */
+  private val KillGrace: java.time.Duration = java.time.Duration.ofSeconds(5)
 
   /** What this server calls itself in the initialize result and in `.bsp/flix.json`. */
   val ServerName: String = "flix"

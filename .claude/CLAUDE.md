@@ -351,13 +351,32 @@ descriptor, which is the protocol channel. Three traps here:
   calls `System.exit` therefore takes the server with it. `jvmTestEnvironment` is the way
   out for a client that wants isolation.
 
+**`build/shutdown` is a request too.** It answers to the same state machine as every other one --
+`ServerNotInitialized` before the handshake or the acknowledgement, `InvalidRequest` twice -- and it
+is answered on the calling thread so it cannot queue behind the work it is stopping.
+
+**A target that was never offered cannot be operated on.** The id is derived from the project path,
+so a client filtered out by the language negotiation can still compute it; `requireKnownTarget`
+checks that a target was *offered*, not only that the id is known.
+
+**Admission is acquired before the work is submitted**, in `FlixBuildServer`, not inside the
+session. A permit taken inside the body has already cost the thread it was meant to prevent, so the
+refusals arrive after the damage -- which is what the first version of this bound did.
+
+**Killing a program means killing its tree.** `ProgramRunner.terminateTree` snapshots the
+descendants *before* destroying the root, because once the root is gone they are reparented and
+`descendants()` no longer finds them. Every path that stops a program -- cancellation and timeout --
+goes through it.
+
 **Cancellation has to reach the work, and `Cancellation` is what carries it.** Dropping the
 reply is enough for a compile, which must finish anyway; it is not enough for a request that
 started something. A cancelled `buildTarget/run` kills its process — otherwise it holds the
 build lock and the output stream until it happens to end — and a cancelled `buildTarget/test`
 stops between tests, the honest limit being that the test in flight finishes because a JVM
 cannot safely stop a method in the middle. Both report a `CANCELLED` task finish so a client's
-progress display agrees with what happened.
+progress display agrees with what happened. `canTest` stays advertised on that basis -- the
+capability promises that tests run and are reported, which they are -- and the forked runner is
+named in `docs/BSP.md` as the fix for the residual case of one test looping forever.
 
 **`BspRunner` supervises the process, never the output.** Draining stdout to end-of-stream and
 *then* waiting with a timeout is a timeout that can never fire: a program that loops without

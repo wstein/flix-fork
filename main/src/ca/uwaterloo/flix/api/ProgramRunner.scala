@@ -19,6 +19,8 @@ import ca.uwaterloo.flix.util.Build
 
 import java.io.File
 import java.nio.file.Paths
+import java.util.concurrent.TimeUnit
+import scala.jdk.CollectionConverters.*
 
 /**
   * How a compiled Flix program is started in a JVM of its own.
@@ -47,6 +49,50 @@ object ProgramRunner {
 
   /** The class `CodeGen` emits for a program's entry point. */
   val MainClass: String = "Main"
+
+  /**
+    * Stops `process` and everything it started, and waits for them to be gone.
+    *
+    * ==Why the tree and not the process==
+    *
+    * `Process.destroyForcibly` kills one process. A program that started a child -- a helper, a shell, a
+    * database it spins up for a run -- leaves those children alive when its own JVM dies, holding the
+    * pipes the run was reading and writing output after the task that owned them reported finished. From
+    * the outside that looks like a server that lies about having stopped something.
+    *
+    * The descendants are snapshotted *before* anything is killed. Once the root is gone its children are
+    * reparented and `descendants()` no longer reaches them, so a snapshot taken afterwards finds nothing
+    * and the leak is invisible.
+    *
+    * Reaped with a bounded wait, because a process that refuses to die must not become a server that
+    * refuses to answer. What cannot be reaped in the grace period is left, having been signalled.
+    */
+  def terminateTree(process: Process, grace: java.time.Duration): Unit = {
+    val descendants =
+      try process.toHandle.descendants().toList.asScala.toList
+      catch {
+        // A process that has already exited has no handle to walk, which is not a failure here.
+        case _: Exception => Nil
+      }
+
+    // Children first, then the root: killing the root first is what orphans them.
+    descendants.foreach(handle => try handle.destroyForcibly() catch { case _: Exception => () })
+    process.destroyForcibly()
+
+    val deadline = System.nanoTime() + grace.toNanos
+    try {
+      process.waitFor(grace.toMillis, TimeUnit.MILLISECONDS)
+      descendants.foreach { handle =>
+        val left = deadline - System.nanoTime()
+        if (left > 0 && handle.isAlive) {
+          try handle.onExit().get(left, TimeUnit.NANOSECONDS)
+          catch { case _: Exception => () }
+        }
+      }
+    } catch {
+      case _: InterruptedException => Thread.currentThread().interrupt()
+    }
+  }
 
   /** Returns the command that starts the program of `view`, built in `build`, with `arguments`. */
   def command(view: ProjectView, build: Build, arguments: List[String]): List[String] = {

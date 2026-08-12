@@ -241,6 +241,50 @@ class TestBspLifecycle extends AnyFunSuite {
     }
   }
 
+  test("shutdown answers to the state machine like any other request") {
+    withProject { project =>
+      withServer(project) { client =>
+        // Before the handshake. This was the one request that could shut down a session that had never
+        // started, and the state model says only a ready session serves requests.
+        val beforeInit = errorCodeOf(client.buildShutdown())
+        assert(beforeInit.contains(ResponseErrorCode.ServerNotInitialized.getValue), s"got $beforeInit")
+
+        client.buildInitialize(initializeParams(project)).get(Timeout, TimeUnit.SECONDS)
+        val beforeAck = errorCodeOf(client.buildShutdown())
+        assert(beforeAck.contains(ResponseErrorCode.ServerNotInitialized.getValue), s"got $beforeAck")
+
+        client.onBuildInitialized()
+        client.buildShutdown().get(Timeout, TimeUnit.SECONDS)
+
+        // And a second one is a client that has lost track of its own session, which is an error rather
+        // than a no-op.
+        val again = errorCodeOf(client.buildShutdown())
+        assert(again.contains(ResponseErrorCode.InvalidRequest.getValue), s"got $again")
+      }
+    }
+  }
+
+  test("a client offered no target cannot operate on one") {
+    withProject { project =>
+      withServer(project) { client =>
+        val params = initializeParams(project)
+        params.setCapabilities(new BuildClientCapabilities(List("scala").asJava))
+        client.buildInitialize(params).get(Timeout, TimeUnit.SECONDS)
+        client.onBuildInitialized()
+
+        // The target id is derived from the project path, so a client that was told about no targets can
+        // still compute one and ask for a compile with it. Filtering only the reply would make the
+        // language negotiation a formality that shaped one answer and guarded nothing.
+        val target = new BuildTargetIdentifier(s"${BspUri.ofDirectory(project)}?id=main")
+        val code = errorCodeOf(client.buildTargetCompile(new CompileParams(List(target).asJava)))
+        assert(code.contains(ResponseErrorCode.InvalidParams.getValue), s"got $code")
+
+        val sources = errorCodeOf(client.buildTargetSources(new SourcesParams(List(target).asJava)))
+        assert(sources.contains(ResponseErrorCode.InvalidParams.getValue), s"got $sources")
+      }
+    }
+  }
+
   test("a request the server does not implement is refused, not answered emptily") {
     withProject { project =>
       withServer(project) { client =>

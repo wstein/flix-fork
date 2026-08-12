@@ -128,6 +128,13 @@ class TestBspMatrix extends AnyFunSuite {
       // it is what an unbounded pile-up eventually produces.
       assert(outcomes.sizeIs == flood.size)
       assert(outcomes.exists(_.contains(StatusCode.OK)), "no request in the flood was served")
+      assert(outcomes.exists(_.isEmpty), "nothing was refused, so the bound never engaged")
+
+      // The measurement that matters, and the one an "eventual refusal" cannot make: how many threads the
+      // flood was able to create. The permit is taken before the work is submitted, so a refused request
+      // never reaches the pool -- if it were taken inside the work, all eighty would have a thread by the
+      // time the first was turned away, which is exactly the cost the bound exists to avoid.
+      assert(s.largestPoolSize < 50, s"the flood grew the pool to ${s.largestPoolSize} threads")
 
       // And the session is still usable afterwards, which is the property a load policy exists for.
       assert(s.compile(s.target).getStatusCode == StatusCode.OK, "the flood left the session broken")
@@ -155,7 +162,11 @@ class TestBspMatrix extends AnyFunSuite {
 
   // ── Harness ──────────────────────────────────────────────────────────────────
 
-  private class Session(val project: Path, val client: BuildServer, val target: BuildTargetIdentifier, received: Received) {
+  private class Session(val project: Path, val client: BuildServer, val target: BuildTargetIdentifier,
+                        received: Received, pool: java.util.concurrent.ThreadPoolExecutor) {
+
+    /** The most threads the connection's executor ever held. */
+    def largestPoolSize: Int = pool.getLargestPoolSize
     def compile(t: BuildTargetIdentifier): CompileResult = compileFuture(t).get(Timeout, TimeUnit.SECONDS)
 
     def compileFuture(t: BuildTargetIdentifier): java.util.concurrent.CompletableFuture[CompileResult] =
@@ -191,11 +202,15 @@ class TestBspMatrix extends AnyFunSuite {
     // Cached, like the server's own pool: a handler can block for the length of a build, and a
     // joiner waits on the build it shares, so a small fixed pool can leave the owner queued behind
     // its own joiners.
-    val executor = Executors.newCachedThreadPool((r: Runnable) => {
-      val t = new Thread(r, "bsp-matrix")
-      t.setDaemon(true)
-      t
-    })
+    // Constructed as the concrete type so the test can ask how many threads it ever held. Cached in
+    // behaviour, like the server's own: a long run must not starve a query.
+    val executor = new java.util.concurrent.ThreadPoolExecutor(
+      0, Int.MaxValue, 60L, TimeUnit.SECONDS, new java.util.concurrent.SynchronousQueue[Runnable](),
+      (r: Runnable) => {
+        val t = new Thread(r, "bsp-matrix")
+        t.setDaemon(true)
+        t
+      })
 
     val serverThread = new Thread(
       () => BspServer.serve(Options.DefaultTest, project, new BspLogStream(), channel.serverIn, channel.serverOut, executor),
@@ -221,7 +236,7 @@ class TestBspMatrix extends AnyFunSuite {
       client.onBuildInitialized()
 
       val target = client.workspaceBuildTargets().get(Timeout, TimeUnit.SECONDS).getTargets.asScala.head.getId
-      f(new Session(project, client, target, received))
+      f(new Session(project, client, target, received, executor))
     } finally {
       channel.close()
       executor.shutdownNow()

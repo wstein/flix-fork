@@ -253,13 +253,25 @@ The console rendering is the one that must *not* be attached here: it builds a J
 system terminal and writes to the real file descriptor, which in a server carries the
 protocol. §12.
 
-**The tests run in the server's process, deliberately for now.** A test is a compiled
-function the compiler reflects and calls, so unlike `buildTarget/run` there is no forked
-process to hand it to — forking would need a test-runner entry point in the compiled
-program, which does not exist. The consequence is worth stating rather than discovering:
-a test that calls `System.exit` takes the server with it, and one that loops forever
-holds the build lock until the client gives up. `buildTarget/jvmTestEnvironment` is the
-way out for a client that wants isolation.
+**The tests run in the server's process, and that is the sharpest limit here.** A test is a
+compiled function the compiler reflects and calls, so unlike `buildTarget/run` there is no forked
+process to hand it to — forking needs a test-runner entry point in the compiled program, which
+`CodeGen` does not emit. Three consequences, stated because a client cannot discover them:
+
+  - a test that calls `System.exit` **takes the server with it**;
+  - a test that loops forever occupies the server's JVM until the process ends. Cancelling stops
+    the run *between* tests, which is what an editor's stop button needs for a long suite, and
+    cannot stop the one already executing: `Thread.stop` was removed from the JVM because it left
+    locks in states nothing could reason about;
+  - `buildTarget/jvmTestEnvironment` is the way out for a client that wants isolation, and it
+    reports the classpath for exactly that.
+
+**`canTest` stays advertised anyway, and that is a decision rather than an oversight.** The
+capability's promise is that the server runs the project's tests and reports them, which it does;
+the alternative — withdrawing it until tests can be forked — would remove a working feature from
+every editor to avoid a case (an infinite loop inside one test) that a person hits while writing
+that test, with the compiler already open. The honest fix is the forked runner, and it is the
+first thing on this section's list of what is not built.
 
 `TestParams.arguments` is read as regular expressions selecting which tests to run,
 which is what `Tester` already accepts; a client that sends none runs them all. A project
@@ -344,6 +356,10 @@ Stated plainly, because each is a real limitation rather than an oversight:
   to be.
 - **Running is forked, so a program cannot be debugged through the server.** Use
   `jvmRunEnvironment` and start it yourself.
+- **A forked test runner.** It would need `CodeGen` to emit a test entry point beside `Main`, and a
+  way for the forked process to report each test back — the server would parse its output instead of
+  watching `Tester`'s events directly. It is the fix for every consequence of running tests in this
+  process (§8), and the reason it is not done is its size rather than its value.
 - **Watcher-driven recompilation.** `buildTarget/didChange` is announced on a reload, but
   nothing watches the filesystem: a client compiles when it decides to. A watcher needs
   debounce, and the one in this repository is wired only to the REPL.
@@ -492,7 +508,11 @@ caller asked for, so sharing one between two requests would answer a question no
     reconciled and its manifest written or the build directory describes nothing. A late answer is
     recoverable; a half-reconciled output directory is the failure `compileProject` exists to
     prevent.
-  - **A run** is killed. Dropping the reply and leaving the program running would hold the build
+  - **A run** is killed, and so is everything it started. `Process.destroyForcibly` kills one
+    process; a program that spawned a child leaves it alive, holding the pipes the run was reading
+    and writing output after the task that owned it reported finished. The descendants are
+    snapshotted before the root is killed, because once it is gone they are reparented and cannot be
+    found. Dropping the reply and leaving the program running would hold the build
     lock, the output stream and the program's own resources until it happened to end, which is not
     cancellation in any sense a user would recognise. `Cancellation` carries the signal to the
     process handle, and it handles the race where the client gives up while the process is starting.
@@ -505,8 +525,10 @@ caller asked for, so sharing one between two requests would answer a question no
 In every case lsp4j answers the cancelled request with `RequestCancelled`, and the task pair
 finishes as `CANCELLED` so a client's progress display agrees with what happened.
 
-**There is a limit, and it says no rather than queueing forever.** At most 32 build requests may
-be in flight; beyond that a request is refused with a message rather than parked. Requests are
+**There is a limit, it says no rather than queueing forever, and it is taken before the work is
+submitted.** At most 32 build requests may be in flight; beyond that a request is refused with a
+message rather than parked. The ordering is the substance: a permit acquired *inside* the work has
+already cost the thread it was meant to prevent, so the refusals arrive after the damage. Requests are
 dispatched off the connection's thread and builds are serialised, so surplus work costs a platform
 thread each -- and the pool is deliberately unbounded, because a ten-minute run must not starve a
 query. Something has to be the bound, and a refusal a client can read is more useful than
@@ -530,6 +552,16 @@ arrives — which is what the specification requires of a client, and collapsing
 would accept a sequence no client may send. A duplicate acknowledgement cannot be refused, since a
 notification has no reply; it is reported on the client's log and changes nothing, so a stray one
 cannot revive a session that has been shut down.
+
+**`build/shutdown` is a request, and answers to the same state machine.** Before the handshake it
+is `ServerNotInitialized`, before the acknowledgement likewise, and a second one is an
+`InvalidRequest`. It used to be the single request that bypassed the model, which made it possible
+to shut down a session that had never started.
+
+**A client that was offered no target cannot operate on one.** The target's id is derived from the
+project path, so a client filtered out by the language negotiation can still compute it and ask for
+a compile. Every target-scoped request therefore checks that a target was offered, not merely that
+the id is one this server knows — otherwise the filter would shape one reply and guard nothing.
 
 **The exit status is the client's, not a constant.** `build/exit` after `build/shutdown` exits 0;
 `build/exit` without one exits 1. A connection that simply ended asked for nothing and exits 0.
@@ -679,7 +711,21 @@ Each names the test that pins it.
 49. **A package entry with awkward characters is encoded.** `TestBspUri`, "an archive entry with
     awkward characters is encoded, not pasted in" — a raw `#` would turn the rest of an entry into a
     fragment.
-50. **A real server process completes the whole cycle.** `TestBspProcess`, "a scripted
+50. **A framed cancel request stops the run it names.** `TestBspProcess`, "a framed cancel request
+    stops the run it names" — the real wire against a real process, which is the only place the
+    lsp4j wiring between a client's `$/cancelRequest` and this server's handler is exercised rather
+    than one side of it.
+51. **Stopping a program stops what it started.** `TestBspRun`, "stopping a program stops what it
+    started" — a shell whose child keeps writing to a file, so that a surviving descendant is
+    observable rather than inferred.
+52. **Shutdown answers to the state machine.** `TestBspLifecycle`, "shutdown answers to the state
+    machine like any other request" — before initialize, before the acknowledgement, and twice.
+53. **A client offered no target cannot operate on one.** `TestBspLifecycle`, "a client offered no
+    target cannot operate on one".
+54. **The request bound is measured, not assumed.** `TestBspMatrix`, "a flood of requests is refused
+    rather than exhausting the server" — eighty requests, and an assertion on how many threads the
+    connection's executor ever held.
+55. **A real server process completes the whole cycle.** `TestBspProcess`, "a scripted
     session drives a real server through the whole cycle" — the assembled jar, started from
     the connection file it wrote, driven over hand-written frames through initialize,
     targets, sources, compile, run, test, shutdown and exit. The only case where nothing is
