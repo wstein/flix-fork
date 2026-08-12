@@ -607,8 +607,12 @@ object Metrics {
   def violations(report: Report, thresholds: Thresholds): List[Violation] = {
     val perDefinition = report.functions.flatMap { d =>
       val where = s"${d.file}:${d.line}"
+      // A function with no branching at all is a table, not logic: a hundred lines of record
+      // literal are a hundred lines of data, and splitting them in two makes nothing easier to
+      // read. Length is charged against code that does something.
+      val isData = d.cognitive == 0 && d.nesting == 0
       List(
-        thresholds.maxLines.filter(d.lines > _).map(l => Violation("lines", d.name, where, d.lines.toString, l.toString)),
+        thresholds.maxLines.filterNot(_ => isData).filter(d.lines > _).map(l => Violation("lines", d.name, where, d.lines.toString, l.toString)),
         // The widest list anywhere inside, so that a loop carrying eight accumulators is not
         // excused by a two-parameter signature.
         thresholds.maxParameters.filter(d.widestParameterList > _).map(l => Violation("parameters", d.name, where, d.widestParameterList.toString, l.toString)),
@@ -617,8 +621,15 @@ object Metrics {
       ).flatten
     }
 
+    // A module of tests is depended upon by the test runner, not by other modules, so having no
+    // dependents is what it is for. Decided from the annotation the compiler recorded rather than
+    // from where the file sits.
+    val testOnly = report.defs.groupBy(_.module).collect {
+      case (module, ds) if ds.nonEmpty && ds.forall(_.isTest) => module
+    }.toSet
+
     val orphans = report.modules
-      .filter(m => m.fanIn == 0 && m.fanOut > 0 && m.name != "(top level)")
+      .filter(m => m.fanIn == 0 && m.fanOut > 0 && m.name != "(top level)" && !testOnly.contains(m.name))
       .map(m => Violation("no module depends on it", m.name, "", "0 dependents", "1"))
 
     val coverage = thresholds.minDocCoverage
@@ -673,9 +684,9 @@ object Metrics {
   /**
     * Renders `report` in `format`.
     */
-  def render(report: Report, format: Format, f: Formatter): String = format match {
+  def render(report: Report, format: Format, f: Formatter, smells: List[Violation] = Nil): String = format match {
     case Format.Text => text(report, f)
-    case Format.Json => json(report)
+    case Format.Json => json(report, smells)
     case Format.Csv => csv(report)
     case Format.Markdown => markdown(report)
   }
@@ -724,7 +735,7 @@ object Metrics {
   /**
     * Renders the report as JSON.
     */
-  private def json(report: Report): String = {
+  private def json(report: Report, smells: List[Violation]): String = {
     val summary: JValue =
       ("files" -> report.files) ~
         ("lines" ->
@@ -794,7 +805,15 @@ object Metrics {
         ("cognitive" -> l.cognitive)
     }
 
-    pretty(JsonMethods.render(("summary" -> summary) ~ ("modules" -> modules) ~ ("definitions" -> definitions) ~ ("localDefinitions" -> locals)))
+    // Emitted so that whatever reads the report reads the verdict too, rather than reimplementing
+    // the thresholds and disagreeing with the exit code.
+    val smellsJson: JValue = smells.map { v =>
+      ("measure" -> v.measure) ~ ("subject" -> v.subject) ~ ("where" -> v.where) ~
+        ("actual" -> v.actual) ~ ("limit" -> v.limit)
+    }
+
+    pretty(JsonMethods.render(("summary" -> summary) ~ ("modules" -> modules) ~
+      ("definitions" -> definitions) ~ ("localDefinitions" -> locals) ~ ("smells" -> smellsJson)))
   }
 
   /**

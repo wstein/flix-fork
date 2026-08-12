@@ -399,7 +399,6 @@ object Main {
               // Reported even when the project does not type check, because the numbers are still
               // true of the code as written, and a beginner asking for them is often mid-repair.
               val report = Metrics.compute(root, Some(cwd))
-              print(Metrics.render(report, format, formatter))
               // An explicit limit always wins over the default the flag supplies, so a project can
               // ask for the set and then disagree with one of it.
               val defaults = if (cmdOpts.metricSmells) Metrics.SmellThresholds else Metrics.Thresholds()
@@ -410,6 +409,7 @@ object Main {
                 cmdOpts.metricMaxComplexity.orElse(defaults.maxComplexity),
                 cmdOpts.metricMinDocCoverage.orElse(defaults.minDocCoverage))
               val exceeded = Metrics.violations(report, thresholds)
+              print(Metrics.render(report, format, formatter, exceeded))
               // Printed to stderr so that a report piped into something else is still only the
               // report, and the gate's reasons are still visible in a CI log.
               if (exceeded.nonEmpty) System.err.print(Metrics.formatViolations(exceeded, formatter))

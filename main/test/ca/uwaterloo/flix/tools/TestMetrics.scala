@@ -314,6 +314,32 @@ class TestMetrics extends AnyFunSuite {
     assertResult(Some(1))(dl.defs.find(_.name == "Demo.rules").map(_.datalogRules))
   }
 
+  test("a flat match is flat, however many arms it has") {
+    // Reported as a false positive; it is not. Arms do not compound, so a lookup table scores the
+    // same as a single conditional, and a function that scores nine really does nest nine deep.
+    val flat = measure(List("mod Demo {", "    pub def code(c: Int32): Int32 = match c {") ++
+      (0 to 20).map(i => s"        case $i => $i").toList ++
+      List("        case _ => 0", "    }", "}"))
+    val code = flat.defs.find(_.name == "Demo.code").getOrElse(fail("not measured"))
+    assertResult(1)(code.nesting)
+    assertResult(1)(code.cognitive)
+  }
+
+  test("length is not charged against data") {
+    // A long record literal is a table. Splitting it in two makes nothing easier to read.
+    val data = measure(List(
+      "mod Demo {",
+      "    pub def defaults(): { a = Int32, b = Int32, c = Int32 } =",
+      "        { a = 1,",
+      "          b = 2,",
+      "          c = 3 }",
+      "}"
+    ))
+    assertResult(Nil)(Metrics.violations(data, Metrics.Thresholds(maxLines = Some(2))))
+    // A function of the same length that branches is still charged.
+    assert(Metrics.violations(report, Metrics.Thresholds(maxLines = Some(2))).nonEmpty)
+  }
+
   test("an empty program measures as empty rather than as a failure") {
     val empty = measure(List("mod Demo {", "}"))
     assertResult(0)(empty.defs.length)
