@@ -810,6 +810,10 @@ object Main {
         .children(
           opt[String]("format").action((arg, c) => c.copy(metricFormat = arg))
             .text("selects the format that 'metric' emits (text, json, csv, md). Defaults to text."),
+          // A shorthand for the format a script asks for most often. Applied in the order given,
+          // so a later --format wins and vice versa.
+          opt[Unit]("json").action((_, c) => c.copy(metricFormat = "json"))
+            .text("shorthand for --format json."),
           opt[Int]("max-lines").action((arg, c) => c.copy(metricMaxLines = Some(arg)))
             .text("fails if any function is longer than this many lines."),
           opt[Int]("max-params").action((arg, c) => c.copy(metricMaxParams = Some(arg)))
