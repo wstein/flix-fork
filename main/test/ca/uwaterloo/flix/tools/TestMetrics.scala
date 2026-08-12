@@ -122,7 +122,7 @@ class TestMetrics extends AnyFunSuite {
   test("csv names every definition, and quotes what would break a column") {
     val csv = Metrics.render(report, Metrics.Format.Csv, Formatter.NoFormatter)
     val header :: rows = csv.trim.split("\n").toList: @unchecked
-    assertResult("name,module,file,line,lines,parameters,returnWidth,traitConstraints,datalogRules,datalogFacts,localDefs,maxLocalParameters,nesting,cognitive,public,test,documented,pure,effects")(header)
+    assertResult("name,module,file,line,lines,parameters,returnWidth,traitConstraints,datalogRules,datalogFacts,localDefs,maxLocalParameters,nesting,cognitive,public,test,documented,pure,effects,smells")(header)
     assertResult(report.defs.map(_.name).sorted)(rows.map(_.takeWhile(_ != ',')).sorted)
   }
 

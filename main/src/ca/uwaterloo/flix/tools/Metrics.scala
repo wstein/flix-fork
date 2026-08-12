@@ -777,9 +777,9 @@ object Metrics {
     * Renders `report` in `format`.
     */
   def render(report: Report, format: Format, f: Formatter, smells: List[Violation] = Nil): String = format match {
-    case Format.Text => text(report, f)
+    case Format.Text => text(report, f, smells)
     case Format.Json => json(report, smells)
-    case Format.Csv => csv(report)
+    case Format.Csv => csv(report, smells)
     case Format.Markdown => markdown(report, smells)
   }
 
@@ -790,8 +790,11 @@ object Metrics {
     * rows cannot be recovered from a summary. Fields are quoted per RFC 4180 so that a name holding
     * a comma cannot shift every column after it.
     */
-  private def csv(report: Report): String = {
-    val header = "name,module,file,line,lines,parameters,returnWidth,traitConstraints,datalogRules,datalogFacts,localDefs,maxLocalParameters,nesting,cognitive,public,test,documented,pure,effects"
+  private def csv(report: Report, smells: List[Violation]): String = {
+    val header = "name,module,file,line,lines,parameters,returnWidth,traitConstraints,datalogRules,datalogFacts,localDefs,maxLocalParameters,nesting,cognitive,public,test,documented,pure,effects,smells"
+    // A definition's smells go in its own row rather than in a second table, because a CSV holds
+    // one table and a consumer sorting by complexity should be able to filter by verdict too.
+    val bySubject = smells.groupBy(_.subject)
     val rows = report.defs.map { d =>
       List(
         d.name,
@@ -812,7 +815,8 @@ object Metrics {
         d.isTest.toString,
         d.hasDoc.toString,
         d.isPure.toString,
-        d.effects.mkString(" ")
+        d.effects.mkString(" "),
+        bySubject.getOrElse(d.name, Nil).map(_.category).sorted.mkString(" ")
       ).map(f => quote(f)).mkString(",")
     }
     (header :: rows).mkString("\n") + "\n"
@@ -955,6 +959,21 @@ object Metrics {
       nested.foreach(d => sb.append(s"| `${d.name}` | ${d.nesting} | ${d.file}:${d.line} |\n"))
     }
 
+    val widest = report.functions.filter(_.widestParameterList > 3).sortBy(-_.widestParameterList).take(FindingsShown)
+    if (widest.nonEmpty) {
+      sb.append("\n## Widest parameter lists\n\n| function | parameters | where | at |\n| --- | --- | --- | --- |\n")
+      widest.foreach { d =>
+        val where = if (d.maxLocalParameters > d.parameters) "a local definition" else "the signature"
+        sb.append(s"| `${d.name}` | ${d.widestParameterList} | $where | ${d.file}:${d.line} |\n")
+      }
+    }
+
+    val locals = report.locals.filter(l => l.lines > 10 || l.parameters > 3).sortBy(-_.lines).take(FindingsShown)
+    if (locals.nonEmpty) {
+      sb.append("\n## Local definitions\n\n| local | inside | lines | parameters | nesting | at |\n| --- | --- | --- | --- | --- | --- |\n")
+      locals.foreach(l => sb.append(s"| `${l.name}` | `${l.owner}` | ${l.lines} | ${l.parameters} | ${l.nesting} | ${l.file}:${l.line} |\n"))
+    }
+
     val undocumented = report.publicApi.filterNot(_.hasDoc).sortBy(_.name).take(FindingsShown)
     if (undocumented.nonEmpty) {
       sb.append("\n## Undocumented public functions\n\n| function | at |\n| --- | --- |\n")
@@ -969,7 +988,7 @@ object Metrics {
   /**
     * Renders `report` for reading.
     */
-  private def text(report: Report, f: Formatter): String = {
+  private def text(report: Report, f: Formatter, smells: List[Violation]): String = {
     val sb = new StringBuilder
 
     sb.append(f.bold("Project") + "\n")
@@ -1033,6 +1052,18 @@ object Metrics {
 
     if (report.tests.isEmpty) {
       sb.append("\n" + f.yellow("This project has no tests.") + "\n")
+    }
+
+    if (smells.nonEmpty) {
+      sb.append("\n" + f.bold(s"${smells.length} to address, worst first") + "\n")
+      smells.sortBy(v => -overBy(v)).take(FindingsShown * 2).foreach { v =>
+        val where = if (v.where.isEmpty) "" else s"  ${f.cyan(v.where)}"
+        sb.append(s"    ${f.blue(v.subject)} -- ${v.measure} ${v.actualText}, over ${v.limitText}$where\n")
+        sb.append(s"      ${action(v.category)}\n")
+      }
+      if (smells.length > FindingsShown * 2) {
+        sb.append(s"    ... and ${smells.length - FindingsShown * 2} more; --format md for all of them\n")
+      }
     }
 
     sb.toString

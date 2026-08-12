@@ -399,19 +399,23 @@ object Main {
               // Reported even when the project does not type check, because the numbers are still
               // true of the code as written, and a beginner asking for them is often mid-repair.
               val report = Metrics.compute(root, Some(cwd))
-              // An explicit limit always wins over the default the flag supplies, so a project can
-              // ask for the set and then disagree with one of it.
-              val defaults = if (cmdOpts.metricSmells) Metrics.SmellThresholds else Metrics.Thresholds()
-              val thresholds = Metrics.Thresholds(
-                cmdOpts.metricMaxLines.orElse(defaults.maxLines),
-                cmdOpts.metricMaxParams.orElse(defaults.maxParameters),
-                cmdOpts.metricMaxNesting.orElse(defaults.maxNesting),
-                cmdOpts.metricMaxComplexity.orElse(defaults.maxComplexity),
-                cmdOpts.metricMinDocCoverage.orElse(defaults.minDocCoverage))
-              val exceeded = Metrics.violations(report, thresholds)
-              print(Metrics.render(report, format, formatter, exceeded))
-              // Printed to stderr so that a report piped into something else is still only the
-              // report, and the gate's reasons are still visible in a CI log.
+              // Smells are always reported: a report that has to be asked for what it already
+              // knows is a report someone will forget to ask.
+              val asked = Metrics.Thresholds(
+                cmdOpts.metricMaxLines, cmdOpts.metricMaxParams, cmdOpts.metricMaxNesting,
+                cmdOpts.metricMaxComplexity, cmdOpts.metricMinDocCoverage)
+              val reporting = Metrics.Thresholds(
+                asked.maxLines.orElse(Metrics.SmellThresholds.maxLines),
+                asked.maxParameters.orElse(Metrics.SmellThresholds.maxParameters),
+                asked.maxNesting.orElse(Metrics.SmellThresholds.maxNesting),
+                asked.maxComplexity.orElse(Metrics.SmellThresholds.maxComplexity),
+                asked.minDocCoverage.orElse(Metrics.SmellThresholds.minDocCoverage))
+              val smells = Metrics.violations(report, reporting)
+              print(Metrics.render(report, format, formatter, smells))
+
+              // Failing is still asked for. A default limit is a suggestion, and a suggestion that
+              // breaks a build is not a suggestion -- so only a limit someone set can fail one.
+              val exceeded = if (asked.isEmpty) Nil else Metrics.violations(report, asked)
               if (exceeded.nonEmpty) System.err.print(Metrics.formatViolations(exceeded, formatter))
               System.exit(if (errors.nonEmpty || exceeded.nonEmpty) 1 else 0)
             case None => exitWithErrors(flix, errors, optRoot)
@@ -638,7 +642,6 @@ object Main {
     metricMaxNesting: Option[Int] = None,
     metricMaxComplexity: Option[Int] = None,
     metricMinDocCoverage: Option[Double] = None,
-    metricSmells: Boolean = false,
     entryPoint: Option[String] = None,
     installDeps: Boolean = true,
     githubToken: Option[String] = None,
@@ -821,8 +824,6 @@ object Main {
           // so a later --format wins and vice versa.
           opt[Unit]("json").action((_, c) => c.copy(metricFormat = "json"))
             .text("shorthand for --format json."),
-          opt[Unit]("smells").action((_, c) => c.copy(metricSmells = true))
-            .text("reports what exceeds a default set of limits, and exits non-zero if anything does."),
           opt[Int]("max-lines").action((arg, c) => c.copy(metricMaxLines = Some(arg)))
             .text("fails if any function is longer than this many lines."),
           opt[Int]("max-params").action((arg, c) => c.copy(metricMaxParams = Some(arg)))
