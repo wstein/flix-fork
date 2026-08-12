@@ -146,7 +146,7 @@ object Tester {
     private var writer: java.io.PrintWriter = _
     private var passed = 0
     private var skipped = 0
-    private var failed: List[(Symbol.DefnSym, List[String])] = Nil
+    private var failed: List[(TestId, List[String])] = Nil
 
     /** Sets up the terminal and prints the headline. */
     def start(tests: Vector[TestCase])(implicit flix: Flix): Unit = {
@@ -167,25 +167,25 @@ object Tester {
       import formatter.*
 
       event match {
-        case TestEvent.Before(sym) =>
+        case TestEvent.Before(id) =>
           // Note: Print \r to reset the caret.
-          writer.print(s"  ${bgYellow(" TEST ")} $sym\r")
+          writer.print(s"  ${bgYellow(" TEST ")} $id\r")
           terminal.flush()
 
-        case TestEvent.Success(sym, elapsed) =>
+        case TestEvent.Success(id, elapsed) =>
           passed = passed + 1
-          writer.println(s"  ${bgGreen(" PASS ")} $sym ${elapsed.fmt}")
+          writer.println(s"  ${bgGreen(" PASS ")} $id ${elapsed.fmt}")
           terminal.flush()
 
-        case TestEvent.Failure(sym, output, _) =>
-          failed = (sym, output) :: failed
+        case TestEvent.Failure(id, output, _) =>
+          failed = (id, output) :: failed
           val line = output.headOption.map(s => s"(${red(s)})").getOrElse("")
-          writer.println(s"  ${bgRed(" FAIL ")} $sym $line")
+          writer.println(s"  ${bgRed(" FAIL ")} $id $line")
           terminal.flush()
 
-        case TestEvent.Skip(sym) =>
+        case TestEvent.Skip(id) =>
           skipped = skipped + 1
-          writer.println(s"  ${bgYellow(" SKIP ")} $sym (${yellow("SKIPPED")})")
+          writer.println(s"  ${bgYellow(" SKIP ")} $id (${yellow("SKIPPED")})")
           terminal.flush()
 
         case TestEvent.Finished(elapsed) =>
@@ -194,9 +194,9 @@ object Tester {
             writer.println()
             writer.println("-" * 80)
             writer.println()
-            for ((sym, output) <- failed; if output.nonEmpty) {
-              writer.println(s"  ${bgRed(" FAIL ")} $sym")
-              writer.println(s"         ${sym.loc.source.name}:${sym.loc.startLine}")
+            for ((id, output) <- failed; if output.nonEmpty) {
+              writer.println(s"  ${bgRed(" FAIL ")} $id")
+              id.location.foreach(loc => writer.println(s"         ${loc.file}:${loc.startLine}"))
               for (line <- output) {
                 writer.println(s"    $line")
               }
@@ -239,15 +239,15 @@ object Tester {
       * Runs the given `test` emitting test events.
       */
     private def runTest(test: TestCase): Unit = test match {
-      case TestCase(sym, skip, run) =>
+      case TestCase(id, skip, run) =>
         // Check if the test case should be ignored.
         if (skip) {
-          queue.add(TestEvent.Skip(sym))
+          queue.add(TestEvent.Skip(id))
           return
         }
 
         // We are about to run the test case.
-        queue.add(TestEvent.Before(sym))
+        queue.add(TestEvent.Before(id))
 
         // Redirect std out and std err.
         val redirect = new ConsoleRedirection
@@ -269,15 +269,15 @@ object Tester {
           result match {
             case java.lang.Boolean.FALSE =>
               // Case 1: Assertion Error.
-              queue.add(TestEvent.Failure(sym, "Assertion Error" :: redirect.stdOut ++ redirect.stdErr, Duration(elapsed)))
+              queue.add(TestEvent.Failure(id, "Assertion Error" :: redirect.stdOut ++ redirect.stdErr, Duration(elapsed)))
 
             case _ =>
               if (redirect.stdErr.isEmpty) {
                 // Case 2: Non-False result and no stderr output.
-                queue.add(TestEvent.Success(sym, Duration(elapsed)))
+                queue.add(TestEvent.Success(id, Duration(elapsed)))
               } else {
                 // Case 3: Non-False result, but with stderr output.
-                queue.add(TestEvent.Failure(sym, "Std Err Output" :: redirect.stdOut ++ redirect.stdErr, Duration(elapsed)))
+                queue.add(TestEvent.Failure(id, "Std Err Output" :: redirect.stdOut ++ redirect.stdErr, Duration(elapsed)))
               }
 
           }
@@ -288,7 +288,7 @@ object Tester {
 
             // Compute elapsed time.
             val elapsed = System.nanoTime() - start
-            queue.add(TestEvent.Failure(sym, redirect.stdOut ++ redirect.stdErr ++ fmtStackTrace(ex), Duration(elapsed)))
+            queue.add(TestEvent.Failure(id, redirect.stdOut ++ redirect.stdErr ++ fmtStackTrace(ex), Duration(elapsed)))
         }
     }
   }
@@ -386,12 +386,12 @@ object Tester {
       * Returns `true` if at least one filter matches the given symbol _OR_ if there are no filters.
       */
     def isMatch(test: TestCase): Boolean = {
-      val name = test.sym.toString
+      val name = test.id.name
       filters.isEmpty || filters.exists(regex => regex.matches(name))
     }
 
     val allTests = compilationResult.getTests.map {
-      case (sym, TestFn(_, skip, run)) => TestCase(sym, skip, run)
+      case (sym, TestFn(_, skip, run)) => TestCase(TestId.of(sym), skip, run)
     }
 
     allTests.filter(isMatch).toVector.sorted
@@ -408,14 +408,46 @@ object Tester {
   }
 
   /**
+    * Where a test is written, as much of it as a runner needs.
+    *
+    * A file and a range rather than a `SourceLocation`, because a test does not always arrive from a
+    * compilation: a build that is already current can be tested from what it left behind, and there is
+    * then no typed AST to take a symbol from. Fabricating one -- a `Symbol.DefnSym` around an empty
+    * `Source` -- would put a hollow compiler object into a data structure that looks like the real
+    * thing, which is worse than saying plainly what is known.
+    *
+    * @param file the source file, as the compiler named it.
+    */
+  case class TestLocation(file: String, startLine: Int, startCol: Int, endLine: Int, endCol: Int)
+
+  /**
+    * Which test this is: what to call it, and where to find it.
+    *
+    * @param name     the fully qualified name, which is what a filter matches and what is displayed.
+    * @param location where it is written, if that is known.
+    */
+  case class TestId(name: String, location: Option[TestLocation]) {
+    override def toString: String = name
+  }
+
+  object TestId {
+    /** Returns the identity of the test defined by `sym`. */
+    def of(sym: Symbol.DefnSym): TestId = {
+      val loc = sym.loc
+      TestId(sym.toString, Some(TestLocation(
+        loc.source.name, loc.startLine, loc.startCol, loc.endLine, loc.endCol)))
+    }
+  }
+
+  /**
     * Represents a single test case.
     *
-    * @param sym  the Flix symbol.
+    * @param id   which test this is.
     * @param skip true if the test case should be skipped.
     * @param run  the code to run.
     */
-  case class TestCase(sym: Symbol.DefnSym, skip: Boolean, run: () => AnyRef) extends Ordered[TestCase] {
-    override def compare(that: TestCase): Int = this.sym.toString.compareTo(that.sym.toString)
+  case class TestCase(id: TestId, skip: Boolean, run: () => AnyRef) extends Ordered[TestCase] {
+    override def compare(that: TestCase): Int = this.id.name.compareTo(that.id.name)
   }
 
   /**
@@ -428,22 +460,22 @@ object Tester {
     /**
       * A test event emitted immediately before a test case is executed.
       */
-    case class Before(sym: Symbol.DefnSym) extends TestEvent
+    case class Before(id: TestId) extends TestEvent
 
     /**
       * A test event emitted to indicate that a test succeeded.
       */
-    case class Success(sym: Symbol.DefnSym, d: Duration) extends TestEvent
+    case class Success(id: TestId, d: Duration) extends TestEvent
 
     /**
       * A test event emitted to indicate that a test failed.
       */
-    case class Failure(sym: Symbol.DefnSym, output: List[String], d: Duration) extends TestEvent
+    case class Failure(id: TestId, output: List[String], d: Duration) extends TestEvent
 
     /**
       * A test event emitted to indicate that a test was ignored.
       */
-    case class Skip(sym: Symbol.DefnSym) extends TestEvent
+    case class Skip(id: TestId) extends TestEvent
 
     /**
       * A test event emitted to indicates that testing has completed.

@@ -54,9 +54,9 @@ class TestTesterSink extends AnyFunSuite {
     val (_, events) = run(Nil)
 
     val outcomes = events.collect {
-      case Tester.TestEvent.Success(sym, _) => sym.name -> "pass"
-      case Tester.TestEvent.Failure(sym, _, _) => sym.name -> "fail"
-      case Tester.TestEvent.Skip(sym) => sym.name -> "skip"
+      case Tester.TestEvent.Success(id, _) => simpleName(id) -> "pass"
+      case Tester.TestEvent.Failure(id, _, _) => simpleName(id) -> "fail"
+      case Tester.TestEvent.Skip(id) => simpleName(id) -> "skip"
     }.toMap
 
     assert(outcomes == Map("testPasses" -> "pass", "testFails" -> "fail", "testSkipped" -> "skip"),
@@ -69,7 +69,7 @@ class TestTesterSink extends AnyFunSuite {
     // The runner returns before `Before` for a skipped test, so a sink that opened its task pair on
     // `Before` would emit a finish with no start -- which leaves a client rendering a tree it cannot
     // place. Stated here because it is the runner's behaviour, not the sink's choice.
-    val started = events.collect { case Tester.TestEvent.Before(sym) => sym.name }
+    val started = events.collect { case Tester.TestEvent.Before(id) => simpleName(id) }
     assert(!started.contains("testSkipped"), s"a skipped test was started: $started")
     assert(started.toSet == Set("testPasses", "testFails"), s"unexpected: $started")
   }
@@ -99,7 +99,7 @@ class TestTesterSink extends AnyFunSuite {
     val (onlyPassing, events) = run(List(".*testPasses"))
     assert(onlyPassing == Result.Ok(()), "a run of only passing tests reported failure")
     // The filter selected, rather than the sink ignoring: a skipped test would otherwise still arrive.
-    assert(events.collect { case Tester.TestEvent.Before(sym) => sym.name } == List("testPasses"))
+    assert(events.collect { case Tester.TestEvent.Before(id) => simpleName(id) } == List("testPasses"))
   }
 
   test("the sink is told what the run will cover before it starts") {
@@ -107,11 +107,14 @@ class TestTesterSink extends AnyFunSuite {
 
     // A client draws a progress bar from this, so it has to include the skipped tests: they are part
     // of what the run reports on even though none of them runs.
-    assert(announced.map(_.sym.name).toSet == Set("testPasses", "testFails", "testSkipped"),
-      s"unexpected: ${announced.map(_.sym.name)}")
+    assert(announced.map(t => simpleName(t.id)).toSet == Set("testPasses", "testFails", "testSkipped"),
+      s"unexpected: ${announced.map(t => simpleName(t.id))}")
   }
 
   // ── Harness ──────────────────────────────────────────────────────────────────
+
+  /** The last segment of a test's qualified name, which is what these assertions are about. */
+  private def simpleName(id: Tester.TestId): String = id.name.split('.').last
 
   private def run(filters: List[String]): (Result[Unit, Int], List[Tester.TestEvent]) = {
     val (result, events, _) = runCollecting(filters)

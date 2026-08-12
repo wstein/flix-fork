@@ -17,9 +17,10 @@ package ca.uwaterloo.flix.api.bsp
 
 import ca.uwaterloo.flix.api.Flix
 import ca.uwaterloo.flix.api.lsp
-import ca.uwaterloo.flix.language.ast.Symbol
 import ca.uwaterloo.flix.tools.Tester
 import ca.uwaterloo.flix.util.Duration
+
+import java.nio.file.{Files, Path}
 import ch.epfl.scala.bsp4j.*
 
 
@@ -56,26 +57,26 @@ class BspTestSink(tasks: BspTasks, target: BuildTargetIdentifier, parent: TaskId
   override def start(tests: Vector[Tester.TestCase])(implicit flix: Flix): Unit = ()
 
   override def accept(event: Tester.TestEvent)(implicit flix: Flix): Unit = event match {
-    case Tester.TestEvent.Before(sym) =>
-      openFor(sym, s"Running $sym")
+    case Tester.TestEvent.Before(id) =>
+      openFor(id, s"Running $id")
 
-    case Tester.TestEvent.Success(sym, elapsed) =>
+    case Tester.TestEvent.Success(id, elapsed) =>
       passed += 1
-      finish(sym, TestStatus.PASSED, message = None, elapsed)
+      finish(id, TestStatus.PASSED, message = None, elapsed)
 
-    case Tester.TestEvent.Failure(sym, output, elapsed) =>
+    case Tester.TestEvent.Failure(id, output, elapsed) =>
       failed += 1
       // The output the console rendering would have printed. Without it a client shows that a test
       // failed and nothing about why, which is the half that matters.
       val message = if (output.isEmpty) None else Some(output.mkString(System.lineSeparator()))
-      finish(sym, TestStatus.FAILED, message, elapsed)
+      finish(id, TestStatus.FAILED, message, elapsed)
 
-    case Tester.TestEvent.Skip(sym) =>
+    case Tester.TestEvent.Skip(id) =>
       skipped += 1
       // A skipped test has no `Before`, so this opens and closes its pair in one step -- a finish with
       // no start would leave a client rendering a row it cannot place in its tree.
-      openFor(sym, s"Skipping $sym")
-      finish(sym, TestStatus.SKIPPED, message = None, Duration(0))
+      openFor(id, s"Skipping $id")
+      finish(id, TestStatus.SKIPPED, message = None, Duration(0))
 
     case Tester.TestEvent.Finished(elapsed) =>
       // The parent task's own finish is the caller's, since only the caller knows the overall status.
@@ -105,45 +106,59 @@ class BspTestSink(tasks: BspTasks, target: BuildTargetIdentifier, parent: TaskId
   def isSuccess: Boolean = failed == 0
 
   /** Opens the task for `sym` and returns its id, recording it so the finish can name the same one. */
-  private def openFor(sym: Symbol.DefnSym, message: String): TaskId = {
-    val id = tasks.child(parent)
-    open += (sym.toString -> id)
-    val start = new TestStart(sym.toString)
-    locationOf(sym).foreach(start.setLocation)
-    tasks.start(id, message, Some((TaskStartDataKind.TEST_START, start)))
-    id
+  private def openFor(id: Tester.TestId, message: String): TaskId = {
+    val task = tasks.child(parent)
+    open += (id.name -> task)
+    val start = new TestStart(id.name)
+    locationOf(id).foreach(start.setLocation)
+    tasks.start(task, message, Some((TaskStartDataKind.TEST_START, start)))
+    task
   }
 
   /** Ends the task opened for `sym`. */
-  private def finish(sym: Symbol.DefnSym, status: TestStatus, message: Option[String],
+  private def finish(id: Tester.TestId, status: TestStatus, message: Option[String],
                      elapsed: Duration): Unit = {
     // A test with no open task is one whose `Before` never arrived. That cannot happen for the events
     // the runner emits today, and if a new one is added the pair is still opened here rather than a
     // finish being sent on its own -- which is the defect the skip case above exists to avoid.
-    val id = open.getOrElse(sym.toString, openFor(sym, s"Running $sym"))
-    open -= sym.toString
+    val task = open.getOrElse(id.name, openFor(id, s"Running $id"))
+    open -= id.name
 
-    val data = new TestFinish(sym.toString, status)
+    val data = new TestFinish(id.name, status)
     message.foreach(data.setMessage)
-    locationOf(sym).foreach(data.setLocation)
+    locationOf(id).foreach(data.setLocation)
 
     // The duration goes in the message: `TestFinish` has no field for it, and a client showing a test
     // tree without timings is missing the thing people look at first.
     tasks.finish(
-      id,
-      if (status == TestStatus.SKIPPED) s"$sym" else s"$sym ${elapsed.fmt}",
+      task,
+      if (status == TestStatus.SKIPPED) s"$id" else s"$id ${elapsed.fmt}",
       if (status == TestStatus.FAILED) StatusCode.ERROR else StatusCode.OK,
       Some((TaskFinishDataKind.TEST_FINISH, data)))
   }
 
-  /** Returns where `sym` is defined, which is what makes a result clickable. */
-  private def locationOf(sym: Symbol.DefnSym): Option[Location] = {
-    val loc = sym.loc
-    val converted = lsp.Range.from(loc).toLsp4j
-    Some(new Location(
-      BspUri.ofSource(loc.source),
-      new Range(
-        new Position(converted.getStart.getLine, converted.getStart.getCharacter),
-        new Position(converted.getEnd.getLine, converted.getEnd.getCharacter))))
+  /**
+    * Returns where `id` is defined, which is what makes a result clickable.
+    *
+    * `None` when the test carries no location, or when the file it names is not there: a client turns a
+    * location into a jump, and a location that does not resolve is a broken link rather than a feature.
+    * A test loaded from a recorded build is the case where that can happen.
+    *
+    * The range is converted to zero-based the same way every other position this server reports is --
+    * `lsp.Position` is one-indexed and only `toLsp4j` subtracts.
+    */
+  private def locationOf(id: Tester.TestId): Option[Location] = id.location.flatMap { loc =>
+    val path = Path.of(loc.file)
+    if (!Files.isRegularFile(path)) {
+      None
+    } else {
+      val converted = lsp.Range(
+        lsp.Position(loc.startLine, loc.startCol), lsp.Position(loc.endLine, loc.endCol)).toLsp4j
+      Some(new Location(
+        BspUri.ofFile(path),
+        new Range(
+          new Position(converted.getStart.getLine, converted.getStart.getCharacter),
+          new Position(converted.getEnd.getLine, converted.getEnd.getCharacter))))
+    }
   }
 }
