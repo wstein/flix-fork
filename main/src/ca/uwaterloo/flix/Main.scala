@@ -667,10 +667,10 @@ object Main {
     */
   case class CmdOpts(
     command: Command = Command.None,
-                     stubsOut: Option[String] = None,
-                     libs: Seq[String] = Seq.empty,
-                     jsonDiagnostics: Boolean = false,
-                     clientContractVersion: Option[Int] = None,
+    stubsOut: Option[String] = None,
+    libs: Seq[String] = Seq.empty,
+    jsonDiagnostics: Boolean = false,
+    clientContractVersion: Option[Int] = None,
     args: List[String] = Nil,
     coverage: Boolean = false,
     coverageOutput: Option[String] = None,
