@@ -18,7 +18,7 @@ package ca.uwaterloo.flix.tools
 import ca.uwaterloo.flix.api.lsp.{Acceptor, Consumer, Visitor}
 import ca.uwaterloo.flix.language.ast.TypedAst.{Expr, Root}
 import ca.uwaterloo.flix.language.ast.shared.{Input, Source}
-import ca.uwaterloo.flix.language.ast.shared.SymUse.DefSymUse
+import ca.uwaterloo.flix.language.ast.shared.SymUse.{DefSymUse, EffSymUse, TraitSymUse}
 import ca.uwaterloo.flix.language.ast.{SemanticOp, SourceLocation, Symbol, TokenKind, Type, TypeConstructor, TypedAst}
 import ca.uwaterloo.flix.language.phase.Lexer
 import ca.uwaterloo.flix.util.Formatter
@@ -76,6 +76,9 @@ object Metrics {
                         isTest: Boolean,
                         hasDoc: Boolean,
                         returnWidth: Int,
+                        traitConstraints: Int,
+                        datalogRules: Int,
+                        datalogFacts: Int,
                         localDefs: Int,
                         maxLocalParameters: Int,
                         cognitive: Int,
@@ -197,6 +200,9 @@ object Metrics {
           isTest = d.spec.ann.isTest,
           hasDoc = d.spec.doc.text.trim.nonEmpty,
           returnWidth = shapeWidth(d.spec.retTpe),
+          traitConstraints = d.spec.tconstrs.length,
+          datalogRules = analysis.datalog.getOrElse(d.sym.toString, (0, 0))._1,
+          datalogFacts = analysis.datalog.getOrElse(d.sym.toString, (0, 0))._2,
           localDefs = analysis.locals.getOrElse(d.sym.toString, Nil).length,
           maxLocalParameters = analysis.locals.getOrElse(d.sym.toString, Nil).map(_._2).maxOption.getOrElse(0),
           cognitive = analysis.cognitive.getOrElse(d.sym.toString, 0),
@@ -421,6 +427,7 @@ object Metrics {
                               cognitive: Map[String, Int],
                               branches: Map[String, List[SourceLocation]],
                               locals: Map[String, List[(String, Int, SourceLocation)]],
+                              datalog: Map[String, (Int, Int)],
                               edges: Set[(String, String)])
 
   /**
@@ -435,17 +442,32 @@ object Metrics {
     val booleans = scala.collection.mutable.Map.empty[String, Int]
     val guards = scala.collection.mutable.Map.empty[String, Int]
     val locals = scala.collection.mutable.Map.empty[String, List[(String, Int, SourceLocation)]]
+    val datalog = scala.collection.mutable.Map.empty[String, (Int, Int)]
     val edges = scala.collection.mutable.Set.empty[(String, String)]
     var current: Option[TypedAst.Def] = None
 
     val consumer = new Consumer {
       override def consumeDef(defn: TypedAst.Def): Unit = current = Some(defn)
 
-      override def consumeDefSymUse(symUse: DefSymUse): Unit = current.foreach { from =>
-        // Only the project's own modules: a call into the standard library says nothing about how
-        // this project is put together.
-        if (isProjectSource(symUse.sym.loc.source)) {
-          edges += ((moduleOf(from.sym), moduleOf(symUse.sym)))
+      override def consumeDefSymUse(symUse: DefSymUse): Unit = depend(symUse.sym.loc, symUse.sym.namespace)
+
+      override def consumeTraitSymUse(symUse: TraitSymUse): Unit = depend(symUse.sym.loc, symUse.sym.namespace)
+
+      override def consumeEffSymUse(symUse: EffSymUse): Unit = depend(symUse.sym.loc, symUse.sym.namespace)
+
+      /**
+        * Records that the definition being visited depends on the module a symbol belongs to.
+        *
+        * A module that uses another's types or traits depends on it just as surely as one that
+        * calls its functions, and counting only calls made a module that merely names another's
+        * enum look independent of it.
+        *
+        * Only the project's own modules: a reference into the standard library says nothing about
+        * how this project is put together.
+        */
+      private def depend(loc: SourceLocation, namespace: List[String]): Unit = current.foreach { from =>
+        if (isProjectSource(loc.source)) {
+          edges += ((moduleOf(from.sym), namespace.mkString(".")))
         }
       }
 
@@ -461,6 +483,13 @@ object Metrics {
         exp match {
           case _: Expr.IfThenElse | _: Expr.Match | _: Expr.ExtMatch | _: Expr.RestrictableChoose =>
             branches.update(name, exp.loc :: branches.getOrElse(name, Nil))
+          case Expr.FixpointConstraintSet(cs, _, _) =>
+            // Flix embeds Datalog in the language, so how much of a project is solved declaratively
+            // rather than written out is a question only this compiler can answer. A constraint
+            // with no body is a fact; one with a body is a rule.
+            val (rules, facts) = cs.partition(_.body.nonEmpty)
+            val (r, f) = datalog.getOrElse(name, (0, 0))
+            datalog.update(name, (r + rules.length, f + facts.length))
           case Expr.LocalDef(_, bnd, fparams, body, _, _, _, _) =>
             // A local definition is a function too, and an invisible one: it is not in `root.defs`,
             // so without this a project's widest and longest function can be one nobody counted.
@@ -480,6 +509,7 @@ object Metrics {
       nesting = branches.map { case (name, locs) => name -> deepestChain(locs) }.toMap,
       branches = branches.toMap,
       locals = locals.toMap,
+      datalog = datalog.toMap,
       cognitive = branches.keySet.++(booleans.keySet).++(guards.keySet).map { name =>
         name -> cognitiveComplexity(branches.getOrElse(name, Nil), booleans.getOrElse(name, 0), guards.getOrElse(name, 0))
       }.toMap,
@@ -550,6 +580,21 @@ object Metrics {
       maxLines.isEmpty && maxParameters.isEmpty && maxNesting.isEmpty && maxComplexity.isEmpty && minDocCoverage.isEmpty
   }
 
+  /**
+    * The limits `--smells` applies when nobody has said what failing means.
+    *
+    * Round numbers chosen to be defensible rather than derived: 40 lines and 5 parameters are
+    * where a function stops fitting on a screen or in a signature, and 15 is where nesting and
+    * conditions stop being followable in one reading. They are a starting point for a conversation
+    * in a project, not a standard -- which is why they are only applied when asked for.
+    */
+  val SmellThresholds: Thresholds = Thresholds(
+    maxLines = Some(40),
+    maxParameters = Some(5),
+    maxNesting = Some(4),
+    maxComplexity = Some(15)
+  )
+
   /** Something measured that exceeded what was asked for. */
   case class Violation(measure: String, subject: String, where: String, actual: String, limit: String)
 
@@ -572,11 +617,15 @@ object Metrics {
       ).flatten
     }
 
+    val orphans = report.modules
+      .filter(m => m.fanIn == 0 && m.fanOut > 0 && m.name != "(top level)")
+      .map(m => Violation("no module depends on it", m.name, "", "0 dependents", "1"))
+
     val coverage = thresholds.minDocCoverage
       .filter(_ > report.docCoverage)
       .map(l => Violation("doc coverage", "public API", "", f"${report.docCoverage * 100}%.1f%%", f"${l * 100}%.1f%%"))
 
-    (perDefinition ++ coverage).sortBy(v => (v.measure, v.subject))
+    (perDefinition ++ orphans.filter(_ => thresholds.maxLines.isDefined) ++ coverage).sortBy(v => (v.measure, v.subject))
   }
 
   /**
@@ -639,7 +688,7 @@ object Metrics {
     * a comma cannot shift every column after it.
     */
   private def csv(report: Report): String = {
-    val header = "name,module,file,line,lines,parameters,returnWidth,localDefs,maxLocalParameters,nesting,cognitive,public,test,documented,pure,effects"
+    val header = "name,module,file,line,lines,parameters,returnWidth,traitConstraints,datalogRules,datalogFacts,localDefs,maxLocalParameters,nesting,cognitive,public,test,documented,pure,effects"
     val rows = report.defs.map { d =>
       List(
         d.name,
@@ -649,6 +698,9 @@ object Metrics {
         d.lines.toString,
         d.parameters.toString,
         d.returnWidth.toString,
+        d.traitConstraints.toString,
+        d.datalogRules.toString,
+        d.datalogFacts.toString,
         d.localDefs.toString,
         d.maxLocalParameters.toString,
         d.nesting.toString,
@@ -705,6 +757,9 @@ object Metrics {
         ("lines" -> d.lines) ~
         ("parameters" -> d.parameters) ~
         ("returnWidth" -> d.returnWidth) ~
+        ("traitConstraints" -> d.traitConstraints) ~
+        ("datalogRules" -> d.datalogRules) ~
+        ("datalogFacts" -> d.datalogFacts) ~
         ("localDefs" -> d.localDefs) ~
         ("maxLocalParameters" -> d.maxLocalParameters) ~
         ("nesting" -> d.nesting) ~

@@ -122,7 +122,7 @@ class TestMetrics extends AnyFunSuite {
   test("csv names every definition, and quotes what would break a column") {
     val csv = Metrics.render(report, Metrics.Format.Csv, Formatter.NoFormatter)
     val header :: rows = csv.trim.split("\n").toList: @unchecked
-    assertResult("name,module,file,line,lines,parameters,returnWidth,localDefs,maxLocalParameters,nesting,cognitive,public,test,documented,pure,effects")(header)
+    assertResult("name,module,file,line,lines,parameters,returnWidth,traitConstraints,datalogRules,datalogFacts,localDefs,maxLocalParameters,nesting,cognitive,public,test,documented,pure,effects")(header)
     assertResult(report.defs.map(_.name).sorted)(rows.map(_.takeWhile(_ != ',')).sorted)
   }
 
@@ -298,6 +298,20 @@ class TestMetrics extends AnyFunSuite {
       "}"
     ))
     assertResult(List(("IO", 2)))(Metrics.effectBudget(effectful.publicApi))
+  }
+
+  test("Datalog is measured, since a rule is not a line of code like any other") {
+    val dl = measure(List(
+      "mod Demo {",
+      "    pub def facts(): #{ Edge(Int32, Int32) } = #{ Edge(1, 2). Edge(2, 3). }",
+      "    pub def rules(): #{ Edge(Int32, Int32), Path(Int32, Int32) } = #{",
+      "        Path(x, y) :- Edge(x, y).",
+      "    }",
+      "}"
+    ))
+    assertResult(Some(2))(dl.defs.find(_.name == "Demo.facts").map(_.datalogFacts))
+    assertResult(Some(0))(dl.defs.find(_.name == "Demo.facts").map(_.datalogRules))
+    assertResult(Some(1))(dl.defs.find(_.name == "Demo.rules").map(_.datalogRules))
   }
 
   test("an empty program measures as empty rather than as a failure") {

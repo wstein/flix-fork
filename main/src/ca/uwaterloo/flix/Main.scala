@@ -400,9 +400,15 @@ object Main {
               // true of the code as written, and a beginner asking for them is often mid-repair.
               val report = Metrics.compute(root, Some(cwd))
               print(Metrics.render(report, format, formatter))
+              // An explicit limit always wins over the default the flag supplies, so a project can
+              // ask for the set and then disagree with one of it.
+              val defaults = if (cmdOpts.metricSmells) Metrics.SmellThresholds else Metrics.Thresholds()
               val thresholds = Metrics.Thresholds(
-                cmdOpts.metricMaxLines, cmdOpts.metricMaxParams, cmdOpts.metricMaxNesting,
-                cmdOpts.metricMaxComplexity, cmdOpts.metricMinDocCoverage)
+                cmdOpts.metricMaxLines.orElse(defaults.maxLines),
+                cmdOpts.metricMaxParams.orElse(defaults.maxParameters),
+                cmdOpts.metricMaxNesting.orElse(defaults.maxNesting),
+                cmdOpts.metricMaxComplexity.orElse(defaults.maxComplexity),
+                cmdOpts.metricMinDocCoverage.orElse(defaults.minDocCoverage))
               val exceeded = Metrics.violations(report, thresholds)
               // Printed to stderr so that a report piped into something else is still only the
               // report, and the gate's reasons are still visible in a CI log.
@@ -632,6 +638,7 @@ object Main {
     metricMaxNesting: Option[Int] = None,
     metricMaxComplexity: Option[Int] = None,
     metricMinDocCoverage: Option[Double] = None,
+    metricSmells: Boolean = false,
     entryPoint: Option[String] = None,
     installDeps: Boolean = true,
     githubToken: Option[String] = None,
@@ -814,6 +821,8 @@ object Main {
           // so a later --format wins and vice versa.
           opt[Unit]("json").action((_, c) => c.copy(metricFormat = "json"))
             .text("shorthand for --format json."),
+          opt[Unit]("smells").action((_, c) => c.copy(metricSmells = true))
+            .text("reports what exceeds a default set of limits, and exits non-zero if anything does."),
           opt[Int]("max-lines").action((arg, c) => c.copy(metricMaxLines = Some(arg)))
             .text("fails if any function is longer than this many lines."),
           opt[Int]("max-params").action((arg, c) => c.copy(metricMaxParams = Some(arg)))
