@@ -1,7 +1,7 @@
 # Changelog
 
 Unreleased:
-- CLI: Every command now has its own help. `flix build --help` lists what `build` accepts; it used to reprint the whole of `flix --help`, byte for byte, for all twenty-four commands.
+- CLI: Every command now has its own help, listing what that command takes. `flix build --help` used to reprint the whole of `flix --help`, byte for byte, for all twenty-four commands; it now lists `build`'s own options and `-h`, and points at `flix --help` for the ones every command shares. They are all still accepted wherever they were.
 - CLI: `-h` is a second name for `--help`, on every command.
 - CLI: `--help` no longer lists the experimental options and commands -- twenty-two of the forty-odd entries a reader had to walk past. They still parse, and `flix --Xhelp` lists them; the standard help says so in its footer.
 - CLI: `--json` is one option again. It was declared twice -- globally, and under `metric` where it selected the report format -- and which one a word meant depended on whether it came before or after the command, so `flix --json metric` printed a text report and `flix metric --json` left `json` unset. There is now one `--json`, it is global, and it no longer selects a `metric` report: `flix metric --json` prints the text report, and `--format json` is how the JSON one is asked for.

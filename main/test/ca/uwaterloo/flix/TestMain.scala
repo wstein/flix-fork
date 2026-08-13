@@ -723,6 +723,39 @@ class TestMain extends AnyFunSuite {
     }
   }
 
+  test("a command's help lists what that command takes") {
+    // `flix build --help` used to reprint the root page: twenty-odd shared options, of which `build`
+    // adds two. The page a reader opens to learn what `build` takes has to answer that first.
+    val text = Main.usageText(Main.HelpScope.Standard, Some("build"), CommandLine.Help.Ansi.OFF)
+    assert(text.contains("--lib"))
+    assert(text.contains("-h, --help"))
+    for (shared <- List("--threads", "--json", "--coverage", "--entrypoint", "--version")) {
+      assert(!text.contains(shared), s"'$shared' is on the 'build' page")
+    }
+    // And where they went, since a shorter page must not read as a smaller command.
+    assert(text.contains("flix --help"))
+    assert(text.contains("flix --Xhelp"))
+  }
+
+  test("--Xhelp on a command leaves nothing out") {
+    val text = Main.usageText(Main.HelpScope.Full, Some("build"), CommandLine.Help.Ansi.OFF)
+    for (option <- List("--lib", "--threads", "--json", "--Xdebug", "-h, --help")) {
+      assert(text.contains(option), s"'$option' is missing from 'flix build --Xhelp'")
+    }
+  }
+
+  test("every command answers every global option, listed or not") {
+    // The options are copied onto each command rather than inherited, which is what lets a command
+    // hide one it still accepts. Hiding and dropping are one edit apart, and only this tells them
+    // apart: `flix build --threads 4` is a line people have in scripts.
+    val root = Main.rootSpec(new Main.OptsCell)
+    val globals = root.options().asScala.map(_.longestName()).toSet
+    for ((name, sub) <- root.subcommands().asScala) {
+      val own = sub.getCommandSpec.options().asScala.map(_.longestName()).toSet
+      assert(globals.subsetOf(own), s"'$name' does not accept ${(globals -- own).mkString(", ")}")
+    }
+  }
+
   test("every command in the usage text is one the parser accepts") {
     // The two are now the same list -- a command is a subcommand spec, and the help is printed from
     // it -- so this cannot drift the way a hand-written usage string does. It can still be wrong in

@@ -1176,9 +1176,39 @@ object Main {
     root.addSubcommand("Xmemory", xmemory)
     root.addSubcommand("Xzhegalkin", xzhegalkin)
 
-    globalOptions(cell, scope).foreach(root.addOption)
+    addGlobalOptions(cell, root, scope)
     root
   }
+
+  /**
+    * Attaches the options every command takes to `root` and to each of its commands.
+    *
+    * Declared once and copied rather than inherited (`ScopeType.INHERIT`), because an inherited
+    * option carries one visibility everywhere it lands and these need two: `flix --help` is where a
+    * reader looks for what applies to every command, and `flix build --help` is where they look for
+    * what `build` takes -- a page that answered the first question was answering it twenty-four
+    * times and the second one never.
+    *
+    * `-h` is the exception, listed wherever it is answered: the option you reach for when lost is
+    * no use hidden. Copying keeps the guard that inheriting gave, since a command that declared one
+    * of these names itself would now be declaring it twice, which picocli refuses.
+    */
+  private def addGlobalOptions(cell: OptsCell, root: CommandSpec, scope: HelpScope): Unit = {
+    globalOptions(cell, scope).foreach(root.addOption)
+    for (sub <- root.subcommands().values().asScala) {
+      val spec = sub.getCommandSpec
+      globalOptions(cell, scope).map(onCommand(_, scope)).foreach(spec.addOption)
+      // Where the shared options went. Without this the reader is left to conclude that `build`
+      // does not take `--threads`, which is the one thing the shorter page must not say.
+      if (scope == HelpScope.Standard) {
+        spec.usageMessage().footer("Options common to every command are listed by 'flix --help', experimental ones by 'flix --Xhelp'.")
+      }
+    }
+  }
+
+  /** The form a global option takes on a command: answered there, listed only where it is an answer. */
+  private def onCommand(spec: OptionSpec, scope: HelpScope): OptionSpec =
+    spec.toBuilder.hidden(scope == HelpScope.Standard && !spec.usageHelp()).build()
 
   /** Repeated on `build` and `check`, where a classpath is assembled. */
   private def libOption(cell: OptsCell): OptionSpec =
@@ -1193,20 +1223,20 @@ object Main {
     value[Integer](cell, "--n", "<n>", classOf[Integer], "number of compilations")((c, n) => c.copy(XPerfN = Some(n.intValue())))
 
   /**
-    * The options every command takes, wherever they appear on the line.
+    * The options every command takes, wherever they appear on the line, as they are listed on
+    * `flix` itself. [[addGlobalOptions]] copies them onto each command.
     *
-    * `ScopeType.INHERIT` is what makes position stop mattering, and it is also what forbids a
-    * command from declaring one of these names again -- which is the whole reason `metric` no
+    * Position stops mattering because every command declares all of them, which is also what
+    * forbids a command from declaring one of these names again -- the whole reason `metric` no
     * longer has a `--json` of its own.
     *
-    * At `Standard` scope the experimental ones are built hidden. An inherited option carries its
-    * visibility into every command, so hiding one here hides it in twenty-four usage texts and
-    * removes it from none of the twenty-four parsers.
+    * At `Standard` scope the experimental ones are built hidden. Hiding is a decision about the
+    * usage text alone: it removes an option from twenty-four pages and from none of the parsers.
     */
   private def globalOptions(cell: OptsCell, scope: HelpScope): List[OptionSpec] = {
     def global(spec: OptionSpec): OptionSpec = {
       val hidden = scope == HelpScope.Standard && spec.names().exists(isExperimental)
-      spec.toBuilder.scopeType(CommandLine.ScopeType.INHERIT).hidden(hidden).build()
+      spec.toBuilder.hidden(hidden).build()
     }
 
     List(
