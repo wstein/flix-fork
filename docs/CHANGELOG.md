@@ -1,6 +1,8 @@
 # Changelog
 
 Unreleased:
+- Package Manager: A compiler that does not know its own version no longer refuses every project. The `flix` field of a `flix.toml` states the oldest compiler a package builds with, and a jar built without reachable tags reports `0.0.0`, which made every floor look unsatisfied -- "cannot tell" was being read as "too old".
+- Package Manager: A malformed version in `flix.toml` is reported by what is wrong with it again. `0330` is the wrong length and `0.?.0` is three components one of which is not a number; both had collapsed into the length error.
 - BSP: `flix bsp` serves the Build Server Protocol on stdio, so an editor can drive a real Flix build; `flix bsp-install` writes `.bsp/flix.json` so a client can find it. Two commands rather than one with a flag, since a flag would also be accepted while serving, and writing a JSON document onto the protocol stream is the failure the endpoint is arranged to avoid.
 - Build: `check`, `build`, `run` and `test` answer from the last successful build when the sources and the `--lib` jars have not changed, and say so rather than printing nothing. `--clean` does the work regardless, and is declared on those four plus `build-jar` and `build-fatjar`, where it empties the output directory first for a reproducible release.
 - CLI: `flix run` exits with the program's own exit code. A program that failed and a compiler that could not build one are different outcomes, and a script has to tell them apart.

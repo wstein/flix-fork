@@ -220,13 +220,29 @@ object ManifestParser {
     * Converts a String `s` to a semantic version and returns
     * an error if the String is not of the correct format.
     * The only allowed format is "x.x.x"
+    *
+    * `SemVer.ofString` answers yes or no, and the two ways of being no read very differently to
+    * whoever has to fix the file: `0330` is not three components, while `0.?.0` is three components
+    * one of which is not a number. Which error is reported is therefore decided by the component
+    * count, so that each message is true of the input that produced it.
     */
   private def toFlixVer(s: String, p: Path): Result[SemVer, ManifestError] = {
     SemVer.ofString(s) match {
       case Some(v) => Ok(v)
+      case None if hasThreeComponents(s) =>
+        Err(ManifestError.VersionNumberWrong(p, s, "A version is three numbers separated by dots, as in '1.2.3'."))
       case None => Err(ManifestError.FlixVersionHasWrongLength(p, s))
     }
   }
+
+  /**
+    * Returns `true` if `s` has three dot-separated components, whatever those components contain.
+    *
+    * The qualifier is cut off first: `1.2.x+fork` is a malformed three-part version, not a
+    * five-part one.
+    */
+  private def hasThreeComponents(s: String): Boolean =
+    s.takeWhile(c => c != '+' && c != '-').split('.').length == 3
 
   /**
     * Converts a String `s` to a reference to a GitHub project.
