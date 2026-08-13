@@ -32,7 +32,9 @@ import ca.uwaterloo.flix.tools.*
 import ca.uwaterloo.flix.tools.pkg.PackageModules
 import ca.uwaterloo.flix.util.*
 
-import java.io.{File, IOException, PrintStream}
+import java.io.{File, FileDescriptor, FileOutputStream, IOException, PrintStream}
+import java.nio.charset.StandardCharsets
+import scala.util.matching.Regex
 import java.net.BindException
 import java.nio.file.{Files, Paths}
 
@@ -429,7 +431,13 @@ object Main {
               Bootstrap.bootstrap(cwd, options.githubToken).flatMap { bootstrap =>
                 val flix = new Flix().setFormatter(formatter)
                 flix.setOptions(options.copy(progress = false))
-                bootstrap.test(flix, reuse = !cmdOpts.clean)
+                val filters = cmdOpts.testFilters.map(_.r).toList
+                if (cmdOpts.eventsJson) {
+                  runTestsReportingEvents(bootstrap, flix, filters, clean = cmdOpts.clean,
+                    reuseBuild = cmdOpts.reuseBuild)
+                } else {
+                  bootstrap.test(flix, filters, reuse = !cmdOpts.clean)
+                }
               },
               options
             )
@@ -643,6 +651,9 @@ object Main {
     xlib: LibLevel = LibLevel.All,
     xprintphases: Boolean = false,
     xsummary: Boolean = false,
+                     testFilters: Seq[String] = Seq(),
+                     eventsJson: Boolean = false,
+                     reuseBuild: Boolean = false,
     xsubeffecting: Set[Subeffecting] = Set.empty,
     xdatalogDebug: Set[DatalogDebug] = Set.empty,
     xnewmono: Boolean = false,
@@ -827,6 +838,12 @@ object Main {
       cmd("test").action((_, c) => c.copy(command = Command.Test)).text("  runs the tests for the current project.").children(
         opt[Unit]("clean").action((_, c) => c.copy(clean = true)).
           text("empties the output directory and rebuilds before testing."),
+        opt[String]("filter").unbounded().action((arg, c) => c.copy(testFilters = c.testFilters :+ arg)).
+          text("runs only the tests whose fully qualified name matches this regular expression. Repeatable."),
+        opt[Unit]("events-json").action((_, c) => c.copy(eventsJson = true)).
+          text("writes one JSON object per line describing each test, for a tool to read."),
+        opt[Unit]("reuse-build").action((_, c) => c.copy(reuseBuild = true)).
+          text("runs the tests the build on disk recorded, without compiling. For a caller that has just built."),
       )
 
       cmd("repl").action((_, c) => c.copy(command = Command.Repl)).text("  starts a repl for the current project, or provided Flix source files.")
@@ -1128,6 +1145,44 @@ object Main {
       if (!checked && !quiet) {
         println("Nothing to do: the sources have not changed since the last successful build.")
       }
+    }
+  }
+
+  /**
+    * Runs the project's tests, reporting each event as a line of JSON for another process to read.
+    *
+    * This is the other end of a forked test run. The events go on the *real* standard output, taken
+    * before anything else can write to it, and `System.out` is pointed at a stream that turns a test's
+    * own printing into `output` events -- the same quarantine `flix bsp` performs, for the same reason:
+    * one stray line between two frames ends the conversation.
+    *
+    * The exit status still says whether the tests passed, so a caller that only wants the answer does
+    * not have to parse anything to get it.
+    */
+  private def runTestsReportingEvents(bootstrap: Bootstrap, flix: Flix, filters: List[Regex],
+                                      clean: Boolean, reuseBuild: Boolean): Result[Unit, BootstrapError] = {
+    val events = new PrintStream(new FileOutputStream(FileDescriptor.out), true, StandardCharsets.UTF_8)
+    val sink = new JsonTestSink(events)
+    val quarantined = new PrintStream(sink.outputStream, true, StandardCharsets.UTF_8)
+    System.setOut(quarantined)
+    try {
+      if (reuseBuild) {
+        // The caller has already built and is the authority on it; asking again here would ask under
+        // different options and make the two disagree about the same directory.
+        bootstrap.testRecorded(flix, filters, sink).flatMap { passed =>
+          if (passed) Result.Ok(()) else Result.Err(BootstrapError.GeneralError("Tester Error"))
+        }
+      } else {
+        val (outcome, ran) = bootstrap.testWith(flix, filters, sink, reuse = !clean)
+        ran match {
+          case Some(true) => Result.Ok(())
+          case Some(false) => Result.Err(BootstrapError.GeneralError("Tester Error"))
+          case None => outcome.toResult.map(_ => ())
+        }
+      }
+    } finally {
+      quarantined.flush()
+      System.setOut(new PrintStream(new FileOutputStream(FileDescriptor.out), true, StandardCharsets.UTF_8))
     }
   }
 

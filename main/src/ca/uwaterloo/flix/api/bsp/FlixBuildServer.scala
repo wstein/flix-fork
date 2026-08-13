@@ -268,9 +268,18 @@ class FlixBuildServer(session: BspSession, onExit: () => Unit, executor: Executo
     val view = session.requireView()
     val targets = requireKnownTargets(view, params.getTargets)
     val target = targets.headOption.getOrElse(BuildTargets.id(view))
-    val filters = Option(params.getArguments).map(_.asScala.toList).getOrElse(Nil).map(_.r)
+    val filters = Option(params.getArguments).map(_.asScala.toList).getOrElse(Nil)
 
-    session.test(target, filters, Option(params.getOriginId), cancellation)
+    // A working directory cannot be honoured for a test run: the runner is `flix test` in the project,
+    // which is where it finds `flix.toml`. Refused rather than ignored -- a field dropped in silence is
+    // the outcome a client cannot tell from one that was applied.
+    Option(params.getWorkingDirectory).filter(_.nonEmpty).foreach { given =>
+      throw new ResponseErrorException(new ResponseError(ResponseErrorCode.InvalidParams,
+        s"workingDirectory is not supported for a test run: the runner starts in the project ($given)", null))
+    }
+
+    session.test(target, filters, Option(params.getOriginId), cancellation,
+      environment = Option(params.getEnvironmentVariables).map(_.asScala.toMap).getOrElse(Map.empty))
   }
 
   /**

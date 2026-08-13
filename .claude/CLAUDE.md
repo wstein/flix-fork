@@ -331,6 +331,28 @@ classpath so a client can fork it itself, and `jvmTestEnvironment` reports the s
 again — `@Test` defs are entry points in the same output, so there is no test-only
 classpath to invent.
 
+**`buildTarget/test` forks, and the fork is this same compiler.** Tests used to run in the
+server's JVM, where a `System.exit` in one took the server with it. The fork is `flix test
+--events-json --reuse-build` in the project: it reads `tests.json` and the class directory, reports
+each test as a line of JSON, and the server parses those back into `Tester.TestEvent`s for the same
+sink an in-process run used — one opinion about what an outcome is, not two. Three things not to
+undo:
+
+- **`--reuse-build` is required, not an optimisation.** The server has just compiled and is the
+  authority; a fork that asked again would ask under *its* options, compute a different fingerprint,
+  and write a manifest the server then reads as stale. Two processes invalidating each other's build
+  is two full compiles per test run, forever, with nothing reporting it.
+- **The events own standard output**, so the runner quarantines `System.out` the way `flix bsp` does
+  and a test's `println` arrives as an `output` event. A line that is not an event is reported as
+  output too — never as a failed test called `<runner>`, which is what the first version did.
+- **An empty test table is authoritative in `testRecorded`** and not on the in-process path: there
+  the record was written by the build that just ran, so "no tests" is a fact rather than a gap.
+
+**`canDebug` stays false, and `docs/BSP.md` §11 carries the JDWP attach recipe instead.**
+`debugSessionStart` must return a DAP address, and JDWP is not DAP; but this compiler emits JSR-45
+tables under `--Xdebug`, and editors attach to JDWP directly, so the capability a user wants is a
+page of documentation away rather than a protocol implementation away.
+
 **`buildTarget/test` reports each test, and there is only one runner.** `Tester` decides
 what a test outcome *is* — a `false` result is a failure, a non-false result that wrote to
 standard error is also one, a `@Skip`ped test never starts the clock — and callers choose

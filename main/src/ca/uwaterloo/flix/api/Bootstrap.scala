@@ -1743,6 +1743,55 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
   }
 
   /**
+    * Runs the tests of the build on disk, without compiling and without asking whether it is current.
+    *
+    * ==Who decides currency, and why not this==
+    *
+    * The caller. This exists for a forked runner whose *parent* has just built the project and is
+    * therefore the authority on it -- and the fork cannot ask the question for itself, because it would
+    * ask it under its own options. Two processes computing the same fingerprint from different option
+    * sets disagree, and since each writes the manifest it believes in, they invalidate each other's:
+    * every run would compile twice, forever, with nothing reporting it. Removing the question removes
+    * the disagreement.
+    *
+    * What is still checked is what only the class files can answer: every method the record names has to
+    * resolve. So a record that does not describe the directory is refused rather than believed, and the
+    * failure is a message rather than a green run over tests that did not happen.
+    */
+  def testRecorded(flix: Flix, filters: List[Regex], sink: Tester.TestEventSink): Result[Boolean, BootstrapError] = {
+    val configured = flix.options.copy(
+      build = Build.Development,
+      outputJvm = true,
+      outputPath = Bootstrap.getOutputDirectory(projectPath, Build.Development),
+      loadClassFiles = true,
+      progress = false)
+    flix.setOptions(configured)
+
+    val build = configured.build
+    TestManifest.read(TestManifest.fileIn(Bootstrap.getOutputDirectory(projectPath, build))) match {
+      case None =>
+        Err(BootstrapError.GeneralError(
+          "no test record for the build on disk; run a build before asking for its tests"))
+
+      case Some(manifest) =>
+        // An empty table is taken at its word here, unlike on the path that may be reading a record from
+        // an older build. The caller has just built, and every successful build rewrites this file, so
+        // "no tests" is what the build found rather than something it failed to write down. A project
+        // whose `test/` holds no `@Test` yet is a green run of nothing, not an error.
+        val selected = manifest.tests.filter(t => filters.isEmpty || filters.exists(_.matches(t.name)))
+        val requested = selected.map(t => (t.name, t.className, t.methodName))
+        JvmLoader.loadTests(readClassFiles(build), requested)(flix) match {
+          case None =>
+            Err(BootstrapError.GeneralError(
+              "the tests the build recorded are not in the class files it left; rebuild before testing"))
+          case Some(runnable) =>
+            val cases = selected.map(t => Tester.TestCase(TestManifest.idOf(t), t.skip, runnable(t.name)))
+            Ok(Tester.run(cases.toVector.sorted, sink)(flix).isInstanceOf[Ok[?, ?]])
+        }
+    }
+  }
+
+  /**
     * Returns the tests of the build on disk, if it can answer for the current sources.
     *
     * ==What has to hold, and why each part is checked==

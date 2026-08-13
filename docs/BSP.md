@@ -64,7 +64,7 @@ explicitly.
 | `buildTarget/jvmRunEnvironment`, `jvmTestEnvironment` | served |
 | `buildTarget/test` | served |
 | `workspace/reload`, `buildTarget/cleanCache` | served |
-| `debugSessionStart` | never (see §11) |
+| `debugSessionStart` | never (see §12) |
 
 Anything not served is refused with `MethodNotFound`, never answered with an empty
 result: an empty answer is indistinguishable from a real one, so a client would draw a
@@ -260,27 +260,39 @@ disagree about whether a test passed. `TestTesterSink` pins the events themselve
 
 The console rendering is the one that must *not* be attached here: it builds a JLine
 system terminal and writes to the real file descriptor, which in a server carries the
-protocol. §12.
+protocol. §13.
 
-**The tests run in the server's process, and that is the sharpest limit here.** A test is a
-compiled function the compiler reflects and calls, so unlike `buildTarget/run` there is no forked
-process to hand it to — forking needs a test-runner entry point in the compiled program, which
-`CodeGen` does not emit. Three consequences, stated because a client cannot discover them:
+**The tests run in a JVM of their own.** They used to run in the server's, which made three
+failures possible and only those three: a test that called `System.exit` **took the server with
+it**, a test that looped forever occupied it, and a test that leaked a thread leaked it into a
+process that lives for hours. All three are now the fork's problem, and stopping a process is an
+ordinary operation where stopping a thread is not one at all — `Thread.stop` was removed from the
+JVM, `Process.destroy` was not.
 
-  - a test that calls `System.exit` **takes the server with it**;
-  - a test that loops forever occupies the server's JVM until the process ends. Cancelling stops
-    the run *between* tests, which is what an editor's stop button needs for a long suite, and
-    cannot stop the one already executing: `Thread.stop` was removed from the JVM because it left
-    locks in states nothing could reason about;
-  - `buildTarget/jvmTestEnvironment` is the way out for a client that wants isolation, and it
-    reports the classpath for exactly that.
+**Nothing had to be generated for it.** The class files are on disk and `tests.json` records where
+each test's shim went, so the fork is this same compiler, invoked as `flix test --events-json
+--reuse-build` in the project. It reports each test as one line of JSON, which the server parses
+back into the events `Tester` emits and hands to the same sink an in-process run used — so there
+is still one opinion about what a test outcome is, which a bespoke path from JSON to notifications
+would have given up.
 
-**`canTest` stays advertised anyway, and that is a decision rather than an oversight.** The
-capability's promise is that the server runs the project's tests and reports them, which it does;
-the alternative — withdrawing it until tests can be forked — would remove a working feature from
-every editor to avoid a case (an infinite loop inside one test) that a person hits while writing
-that test, with the compiler already open. The honest fix is the forked runner, and it is the
-first thing on this section's list of what is not built.
+Two details are load-bearing:
+
+  - **`--reuse-build` is not an optimisation.** The server has just compiled and is the authority on
+    the build; the fork must not ask again, because it would ask under its own options, compute a
+    different fingerprint, and write a manifest the server then reads as stale. Two processes each
+    invalidating the other's build is two full compiles per test run, forever, with nothing
+    reporting it.
+  - **The events own standard output.** A test's own `println` would land between two JSON objects
+    and end the conversation, which is the hazard `flix bsp` has on its own output. The runner takes
+    the real descriptor for the events and points `System.out` at a stream that turns a program's
+    writing into `output` events, which reach the client as log messages. A line that is not an event
+    at all — a JVM warning — is reported the same way rather than dropped, and emphatically not as a
+    failed test called `<runner>`, which is what the first version of this did.
+
+What is still true: the *interleaving* of a program's output against test results is approximate,
+because `Tester` runs tests on one thread and reports them from another, so a test's printing can
+arrive slightly ahead of the event for the test that produced it. That predates the fork.
 
 `TestParams.arguments` is read as regular expressions selecting which tests to run,
 which is what `Tester` already accepts; a client that sends none runs them all. A project
@@ -355,9 +367,41 @@ Stated plainly, because each is a real limitation rather than an oversight:
   protocol version, so a client correlates a task through its `taskId` and the report payload.
 - **Some sources cannot be opened.** A diagnostic in the standard library or inside a
   `.fpkg` dependency is reported against a `flix-lib:` or `jar:` URI. That is
-  deliberate; see §13.
+  deliberate; see §14.
 
-## 11. What is not built, and why
+## 11. Debugging, without a debug adapter
+
+`canDebug` is false and `debugSessionStart` always fails, because that request must return the
+address of a **DAP** server and Flix has none. What it does not mean is that a Flix program cannot
+be debugged: this compiler emits JSR-45 `SourceDebugExtension` tables and line numbers under
+`--Xdebug`, so a JVM debugger that attaches to a running program can show Flix source and stop on
+Flix lines. IntelliJ's "Remote JVM Debug" and the VS Code Java extension both attach to a JDWP port
+directly, which covers the case a DAP would.
+
+The recipe, for a program:
+
+```
+flix build --Xdebug
+java -agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=5005 \
+     -cp "$(the classpath from buildTarget/jvmRunEnvironment)" Main
+```
+
+and for the tests, the same with the runner the server itself uses:
+
+```
+java -agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=5005 \
+     -cp flix.jar ca.uwaterloo.flix.Main test --reuse-build
+```
+
+Then attach the editor to port 5005. `buildTarget/jvmRunEnvironment` reports the classpath for the
+first, which is what it is for; the second needs only the compiler's own jar, since the runner reads
+`tests.json` and the class directory.
+
+This is deliberately documentation rather than a capability. Advertising `canDebug` and returning a
+JDWP address would be answering a question about DAP with something that is not DAP, and a client
+would fail at the point of use — the exact mistake `BspCapabilities` exists to prevent.
+
+## 12. What is not built, and why
 
 - **`debugSessionStart`.** Flix has no debug adapter, so there is no address to return.
   `canDebug` is false and the request always fails. Unlike everything else that was once
@@ -365,10 +409,10 @@ Stated plainly, because each is a real limitation rather than an oversight:
   to be.
 - **Running is forked, so a program cannot be debugged through the server.** Use
   `jvmRunEnvironment` and start it yourself.
-- **A forked test runner.** It would need `CodeGen` to emit a test entry point beside `Main`, and a
-  way for the forked process to report each test back — the server would parse its output instead of
-  watching `Tester`'s events directly. It is the fix for every consequence of running tests in this
-  process (§8), and the reason it is not done is its size rather than its value.
+- **A per-test timeout.** The fork bounds a whole test run at thirty minutes, so one test that never
+  returns can no longer hold a session; it cannot yet say *which* test hung. Doing it properly means
+  running each test on its own thread inside the runner and abandoning one that overruns, which is
+  safe in a process that is about to exit and is a change to `flix test` for everyone.
 - **Watcher-driven recompilation.** `buildTarget/didChange` is announced on a reload, but
   nothing watches the filesystem: a client compiles when it decides to. A watcher needs
   debounce, and the one in this repository is wired only to the REPL.
@@ -377,7 +421,7 @@ Stated plainly, because each is a real limitation rather than an oversight:
 - **TCP transport and concurrent clients.** stdio only. One `Flix` instance per
   session is the concurrency ceiling regardless.
 
-## 12. Standard output belongs to the protocol
+## 13. Standard output belongs to the protocol
 
 This is the invariant most easily broken by an unrelated edit, so it is stated as a
 rule: **never `println` on a code path a BSP request can reach.**
@@ -398,7 +442,7 @@ interesting failures happen while the project is loading.
 `C` of `Content-Length`, which is the only assertion that can catch a `println` added
 anywhere on the initialize path.
 
-## 13. URIs, and why nothing is dropped
+## 14. URIs, and why nothing is dropped
 
 `BspUri.ofSource` returns a `String`, not an `Option[String]`. There is no filter, so
 there is nothing to drop.
@@ -430,7 +474,7 @@ Two details are load-bearing and were each established by a failing test:
   the user opened are then two spellings of one directory, and a correct client is
   refused.
 
-## 14. Session model
+## 15. Session model
 
 One `Bootstrap` and one `Flix` per connection, held by `BspSession`, which also owns
 the lifecycle state machine: `Uninitialized`, `Initialized`, `ShutDown`. Requests
@@ -576,7 +620,7 @@ the id is one this server knows — otherwise the filter would shape one reply a
 `build/exit` without one exits 1. A connection that simply ended asked for nothing and exits 0.
 `TestBspProcess` asserts both, against real processes, because nothing smaller can.
 
-## 15. Acceptance criteria
+## 16. Acceptance criteria
 
 Each names the test that pins it.
 
@@ -734,13 +778,16 @@ Each names the test that pins it.
 54. **The request bound is measured, not assumed.** `TestBspMatrix`, "a flood of requests is refused
     rather than exhausting the server" — eighty requests, and an assertion on how many threads the
     connection's executor ever held.
-55. **A real server process completes the whole cycle.** `TestBspProcess`, "a scripted
+55. **A test that exits the JVM does not take the server with it.** `TestBspTest`, "a test that exits
+    the JVM does not take the server with it" — the run reports a failure and the session still
+    compiles and still runs tests. This is the assertion the fork exists for.
+56. **A real server process completes the whole cycle.** `TestBspProcess`, "a scripted
     session drives a real server through the whole cycle" — the assembled jar, started from
     the connection file it wrote, driven over hand-written frames through initialize,
     targets, sources, compile, run, test, shutdown and exit. The only case where nothing is
     stubbed, and so the only one that can see a packaging fault.
 
-## 16. Running the tests
+## 17. Running the tests
 
 ```
 ./mill flix.test        # the in-process tests, with the rest of the suite

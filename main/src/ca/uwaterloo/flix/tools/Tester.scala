@@ -109,6 +109,15 @@ object Tester {
 
     /** Called for each event, on the reporter's thread. */
     def accept(event: TestEvent)(implicit flix: Flix): Unit
+
+    /**
+      * Called with a line the program under test wrote outside any test's own captured output.
+      *
+      * Ignored by default, because a rendering that shares a terminal with the tests already sees it --
+      * `ConsoleRedirection` tees as it goes. A rendering that does *not* share it, because the tests ran
+      * in another process, has this as its only way to pass a program's printing along.
+      */
+    def output(line: String)(implicit flix: Flix): Unit = ()
   }
 
   /**

@@ -535,35 +535,49 @@ class BspSession(val projectPath: Path, options: Options, log: BspLogStream) {
     * descriptor, which here carries the protocol. The events go to a [[BspTestSink]] instead, and both
     * renderings agree about pass and fail because both watch the same runner.
     */
-  def test(target: BuildTargetIdentifier, filters: List[Regex], originId: Option[String],
-           cancellation: Cancellation): TestResult = {
+  def test(target: BuildTargetIdentifier, filters: List[String], originId: Option[String],
+           cancellation: Cancellation,
+           environment: Map[String, String] = Map.empty): TestResult = {
     val startedAt = currentGeneration
     val view = requireView()
 
     val parent = tasks.newTask()
-    val sink = new BspTestSink(tasks, target, parent)
+    val sink = new BspTestSink(tasks, target, parent, onOutput = line => logMessage(line))
     tasks.start(parent, s"Testing ${view.packageName}", Some((TaskStartDataKind.TEST_TASK, new TestTask(target))))
 
-    // The finish is in a `finally` for the same reason `BspTasks.bracket` puts it there, which this
-    // cannot use because the pairs interleave with the events driving them: a throw between the start
-    // and the finish -- a shutdown, a project that stopped loading -- would leave the client's progress
-    // indicator turning forever and report the failure nowhere.
     var status: StatusCode = StatusCode.ERROR
     try {
-      val (outcome, ran) = buildLock.synchronized {
+      // Compiled here, and only here: the diagnostics are the server's to publish, and a client must not
+      // have to read a test runner's output to learn that its program does not compile. The fork then
+      // finds the build current and compiles nothing.
+      val outcome = buildLock.synchronized {
         val b = requireBootstrapForBuild()
-        b.testWith(flix, filters, sink, isCancelled = () => cancellation.isCancelled)
+        compileWith(b, view)
       }
 
       status =
-        if (cancellation.isCancelled) StatusCode.CANCELLED
-        else if (!isCurrent(startedAt)) StatusCode.CANCELLED
+        if (cancellation.isCancelled || !isCurrent(startedAt)) StatusCode.CANCELLED
         else {
           publish(target, outcome)
-          ran match {
-            // The program did not compile, so no test ran. The diagnostics just published say why.
-            case None => StatusCode.ERROR
-            case Some(succeeded) => if (succeeded) StatusCode.OK else StatusCode.ERROR
+          if (!outcome.isSuccess) {
+            // No test ran. The diagnostics just published say why.
+            StatusCode.ERROR
+          } else {
+            val result = BspForkedTester.run(
+              view, filters, sink,
+              // A cancelled test run kills the fork, which is the whole reason the tests are over there:
+              // stopping a process is an ordinary operation where stopping a thread is not one at all.
+              onStart = process => cancellation.onCancel(() => ProgramRunner.terminateTree(process, KillGrace)),
+              TestTimeout,
+              environment)(flix)
+
+            if (result.timedOut) {
+              showMessage(MessageType.ERROR,
+                s"the tests of ${view.packageName} did not finish within ${TestTimeout.toMinutes} minutes and were stopped.")
+            }
+            if (cancellation.isCancelled) StatusCode.CANCELLED
+            else if (result.passed) StatusCode.OK
+            else StatusCode.ERROR
           }
         }
 
@@ -571,9 +585,6 @@ class BspSession(val projectPath: Path, options: Options, log: BspLogStream) {
       originId.foreach(result.setOriginId)
       result
     } finally {
-      // The report carries the origin id, like a compile report does: it is how a client ties an
-      // aggregate back to the request that asked for it. `TaskStart` and `TaskFinish` themselves have no
-      // such field in this protocol version, so the payload is where it can go.
       val report = sink.report()
       originId.foreach(report.setOriginId)
       tasks.finish(parent, s"Tested ${view.packageName}", status,
@@ -850,6 +861,15 @@ object BspSession {
     * because a process that ignores a forcible kill for five seconds is not going to be reasoned with.
     */
   private val KillGrace: java.time.Duration = java.time.Duration.ofSeconds(5)
+
+  /**
+    * How long a test run may take before the server stops it.
+    *
+    * Longer than a run's, because a suite legitimately takes longer than a program, and bounded for the
+    * same reason: a client cannot cancel a process it cannot see, and one test that never returns must
+    * not hold a session open indefinitely. The fork is what makes stopping it possible at all.
+    */
+  private val TestTimeout: java.time.Duration = java.time.Duration.ofMinutes(30)
 
   /** What this server calls itself in the initialize result and in `.bsp/flix.json`. */
   val ServerName: String = "flix"
