@@ -29,6 +29,26 @@ import org.scalatest.funsuite.AnyFunSuite
   */
 class TestBspCapabilities extends AnyFunSuite {
 
+  test("run/printStdout is offered only to a client that can receive it") {
+    // Measured, not assumed: `BuildClient` in bsp4j 2.1.1 declares `onBuildLogMessage` and no
+    // `onRunPrintStdout`, so a 2.1 client loses a program's output entirely rather than showing it
+    // somewhere else. The version a client declares in `build/initialize` is the only thing that says
+    // which it is.
+    assert(BspSession.hasPrintStdout(Some("2.2.0")))
+    assert(BspSession.hasPrintStdout(Some("2.2.0-M2")))
+    assert(BspSession.hasPrintStdout(Some("3.0.0")))
+    // Compared as numbers: "2.10" sorts before "2.2" as text, and is later.
+    assert(BspSession.hasPrintStdout(Some("2.10.0")))
+
+    assert(!BspSession.hasPrintStdout(Some("2.1.0")))
+    assert(!BspSession.hasPrintStdout(Some("2.0.0")))
+    // Absent or unreadable is treated as old, because `build/logMessage` has existed in every version:
+    // being wrong that way costs a message in the wrong window, the other way costs the message.
+    assert(!BspSession.hasPrintStdout(None))
+    assert(!BspSession.hasPrintStdout(Some("")))
+    assert(!BspSession.hasPrintStdout(Some("nonsense")))
+  }
+
   test("every advertised capability is one the server implements") {
     val advertised = BspCapabilities.mkServerCapabilities()
 

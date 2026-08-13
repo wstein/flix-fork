@@ -57,6 +57,9 @@ class BspSession(val projectPath: Path, options: Options, log: BspLogStream) {
   /** The languages the client said it supports, from `build/initialize`. */
   @volatile private var clientLanguageIds: List[String] = Nil
 
+  /** The BSP version the client said it speaks, from `build/initialize`. `None` if it named none. */
+  @volatile private var clientBspVersion: Option[String] = None
+
   /** The loaded project. `None` until `build/initialize` succeeds. */
   @volatile private var bootstrap: Option[Bootstrap] = None
 
@@ -163,6 +166,9 @@ class BspSession(val projectPath: Path, options: Options, log: BspLogStream) {
 
     clientLanguageIds =
       Option(params.getCapabilities).flatMap(c => Option(c.getLanguageIds)).map(_.asScala.toList).getOrElse(Nil)
+
+    // Which notifications this client can receive at all. See `printStdout`.
+    clientBspVersion = Option(params.getBspVersion).filter(_.nonEmpty)
 
     // Dependency resolution can reach the network and narrates while it does. Its output goes to the
     // client's log, never to standard output, which belongs to the protocol.
@@ -779,12 +785,30 @@ class BspSession(val projectPath: Path, options: Options, log: BspLogStream) {
     */
   private def liveClient: Option[BuildClient] = if (isShutDown) None else client
 
-  /** Sends a line of a running program's output, which is not a message about the build. */
+  /**
+    * Sends a line of a running program's output, which is not a message about the build.
+    *
+    * `run/printStdout` is where a program's output belongs, and it does not exist before BSP 2.2:
+    * `BuildClient` in bsp4j 2.1.1 declares `onBuildLogMessage` and no `onRunPrintStdout` at all. A
+    * client on that version does not ignore the notification politely -- it has no method to receive
+    * it, so lsp4j logs "Unsupported notification method" on its side and the program's entire output
+    * is lost, which looks to a user like a program that printed nothing.
+    *
+    * So the channel is chosen by what the client said it speaks in `build/initialize`. A client that
+    * named no version is treated as old, because `build/logMessage` is the one of the two that has
+    * always existed.
+    */
   private def printStdout(line: String, originId: Option[String]): Unit =
     liveClient.foreach { c =>
-      val params = new PrintParams(originId.getOrElse(""), line + System.lineSeparator())
-      c.onRunPrintStdout(params)
+      if (clientSpeaksPrintStdout) {
+        c.onRunPrintStdout(new PrintParams(originId.getOrElse(""), line + System.lineSeparator()))
+      } else {
+        c.onBuildLogMessage(new LogMessageParams(MessageType.LOG, line))
+      }
     }
+
+  /** Whether the client's declared BSP version has `run/printStdout` in it. */
+  private def clientSpeaksPrintStdout: Boolean = BspSession.hasPrintStdout(clientBspVersion)
 
   /** Sends `message` to the client's log, if there is a client. */
   def logMessage(message: String): Unit =
@@ -838,6 +862,27 @@ class BspSession(val projectPath: Path, options: Options, log: BspLogStream) {
 }
 
 object BspSession {
+
+  /**
+    * Whether a client that declared `version` can receive `run/printStdout`.
+    *
+    * It arrived in BSP 2.2: `BuildClient` in bsp4j 2.1.1 has `onBuildLogMessage` and no
+    * `onRunPrintStdout`, so a 2.1 client cannot receive one however politely it is sent -- the output
+    * is lost rather than displayed elsewhere. The specification also marks both print notifications
+    * unstable, which is a second reason not to make them the only way a program's output can arrive.
+    *
+    * A version that is absent or cannot be read is treated as old. `build/logMessage` has existed in
+    * every version of the protocol, so being wrong in that direction costs a message in the wrong
+    * window, and being wrong in the other direction costs the message.
+    */
+  private[bsp] def hasPrintStdout(version: Option[String]): Boolean = version.exists { given =>
+    // A leading `2.2`, `2.10`, `3.x`: compared as numbers, since `"2.10" < "2.2"` as text.
+    val parts = given.trim.split("[.\\-+]").toList
+    (parts.headOption.flatMap(_.toIntOption), parts.lift(1).flatMap(_.toIntOption)) match {
+      case (Some(major), Some(minor)) => major > 2 || (major == 2 && minor >= 2)
+      case _ => false
+    }
+  }
 
   /**
     * What a compile answers with: the result a client waits for, and how much the compiler said.

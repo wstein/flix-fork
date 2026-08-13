@@ -51,6 +51,21 @@ class TestBspRun extends AnyFunSuite {
     }
   }
 
+  test("a client that cannot receive run/printStdout is sent the output it can receive") {
+    // `run/printStdout` arrived in BSP 2.2. `BuildClient` in bsp4j 2.1.1 declares `onBuildLogMessage`
+    // and no `onRunPrintStdout` at all, so a 2.1 client does not ignore the notification politely --
+    // it has no method to receive it, lsp4j reports an unsupported method on its side, and a program's
+    // entire output is lost. To a user that is a program that printed nothing.
+    withSession("""def main(): Unit \ IO = println("PROGRAM-RAN")""", bspVersion = "2.1.0") { s =>
+      val result = s.run()
+
+      assert(result.getStatusCode == StatusCode.OK, s"unexpected status: ${result.getStatusCode}")
+      assert(s.logs.exists(_.contains("PROGRAM-RAN")), s"the output never arrived anywhere: ${s.logs}")
+      assert(!s.output.exists(_.contains("PROGRAM-RAN")),
+        "the output was sent as run/printStdout to a client that predates it")
+    }
+  }
+
   test("the program starts in the working directory the client named") {
     // `RunParams.workingDirectory` was accepted and dropped: the plumbing through `BspSession.run` and
     // `BspRunner` was written and correct, and the server never read the field. A dropped field is the
@@ -442,7 +457,7 @@ class TestBspRun extends AnyFunSuite {
   }
 
   /** Runs `f` against an initialised server whose project's `Main.flix` is `source`. */
-  private def withSession(source: String)(f: Session => Unit): Unit = {
+  private def withSession(source: String, bspVersion: String = Bsp4j.PROTOCOL_VERSION)(f: Session => Unit): Unit = {
     val project = Files.createTempDirectory("flix-bsp-run-")
     Bootstrap.init(project)(System.out).unsafeGet
     Files.writeString(project.resolve("src").resolve("Main.flix"), source + "\n")
@@ -477,7 +492,7 @@ class TestBspRun extends AnyFunSuite {
 
       val client = launcher.getRemoteProxy
       client.buildInitialize(new InitializeBuildParams(
-        "test-client", "1.0", Bsp4j.PROTOCOL_VERSION, BspUri.ofDirectory(project),
+        "test-client", "1.0", bspVersion, BspUri.ofDirectory(project),
         new BuildClientCapabilities(List("flix").asJava))).get(Timeout, TimeUnit.SECONDS)
       client.onBuildInitialized()
 
