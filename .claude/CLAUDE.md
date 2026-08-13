@@ -400,11 +400,28 @@ refused beyond that rather than parked — surplus work costs a platform thread 
 is deliberately unbounded so a long run cannot starve a query. And `BspLogStream` truncates a
 line past 32 KB once, then discards the rest of it.
 
-**Two things the pinned wire model cannot express**, both documented rather than half-done:
-bsp4j 2.1.1's `RunParams`/`TestParams` have no `workingDirectory` or `environmentVariables`, so
-a client sending them is sending fields gson drops before this code sees them; and
-`TaskStartParams`/`TaskFinishParams` have no `originId`, so it goes on the `CompileReport` and
-`TestReport` payloads, which do.
+**The wire model is bsp4j 2.2.0-M2, and that is a decision with a reason.** On 2.1.1
+`RunParams`/`TestParams` have no `workingDirectory` or `environmentVariables` and `BuildClient` has
+no `run/printStdout`, so those facilities could only be documented as missing. A milestone with no
+successor is a real risk; `flix.testBsp` is the gate, because a renamed wire field shows up in
+serialisation and nowhere else. `TaskStartParams`/`TaskFinishParams` still have no `originId`, so it
+goes on the `CompileReport` and `TestReport` payloads, which do.
+
+**A program's output is `run/printStdout`, not `build/logMessage`.** A client shows a run in its own
+console; the build log is for the build. Both streams are merged before they get there, so stderr
+arrives on the stdout channel -- deliberate, since the program's own interleaving is what a reader
+needs.
+
+**`CompileReport.errors` is a count of diagnostics**, not of files with diagnostics, and the count
+comes from the session because only it sees the messages. It was `0 | 1` for as long as the report
+was built from the status alone.
+
+**Every successful build records the test table** (`TestManifest`), not only a run that loaded the
+classes: `CodeGen` computes where each shim went for every build, and `JvmLoader.LoaderResult`
+reports it either way. Recording it only when the classes were loaded meant a test run after
+`flix build` compiled the whole program again to learn what the build already knew. `clean` had to be
+taught about the file -- an output type it does not recognise makes the build directory uncleanable,
+which is how this was caught.
 
 **Requests do not run on lsp4j's message thread, and that has two consequences.** A
 handler that ran there would stop the connection being read for the length of a compile,

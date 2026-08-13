@@ -15,7 +15,8 @@
  */
 package ca.uwaterloo.flix.api
 
-import ca.uwaterloo.flix.runtime.TestFn
+import ca.uwaterloo.flix.language.ast.Symbol
+import ca.uwaterloo.flix.language.phase.jvm.JvmLoader
 import ca.uwaterloo.flix.tools.Tester
 import ca.uwaterloo.flix.util.Result
 import org.json4s.JsonDSL.*
@@ -31,11 +32,14 @@ import java.nio.file.{Files, Path}
   *
   * Because it is a description of the *program*, and that manifest is a record of products and inputs.
   * The distinction is not filing: a wrong `BuildManifest` costs a rebuild, while a wrong test table
-  * means the tests someone believes ran did not. Keeping them apart makes the second artifact's
-  * weaker standing visible, and it is also forced by a fact about the compiler -- `flix build` runs
-  * with `loadClassFiles = false` and so knows no test shims at all, and a build server's compile
-  * deliberately does the same. Only a run that loaded the classes can write this, which is exactly
-  * the run that has the information.
+  * means the tests someone believes ran did not. Keeping them apart makes the second artifact's weaker
+  * standing visible instead of lending it the other's.
+  *
+  * Every successful build writes it, including one that does not load its classes. `CodeGen` computes
+  * where each shim went whichever kind of build asked for it, so the names cost nothing to record -- and
+  * recording them only when the classes were loaded would mean a test run after `flix build`, or after a
+  * build server's compile, had to compile the whole program a second time to find out what it already
+  * knew.
   *
   * ==What makes it trustworthy enough to use==
   *
@@ -84,13 +88,23 @@ object TestManifest {
   /** Returns the path of the record inside the output directory `outputDir`. */
   def fileIn(outputDir: Path): Path = outputDir.resolve(FileName).normalize()
 
-  /** Returns the record describing `tests`, as a build with `fingerprint` over `sourcesDigest` found them. */
-  def of(fingerprint: String, sourcesDigest: String, tests: Iterable[TestFn]): TestManifest = {
-    val recorded = tests.toList.map { fn =>
-      val loc = fn.sym.loc
-      RecordedTest(
-        fn.sym.toString, fn.className, fn.methodName, fn.skip,
-        loc.source.name, loc.startLine, loc.startCol, loc.endLine, loc.endCol)
+  /**
+    * Returns the record describing `tests`, as a build with `fingerprint` over `sourcesDigest` found them.
+    *
+    * Built from the *entry points* rather than from the callable tests, because those are known to every
+    * build: a build that did not load its classes has nothing to call and still knows where every shim
+    * is. Recording from the callables would have meant that only a test run could write this, so a test
+    * run after `flix build` -- or after a build server's compile, which also does not load -- would
+    * compile the whole program a second time.
+    */
+  def of(fingerprint: String, sourcesDigest: String,
+         tests: Iterable[(Symbol.DefnSym, JvmLoader.TestEntryPoint)]): TestManifest = {
+    val recorded = tests.toList.map {
+      case (sym, entry) =>
+        val loc = sym.loc
+        RecordedTest(
+          sym.toString, entry.className, entry.methodName, entry.skip,
+          loc.source.name, loc.startLine, loc.startCol, loc.endLine, loc.endCol)
     }
     TestManifest(fingerprint, sourcesDigest, recorded.sortBy(_.name))
   }

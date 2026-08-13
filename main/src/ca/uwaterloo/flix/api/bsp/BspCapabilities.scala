@@ -45,13 +45,14 @@ object BspFeature {
   case object OutputPaths extends BspFeature
   case object JvmRunEnvironment extends BspFeature
   case object JvmTestEnvironment extends BspFeature
+  case object JvmCompileClasspath extends BspFeature
   case object Reload extends BspFeature
   case object BuildTargetChanged extends BspFeature
 
   /** Every optional request, so a test can walk the ones that are off as well as the ones that are on. */
   val All: List[BspFeature] = List(
     Compile, Run, Test, Debug, InverseSources, DependencySources, DependencyModules, Resources,
-    OutputPaths, JvmRunEnvironment, JvmTestEnvironment, Reload, BuildTargetChanged)
+    OutputPaths, JvmRunEnvironment, JvmTestEnvironment, JvmCompileClasspath, Reload, BuildTargetChanged)
 }
 
 /**
@@ -110,6 +111,7 @@ object BspCapabilities {
     c.setOutputPathsProvider(implemented(BspFeature.OutputPaths))
     c.setJvmRunEnvironmentProvider(implemented(BspFeature.JvmRunEnvironment))
     c.setJvmTestEnvironmentProvider(implemented(BspFeature.JvmTestEnvironment))
+    c.setJvmCompileClasspathProvider(implemented(BspFeature.JvmCompileClasspath))
     c.setCanReload(implemented(BspFeature.Reload))
     c.setBuildTargetChangedProvider(implemented(BspFeature.BuildTargetChanged))
 

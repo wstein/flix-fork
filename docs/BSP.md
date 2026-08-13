@@ -194,10 +194,19 @@ program's own problem and gives a client the exit status it asked for. A run tha
 not finish within ten minutes is stopped, because a client cannot cancel a process it
 cannot see.
 
-The program's output arrives as `build/logMessage`, not as diagnostics — it is not a
-problem with the code, and a client shows the two in different places. A project with no
-`main` is refused with a message rather than treated as a run that did nothing:
-"nothing happened" and "there was nothing to happen" call for different words.
+The program's output arrives as `run/printStdout`, the channel this protocol version gives it, so a
+client shows it in a run console rather than beside dependency resolution in a build log. The two
+streams are merged before they get there, so a program's writes to standard error arrive on that one
+as well — the price of preserving the program's own interleaving, which is what someone reading the
+output actually needs. A project with no `main` is refused with a message rather than treated as a
+run that did nothing: "nothing happened" and "there was nothing to happen" call for different words.
+
+**`workingDirectory` and `environmentVariables` are honoured.** A directory that is not one is
+refused by name, because `ProcessBuilder` reports a missing working directory as a generic failure to
+start the program, which a user reads as the build server being unable to run their code. The
+variables are added to the environment this process inherited rather than replacing it: the protocol
+calls them variables to *set*, and a program that suddenly had no `PATH` would fail for reasons
+nobody asked for. A client that wants one gone sets it empty.
 
 The classpath is `ProjectView.runtimeClasspath`: the mode's class directory, `resources/`
 (because `buildJar` copies it to the jar root, so a program calling
@@ -332,15 +341,15 @@ Stated plainly, because each is a real limitation rather than an oversight:
 - **`languageIds` is `["flix"]`**, which no stock client knows, so none will route
   Flix files to semantic features. Claiming `"java"` would invite
   `buildTarget/javacOptions`, which is not implemented — a worse trade.
-- **`workingDirectory` and `environmentVariables` on a run or test request are not honoured, and
-  cannot be.** They do not exist in the wire model this server is built against: bsp4j 2.1.1's
-  `RunParams` and `TestParams` carry a target, an `originId`, `arguments`, and a `data` payload, and
-  nothing else. A client that sends them is sending fields gson drops before this code sees them, so
-  they can be neither honoured nor rejected — there is nothing to reject. A run uses the project
-  directory and the server's environment; a client that needs otherwise forks with
-  `jvmRunEnvironment`, which reports the classpath for exactly that purpose. Honouring them means
-  moving to a bsp4j that has them, which today means a 2.2 milestone; §3 says why the version is
-  pinned.
+- **`run/readStdin` is not supported.** Honouring it means keeping a program's standard input open
+  for the length of a run, and it is closed immediately on purpose: a program that reads input then
+  sees end-of-stream and proceeds, where one waiting on input a client may never send would hang
+  until the run's timeout. The notification reports itself unsupported on the client's log, which is
+  all a notification can do.
+- **`buildTarget/jvmCompileClasspath` is refused.** The protocol asks for the jars a *compilation*
+  needs, which for a JVM language is where the javac-visible dependencies are. A Flix build resolves
+  its own from `flix.toml` and compiles Flix; the only classpath a client can act on is the runtime
+  one, and answering with that under this name would describe something else.
 - **`originId` appears on the reports, not on the task notifications.** `CompileReport` and
   `TestReport` carry it and do; `TaskStartParams` and `TaskFinishParams` have no such field in this
   protocol version, so a client correlates a task through its `taskId` and the report payload.

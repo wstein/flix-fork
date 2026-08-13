@@ -105,7 +105,11 @@ class TestBspLinkage extends AnyFunSuite {
       assert(diagnostics.lengthIs == 1)
       val d = diagnostics.head
       assert(d.getSeverity == DiagnosticSeverity.ERROR)
-      assert(d.getCode == "E2136")
+      // An `Either[String, Integer]` in this protocol version, matching LSP, and gson has to carry the
+      // choice as well as the value: a round trip that lost which side it was would put a number where a
+      // client expects a code.
+      assert(d.getCode.isLeft, s"the code arrived as ${d.getCode}")
+      assert(d.getCode.getLeft == "E2136")
       assert(d.getSource == "flix")
       assert(d.getMessage == "an example message")
       // Zero-based, and unchanged by the crossing. `CliContract` chose zero-based ranges precisely
@@ -258,6 +262,7 @@ class TestBspLinkage extends AnyFunSuite {
     override def onBuildInitialized(): Unit = ()
     override def buildShutdown(): CompletableFuture[Object] = CompletableFuture.completedFuture(null)
     override def onBuildExit(): Unit = ()
+    override def onRunReadStdin(params: ReadParams): Unit = ()
 
     override def workspaceBuildTargets(): CompletableFuture[WorkspaceBuildTargetsResult] = unsupported
     override def workspaceReload(): CompletableFuture[Object] = unsupported
@@ -283,6 +288,8 @@ class TestBspLinkage extends AnyFunSuite {
   private class StubClient(received: util.Queue[PublishDiagnosticsParams]) extends BuildClient {
     override def onBuildPublishDiagnostics(params: PublishDiagnosticsParams): Unit = received.add(params)
     override def onBuildShowMessage(params: ShowMessageParams): Unit = ()
+    override def onRunPrintStdout(params: PrintParams): Unit = ()
+    override def onRunPrintStderr(params: PrintParams): Unit = ()
     override def onBuildLogMessage(params: LogMessageParams): Unit = ()
     override def onBuildTargetDidChange(params: DidChangeBuildTarget): Unit = ()
     override def onBuildTaskStart(params: TaskStartParams): Unit = ()

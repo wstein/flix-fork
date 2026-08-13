@@ -560,6 +560,15 @@ object Bootstrap {
   private def getBuildManifestFile(p: Path, build: Build): Path =
     BuildManifest.fileIn(getOutputDirectory(p, build))
 
+  /**
+    * Returns the file recording where the tests of the build mode `build` are.
+    *
+    * Beside the build manifest, and known to `clean` for the same reason: an output file type `clean`
+    * does not recognise makes the build directory uncleanable.
+    */
+  private def getTestManifestFile(p: Path, build: Build): Path =
+    TestManifest.fileIn(getOutputDirectory(p, build))
+
   /** Every build mode, so that `clean` can visit the output of each. */
   private val AllBuilds: List[Build] = List(Build.Development, Build.Production)
 
@@ -1057,6 +1066,9 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
         outcome
 
       case Some(result) =>
+        // Recorded by every build, cheap because the names are already computed, and what lets a test run
+        // reach these tests without compiling again.
+        recordTests(flix, result)
         val recorded = for {
           _ <- Steps.reconcileClassDirectory(build, result.products)
           _ <- Steps.writeBuildManifest(
@@ -1340,6 +1352,7 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
     // Every build mode's output, since 'clean' resets the project and not one of its modes.
     val classDirs = Bootstrap.AllBuilds.map(Bootstrap.getClassDirectory(projectPath, _))
     val manifestFiles = Bootstrap.AllBuilds.map(Bootstrap.getBuildManifestFile(projectPath, _))
+    val testManifestFiles = Bootstrap.AllBuilds.map(Bootstrap.getTestManifestFile(projectPath, _))
     val docDir = Bootstrap.getDocumentationDirectory(projectPath)
     val stubsDir = Bootstrap.getStubsDirectory(projectPath)
     val coverageReports = Bootstrap.CoverageReports.map(name => buildDir.resolve(name).normalize())
@@ -1357,6 +1370,9 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
         // The record of what the last build produced. It has to go with the products it
         // describes: a manifest that outlives them would let the next build reuse a class
         // directory that is no longer there.
+      } else if (testManifestFiles.contains(file)) {
+        // The record of where the last build put each test's shim. Same reasoning, and the same trap:
+        // a build output type this does not recognise makes the whole build directory uncleanable.
       } else if (classDirs.exists(file.startsWith)) {
         if (!FileOps.checkExt(file, "class")) {
           return Err(BootstrapError.FileError(s"Unexpected file extension in build directory (only '.class' files are allowed): '${projectPath.relativize(file)}'"))
@@ -1721,7 +1737,6 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
     outcome.result match {
       case None => (outcome, None)
       case Some(compiled) =>
-        recordTests(flix, compiled)
         val cases = Tester.getTestCases(filters, compiled)
         (outcome, Some(Tester.run(cases, sink, isCancelled)(flix).isInstanceOf[Ok[?, ?]]))
     }
@@ -1783,7 +1798,7 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
     val build = flix.options.build
     val fingerprint = fingerprintOf(flix)
     val digest = BuildManifest.digestOfSources(projectPath, sourcePaths)
-    val manifest = TestManifest.of(fingerprint, digest, compiled.getTests.values)
+    val manifest = TestManifest.of(fingerprint, digest, compiled.getTestEntryPoints)
     // A failure here costs the next run a compile and nothing else, so it is not worth failing the run
     // that just passed.
     TestManifest.write(TestManifest.fileIn(Bootstrap.getOutputDirectory(projectPath, build)), manifest)
@@ -2694,6 +2709,7 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
     def emptyOutputDirectory(build: Build): Result[Unit, BootstrapError] = {
       for {
         _ <- deleteBuildManifest(build)
+        _ <- deleteTestManifest(build)
         _ <- removeClassFiles(build, keep = Set.empty)
         _ <- pruneEmptyDirectories(Bootstrap.getClassDirectory(projectPath, build))
       } yield {
@@ -2777,6 +2793,24 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
       )
       BuildManifest.write(Bootstrap.getBuildManifestFile(projectPath, build), manifest)
         .mapErr(e => BootstrapError.FileError(s"Failed to write the build manifest: ${e.getMessage}"))
+    }
+
+    /**
+      * Deletes the record of where the tests are, if there is one.
+      *
+      * With the products, not after them: it names class files by generated name, and one that outlived
+      * them would describe a directory that no longer holds what it points at.
+      */
+    private def deleteTestManifest(build: Build): Result[Unit, BootstrapError] = {
+      val path = Bootstrap.getTestManifestFile(projectPath, build)
+      if (!Files.exists(path)) {
+        return Ok(())
+      }
+      checkForDangerousPath(path) match {
+        case Err(e) => return Err(e)
+        case Ok(()) => ()
+      }
+      FileOps.delete(path).mapErr(e => BootstrapError.FileError(s"Failed to delete the test record: ${e.getMessage}"))
     }
 
     /** Deletes the build manifest of the build mode `build`, if there is one. */

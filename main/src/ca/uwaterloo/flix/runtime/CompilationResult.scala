@@ -18,6 +18,7 @@ package ca.uwaterloo.flix.runtime
 
 import ca.uwaterloo.flix.language.ast.*
 import ca.uwaterloo.flix.language.ast.shared.Source
+import ca.uwaterloo.flix.language.phase.jvm.JvmLoader
 
 import java.nio.file.Path
 
@@ -39,6 +40,7 @@ import java.nio.file.Path
   */
 class CompilationResult(main: Option[Array[String] => Unit],
                         tests: Map[Symbol.DefnSym, TestFn],
+                        testEntryPoints: Map[Symbol.DefnSym, JvmLoader.TestEntryPoint],
                         sources: Map[Source, SourceLocation],
                         val totalTime: Long,
                         val codeSize: Int,
@@ -53,6 +55,16 @@ class CompilationResult(main: Option[Array[String] => Unit],
   /** Returns all the test functions in the program. */
   def getTests: Map[Symbol.DefnSym, TestFn] =
     tests
+
+  /**
+    * Returns where every test's generated shim is, whether or not the classes were loaded.
+    *
+    * [[getTests]] is empty for a build that did not load its classes, because there is nothing to call.
+    * This is not: the names come from `CodeGen`, which computes them for every build, and recording them
+    * is what lets a later process reach the same tests from the class files this build wrote.
+    */
+  def getTestEntryPoints: Map[Symbol.DefnSym, JvmLoader.TestEntryPoint] =
+    testEntryPoints
 
   /** Returns the total number of lines of compiled code. */
   def getTotalLines: Int = sources.foldLeft(0) {

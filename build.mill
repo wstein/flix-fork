@@ -85,7 +85,16 @@ object flix extends ScalaModule {
     //
     // No bsp4j release avoids this chain: 2.1.1 is the newest stable, 2.2.0 was never
     // released, and both milestones use the same generator.
-    mvn"ch.epfl.scala:bsp4j:2.1.1".exclude("org.eclipse.lsp4j" -> "org.eclipse.lsp4j.generator"),
+    //
+    // 2.2.0-M2 rather than 2.1.1, and the reason is not novelty. `RunParams` and `TestParams`
+    // gained `workingDirectory` and `environmentVariables` there, and `BuildClient` gained
+    // `run/printStdout`; on 2.1.1 those fields are absent from the model, so a client sending
+    // them is sending fields gson drops before any of this code can honour *or* reject them.
+    // A milestone is a real risk -- it has had no successor since March 2024 -- and the
+    // alternative was two protocol facilities that could only be documented as missing. The
+    // upgrade is one revertible commit, and `flix.testBsp` is what would catch a renamed
+    // field, since serialisation shape shows up nowhere else.
+    mvn"ch.epfl.scala:bsp4j:2.2.0-M2".exclude("org.eclipse.lsp4j" -> "org.eclipse.lsp4j.generator"),
     mvn"org.eclipse.xtext:org.eclipse.xtext.xbase.lib:2.28.0",
     mvn"com.dynatrace.hash4j:hash4j:0.30.0"
   )

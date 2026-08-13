@@ -251,6 +251,8 @@ class TestBspMatrix extends AnyFunSuite {
 
     override def onBuildTargetDidChange(params: DidChangeBuildTarget): Unit = received.count.incrementAndGet()
     override def onBuildShowMessage(params: ShowMessageParams): Unit = received.count.incrementAndGet()
+    override def onRunPrintStdout(params: PrintParams): Unit = ()
+    override def onRunPrintStderr(params: PrintParams): Unit = ()
     override def onBuildLogMessage(params: LogMessageParams): Unit = received.count.incrementAndGet()
     override def onBuildTaskStart(params: TaskStartParams): Unit = received.count.incrementAndGet()
     override def onBuildTaskProgress(params: TaskProgressParams): Unit = received.count.incrementAndGet()
