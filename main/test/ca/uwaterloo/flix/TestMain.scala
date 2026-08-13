@@ -323,6 +323,36 @@ class TestMain extends AnyFunSuite {
     assert(Main.parseCmdOpts(Array("--refresh", "init")).isEmpty)
   }
 
+  test("bsp") {
+    val opts = Main.parseCmdOpts(Array("bsp")).get
+    assert(opts.command == Main.Command.Bsp)
+  }
+
+  test("bsp-install") {
+    val opts = Main.parseCmdOpts(Array("bsp-install")).get
+    assert(opts.command == Main.Command.BspInstall)
+    assert(opts.bspJar.isEmpty)
+    assert(!opts.force)
+  }
+
+  test("bsp-install --jar and --force") {
+    val opts = Main.parseCmdOpts(Array("bsp-install", "--jar", "/tmp/flix.jar", "--force")).get
+    assert(opts.command == Main.Command.BspInstall)
+    assert(opts.bspJar.contains("/tmp/flix.jar"))
+    assert(opts.force)
+  }
+
+  test("bsp-install's options belong to it, and bsp takes none") {
+    // `bsp` serves a protocol on stdout, so it must not grow a flag that writes a document: a flag
+    // declared globally would parse there too. Writing the connection file is its own command for
+    // exactly that reason, and these assertions are what hold the two apart.
+    assert(Main.parseCmdOpts(Array("bsp", "--jar", "/tmp/flix.jar")).isEmpty)
+    assert(Main.parseCmdOpts(Array("bsp", "--force")).isEmpty)
+    assert(Main.parseCmdOpts(Array("bsp", "--install")).isEmpty)
+    assert(Main.parseCmdOpts(Array("build", "--force")).isEmpty)
+    assert(Main.parseCmdOpts(Array("--force")).isEmpty)
+  }
+
   test("an unrecognised doc option is rejected, not ignored") {
     // The `--datalog` diagram option was removed because nothing consumed it. These assertions are
     // what make the rest of this suite mean anything: if the parser accepted unknown flags, a test
@@ -742,6 +772,24 @@ class TestMain extends AnyFunSuite {
     for (option <- List("--lib", "--threads", "--json", "--Xdebug", "-h, --help")) {
       assert(text.contains(option), s"'$option' is missing from 'flix build --Xhelp'")
     }
+  }
+
+  test("`--clean` is declared on the commands that can skip work, and nowhere else") {
+    // It is per-command on purpose: a command that never skips has no use for a flag saying do the
+    // work anyway, and a flag the parser knows but nothing reads is worse than one it rejects --
+    // it reads as an escape hatch and is not. Six commands read `cmdOpts.clean`.
+    val skips = Set("check", "build", "build-jar", "build-fatjar", "run", "test")
+    val root = Main.rootSpec(new Main.OptsCell)
+    for ((name, sub) <- root.subcommands().asScala) {
+      val declared = sub.getCommandSpec.findOption("--clean") != null
+      assert(declared == skips.contains(name), s"'$name' declares --clean: $declared")
+    }
+    for (name <- skips) {
+      assert(Main.parseCmdOpts(Array(name, "--clean")).get.clean, s"'$name --clean' does not parse")
+      assert(!Main.parseCmdOpts(Array(name)).get.clean)
+    }
+    // Not on `clean`, which empties the directory as its whole purpose.
+    assert(Main.parseCmdOpts(Array("clean", "--clean")).isEmpty)
   }
 
   test("every command answers every global option, listed or not") {

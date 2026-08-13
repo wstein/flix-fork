@@ -64,7 +64,7 @@ one -- see D7.
 
 `-h` is what a reader types before having read anything, and every other tool on
 their machine takes it. It is declared on the global `--help`, so it is answered
-by all twenty-four commands: a short name that works on `flix` but not on `flix
+by every command: a short name that works on `flix` but not on `flix
 build` teaches a habit that then fails.
 
 **Rejected:** a short name per option (`-t` for `--threads`, `-o` for output).
@@ -102,7 +102,7 @@ for it would be a promise about options that carry no promise.
 
 `flix init --help` listed twenty-one options, of which `init` takes one. The page
 a reader opens to learn what a command takes has to answer that before anything
-else, and reprinting the root page for all twenty-four commands answered it
+else, and reprinting the root page for every command answered it
 nowhere.
 
 The shared options are therefore **copied onto each command rather than

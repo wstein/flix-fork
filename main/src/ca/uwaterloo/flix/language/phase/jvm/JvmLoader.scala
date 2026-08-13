@@ -49,6 +49,46 @@ object JvmLoader {
     }
   }
 
+  /**
+    * Loads the tests named by `requested` from already-written class files.
+    *
+    * `classFiles` maps a binary class name to its bytes, read from a build's class directory. They go
+    * through the same [[FlixClassLoader]] the compiled path uses, and that is the load-bearing detail:
+    * the loader prefers the bytes it is given over the ones this process was started with, so the
+    * program's own `dev.flix.runtime.Global` shadows the *mock* one inside `flix.jar` whose `setArgs`
+    * throws. A plain `URLClassLoader` over the directory would resolve the mock and the program would
+    * die before it ran.
+    *
+    * Returns `None` if any requested method cannot be resolved, which is the whole verification: a
+    * recorded test whose shim is not where it was recorded means the record and the directory disagree,
+    * and the caller's answer to that is to compile rather than to run a subset and call it a test run.
+    *
+    * @param requested the class and method of each test, by test name.
+    */
+  def loadTests(classFiles: Map[String, Array[Byte]],
+                requested: List[(String, String, String)])(implicit flix: Flix): Option[Map[String, () => AnyRef]] = {
+    // The map is keyed by binary name, which is what `FlixClassLoader` looks up; the `JvmName` inside
+    // each entry is not consulted on this path, so it is derived rather than parsed.
+    val loader = new FlixClassLoader(classFiles.map {
+      case (name, bytes) =>
+        val segments = name.split('.').toList
+        name -> JvmClass(JvmName(segments.init, segments.last), bytes)
+    })
+
+    val loaded = requested.map {
+      case (testName, className, methodName) =>
+        try {
+          val clazz = loader.loadClass(className)
+          findMethod(clazz, methodName).map(method => testName -> wrapTest(method))
+        } catch {
+          case _: ClassNotFoundException => None
+          case _: LinkageError => None
+        }
+    }
+
+    if (loaded.exists(_.isEmpty)) None else Some(loaded.flatten.toMap)
+  }
+
   /** Returns the tests of `root`. */
   private def wrapTest(method: Method): () => AnyRef = {
     val parameterCount = method.getParameterCount
@@ -77,7 +117,9 @@ object JvmLoader {
     implicit val loadedClasses: Map[JvmName, Class[?]] = loadAll(root.classes.values)
 
     val tests = MapOps.mapValuesWithKey(root.tests) {
-      case (sym, defn) => TestFn(sym, defn.isSkip, wrapTest(loadMethod(defn.className, defn.methodName)))
+      case (sym, defn) =>
+        TestFn(sym, defn.isSkip, wrapTest(loadMethod(defn.className, defn.methodName)),
+          defn.className.toBinaryName, defn.methodName)
     }
     val main = root.main.map {
       case defn => wrapMain(loadMethod(defn.className, defn.methodName))

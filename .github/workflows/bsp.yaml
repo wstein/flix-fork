@@ -1,0 +1,42 @@
+name: BSP
+
+on: [ pull_request, merge_group ]
+
+permissions:
+  contents: read
+
+# Cancel previous runs if the PR is updated
+concurrency:
+  cancel-in-progress: true
+  group: test-flix-bsp-${{ github.ref }}
+
+jobs:
+  build-and-test-bsp:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out master
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Install JDK
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+      - name: Cache Mill and Coursier
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: ${{ runner.os }}-mill-${{ hashFiles('build.mill', '.mill-version') }}
+          restore-keys: |
+            ${{ runner.os }}-mill-
+      # No token: unlike the package manager suite, nothing here reaches the network.
+      #
+      # The task builds the assembly itself, because the suite's subject is the *packaged*
+      # compiler: `assemblyRules` drops most of guava, and an exclusion that went too far is
+      # invisible to any test that runs on the full classpath. Run without the jar these tests
+      # would have nothing to look at.
+      - name: Test BSP suite with timeout
+        timeout-minutes: 15
+        run: ./mill flix.testBsp

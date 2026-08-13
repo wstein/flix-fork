@@ -16,6 +16,7 @@
 
 package ca.uwaterloo.flix
 
+import ca.uwaterloo.flix.api.bsp.{BspDiscovery, BspServer}
 import ca.uwaterloo.flix.api.lsp.{LspServer, VSCodeLspServer, FormatterLsp as LspFormatter}
 import ca.uwaterloo.flix.tools.fmt.{Canonical, PrettyPrinter}
 import ca.uwaterloo.flix.api.{Bootstrap, BootstrapError, CliContract, Flix, Version}
@@ -296,7 +297,7 @@ object Main {
                 Bootstrap.bootstrap(cwd, options.githubToken).flatMap { bootstrap =>
                   val flix = new Flix().setFormatter(formatter)
                   flix.setOptions(options)
-                  addLibs(flix, cmdOpts.libs).flatMap(_ => bootstrap.check(flix))
+                  addLibs(flix, cmdOpts.libs).flatMap(_ => runCheck(bootstrap, flix, cmdOpts, quiet = true))
                 }
               }
             }
@@ -305,7 +306,7 @@ object Main {
               Bootstrap.bootstrap(cwd, options.githubToken).flatMap { bootstrap =>
                 val flix = new Flix().setFormatter(formatter)
                 flix.setOptions(options)
-                addLibs(flix, cmdOpts.libs).flatMap(_ => bootstrap.check(flix))
+                addLibs(flix, cmdOpts.libs).flatMap(_ => runCheck(bootstrap, flix, cmdOpts, quiet = false))
               }
             }
           } else {
@@ -327,7 +328,17 @@ object Main {
           val runBuild = () => Bootstrap.bootstrap(cwd, options.githubToken).flatMap { bootstrap =>
             val flix = new Flix().setFormatter(formatter)
             flix.setOptions(options.copy(loadClassFiles = false))
-            addLibs(flix, cmdOpts.libs).flatMap(_ => bootstrap.build(flix))
+            // The `--lib` jars are added before the fingerprint is computed, and they are part of it, so
+            // a build given one is up to date or not on the same terms as any other.
+            addLibs(flix, cmdOpts.libs).flatMap { _ =>
+              bootstrap.buildIfNeeded(flix, clean = cmdOpts.clean).map { compiled =>
+                // Said out loud, because a build that prints nothing and a build that did nothing look
+                // the same. Not on the JSON path, which carries diagnostics and nothing else.
+                if (!compiled && !cmdOpts.jsonDiagnostics) {
+                  println("Nothing to do: the build output is up to date.")
+                }
+              }
+            }
           }
           if (cmdOpts.jsonDiagnostics) exitWithJson(runBuild()) else exitOnResult(runBuild())
 
@@ -340,7 +351,7 @@ object Main {
             Bootstrap.bootstrap(cwd, options.githubToken).flatMap { bootstrap =>
               val flix = new Flix().setFormatter(formatter)
               flix.setOptions(options.copy(loadClassFiles = false))
-              bootstrap.buildJar(flix)
+              bootstrap.buildJar(flix, clean = cmdOpts.clean)
             }
           }
 
@@ -353,7 +364,7 @@ object Main {
             Bootstrap.bootstrap(cwd, options.githubToken).flatMap { bootstrap =>
               val flix = new Flix().setFormatter(formatter)
               flix.setOptions(options.copy(loadClassFiles = false))
-              bootstrap.buildFatJar(flix)
+              bootstrap.buildFatJar(flix, clean = cmdOpts.clean)
             }
           }
 
@@ -505,14 +516,15 @@ object Main {
             println("The 'run' command does not support file arguments.")
             System.exit(1)
           }
-          exitOnResult(
-            Bootstrap.bootstrap(cwd, options.githubToken).flatMap { bootstrap =>
-              val flix = new Flix().setFormatter(formatter)
-              flix.setOptions(options)
-              bootstrap.run(flix, cmdOpts.args.toArray)
-            },
-            options
-          )
+          val ran = Bootstrap.bootstrap(cwd, options.githubToken).flatMap { bootstrap =>
+            val flix = new Flix().setFormatter(formatter)
+            flix.setOptions(options)
+            bootstrap.run(flix, cmdOpts.args.toArray, reuse = !cmdOpts.clean)
+          }
+          // The program's own exit code, not the compiler's success. A program that failed and a
+          // compiler that could not build it are different outcomes, and a script has to tell them
+          // apart: 1 for the second, whatever the program said for the first.
+          exitWithCode(ran, options)
 
         case Command.Test =>
           if (cmdOpts.files.isEmpty) {
@@ -520,7 +532,7 @@ object Main {
               Bootstrap.bootstrap(cwd, options.githubToken).flatMap { bootstrap =>
                 val flix = new Flix().setFormatter(formatter)
                 flix.setOptions(options.copy(progress = false))
-                bootstrap.test(flix)
+                bootstrap.test(flix, reuse = !cmdOpts.clean)
               },
               options
             )
@@ -562,6 +574,32 @@ object Main {
               System.exit(0)
             case Result.Err(error) =>
               println(error.message(formatter))
+              System.exit(1)
+          }
+
+        case Command.Bsp =>
+          // No check that `cmdOpts.files` is empty: the command declares no positional, so the
+          // parser refuses a file before this runs. It read as a guard under a flat parser that
+          // accepted files for every command.
+          //
+          // `cwd` and not a flag: a client starts the server with the workspace as its working
+          // directory, which is exactly the project it means.
+          //
+          // The status is the server's, not a constant: the specification asks for 0 after an orderly
+          // shutdown and 1 for a `build/exit` without one, and a client reads it to tell a server that
+          // went away cleanly from one that was told to stop and had not been shut down.
+          System.exit(BspServer.run(options, cwd))
+
+        case Command.BspInstall =>
+          BspDiscovery.install(cwd, cmdOpts.bspJar.map(Paths.get(_)), cmdOpts.force) match {
+            case Result.Ok(file) =>
+              println(s"Wrote $file")
+              if (BspDiscovery.isFromCheckout(cmdOpts.bspJar.map(Paths.get(_)))) {
+                println("Note: it names this checkout's classpath, so it works on this machine only.")
+              }
+              System.exit(0)
+            case Result.Err(message) =>
+              println(message)
               System.exit(1)
           }
 
@@ -681,6 +719,9 @@ object Main {
     coverageOutput: Option[String] = None,
     coverageLcovOutput: Option[String] = None,
     canonical: Boolean = false,
+    clean: Boolean = false,
+    bspJar: Option[String] = None,
+    force: Boolean = false,
     docFormat: DocFormat = Options.Default.docFormat,
     // Absent rather than "text": what an unasked-for format resolves to is the command's decision,
     // and a default recorded here is one the command can no longer tell from an answer.
@@ -764,6 +805,10 @@ object Main {
     case object Repl extends Command
 
     case object PlainLsp extends Command
+
+    case object Bsp extends Command
+
+    case object BspInstall extends Command
 
     case class VSCodeLsp(port: Int) extends Command
 
@@ -892,6 +937,8 @@ object Main {
       case "run" => Command.Run
       case "test" => Command.Test
       case "repl" => Command.Repl
+      case "bsp" => Command.Bsp
+      case "bsp-install" => Command.BspInstall
       case "lsp" => Command.PlainLsp
       // The only command carrying a value in its identity: there is no VSCode server without a port
       // to serve it on, so the port is an argument of the command and not a field beside it.
@@ -1087,6 +1134,7 @@ object Main {
       "also writes the diagnostics, and what 'metric' would report, to <file> as SARIF 2.1.0.")((c, p) => c.copy(sarifPath = Some(p))))
     check.addOption(libOption(cell))
     check.addOption(diagnosticsJson(cell))
+    check.addOption(cleanOption(cell, "checks even when a successful build already answers for these sources."))
 
     val capabilities = command(cell, "capabilities", "reports the tooling contract this compiler speaks.", takesFiles = false)
     capabilities.addOption(value[Integer](cell, "--contract-version", "<n>", classOf[Integer],
@@ -1099,6 +1147,30 @@ object Main {
     val build = command(cell, "build", "builds (i.e. compiles) the current project.")
     build.addOption(libOption(cell))
     build.addOption(diagnosticsJson(cell))
+    build.addOption(cleanOption(cell, "empties the output directory first and rebuilds from nothing."))
+
+    val buildJar = command(cell, "build-jar", "builds a jar-file from the current project.")
+    buildJar.addOption(cleanOption(cell, "empties the output directory first and rebuilds from nothing. For a reproducible release."))
+
+    val buildFatJar = command(cell, "build-fatjar", "builds a fatjar-file from the current project.")
+    buildFatJar.addOption(cleanOption(cell, "empties the output directory first and rebuilds from nothing. For a reproducible release."))
+
+    val run = command(cell, "run", "runs main for the current project.")
+    run.addOption(cleanOption(cell, "empties the output directory and rebuilds before running."))
+
+    val test = command(cell, "test", "runs the tests for the current project.")
+    test.addOption(cleanOption(cell, "empties the output directory and rebuilds before testing."))
+
+    // Two commands rather than `bsp --install`: a flag on `bsp` would also be accepted while
+    // serving, and writing a JSON document onto the protocol stream is the failure this whole
+    // endpoint is arranged to avoid.
+    val bsp = command(cell, "bsp", "starts the Build Server Protocol server on stdio.", takesFiles = false)
+
+    val bspInstall = command(cell, "bsp-install", "writes '.bsp/flix.json' so an editor can find the BSP server.", takesFiles = false)
+    bspInstall.addOption(value[String](cell, "--jar", "<path>", classOf[String],
+      "the compiler jar to name in the connection file. Defaults to the running one.")((c, p) => c.copy(bspJar = Some(p))))
+    bspInstall.addOption(flag(cell, "--force",
+      "replaces a connection file this server did not write.")(_.copy(force = true)))
 
     val metric = command(cell, "metric", "displays code or compiler metrics for the project.")
     metric.addOption(value[String](cell, "--format", "<format>", classOf[String],
@@ -1150,16 +1222,18 @@ object Main {
     root.addSubcommand("capabilities", capabilities)
     root.addSubcommand("stubs", stubs)
     root.addSubcommand("build", build)
-    root.addSubcommand("build-jar", command(cell, "build-jar", "builds a jar-file from the current project (full, clean build)."))
-    root.addSubcommand("build-fatjar", command(cell, "build-fatjar", "builds a fatjar-file from the current project (full, clean build)."))
+    root.addSubcommand("build-jar", buildJar)
+    root.addSubcommand("build-fatjar", buildFatJar)
     root.addSubcommand("build-pkg", command(cell, "build-pkg", "builds a fpkg-file from the current project."))
     root.addSubcommand("clean", command(cell, "clean", "recursively removes class files from the build directory."))
     root.addSubcommand("metric", metric)
     root.addSubcommand("doc", doc)
     root.addSubcommand("format", format)
-    root.addSubcommand("run", command(cell, "run", "runs main for the current project."))
-    root.addSubcommand("test", command(cell, "test", "runs the tests for the current project."))
+    root.addSubcommand("run", run)
+    root.addSubcommand("test", test)
     root.addSubcommand("repl", command(cell, "repl", "starts a repl for the current project, or provided Flix source files."))
+    root.addSubcommand("bsp", bsp)
+    root.addSubcommand("bsp-install", bspInstall)
     root.addSubcommand("lsp", command(cell, "lsp", "starts the Plain-LSP server.", takesFiles = false))
     root.addSubcommand("lsp-vscode", lspVscode)
     root.addSubcommand("release", command(cell, "release", "releases a new version to GitHub.", takesFiles = false))
@@ -1189,8 +1263,8 @@ object Main {
     * Declared once and copied rather than inherited (`ScopeType.INHERIT`), because an inherited
     * option carries one visibility everywhere it lands and these need two: `flix --help` is where a
     * reader looks for what applies to every command, and `flix build --help` is where they look for
-    * what `build` takes -- a page that answered the first question was answering it twenty-four
-    * times and the second one never.
+    * what `build` takes -- a page that answered the first question was answering it once per
+    * command and the second one never.
     *
     * `-h` is the exception, listed wherever it is answered: the option you reach for when lost is
     * no use hidden. Copying keeps the guard that inheriting gave, since a command that declared one
@@ -1218,6 +1292,16 @@ object Main {
     values[String](cell, "--lib", "<jar>", classOf[String], None,
       "adds a jar to the classpath. Repeatable.")((c, xs) => c.copy(libs = c.libs ++ xs))
 
+  /**
+    * Repeated on the six commands that can answer from a recorded build.
+    *
+    * Declared per command rather than globally, and that is the point of it: a command that cannot
+    * skip work has no use for a flag that says do it anyway, and a flag nothing reads is worse than
+    * one the parser rejects -- it looks like an escape hatch and is not.
+    */
+  private def cleanOption(cell: OptsCell, description: String): OptionSpec =
+    flag(cell, "--clean", description)(_.copy(clean = true))
+
   private def diagnosticsJson(cell: OptsCell): OptionSpec =
     flag(cell, "--diagnostics-json",
       "writes diagnostics to stdout as JSON, for a build tool to read.")(_.copy(jsonDiagnostics = true))
@@ -1234,7 +1318,7 @@ object Main {
     * longer has a `--json` of its own.
     *
     * At `Standard` scope the experimental ones are built hidden. Hiding is a decision about the
-    * usage text alone: it removes an option from twenty-four pages and from none of the parsers.
+    * usage text alone: it removes an option from every page and from none of the parsers.
     */
   private def globalOptions(cell: OptsCell, scope: HelpScope): List[OptionSpec] = {
     def global(spec: OptionSpec): OptionSpec = {
@@ -1403,6 +1487,24 @@ object Main {
     System.exit(if (errors.isEmpty) 0 else 1)
   }
 
+  /**
+    * Type checks the project, reusing a recorded build when one answers for the current sources.
+    *
+    * `--clean` is decided here because only the command line knows it: it is a request to do the work
+    * regardless. The `--lib` jars need no decision -- they are added to the `Flix` instance before this
+    * runs and are part of the fingerprint, so a check given one is answerable from a record or not on
+    * the same terms as any other.
+    *
+    * @param quiet suppresses the note, for `--diagnostics-json`, whose output is a document.
+    */
+  private def runCheck(bootstrap: Bootstrap, flix: Flix, cmdOpts: CmdOpts, quiet: Boolean): Result[Unit, BootstrapError] = {
+    bootstrap.checkIfNeeded(flix, reuse = !cmdOpts.clean).map { checked =>
+      if (!checked && !quiet) {
+        println("Nothing to do: the sources have not changed since the last successful build.")
+      }
+    }
+  }
+
   private def addLibs(flix: Flix, libs: Seq[String]): Result[Unit, BootstrapError] = {
     Result.traverse(libs) { lib =>
       try {
@@ -1441,12 +1543,27 @@ object Main {
   /**
     * Exits with code 0 on success, or prints the error and exits with code 1 on failure.
     */
+  /**
+    * Exits with the code a successful command reports, or 1 if it failed.
+    *
+    * For `run`, whose success carries the program's own exit code. A program that failed and a compiler
+    * that could not build one are different outcomes and a script has to tell them apart.
+    */
+  private def exitWithCode(result: Result[Int, BootstrapError], options: Options)(implicit formatter: Formatter): Unit = {
+    if (options.coverage) {
+      writeCoverage(options)
+    }
+    result match {
+      case Result.Ok(code) => System.exit(code)
+      case Result.Err(error) =>
+        println(error.message(formatter))
+        System.exit(1)
+    }
+  }
+
   private def exitOnResult[T](result: Result[T, BootstrapError], options: Options)(implicit formatter: Formatter): Unit = {
     if (options.coverage) {
-      val session = Coverage.getSession
-      CoverageReporter.writeJsonReport(session, options.coverageOutput)
-      CoverageReporter.writeLcovReport(session, options.coverageLcovOutput)
-      println(CoverageReporter.formatSummary(session))
+      writeCoverage(options)
     }
     result match {
       case Result.Ok(_) => System.exit(0)
@@ -1454,6 +1571,14 @@ object Main {
         println(error.message(formatter))
         System.exit(1)
     }
+  }
+
+  /** Writes the coverage reports of this process's session. */
+  private def writeCoverage(options: Options): Unit = {
+    val session = Coverage.getSession
+    CoverageReporter.writeJsonReport(session, options.coverageOutput)
+    CoverageReporter.writeLcovReport(session, options.coverageLcovOutput)
+    println(CoverageReporter.formatSummary(session))
   }
 
   /**

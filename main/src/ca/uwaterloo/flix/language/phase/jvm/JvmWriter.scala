@@ -26,13 +26,24 @@ import java.nio.file.{Files, LinkOption, Path}
 
 object JvmWriter {
 
-  /** Writes `classes` into the `<build>/class/` folder if enabled by [[Flix.options.outputJvm]]. */
-  def run(root: BytecodeAst.Root)(implicit flix: Flix): Unit = {
+  /**
+    * Writes `classes` into the `<build>/class/` folder if enabled by [[Flix.options.outputJvm]].
+    *
+    * Returns the path of every class file written, relative to that folder. The set is empty
+    * when JVM output is disabled, since then nothing was written.
+    *
+    * A caller that maintains the class directory needs to know exactly which files are in it,
+    * and the only account of that which cannot drift is the one the writer itself keeps: the
+    * returned paths are the ones it resolved and wrote, not names re-derived from the class
+    * names afterwards.
+    */
+  def run(root: BytecodeAst.Root)(implicit flix: Flix): Set[Path] = {
     // Write each class (and interface) to disk if enabled.
     if (flix.options.outputJvm) {
-      for ((_, jvmClass) <- root.classes) {
-        writeClass(flix.options.outputPath.resolve("class/"), jvmClass)
-      }
+      val classDir = flix.options.outputPath.resolve("class/")
+      root.classes.map { case (_, jvmClass) => writeClass(classDir, jvmClass) }.toSet
+    } else {
+      Set.empty
     }
   }
 
@@ -42,10 +53,13 @@ object JvmWriter {
     * For example, if the prefix path is `/tmp/` and the class name is Foo.Bar.Baz
     * then the bytecode is written to the path `/tmp/Foo/Bar/Baz.class` provided
     * that this path either does not exist or is already a JVM class file.
+    *
+    * Returns the written path, relative to `prefixPath`.
     */
-  private def writeClass(prefixPath: Path, clazz: JvmClass): Unit = {
+  private def writeClass(prefixPath: Path, clazz: JvmClass): Path = {
     // Compute the absolute path of the class file to write.
-    val path = prefixPath.resolve(clazz.name.toPath).toAbsolutePath
+    val relativePath = clazz.name.toPath
+    val path = prefixPath.resolve(relativePath).toAbsolutePath
 
     // Create all parent directories (in case they don't exist).
     Files.createDirectories(path.getParent)
@@ -70,6 +84,8 @@ object JvmWriter {
 
     // Write the bytecode.
     Files.write(path, clazz.bytecode)
+
+    relativePath
   }
 
 }

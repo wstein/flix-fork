@@ -26,10 +26,10 @@ import org.json4s.JsonDSL.*
   *
   * ==What this is not==
   *
-  * It is **not** the Build Server Protocol, and not a peer of it. BSP standardises the boundary
-  * between an editor and a build tool -- there the IDE is the *client* and sbt, Gradle or Bazel is
-  * the *server*. This contract sits one layer below that, between a build tool and the compiler,
-  * which BSP does not describe and where the Scala ecosystem uses `zinc` instead.
+  * It is **not** the Build Server Protocol. BSP standardises the boundary between an editor and a
+  * build tool -- there the IDE is the *client* and sbt, Gradle or Bazel is the *server*. This contract
+  * sits one layer below that, between a build tool and the compiler, which BSP does not describe and
+  * where the Scala ecosystem uses `zinc` instead.
   *
   * {{{
   *   editor  --BSP-->  build tool  --this contract-->  flix.jar
@@ -37,7 +37,14 @@ import org.json4s.JsonDSL.*
   *
   * It is also not an LSP extension. Build requests do not belong in a language server: that the
   * server already holds a warm compiler is a fact about implementation, not an argument about where
-  * the boundary goes.
+  * the boundary goes. That part is unchanged by what follows.
+  *
+  * Flix serves the upper boundary too, and this contract is not superseded by it. For a plain
+  * `flix.toml` project `flix` is the build tool, so `flix bsp` ([[ca.uwaterloo.flix.api.bsp]] and
+  * `docs/BSP.md`) is a build server in its own right -- a separate endpoint, not a language-server
+  * extension, so the constraint in the previous paragraph holds. The two are peers: `flix bsp` is for
+  * a project whose build is `flix`, and this contract is for a project whose build is Gradle, Mill or
+  * Bazel and drives the compiler as a command. A project has one or the other.
   *
   * ==Why a contract rather than a linked API==
   *

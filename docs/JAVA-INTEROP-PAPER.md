@@ -505,14 +505,14 @@ given compiler build but are not a compatibility guarantee; match on the
 **B.1 Functions monomorphize on the source type (§4).** With
 `def idf(x: a, n: Int32): a = if (n > 0) idf(x, n - 1) else x` applied at
 `"s"` and `12345678901234567890ii`, `$FLIX build` then
-`find build/class -name 'Def$idf*'` yields two classes —
+`find build/development/class -name 'Def$idf*'` yields two classes —
 `Def$idf$gxHvfHhkmvN` and `Def$idf$X9AoBsJRHtW` — for two *reference*
 instantiations. Adding a `Float64` call yields a third.
 
 **B.2 Data representations specialize after erasure (§4).** Export four defs
 returning `Option[String]`, `Option[BigInt]`, `Option[Int32]` and
 `Option[Float64]` from one module. After `$FLIX build`,
-`find build/class -name 'Option$*'` shows three specializations:
+`find build/development/class -name 'Option$*'` shows three specializations:
 `Option$LRvYAvhsMeY` (both reference cases), `Option$XfxNPeZznzG` (`Int32`) and
 `Option$NFgb6xberHg` (`Float64`). Substituting `BigDecimal` for either reference
 type does not change the grouping. `$FLIX build-jar` then `javap -cp
@@ -522,7 +522,7 @@ artifact/*.jar <Module>` shows the boxing of §4 end to end:
 
 **B.3 The class/package clash (§5).** Build a module tree with exports at
 `Acme.Api`, `Acme.Api.Deep`, `Acme.Api.Deep.Deeper` and `Acme.Quiet.Sub`, whose
-ancestor `Acme.Quiet` exports nothing. `find build/class/Acme` must list only
+ancestor `Acme.Quiet` exports nothing. `find build/development/class/Acme` must list only
 files — `Api.class`, `Api$Deep.class`, `Api$Deep$Deeper.class`,
 `Quiet$Sub.class` and their `$Def$` siblings — and no directory, since a
 directory under `Acme` is a package below a facade class. `javap` on the

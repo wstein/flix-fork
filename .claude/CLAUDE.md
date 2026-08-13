@@ -113,6 +113,212 @@ wrong:
 - `max_line_length = off`. Some editors read a width as an instruction to
   hard-wrap, which reformats code without understanding it.
 
+## Building a Project
+
+**Each build mode owns an output directory**: `build/development/` for
+`Build.Development` (`flix build`, `run`, `test`) and `build/production/` for
+`Build.Production` (`build-jar`, `build-fatjar`). `Build.directoryName` is the
+mapping, `Bootstrap.getOutputDirectory` resolves it, and it is what
+`Options.outputPath` is set to — so the class files land in
+`build/<mode>/class/`, since `JvmWriter` resolves `class/` against that path.
+Class files, build manifest and product set are all per mode. They cannot be
+shared: build mode reaches the *typer* (`ConstraintSolverInterface` is lenient
+about the `Debug` effect in development), so the two modes do not compile the
+same program, and one directory had every `build` reset what the last
+`build-jar` left and the other way round. `build/doc/` stays outside, because
+documentation is not mode-specific. `clean` visits every mode's output —
+`Bootstrap.AllBuilds` is the list, and a new mode has to be added there or its
+output becomes uncleanable.
+
+`flix build`, `build-jar` and `build-fatjar` go through `Bootstrap`, and none of
+them wipes its class directory any more. They **reconcile** it: compile, then
+delete every class file that is not one this compilation wrote, and prune the
+directories that empties. `--clean` still empties the directory up front and
+rebuilds from nothing, which is what a reproducible release wants: there is then no
+moment at which the previous build's output could be taken for this one's.
+
+Reconciling is only sound because of one fact about the compiler, and a change
+that stops it being true breaks this silently: **`Flix.codeGen` is
+whole-program.** Every call runs the monomorphizer, both tree shakers and
+`CodeGen` over the entire program, so the classes it emits are the *complete*
+set the current sources require — never a changed subset. `previous −
+current` is therefore exactly the products to delete, computed rather than
+guessed. `JvmWriter.run` returns the relative path of every file it wrote and
+that set reaches `CompilationResult.products`; deriving those names a second
+time from the class names instead is how a writer and its bookkeeping drift
+apart.
+
+The same fact is why there is **no per-source product ownership**, and why
+`BuildManifest.sources` is one group rather than a map. Most generated classes
+are keyed on *types* aggregated over the whole program — tuples, records,
+function interfaces, closures, tag classes and the effect runtime all come out
+of `root.types` — and a monomorphized specialization exists because of a call
+site in some source other than the one declaring it. A per-file mapping would
+read as ownership while being wrong about it, and nothing needs one: the set
+difference is exact where an ownership approximation is not.
+
+`build/<mode>/build.json` (`BuildManifest`) records the product set and a
+fingerprint of every *non-source* input: compiler version, the back-end options,
+and the dependencies by size and modification time. A build whose fingerprint
+differs from the recorded one, or which cannot read the manifest at all, falls
+back to a full build. Three details are load-bearing:
+
+- Source changes are deliberately **not** in the fingerprint. They are handled by
+  recompiling and diffing the product set; putting them there would force a full
+  build on every edit and defeat the point. The manifest does carry a *digest* of
+  the sources' contents, which answers a different question — see below — and is
+  compared against, never reset from.
+- Thread count is not in it either, and must not be. A few generated names carry a
+  symbol counter whose allocation order depends on scheduling, so two builds of
+  one program can disagree about a handful of closure class *names*. Reconciling
+  handles a rename exactly; a fingerprint over it would rebuild everything at
+  random. It is also why a test that compares class directories has to pin
+  `threads = 1`.
+- `clean` knows the manifest by name and deletes it with the products it
+  describes. A manifest that outlived them would be trusted by the next build.
+
+Build mode is in the fingerprint too, which is belt and braces now that each mode
+has its own directory: a manifest is only ever compared against one written for
+the same mode, so the check cannot fire. It stays because the fingerprint is meant
+to describe *every* non-source input, and a reader who finds mode missing from it
+would reasonably conclude modes are interchangeable.
+
+**A build with nothing to do is skipped, and the condition is content-based.**
+`BuildManifest` records a digest of every source's *content* (`digestOfSources`) plus whether
+the program had a `main`, and `Bootstrap.buildIfNeeded` / `compileProjectOutcome(skipIfUpToDate
+= true)` answer without compiling when the digest matches, the fingerprint matches, and the
+class directory holds *exactly* the recorded products. `flix build` on an unchanged project
+goes from 4.4 s to 0.44 s. Four things to know before touching it:
+
+- **A digest, never an mtime.** `Source` equality is by path and mtimes are whole seconds on
+  some filesystems, so a clock cannot license this. A touched-but-identical file has nothing to
+  do, which is a test.
+- **A stray file in the class directory forces a build**, not just a missing one: a directory
+  holding something no build wrote is what the manifest exists to prevent.
+- **`flix check` consults the same record**, because a build *is* a check followed by code
+  generation and stops if the check reports anything: a manifest whose digest matches proves
+  the sources type check. `Bootstrap.checkIfNeeded` — 3.2 s to 0.44 s.
+- **The fingerprint is two fingerprints, and which side an option goes on is a decision.**
+  `BuildManifest.fingerprintOf` governs reusing *products*; `frontendFingerprintOf` governs
+  reusing a *verdict*, and covers only what can change what the front end reports. Both are
+  recorded. Put an option on the front-end side unless it is *known* to change nothing but what
+  is emitted: over-including costs an occasional real type check, under-including reports a
+  program as clean that would not check clean. Today the back-end-only side is `coverage`,
+  `xnewmono` and `xdebug` — everything else, including the build mode (development is lenient
+  about the `Debug` effect, so the modes do not check the same program) and every dependency
+  jar, is a front-end input. Without the split, every option added to the fingerprint would have
+  narrowed when a check could be answered whether or not it had anything to do with checking,
+  and nothing would have reported the loss.
+- **A check does not require the products to still be there.** A verdict is a fact about
+  sources. `clean` deletes the manifest with them, so a cleaned project is checked for real by
+  the absence of a record rather than by a condition that pretends to be about one thing.
+- **`flix run` forks, and that is what lets it skip.** Running in this process means reflecting
+  over a `CompilationResult`, and only a compile produces one — so `run` compiled every time.
+  `ProgramRunner` builds the command (`java -cp <runtimeClasspath> Main <args>`) for both
+  `flix run` and `buildTarget/run`; the CLI inherits the terminal's stdio and reports the
+  program's own exit code, the server pipes output into log messages. 5.4 s to 0.53 s.
+  Do *not* "optimise" this into an in-process class loader over the class directory:
+  `flix.jar` carries a mock `dev.flix.runtime.Global` whose `setArgs` throws, so the loader
+  would have to be child-first and exactly right, and the failure when it is not is a program
+  that dies before `main`.
+- **`--coverage` keeps the in-process path**, because the report is written from
+  `Coverage.getSession` in the *compiler's* process; a forked program's hits would be recorded
+  in a JVM nobody reads and the report would come out empty.
+- **`flix test` and `buildTarget/test` reuse a build too, through a second artifact.** Reaching
+  a test without compiling means knowing which generated class and method carry its shim, which
+  only a run with `loadClassFiles` knows — so `build/<mode>/tests.json` (`TestManifest`) is
+  written by a test run, and is deliberately *not* part of `BuildManifest`: that one records
+  products, this one describes the program. A wrong product record costs a rebuild; a wrong test
+  table means the tests someone believes ran did not. 4.6 s to 0.73 s, and ~1.3 s to ~0.3 s in a
+  warm BSP session. Four conditions, all tested: the build must be current, the record must
+  match that build, **every recorded method must resolve in the class files** (confirmed, not
+  believed), and an empty table is refused while the project has test sources. Both fallbacks
+  print why — a silent one is indistinguishable from a slow day.
+- **`Tester` identifies a test by `TestId(name, location)`**, not by `Symbol.DefnSym`, because a
+  test does not always come from a compilation and fabricating a hollow symbol around an empty
+  `Source` would put a half-built compiler object where the real thing is expected.
+- **A caller that needs the `CompilationResult` must not ask for the skip** — `build`, `run`
+  and `test` on the command line, and `Bootstrap.testWith`, all still compile. `CompileOutcome`
+  carries `hasMain` for exactly this reason: a skipped build has no typed AST, and BSP's `run`
+  still has to know whether there is an entry point.
+- **The fingerprint covers `--lib` jars too**, via `Flix.jarPaths` — read back from the class
+  loader rather than kept in a list beside it, since the loader is where a jar has an effect.
+  `Bootstrap.fingerprintOf` is the one place that computes the value, because the check that a
+  recorded build applies and the record that build writes must agree exactly. Stamps are
+  deduplicated *after* stamping: callers union overlapping lists, and two identical stamps would
+  otherwise leave a build permanently stale against its own manifest.
+- **`--clean` is the escape hatch, and it is per-subcommand.** It has to be declared on each
+  command that can skip — `check` gained it — because a flag the parser does not know is
+  rejected, and a flag it knows but nothing reads is worse: it looks like an escape and is not.
+
+**A modification time may not license reusing a cached AST.** `Source` equality is
+by path, not by content, and `ChangeSet.partition` hands back the *cached* result
+for any input not marked changed — so a file whose mtime did not move is compiled
+as it was, and the edit silently never reaches the output. Mtimes are millisecond
+resolution at best and whole seconds on some filesystems, so two writes inside one
+tick are ordinary. `updateStaleSources` therefore re-offers **every** source when
+no watcher is active, and is selective only on the watcher path, where an edit is
+an event rather than an inference. This is why `build` dropping `incremental =
+false` is safe: the front-end cache is only ever reused when something
+authoritative said what changed. Real front-end incrementality for a long-lived
+non-watcher client (a BSP server) needs content hashes in place of mtimes — that
+is a separate change, and it is the thing to do rather than loosening this.
+
+`Bootstrap` also tracks which sources a **particular** `Flix` instance has already
+been given, so a *different* instance gets a full rescan. The drained watcher
+events are per-instance facts; telling a fresh instance only what changed since
+leaves it compiling an empty program, which `reconcileClassDirectory` would then
+read as "every class file is stale". It refuses an empty product set for that
+reason: emptying the directory and packaging an empty jar is the one failure here
+that looks like success.
+
+Two more places where a silent-wrong-output path was closed, both worth keeping:
+`removeClassFiles` checks the *bytes* of a `.class` file and not just its name,
+because it now runs on every ordinary build where before only `clean` deleted
+there — and it tolerates an empty one, since that is what an interrupted write
+leaves. And `validateProducts` runs before the jar is opened, because
+`FileOps.addToZip` *skips* a path that does not exist rather than failing, and
+`createJar` truncates the last good jar first: without the check, a product that
+went missing yields a jar quietly short a class and an exit code of zero.
+
+**A full build happens for two reasons, and they are not the same operation.**
+`--clean` was asked for, so `emptyOutputDirectory` wipes the class files and the
+manifest *before* the compile — and a `--clean` whose compile then fails leaves
+nothing, the same bargain `make clean && make` offers. A full build forced by a
+changed **fingerprint** was not asked for: it discards the compiler's in-memory
+state and touches **nothing on disk**, because reconciling after a successful
+compile reaches the same directory anyway, and wiping first would destroy a working
+build whenever the compile meant to replace it fails. The inputs that land there —
+a compiler upgrade, a new `--coverage`, an updated dependency — are far too common
+for that. Collapsing the two back into one operation is the mistake to avoid;
+`TestBootstrap` pins both halves.
+
+Two things the incremental path newly exposes are fixed in
+`updateStaleSourcesByTimestamp`: a deleted file reads as stale but must be
+removed rather than re-added (`addFile` rejects a file that is not there), and
+only a `.flix` path may be handed to `remFile`. Note also that `Bootstrap` scans
+for sources once, when it is constructed — a file *created* afterwards is
+invisible until the next scan, so a test that adds one has to write it before
+`Bootstrap.bootstrap`.
+
+**`./mill flix.test` does not run any of this.** `TestBootstrap` is
+`@DoNotDiscover` and reached only through `PackageManagerSuite`, so the whole
+`Bootstrap` surface — build, `build-jar`, `clean`, the manifest, reconciliation —
+is covered by `./mill flix.testPackageManager` alone. CI does run it
+(`.github/workflows/package-manager.yaml`, with a token, on every PR), but the
+local loop this guide recommends reports green on a regression here. Run
+`flix.testPackageManager` too when touching `Bootstrap`; without a token its
+GitHub-fetching tests fail on the anonymous rate limit, and a failure whose
+message is not `API rate limit exceeded` is a real one.
+
+`main/test/resources` has no fixtures for any of this on purpose: every test
+builds a real temp project. Two properties of that setup are load-bearing. A test
+comparing generated class *names* must pin `threads = 1` (`mkDeterministicFlix`),
+and even then a few specialization hashes vary across `Flix` instances — so
+compare a *count* when what matters is that nothing accumulated. And a test that
+edits a source between builds must use a fresh `Flix` instance per build, or it
+depends on mtime resolution to notice the edit.
+
 ## Dependency Downloads
 
 Installing a dependency fetches two files from a GitHub release, and **the
@@ -190,6 +396,224 @@ limit to test rate-limit handling is self-defeating, and the interesting
 responses (304, 403, an unfollowable redirect) cannot be asked for on demand
 anyway. `TestFlixPackageManager` still uses the real registry, which is what
 keeps the URL shapes honest.
+
+## The BSP Server
+
+`flix bsp` serves the Build Server Protocol on stdio, so an editor can drive a real
+Flix build. `flix bsp-install` writes `.bsp/flix.json` so a client can find it.
+Everything lives in `ca.uwaterloo.flix.api.bsp`, and it is **not** in the language
+server: `docs/TOOLING-CONTRACT.md` forbids putting build requests there and that
+constraint stands. What that document concluded — that BSP belongs to some other
+build tool — does not hold for a plain `flix.toml` project, where `flix` *is* the
+build tool, and its section now says so: the two are peers, `flix bsp` for a project
+whose build is `flix` and `--diagnostics-json` for one whose build is Gradle, Mill or
+Bazel.
+
+**Standard output belongs to the protocol, so never `println` on a path a BSP
+request can reach.** `BspServer.run` takes `FileDescriptor.out` for the launcher and
+points `System.out` at `BspLogStream`, which turns each line into a
+`build/logMessage`. That is not paranoia: `Bootstrap` narrates dependency resolution
+on every start, and without the quarantine those lines land between two frames and
+end the connection. Redirecting to the client's log rather than to nothing is
+deliberate — a crash report that vanishes is worse than one that arrives somewhere
+unexpected. `TestBspProcess` asserts the first byte of stdout is the `C` of
+`Content-Length`.
+
+**`buildTarget/compile` is a real build, through `Bootstrap`'s own path.** It writes
+class files and reuses the reconciliation and manifest logic, because a second compile
+path is how a build server's idea of a build drifts from `flix build`'s.
+`Bootstrap.CompileOutcome` is what makes that possible: a `Result` says a build worked
+or failed, and a compile that *succeeded* can still carry messages a client must be
+shown. Three ways to get diagnostics wrong, each now pinned by a test:
+
+- **`lsp.Position` is one-indexed**; only `toJSON`/`toLsp4j` subtract. Reading
+  `range.start.line` directly puts every diagnostic one line low. `BspDiagnostics`
+  converts through `toLsp4j` rather than repeating the arithmetic.
+- **`code` must be the stable `E2136`**, not the kind. The language server's `code`
+  field is the category, which hundreds of errors share and nothing can key on.
+- **A fixed file needs an explicit empty report**, or the marker stays until the editor
+  restarts. `DiagnosticLedger` remembers what was published — and after a *failed*
+  compile clears nothing, because a document the compiler never reached has not been
+  shown to be clean.
+
+**`buildTarget/run` forks.** `Bootstrap.run` runs `main` in the compiler's own process by
+reflection, which a server cannot do: a `System.exit` in user code would take the
+connection with it. `ProjectView.runtimeClasspath` is what makes forking possible — class
+directory, `resources/`, then the Maven and url jars. It excludes `flix.jar`, and that
+exclusion is load-bearing rather than tidy: the compiler ships a *mock*
+`dev.flix.runtime.Global` whose `setArgs` throws, so a program that finds the compiler
+ahead of its own classes dies before `main`. `jvmRunEnvironment` reports the same
+classpath so a client can fork it itself, and `jvmTestEnvironment` reports the same list
+again — `@Test` defs are entry points in the same output, so there is no test-only
+classpath to invent.
+
+**`buildTarget/test` reports each test, and there is only one runner.** `Tester` decides
+what a test outcome *is* — a `false` result is a failure, a non-false result that wrote to
+standard error is also one, a `@Skip`ped test never starts the clock — and callers choose
+only how those events are rendered (`Tester.TestEventSink`). `flix test` attaches the
+console rendering; the server attaches `BspTestSink`. That is the structural reason the
+command line and an editor cannot come to disagree about whether a test passed, and
+`TestTesterSink` pins the events. The console rendering is the one that must not be
+attached in a server: it builds a JLine *system* terminal and writes to the real file
+descriptor, which is the protocol channel. Three traps here:
+
+- **A skipped test gets no `Before` event**, so its task pair has to be opened and closed
+  together, or the client receives a finish with no start.
+- **`TestReport` takes five consecutive `Integer` parameters.** `cancelled` and `skipped`
+  the wrong way round compiles, runs, and puts a plausible number in the wrong column.
+  `BspTestSink.report` uses setters for exactly that reason.
+- **The tests run in the server's process**, because a test is a compiled function the
+  compiler reflects and calls; there is no test-runner entry point to fork. A test that
+  calls `System.exit` therefore takes the server with it. `jvmTestEnvironment` is the way
+  out for a client that wants isolation.
+
+**`build/shutdown` is a request too.** It answers to the same state machine as every other one --
+`ServerNotInitialized` before the handshake or the acknowledgement, `InvalidRequest` twice -- and it
+is answered on the calling thread so it cannot queue behind the work it is stopping.
+
+**A target that was never offered cannot be operated on.** The id is derived from the project path,
+so a client filtered out by the language negotiation can still compute it; `requireKnownTarget`
+checks that a target was *offered*, not only that the id is known.
+
+**Admission is acquired before the work is submitted**, in `FlixBuildServer`, not inside the
+session. A permit taken inside the body has already cost the thread it was meant to prevent, so the
+refusals arrive after the damage -- which is what the first version of this bound did.
+
+**Killing a program means killing its tree.** `ProgramRunner.terminateTree` snapshots the
+descendants *before* destroying the root, because once the root is gone they are reparented and
+`descendants()` no longer finds them. Every path that stops a program -- cancellation and timeout --
+goes through it.
+
+**Cancellation has to reach the work, and `Cancellation` is what carries it.** Dropping the
+reply is enough for a compile, which must finish anyway; it is not enough for a request that
+started something. A cancelled `buildTarget/run` kills its process — otherwise it holds the
+build lock and the output stream until it happens to end — and a cancelled `buildTarget/test`
+stops between tests, the honest limit being that the test in flight finishes because a JVM
+cannot safely stop a method in the middle. Both report a `CANCELLED` task finish so a client's
+progress display agrees with what happened. `canTest` stays advertised on that basis -- the
+capability promises that tests run and are reported, which they are -- and the forked runner is
+named in `docs/BSP.md` as the fix for the residual case of one test looping forever.
+
+**`BspRunner` supervises the process, never the output.** Draining stdout to end-of-stream and
+*then* waiting with a timeout is a timeout that can never fire: a program that loops without
+printing, or writes a line it never terminates, holds the reader forever. The output is pumped
+on its own thread; the main thread waits with the timeout, then kills, reaps, and joins the
+pump. A partial final line is still reported — a program killed mid-line has said something,
+usually the thing you wanted.
+
+**Three lifecycle states, and the exit status is the client's.** `initialize` moves to
+*awaiting acknowledgement*, where requests are refused with `ServerNotInitialized`, because the
+specification does not let a client send anything before `build/initialized`. A duplicate
+acknowledgement is logged and ignored (a notification has no reply to refuse with) and must not
+move the state, or it could revive a shut-down session. `build/exit` exits 0 after a shutdown
+and 1 without one, so `BspServer.run` returns a status and `Main` uses it.
+
+**An empty `languageIds` list means no targets.** Absent from an empty list is every language.
+It reads like "whatever you have" and the specification says the opposite.
+
+**Two bounds exist because unbounded is a failure mode.** At most 32 build requests in flight,
+refused beyond that rather than parked — surplus work costs a platform thread each, and the pool
+is deliberately unbounded so a long run cannot starve a query. And `BspLogStream` truncates a
+line past 32 KB once, then discards the rest of it.
+
+**Two things the pinned wire model cannot express**, both documented rather than half-done:
+bsp4j 2.1.1's `RunParams`/`TestParams` have no `workingDirectory` or `environmentVariables`, so
+a client sending them is sending fields gson drops before this code sees them; and
+`TaskStartParams`/`TaskFinishParams` have no `originId`, so it goes on the `CompileReport` and
+`TestReport` payloads, which do.
+
+**Requests do not run on lsp4j's message thread, and that has two consequences.** A
+handler that ran there would stop the connection being read for the length of a compile,
+so `FlixBuildServer` dispatches to the connection's executor; builds stay serialised by
+`BspSession`'s lock rather than by the transport. The consequences: cancellation is *soft*
+(the work finishes and its result is dropped, because the compiler's ForkJoin pool and
+`JvmWriter`'s writes are not interrupt-safe and a half-reconciled class directory is worse
+than a late answer), and work can outlive the `shutdown` that ended the session — so every
+notification goes through one accessor that returns no client once shut down, and
+`shutdown` bumps the generation so an in-flight build's result is discarded.
+
+**`buildTarget/compile` skips a build with nothing to do** — see *Building a Project* for the
+condition. `buildTarget/run` takes that path too, since it forks against the class directory;
+`buildTarget/test` never can, because a test is a function this process reflects and calls.
+
+**Concurrent compiles are coalesced, and the condition is what makes it sound.** A request
+may share another's build only while that build **has not started**: the slot is claimed
+before `buildLock` is taken and released once it is held, so every sharer arrived before the
+compile read the sources. A request that arrives during a running build takes the next slot
+instead — its edit may postdate that build. Only the request whose build ran publishes, or
+the ledger resends every marker and clears nothing. `run` and `test` are never coalesced:
+they have effects their caller asked for.
+
+**`workspace/reload` is transactional, and `buildTarget/cleanCache` is not
+`Bootstrap.clean`.** A reload builds a fresh `Bootstrap` and a fresh `Flix` and installs
+only a complete one — a half-applied reload would answer some questions from the old
+project and some from the new — and a reload that fails leaves the previous session
+serving, because a typo in `flix.toml` must not leave an editor connected to a dead
+server. It bumps the generation, so a compile already in flight is discarded rather than
+published, and it clears published markers before forgetting them: a file dropped from
+the project can never be spoken for again, so the marker would otherwise outlive the
+editor session. `Bootstrap.cleanOutput(flix, build)` is what `cleanCache` uses — one
+build mode's class files, its manifest, and the compiler's in-memory caches. `clean()`
+would also delete `doc/`, `stubs/` and the coverage reports, which no client asked about.
+
+**Source membership is reconciled before every compile** (`Steps.rescanSources`).
+Modification-time polling answers which *known* files changed, and a created file is
+not among them. Two related traps, both found by tests rather than by reading:
+re-offering every source is not the same as *forgetting* what was loaded — the
+timestamp map doubles as the record of what the compiler was given, which is what
+identifies a deleted file, and clearing it left the deleted file in the compiler's
+inputs until the reader failed on it. And a failed build writes no manifest, so every
+later build takes the stale-inputs path, which is how that bug reached every build
+after the first failure.
+
+**One target per project, and it is forced rather than chosen.** `src/`, `test/` and
+the project root compile together as one whole program and `@Test` defs are entry
+points, so a `src`/`test` split would publish test diagnostics against the `src`
+target while `inverseSources` assigned those files to `test` — and the marker would
+never be cleared. `BuildTargets` is the only place this is decided. The tag is
+`library`, never `application` (unknown until it compiles, and discovery must answer
+for a broken project) and never `test` (a client turns that into a test source root,
+which with one target means every source in the project).
+
+**Advertise nothing that is not implemented.** `BspCapabilities.Implemented` is the
+single source of truth: it drives both the capability flags and the `MethodNotFound`
+refusals in `FlixBuildServer`, so a request and its advertisement cannot drift.
+`TestBspCapabilities` holds them in step in both directions. A phase adds its request
+and its flag together. `debugSessionStart` is the one that never becomes available —
+there is no debug adapter, so `canDebug` is false permanently.
+
+Five things learned the hard way, each now pinned by a test:
+
+- **A target id needs an *empty* URI authority, not a null one.** `new URI(scheme,
+  null, path, query, null)` renders `file:/path`, which is legal and is not what
+  `Path.toUri` or any other build server produces — a client that computes the id
+  itself and compares strings would see a different target.
+- **Comparing normalised paths refuses correct clients.** `rootUri` is checked with
+  `toRealPath`, because on macOS every temp directory is under `/var`, a link to
+  `/private/var`; `normalize` is textual and cannot see a link, so the path the JVM
+  reports and the path the user opened are two spellings of one directory.
+- **`Source.name` is not a URI.** It is `path.toString`. `BspUri.ofSource` is total —
+  `String`, not `Option[String]` — so nothing is silently dropped. The language
+  server's `file://` filter drops diagnostics from bundled and packaged code, and
+  would drop ordinary project files too if documents did not reach it as virtual
+  URIs. Bundled library sources get `flix-lib:`, `.fpkg` contents get `jar:…!/…`.
+- **A test harness must not connect the two ends with `PipedInputStream`.** It is a pipe
+  between *threads*, not streams: it remembers the last thread that wrote and throws
+  `Write end dead` from `read` once that thread exits. A server writes on whatever thread
+  produced the event, and `Tester`'s reporter thread is deliberately short-lived, so a
+  piped pair killed the client's reader mid-request and accused working code.
+  `BspTestChannel` opens a `java.nio.channels.Pipe`, which has no thread affinity, and
+  every suite goes through it.
+- **`ProjectView` is a snapshot, and there is one per request.** `Bootstrap`'s source
+  and dependency lists are mutable, so accessors would let one request be answered
+  from two different projects. It carries only what is known *without* compiling,
+  because discovery is asked before the first build and while the project is broken.
+
+`./mill flix.test` runs the in-process tests. The ones that need a built assembly or
+a process of their own are `@DoNotDiscover` in `BspSuite`, reached by `./mill
+flix.testBsp`, which builds the assembly first — a test that cancels itself when the
+jar is missing reports green while proving nothing. `.github/workflows/bsp.yaml`
+runs it; it needs no token, since nothing there reaches the network.
 
 ## Source Code Formatting
 

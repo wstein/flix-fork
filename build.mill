@@ -55,6 +55,38 @@ object flix extends ScalaModule {
     mvn"org.antlr:antlr4-runtime:4.11.1",
     mvn"org.slf4j:slf4j-nop:2.0.17",       // silence JLine logger
     mvn"org.eclipse.lsp4j:org.eclipse.lsp4j:1.0.0",
+    // Declared rather than left transitive: `LspServer` imports it directly, and the BSP
+    // server pins the version that `bsp4j` below would otherwise drag backwards.
+    mvn"org.eclipse.lsp4j:org.eclipse.lsp4j.jsonrpc:1.0.0",
+    // The Build Server Protocol bindings, for `flix bsp`. `bsp4j` asks for jsonrpc 0.20.1;
+    // it references only `Either`, the `services` annotations and two gson type adapters,
+    // all of which 1.0.0 still has, so unifying upward is safe -- `TestBspLinkage` is what
+    // holds that claim.
+    //
+    // The two lines after the exclusion are a **reachability contract**, not a claim about
+    // what bsp4j depends on, and each was established by a test failing rather than by
+    // reading a pom.
+    //
+    // `generator` is an Xtend active annotation used at bsp4j's own build time, so none of
+    // its code is reachable at runtime -- with one exception that the poms do not show:
+    // bsp4j's generated `toString` calls xtext's `ToStringBuilder`, which arrives only
+    // with `generator`. lsp4j 1.0.0 has its own `ToStringBuilder` and puts no xtext on the
+    // classpath, so excluding `generator` alone makes every `toString` on a BSP object
+    // throw. That is not cosmetic: lsp4j renders a message's params when it logs a failed
+    // request, so the throw lands inside lsp4j's own error handling -- a failure while
+    // reporting a failure. `xbase.lib` (166 KB) supplies that one class.
+    //
+    // And the path continues: `ToStringBuilder` reaches `com.google.common.base.Strings`.
+    // Guava is here for that reach and nothing else -- it was absent from this jar before
+    // bsp4j, and nothing else on the classpath references it. Excluding it was tried and
+    // threw at the first `toString`. See the guava rule in `assemblyRules`, which keeps
+    // only what that path needs, and `TestBspAssembly`, which drives the path in a JVM
+    // holding nothing but the assembled jar.
+    //
+    // No bsp4j release avoids this chain: 2.1.1 is the newest stable, 2.2.0 was never
+    // released, and both milestones use the same generator.
+    mvn"ch.epfl.scala:bsp4j:2.1.1".exclude("org.eclipse.lsp4j" -> "org.eclipse.lsp4j.generator"),
+    mvn"org.eclipse.xtext:org.eclipse.xtext.xbase.lib:2.28.0",
     mvn"com.dynatrace.hash4j:hash4j:0.30.0"
   )
 
@@ -116,6 +148,19 @@ object flix extends ScalaModule {
     Rule.ExcludePattern("io/airlift/compress/.*"),
     // xbean-reflect: dependency injection helper for Plexus.
     Rule.ExcludePattern("org/apache/xbean/.*"),
+
+    // ── Guava, except the one package that is reachable (saves ~2.4 MB) ──
+    // Guava arrives only with xtext's `xbase.lib`, which is on the classpath only for
+    // `ToStringBuilder`, which bsp4j's generated `toString` calls. Nothing else here
+    // references guava at all -- it was absent from this jar before bsp4j was added.
+    // `ToStringBuilder` needs exactly `com.google.common.base.Strings`, so `base/` stays
+    // and `collect/`, `cache/`, `io/`, `hash/` and the rest go: 6 MB down to 365 KB.
+    //
+    // The rest of `xbase.lib` does reference `com/google/common/collect`, so this is a
+    // claim about what is *reachable*, not about what is referenced -- and it is held by
+    // `TestBspAssembly`, which drives the assembled jar in a separate JVM and prints a
+    // protocol object. Reading the poms is what got this wrong the first time.
+    Rule.ExcludePattern("com/google/common/(?!base/).*"),
 
     // ── Benchmark build artifacts ────────────────────────────
     // main/src/resources/benchmark/build/ is gitignored, untracked local
@@ -206,6 +251,24 @@ object flix extends ScalaModule {
   /** Run: ./mill flix.testPackageManager */
   def testPackageManager = Task {
     runSuite("ca.uwaterloo.flix.tools.pkg.PackageManagerSuite", test.runClasspath(), Task.env)
+  }
+
+  /**
+   * Run: ./mill flix.testBsp
+   *
+   * The BSP tests that need something the ordinary suite cannot give them: a built
+   * assembly, or a process of their own. It depends on `assembly()` rather than
+   * assuming a jar is lying around, because the suite's whole subject is what the
+   * *packaged* compiler can do -- `assemblyRules` drops most of guava, and an
+   * exclusion that went too far is invisible to any test run on the full classpath.
+   * Without the dependency these tests cancel themselves and report green.
+   *
+   * The in-process BSP tests are not here. They are fast and belong in `flix.test`,
+   * where a dependency bump is noticed by whoever made it.
+   */
+  def testBsp = Task {
+    assembly()
+    runSuite("ca.uwaterloo.flix.api.bsp.BspSuite", test.runClasspath(), Task.env)
   }
 
   /**

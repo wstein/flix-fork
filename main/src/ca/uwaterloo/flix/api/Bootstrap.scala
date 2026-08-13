@@ -22,6 +22,7 @@ import ca.uwaterloo.flix.language.CompilationMessage
 import ca.uwaterloo.flix.language.ast.shared.SecurityContext
 import ca.uwaterloo.flix.language.ast.{Scheme, SourceLocation, Symbol, TypedAst}
 import ca.uwaterloo.flix.language.phase.Documentor
+import ca.uwaterloo.flix.language.phase.jvm.JvmLoader
 import ca.uwaterloo.flix.runtime.CompilationResult
 import ca.uwaterloo.flix.runtime.shell.FileWatcher
 import ca.uwaterloo.flix.tools.Tester
@@ -37,7 +38,8 @@ import java.nio.file.{FileSystems, Files, Path, StandardCopyOption}
 import java.util.zip.{ZipInputStream, ZipOutputStream}
 import scala.collection.mutable
 import scala.io.StdIn.readLine
-import scala.jdk.CollectionConverters.IterableHasAsScala
+import scala.jdk.CollectionConverters.{IterableHasAsScala, ListHasAsScala}
+import scala.util.matching.Regex
 import scala.util.{Failure, Success, Using}
 
 
@@ -158,6 +160,7 @@ object Bootstrap {
          |$artifactDirectoryRaw
          |$buildDirectoryRaw
          |$libDirectoryRaw
+         |$bspDirectoryRaw
          |crash_report_*.txt
          |""".stripMargin
     }
@@ -367,7 +370,7 @@ object Bootstrap {
       |- `flix check` — type-check without generating code; the fast feedback loop
       |- `flix test` — run every `@Test` function under `test/`
       |- `flix run` — run `main`
-      |- `flix build` — compile to `build/class`
+      |- `flix build` — compile the project; `--clean` rebuilds from scratch
       |- `flix doc` — write API documentation for the standard library and this project to `build/doc/`
       |
       |## Layout
@@ -525,6 +528,16 @@ object Bootstrap {
   private val libDirectoryRaw: String = "lib/"
 
   /**
+    * The relative path to the build server's discovery directory as a string.
+    *
+    * Named here only so that `init` can ignore it. A connection file names a compiler jar on one
+    * machine, so it has no business in a repository.
+    *
+    * @see [[ca.uwaterloo.flix.api.bsp.BspDiscovery]]
+    */
+  private val bspDirectoryRaw: String = ".bsp/"
+
+  /**
     * Returns the path to the source directory relative to the given path `p`.
     */
   private def getSourceDirectory(p: Path): Path = p.resolve("./src/").normalize()
@@ -547,9 +560,105 @@ object Bootstrap {
   private val buildDirectoryRaw: String = "build/"
 
   /**
-    * Returns the directory of the output .class-files relative to the given path `p`.
+    * Returns the output directory of the build mode `build`, relative to the given path `p`.
+    *
+    * Each mode owns a directory - `build/development/` and `build/production/` - and its class files, its
+    * build manifest and its product set all live in that one. They cannot be shared: the mode
+    * reaches the typer, so the two modes do not compile the same program, and a single directory
+    * would have each build invalidate the other's and reset it.
+    *
+    * This is what `Options.outputPath` is set to, so it is also where the class files land:
+    * `JvmWriter` resolves `class/` against that path, which is what [[getClassDirectory]]
+    * returns.
     */
-  private def getClassDirectory(p: Path): Path = getBuildDirectory(p).resolve("./class/").normalize()
+  private def getOutputDirectory(p: Path, build: Build): Path =
+    getBuildDirectory(p).resolve(s"./${build.directoryName}/").normalize()
+
+  /**
+    * Returns the directory of the output .class-files of the build mode `build`, relative to the
+    * given path `p`.
+    */
+  private def getClassDirectory(p: Path, build: Build): Path =
+    getOutputDirectory(p, build).resolve("./class/").normalize()
+
+  /**
+    * Returns the path to the build manifest of the build mode `build`, relative to the given
+    * path `p`.
+    *
+    * @see [[BuildManifest]]
+    */
+  private def getBuildManifestFile(p: Path, build: Build): Path =
+    BuildManifest.fileIn(getOutputDirectory(p, build))
+
+  /** Every build mode, so that `clean` can visit the output of each. */
+  private val AllBuilds: List[Build] = List(Build.Development, Build.Production)
+
+  /**
+    * What a compilation produced, and what the compiler said while producing it.
+    *
+    * Kept apart from `Result` on purpose. A `Result` says a build either worked or failed, which is
+    * what a command needs to decide an exit code -- but a compile that *succeeded* can still carry
+    * messages, and a caller publishing diagnostics has to report those. Collapsing the two loses
+    * exactly the case a build server exists to handle.
+    *
+    * @param result   the compilation, if the program type checked.
+    * @param root     the typed program, when there is one -- available even on failure, which is
+    *                 what lets a caller name the sources a previous report covered.
+    * @param messages everything the compiler said. Empty exactly when nothing was wrong.
+    * @param error    a failure of the *build* rather than of the code: an output directory that
+    *                 could not be emptied, a class directory that could not be reconciled. Separate
+    *                 from `messages` because it has no source location and is not the user's fault.
+    */
+  case class CompileOutcome(result: Option[CompilationResult],
+                            root: Option[TypedAst.Root],
+                            messages: List[CompilationMessage],
+                            error: Option[BootstrapError] = None,
+                            upToDate: Boolean = false,
+                            hasMain: Boolean = false) {
+
+    /**
+      * Returns `true` if the output is current: the program compiled and the build finished, or there
+      * was nothing to do.
+      *
+      * A skipped build is a success with no compilation, which is the one case where `result` is empty
+      * and nothing went wrong. Only a caller that asked for the skip can see it.
+      */
+    def isSuccess: Boolean = error.isEmpty && (result.isDefined || upToDate)
+
+    /**
+      * Collapses to the shape a command wants: the compilation, or what prevented it.
+      *
+      * A caller that needs the compilation -- to run the program, to reflect its tests -- must not ask
+      * for a skipped build, because a skip produces no `CompilationResult` to give it. The commands
+      * that do are the ones that never pass `skipIfUpToDate`.
+      */
+    def toResult: Result[CompilationResult, BootstrapError] = (result, error) match {
+      // A build failure outranks a successful compile: a class directory that was not reconciled is
+      // one whose contents nobody can describe, whatever the compiler managed.
+      case (_, Some(e)) => Err(e)
+      case (Some(compiled), None) => Ok(compiled)
+      case (None, None) => Err(BootstrapError.CompilationErrors(messages, root))
+    }
+  }
+
+  /**
+    * Returns the directory `flix stubs` writes Java stubs to by default, relative to `p`.
+    *
+    * @see [[ca.uwaterloo.flix.tools.ExportStubs]]
+    */
+  private def getStubsDirectory(p: Path): Path = getBuildDirectory(p).resolve("./stubs/").normalize()
+
+  /**
+    * The coverage reports, relative to the build directory.
+    *
+    * These are the default names only. `--coverage-output` can put a report anywhere, and one
+    * written outside the build directory is not `clean`'s business - but one left at its default
+    * name is, and before it was recognised here `flix test --coverage` made a project that `flix
+    * clean` refused to clean at all.
+    *
+    * @see [[ca.uwaterloo.flix.util.Options.coverageOutput]]
+    */
+  private val CoverageReports: List[String] = List("coverage.json", "coverage.info")
 
   /**
     * Returns the directory of the generated documentation files relative to the given path `p`.
@@ -697,6 +806,11 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
   // Timestamps at the point the sources were loaded
   private var timestamps: Map[Path, Long] = Map.empty
 
+  // The Flix instance the timestamps above - and the drained watcher events - describe.
+  // Which sources are stale is a question about one instance: a different instance has been
+  // given nothing, however recently this one was brought up to date.
+  private var lastFlix: Option[Flix] = None
+
   // Lists of paths to the source files, flix packages and .jar files used
   private var sourcePaths: List[Path] = List.empty
   private var flixPackagePaths: List[Path] = List.empty
@@ -776,38 +890,72 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
 
   /**
     * Builds (compiles) the source files for the project.
+    *
+    * @param clean empties the output directory before compiling and rebuilds from nothing. This
+    *              is the only path that deletes before it knows the compile succeeds, and it does
+    *              so because that is what was asked for.
+    * @see [[compileProject]]
     */
-  def build(flix: Flix, build: Build = Build.Development): Result[CompilationResult, BootstrapError] = {
-    // We disable incremental compilation and clear prior class files to ensure a clean build.
-    // This matters when a compiler update changes a generated class name or package: writing the
-    // new classes alone would leave the old ones on the classpath.
-    val newOptions = flix.options.copy(build = build, incremental = false, outputJvm = true, outputPath = Bootstrap.getBuildDirectory(projectPath))
+  def build(flix: Flix, build: Build = Build.Development, clean: Boolean = false): Result[CompilationResult, BootstrapError] = {
+    configureBuild(flix, build)
+    compileProject(flix, clean)
+  }
+
+  /**
+    * Brings the output of `build` up to date, doing nothing if it already is.
+    *
+    * The difference from [[build]] is what it promises. `build` promises a compilation, so it always
+    * compiles; this promises only that the output describes the sources, which is what `flix build` and
+    * a build server's compile request actually ask for -- and a whole-program compile is seconds, most
+    * of it a back end that runs whatever changed. Repeating it to produce the bytes that are already
+    * there is the most common thing a build server is asked to do.
+    *
+    * The conditions are in `Steps.isRecordedBuildCurrent`, and they are content-based: a clock cannot
+    * license this. `clean` still empties the directory and rebuilds, since that is a request to build
+    * from nothing.
+    *
+    * A caller with a `--lib` jar must not use this. Those are added to the `Flix` instance directly and
+    * never reach `Bootstrap`, so they are absent from the fingerprint: a changed one would leave this
+    * reporting an output that is up to date with respect to everything it can see.
+    *
+    * @return whether anything was compiled. `false` means the output was already current.
+    */
+  def buildIfNeeded(flix: Flix, build: Build = Build.Development, clean: Boolean = false): Result[Boolean, BootstrapError] = {
+    configureBuild(flix, build)
+    val outcome = compileProjectOutcome(flix, clean, skipIfUpToDate = true)
+    if (outcome.upToDate) Ok(false) else outcome.toResult.map(_ => true)
+  }
+
+  /** Points `flix` at the output directory of `build`, which every build path needs first. */
+  private def configureBuild(flix: Flix, build: Build): Unit = {
+    val newOptions = flix.options.copy(
+      build = build, outputJvm = true, outputPath = Bootstrap.getOutputDirectory(projectPath, build))
     flix.setOptions(newOptions)
-
-    // We also clear any cached ASTs.
-    flix.clearCaches()
-
-    Steps.updateStaleSources(flix)
-    Steps.cleanClassDirectory().flatMap(_ => Steps.compile(flix))
   }
 
   /**
     * Builds a jar package for the project.
     *
-    * Always performs a full, clean build so that the jar is a function of the current
-    * sources alone.
+    * The jar holds exactly the class files this build wrote - not whatever the class
+    * directory happens to contain - so it is a function of the current sources alone whether
+    * or not the build directory was wiped first.
+    *
+    * Builds in production mode, so its output is `build/production/` and it neither reads nor
+    * invalidates what `flix build` left in `build/development/`.
+    *
+    * @param clean empties the output directory before compiling and rebuilds from nothing. This
+    *              is what a reproducible release wants: it makes the jar a function of the sources
+    *              and nothing else, including anything an earlier build left in the directory.
     */
-  def buildJar(flix: Flix): Result[Unit, BootstrapError] = {
+  def buildJar(flix: Flix, clean: Boolean = false): Result[Unit, BootstrapError] = {
     val jarFile = Bootstrap.getJarFile(projectPath)
-    Steps.invalidateSourceTimestamps()
-    Steps.updateStaleSources(flix)
     for {
       _ <- Steps.configureJarOutput(flix)
-      _ <- Steps.cleanClassDirectory()
-      _ <- Steps.compile(flix)
+      result <- compileProject(flix, clean)
       _ <- Steps.validateJarFile(jarFile)
+      _ <- Steps.validateProducts(Build.Production, result.products)
       contents = (zip: ZipOutputStream) => {
-        Steps.addClassFilesFromDirToZip(Bootstrap.getClassDirectory(projectPath), zip)
+        Steps.addProductsToZip(Build.Production, result.products, zip)
         Steps.addResourcesFromDirToZip(Bootstrap.getResourcesDirectory(projectPath), zip)
       }
       _ <- Steps.createJar(jarFile, contents)
@@ -819,23 +967,21 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
   /**
     * Builds a fatjar package for the project.
     *
-    * Always performs a full, clean build so that the jar is a function of the current
-    * sources alone.
+    * @param clean empties the output directory before compiling and rebuilds from nothing.
+    * @see [[buildJar]]
     */
-  def buildFatJar(flix: Flix): Result[Unit, BootstrapError] = {
+  def buildFatJar(flix: Flix, clean: Boolean = false): Result[Unit, BootstrapError] = {
     val jarFile = Bootstrap.getJarFile(projectPath)
     val libDir = Bootstrap.getLibraryDirectory(projectPath)
-    Steps.invalidateSourceTimestamps()
-    Steps.updateStaleSources(flix)
     for {
       _ <- Steps.configureJarOutput(flix)
-      _ <- Steps.cleanClassDirectory()
-      _ <- Steps.compile(flix)
+      result <- compileProject(flix, clean)
       _ <- Steps.validateJarFile(jarFile)
+      _ <- Steps.validateProducts(Build.Production, result.products)
       _ <- Steps.validateDirectory(libDir)
       _ <- Steps.validateJarFilesIn(libDir)
       contents = (zip: ZipOutputStream) => {
-        Steps.addClassFilesFromDirToZip(Bootstrap.getClassDirectory(projectPath), zip)
+        Steps.addProductsToZip(Build.Production, result.products, zip)
         Steps.addResourcesFromDirToZip(Bootstrap.getResourcesDirectory(projectPath), zip)
         Steps.addJarsFromDirToZip(libDir, zip, extraJars = mavenPackagePaths ::: jarPackagePaths)
       }
@@ -844,6 +990,150 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
       ()
     }
   }
+
+  /**
+    * Compiles the project and leaves the class directory holding exactly the class files this
+    * compilation wrote.
+    *
+    * The class directory is *reconciled* rather than wiped: the compiler's back end is
+    * whole-program, so the set of class files it just wrote is the complete set the current
+    * sources require, and every other class file in the directory belongs to an earlier build.
+    * Deleting those - and only those - leaves the same directory a wipe-and-recompile would,
+    * without discarding the front end's caches or rewriting files that did not change.
+    * [[BuildManifest]] records the outcome so that a build which fails, or one interrupted
+    * between writing and packaging, still leaves a directory that can be described.
+    *
+    * A full build - nothing the previous build left is reused - happens for two different
+    * reasons, and they are deliberately *not* the same operation:
+    *
+    *   - `clean` is set. The caller asked to build from nothing, so the output directory is
+    *     emptied before the compile starts: class files, the directories that leaves empty, and
+    *     the manifest. There is then no moment at which the previous build's output could be
+    *     mistaken for this one's, which is the guarantee a reproducible release is after. The cost
+    *     is that a `--clean` whose compile then fails leaves nothing behind - the same bargain
+    *     `make clean && make` offers, and the caller asked for it.
+    *   - The recorded fingerprint of the non-source inputs - compiler version, back-end options,
+    *     dependencies - does not match this build's. Nothing an earlier build left was produced
+    *     under these settings, so the compiler's in-memory state is discarded; but **nothing on
+    *     disk is deleted**, because nobody asked for that. Reconciling after a successful compile
+    *     reaches the same directory anyway, and emptying it up front would destroy a working
+    *     build's output whenever the compile meant to replace it fails. A failing compile is
+    *     ordinary, and so are the inputs that land here: a compiler upgrade, a new `--coverage`
+    *     flag, an updated dependency.
+    *
+    * Everything here is scoped to the output directory of the mode `flix` is configured for, so
+    * a development build and a production build keep separate products and separate manifests
+    * and neither resets the other.
+    *
+    * If compilation fails, nothing on disk is touched *except* by an explicit `clean`: the class
+    * directory and the manifest still describe the last build that succeeded.
+    */
+  private def compileProject(flix: Flix, clean: Boolean): Result[CompilationResult, BootstrapError] =
+    compileProjectOutcome(flix, clean).toResult
+
+  /**
+    * Compiles the project and reports what the compiler said, not only whether it worked.
+    *
+    * The same path as [[compileProject]] -- reconciliation and the manifest included -- because a
+    * second compile path is how a build server's idea of a build drifts from `flix build`'s.
+    *
+    * On failure the messages are returned and nothing on disk is touched, so a caller can publish
+    * diagnostics for a program that does not compile without the class directory being disturbed.
+    */
+  private[api] def compileProjectOutcome(flix: Flix, clean: Boolean,
+                                         skipIfUpToDate: Boolean = false): Bootstrap.CompileOutcome = {
+    val build = flix.options.build
+    val fingerprint = fingerprintOf(flix)
+    val recorded = Steps.readBuildManifest(build)
+    val staleInputs = !recorded.exists(_.fingerprint == fingerprint)
+
+    if (clean || staleInputs) {
+      Steps.discardIncrementalState(flix)
+    }
+
+    // Only `--clean` empties the directory, and only before the compile. See the note above.
+    val emptied = if (clean) Steps.emptyOutputDirectory(build) else Ok(())
+    emptied match {
+      case Err(e) => return Bootstrap.CompileOutcome(None, None, Nil, Some(e))
+      case Ok(()) => ()
+    }
+
+    // Which files the project *has*, before asking which of them changed.
+    //
+    // `updateStaleSources` answers the second question about the paths it already knows, and a file
+    // created since the last build is not among them -- so without this a long-lived session never
+    // compiles a new source, and never stops compiling a deleted one. The scan happens once per
+    // build and costs a directory walk against a whole-program compile.
+    Steps.rescanSources()
+
+    // Nothing to do, when the caller is one that can be told so. The scan above has to come first:
+    // the question is about the sources the project *has*, and a file created since the last build is
+    // not in the list until it is rescanned.
+    if (skipIfUpToDate && !clean) {
+      recorded match {
+        case Some(m) if !staleInputs && Steps.isRecordedBuildCurrent(build, m) =>
+          return Bootstrap.CompileOutcome(None, None, Nil, None, upToDate = true, hasMain = m.hasMain)
+        case _ => ()
+      }
+    }
+
+    // Computed before the compile, not after, and the direction matters: a source edited *while* the
+    // build runs then differs from what is recorded, so the next build recompiles. Recording what the
+    // sources became would call that build current when it had not read them.
+    val sourcesDigest = BuildManifest.digestOfSources(projectPath, sourcePaths)
+
+    Steps.updateStaleSources(flix)
+
+    val outcome = Steps.compileOutcome(flix)
+    outcome.result match {
+      case None =>
+        // Nothing to reconcile against and no manifest to write, so the previous build's output and
+        // its manifest stay as they are, describing the last build that succeeded.
+        outcome
+
+      case Some(result) =>
+        val recorded = for {
+          _ <- Steps.reconcileClassDirectory(build, result.products)
+          _ <- Steps.writeBuildManifest(
+            build, fingerprint, frontendFingerprintOf(flix), result.products, sourcesDigest, outcome.hasMain)
+        } yield ()
+        recorded match {
+          case Ok(()) => outcome
+          // The program compiled but the build did not finish. Reported as a failure, because a
+          // class directory that was not reconciled is one whose contents nobody can describe.
+          case Err(e) => outcome.copy(error = Some(e))
+        }
+    }
+  }
+
+  /**
+    * Returns the fingerprint of everything but the sources for a build with `flix`.
+    *
+    * One place, because the value has to be identical wherever it is computed -- the check that a
+    * recorded build still applies, and the record that build writes. Two spellings of "the inputs" would
+    * make a build permanently stale against its own manifest.
+    *
+    * `flix.jarPaths` is what closes the last gap in it. A jar handed to the compiler with `--lib` is an
+    * input to the typer -- it is where the Java classes a program calls come from -- and it used to
+    * reach `Flix` without ever reaching here, so a recorded build could be reported as current with
+    * respect to an input nothing had recorded. Every command that reuses a build refused to do so
+    * whenever `--lib` was given, which was a carve-out around the hole rather than a fix for it.
+    */
+  private def fingerprintOf(flix: Flix): String =
+    BuildManifest.fingerprintOf(flix.options, dependencyPaths ::: flix.jarPaths)
+
+  /**
+    * Returns the fingerprint of the inputs that can change what the front end reports.
+    *
+    * The narrower of the two, for the narrower question: whether a recorded build's *verdict* still
+    * applies, rather than whether its products may be reused.
+    */
+  private def frontendFingerprintOf(flix: Flix): String =
+    BuildManifest.frontendFingerprintOf(flix.options, dependencyPaths ::: flix.jarPaths)
+
+  /** Returns every dependency this project resolves against: flix packages, maven and url jars. */
+  private def dependencyPaths: List[Path] =
+    flixPackagePaths ::: mavenPackagePaths ::: jarPackagePaths
 
   /**
     * Builds a flix package for the project.
@@ -988,12 +1278,77 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
   private def isProjectMode: Boolean = optManifest.isDefined
 
   /**
+    * Returns what this project is configured to be, as of now.
+    *
+    * A copy, and one method rather than an accessor per field: the lists below are rewritten by a
+    * rescan, a watcher event or a reload, so a caller holding several accessors could answer one
+    * request from two different projects. It is built here because the layout functions on the
+    * companion are private and should stay that way - a second definition of where `src/` lives is
+    * how two definitions of a layout begin.
+    *
+    * Everything in it is known without compiling, which is the point: the questions it answers
+    * arrive before the first build and while the project is broken.
+    *
+    * Paths are absolutised and normalised here rather than trusted, because `projectPath` is
+    * whatever the caller constructed this with, and only the command line guarantees an absolute
+    * one.
+    *
+    * @see [[ProjectView]]
+    */
+  def view: ProjectView = {
+    val root = projectPath.toAbsolutePath.normalize()
+    ProjectView(
+      projectPath = root,
+      packageName = optManifest.map(_.name).getOrElse(Bootstrap.getPackageName(root)),
+      manifest = optManifest,
+      sourcePaths = sourcePaths.map(_.toAbsolutePath.normalize()).distinct.sorted,
+      flixPackagePaths = flixPackagePaths.map(_.toAbsolutePath.normalize()).distinct.sorted,
+      mavenPackagePaths = mavenPackagePaths.map(_.toAbsolutePath.normalize()).distinct.sorted,
+      jarPackagePaths = jarPackagePaths.map(_.toAbsolutePath.normalize()).distinct.sorted,
+      sourceDirectory = Bootstrap.getSourceDirectory(root),
+      testDirectory = Bootstrap.getTestDirectory(root),
+      resourcesDirectory = Bootstrap.getResourcesDirectory(root),
+      libraryDirectory = Bootstrap.getLibraryDirectory(root),
+      artifactDirectory = Bootstrap.getArtifactDirectory(root),
+      jarFile = Bootstrap.getJarFile(root),
+      outputDirectories = Bootstrap.AllBuilds.map(b => b -> Bootstrap.getOutputDirectory(root, b)).toMap,
+      classDirectories = Bootstrap.AllBuilds.map(b => b -> Bootstrap.getClassDirectory(root, b)).toMap
+    )
+  }
+
+  /**
+    * Empties one build mode's output and forgets what the compiler had cached about it.
+    *
+    * This is what a build server's `buildTarget/cleanCache` needs, and it is deliberately *not*
+    * [[clean]]. `clean` resets the project: every build mode, plus `doc/`, `stubs/` and the coverage
+    * reports. A client asking to clear a target's cache has not asked for the documentation to be
+    * deleted, and a server that deleted it anyway would be destroying work nobody mentioned.
+    *
+    * Both halves are needed and neither is sufficient. Emptying the directory alone leaves the cached
+    * ASTs in memory, so "clear the cache" would not have cleared the cache the next build actually
+    * reuses; discarding those alone leaves the previous build's class files and manifest on disk.
+    *
+    * Failure-atomic in the only sense available: nothing is written, and a failure leaves the
+    * directory partly emptied with no manifest -- which is a state the next build treats as no
+    * previous build at all, so it recovers by rebuilding rather than by trusting what is left.
+    */
+  def cleanOutput(flix: Flix, build: Build): Result[Unit, BootstrapError] = {
+    Steps.discardIncrementalState(flix)
+    Steps.emptyOutputDirectory(build)
+  }
+
+  /**
     * Deletes all compiled `.class` files under the project's build directory and removes any now-empty
     * directories (including the `build` directory itself). Performs safety checks to ensure:
     *  - the current directory is a Flix project (manifest present),
     *  - no root or home directories are targeted,
     *  - no ancestor of the project directory is targeted,
-    *  - every file in the build directory has a `.class` extension and is a valid class file.
+    *  - every file in the build directory is a valid class file, a build manifest, or documentation.
+    *
+    * Every build mode's output is visited, since this resets the project rather than one of its
+    * modes: a `clean` that emptied `build/development/` and left `build/production/` alone would be a
+    * surprise, and one that refused to recognise the mode it was not asked about would make the
+    * project uncleanable.
     *
     * Returns `Ok(())` on success or `Err(BootstrapError.FileError(...))` on validation or IO failures.
     */
@@ -1017,8 +1372,12 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
     }
 
     val buildDir = Bootstrap.getBuildDirectory(projectPath)
-    val classDir = Bootstrap.getClassDirectory(projectPath)
+    // Every build mode's output, since 'clean' resets the project and not one of its modes.
+    val classDirs = Bootstrap.AllBuilds.map(Bootstrap.getClassDirectory(projectPath, _))
+    val manifestFiles = Bootstrap.AllBuilds.map(Bootstrap.getBuildManifestFile(projectPath, _))
     val docDir = Bootstrap.getDocumentationDirectory(projectPath)
+    val stubsDir = Bootstrap.getStubsDirectory(projectPath)
+    val coverageReports = Bootstrap.CoverageReports.map(name => buildDir.resolve(name).normalize())
 
     // Ensure `buildDir` is not dangerous
     checkForDangerousPath(buildDir) match {
@@ -1029,7 +1388,11 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
     // Ensure all files in `buildDir` are valid class files.
     val files = FileOps.getFilesIn(buildDir, Int.MaxValue).map(_.normalize())
     for (file <- files) {
-      if (file.startsWith(classDir)) {
+      if (manifestFiles.contains(file)) {
+        // The record of what the last build produced. It has to go with the products it
+        // describes: a manifest that outlives them would let the next build reuse a class
+        // directory that is no longer there.
+      } else if (classDirs.exists(file.startsWith)) {
         if (!FileOps.checkExt(file, "class")) {
           return Err(BootstrapError.FileError(s"Unexpected file extension in build directory (only '.class' files are allowed): '${projectPath.relativize(file)}'"))
         }
@@ -1041,6 +1404,14 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
         isValidDocumentFile(file) match {
           case Err(e) => return Err(e)
           case Ok(()) => ()
+        }
+      } else if (coverageReports.contains(file)) {
+        // A coverage report left at its default name. Generated, so it goes.
+      } else if (file.startsWith(stubsDir)) {
+        // `flix stubs` output. Only the Java sources it writes - anything else under there was
+        // put there by somebody, and this is the one chance to notice.
+        if (!FileOps.checkExt(file, "java")) {
+          return Err(BootstrapError.FileError(s"Unexpected file in the stubs directory (only 'java' files are allowed): '${projectPath.relativize(file)}'"))
         }
       } else {
         return Err(BootstrapError.FileError(s"Unexpected directory in build directory: '${projectPath.relativize(file)}'"))
@@ -1167,6 +1538,81 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
   }
 
   /**
+    * Type checks the project, unless a recorded build already answers for these sources.
+    *
+    * ==Why a build manifest can answer a question about type checking==
+    *
+    * Because a build *is* a check followed by code generation: `Steps.compileOutcome` runs
+    * `flix.check()` and stops if it reports anything, so a manifest exists only if the check passed.
+    * A manifest whose fingerprint and source digest still match therefore proves the current sources
+    * type check, without a new record to keep or a new thing to trust -- and without weakening the
+    * guard, since it is the same one a skipped build uses.
+    *
+    * That is also why the fingerprint now covers front-end options. A recorded build answering for a
+    * check makes any option that changes what the front end *reports* part of what the record depends
+    * on, which `xnodeprecated` was not.
+    *
+    * ==What it costs==
+    *
+    * Being conservative in one direction: the condition requires the class directory to match the
+    * manifest, which a check does not otherwise care about. A project whose build output was deleted
+    * type checks for real again. That is one predicate rather than two, and the wrong answer it can
+    * give is a check that happened.
+    *
+    * A caller with a `--lib` jar must not use this, for the reason `buildIfNeeded` gives: those jars
+    * reach the typer and never reach `Bootstrap`, so nothing recorded describes them.
+    *
+    * @param reuse pass `false` to check regardless, which is what `--clean` asks for.
+    * @return whether the check ran. `false` means a recorded build already answered.
+    */
+  def checkIfNeeded(flix: Flix, reuse: Boolean = true): Result[Boolean, BootstrapError] = {
+    if (reuse && isCheckedByRecordedBuild(flix)) {
+      return Ok(false)
+    }
+    check(flix).map(_ => true)
+  }
+
+  /**
+    * Returns `true` if a recorded build already type checked exactly these sources.
+    *
+    * Two conditions, and deliberately not three. The sources must hash to what the build read, and the
+    * inputs that can change what the front end *reports* must be the ones it read them under -- which
+    * is a narrower comparison than a build reuses, because an option that only changes what is emitted
+    * cannot change a verdict.
+    *
+    * The products are not required to still be there, which is the difference from
+    * `Steps.isRecordedBuildCurrent`. A type-checking verdict is a fact about sources; deleting class
+    * files does not make a program stop checking. `clean` removes the manifest along with them, so a
+    * project that was cleaned is checked for real anyway -- by the absence of a record rather than by a
+    * condition that pretends to be about one thing while being about another.
+    */
+  private def isCheckedByRecordedBuild(flix: Flix): Boolean = {
+    val expected = frontendFingerprintOf(flix)
+    Steps.rescanSources()
+    Steps.readBuildManifest(flix.options.build) match {
+      case Some(m) if m.frontendFingerprint == expected =>
+        m.sourcesDigest == BuildManifest.digestOfSources(projectPath, sourcePaths)
+      case _ => false
+    }
+  }
+
+  /**
+    * Returns `true` if the build recorded for `flix`'s configuration still describes this project.
+    *
+    * Public because a *check* consults it, which is a question about the sources rather than about the
+    * output. The conditions are in `Steps.isRecordedBuildCurrent`.
+    */
+  private def isRecordedBuildCurrent(flix: Flix): Boolean = {
+    val build = flix.options.build
+    val fingerprint = fingerprintOf(flix)
+    Steps.rescanSources()
+    Steps.readBuildManifest(build) match {
+      case Some(m) if m.fingerprint == fingerprint => Steps.isRecordedBuildCurrent(build, m)
+      case _ => false
+    }
+  }
+
+  /**
     * Generates API documentation.
     */
   def doc(flix: Flix): Result[Unit, BootstrapError] = {
@@ -1192,7 +1638,66 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
   /**
     * Runs the main function in flix package for the project.
     */
-  def run(flix: Flix, args: Array[String]): Result[Unit, BootstrapError] = {
+  def run(flix: Flix, args: Array[String], reuse: Boolean = true): Result[Int, BootstrapError] = {
+    // Coverage is aggregated from `Coverage.getSession` in *this* process and written after the program
+    // returns, so a forked program's hits would be recorded in a JVM nobody reads and the report would
+    // come out empty. An empty coverage report is worse than a slow one, so this run stays in-process.
+    if (flix.options.coverage) {
+      return runInProcess(flix, args)
+    }
+
+    for {
+      _ <- buildIfNeeded(flix, clean = !reuse)
+      code <- runForked(args.toList)
+    } yield code
+  }
+
+  /**
+    * Runs the program in a JVM of its own and returns its exit code.
+    *
+    * ==Why forked, when it used to run here==
+    *
+    * Because the program has to be startable from what a build *left behind*, or `flix run` can never
+    * skip a compile: running in this process means reflecting over a `CompilationResult`, and only a
+    * compile produces one. Loading the classes from the directory instead is not the cheap alternative
+    * it appears to be -- `flix.jar` carries a *mock* `dev.flix.runtime.Global` whose `setArgs` throws,
+    * so a class loader that resolved the program's runtime classes through this process's would have to
+    * be child-first and exactly right, and the failure when it is not is a program that dies before
+    * `main`. Forking cannot make that mistake.
+    *
+    * What changes for a user: the program gets its own JVM, so its exit code is reported rather than
+    * inherited by accident, a `System.exit` no longer takes the compiler with it, and standard input,
+    * output and error are the terminal's -- inherited, not captured, so an interactive program still
+    * works.
+    */
+  private def runForked(arguments: List[String]): Result[Int, BootstrapError] = {
+    val snapshot = view
+    val command = ProgramRunner.command(snapshot, Build.Development, arguments)
+    try {
+      val process = new ProcessBuilder(command*)
+        // In the project, so a program that reads a relative path finds what a user would expect.
+        .directory(snapshot.projectPath.toFile)
+        // The terminal's, so that a program which prompts, reads a pipe or draws a progress bar behaves
+        // as it would if the user had started it.
+        .inheritIO()
+        .start()
+      Ok(process.waitFor())
+    } catch {
+      case e: java.io.IOException =>
+        Err(BootstrapError.GeneralError(s"Could not start the program: ${e.getMessage}"))
+      case _: InterruptedException =>
+        Thread.currentThread().interrupt()
+        Err(BootstrapError.GeneralError("Interrupted while running the program."))
+    }
+  }
+
+  /**
+    * Runs `main` by reflection in this process, which is what `--coverage` needs.
+    *
+    * The exit code is 0 unless the program calls `System.exit` itself, in which case this never
+    * returns -- the same behaviour every `flix run` had before forking.
+    */
+  private def runInProcess(flix: Flix, args: Array[String]): Result[Int, BootstrapError] = {
     for {
       compilationResult <- build(flix)
     } yield {
@@ -1200,19 +1705,141 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
         case None => ()
         case Some(main) => main(args)
       }
+      0
     }
   }
 
   /**
     * Runs all tests in the flix package for the project.
     */
-  def test(flix: Flix): Result[Unit, BootstrapError] = {
-    for {
-      compilationResult <- build(flix)
-      res <- Tester.run(Nil, compilationResult)(flix).mapErr(_ => BootstrapError.GeneralError("Tester Error"))
-    } yield {
-      res
+  def test(flix: Flix, filters: List[Regex] = Nil, reuse: Boolean = true): Result[Unit, BootstrapError] = {
+    val (outcome, ran) = testWith(flix, filters, Tester.consoleSink, reuse)
+    ran match {
+      case Some(true) => Ok(())
+      case Some(false) => Err(BootstrapError.GeneralError("Tester Error"))
+      case None => outcome.toResult.map(_ => ())
     }
+  }
+
+  /**
+    * Runs the project's tests, reporting each event to `sink`.
+    *
+    * The compilation is returned alongside the outcome because a caller reporting on a test run needs
+    * both: the messages, to publish, and whether the program compiled at all, since a test run that
+    * never started is not a test run that failed.
+    *
+    * `loadClassFiles` is forced on. A test is a compiled function this process reflects and calls, so
+    * unlike a compile there is no version of this that leaves the classes on disk.
+    */
+  def testWith(flix: Flix, filters: List[Regex], sink: Tester.TestEventSink,
+               reuse: Boolean = true,
+               isCancelled: () => Boolean = () => false): (Bootstrap.CompileOutcome, Option[Boolean]) = {
+    val configured = flix.options.copy(
+      build = Build.Development,
+      outputJvm = true,
+      outputPath = Bootstrap.getOutputDirectory(projectPath, Build.Development),
+      loadClassFiles = true,
+      progress = false)
+    flix.setOptions(configured)
+
+    // Nothing to compile, and the tests are where the last run said they were.
+    if (reuse) {
+      recordedTestCases(flix, filters) match {
+        case Some(cases) =>
+          val passed = Tester.run(cases, sink, isCancelled)(flix).isInstanceOf[Ok[?, ?]]
+          return (Bootstrap.CompileOutcome(None, None, Nil, None, upToDate = true, hasMain = false), Some(passed))
+        case None => ()
+      }
+    }
+
+    val outcome = compileProjectOutcome(flix, clean = !reuse)
+    outcome.result match {
+      case None => (outcome, None)
+      case Some(compiled) =>
+        recordTests(flix, compiled)
+        val cases = Tester.getTestCases(filters, compiled)
+        (outcome, Some(Tester.run(cases, sink, isCancelled)(flix).isInstanceOf[Ok[?, ?]]))
+    }
+  }
+
+  /**
+    * Returns the tests of the build on disk, if it can answer for the current sources.
+    *
+    * ==What has to hold, and why each part is checked==
+    *
+    * The build must be current by the same test a skipped build uses, the recorded table must have been
+    * written by *that* build, and every method it names must resolve in the class files that are there
+    * now. The last of those is what makes this a confirmation rather than a cache: the record is never
+    * believed on its own, because the failure it would otherwise produce is the worst one a test runner
+    * has -- tests that someone believes ran and did not.
+    *
+    * A table with no tests is refused whenever the project has test sources, because "no tests" and
+    * "the tests were not recorded" look identical from here and only one of them should report success.
+    *
+    * A refusal is said out loud rather than inferred from a build that took longer than expected.
+    */
+  private def recordedTestCases(flix: Flix, filters: List[Regex]): Option[Vector[Tester.TestCase]] = {
+    if (!isRecordedBuildCurrent(flix)) {
+      return None
+    }
+
+    val build = flix.options.build
+    val fingerprint = fingerprintOf(flix)
+    val recorded = TestManifest.read(TestManifest.fileIn(Bootstrap.getOutputDirectory(projectPath, build)))
+
+    recorded match {
+      case None => None
+
+      case Some(manifest) if manifest.fingerprint != fingerprint => None
+
+      case Some(manifest) if manifest.sourcesDigest != BuildManifest.digestOfSources(projectPath, sourcePaths) =>
+        None
+
+      case Some(manifest) if manifest.tests.isEmpty && hasTestSources =>
+        println("Recompiling: the build on disk records no tests, but this project has test sources.")
+        None
+
+      case Some(manifest) =>
+        val selected = manifest.tests.filter(t => filters.isEmpty || filters.exists(_.matches(t.name)))
+        val requested = selected.map(t => (t.name, t.className, t.methodName))
+        JvmLoader.loadTests(readClassFiles(build), requested)(flix) match {
+          case None =>
+            println("Recompiling: the tests the last build recorded are not in the class files it left.")
+            None
+          case Some(runnable) =>
+            val cases = selected.map(t => Tester.TestCase(TestManifest.idOf(t), t.skip, runnable(t.name)))
+            Some(cases.toVector.sorted)
+        }
+    }
+  }
+
+  /** Records where the tests of `compiled` are, so a later run can reach them without compiling. */
+  private def recordTests(flix: Flix, compiled: CompilationResult): Unit = {
+    val build = flix.options.build
+    val fingerprint = fingerprintOf(flix)
+    val digest = BuildManifest.digestOfSources(projectPath, sourcePaths)
+    val manifest = TestManifest.of(fingerprint, digest, compiled.getTests.values)
+    // A failure here costs the next run a compile and nothing else, so it is not worth failing the run
+    // that just passed.
+    TestManifest.write(TestManifest.fileIn(Bootstrap.getOutputDirectory(projectPath, build)), manifest)
+    ()
+  }
+
+  /** Returns every class file of `build`, by binary name. */
+  private def readClassFiles(build: Build): Map[String, Array[Byte]] = {
+    val classDir = Bootstrap.getClassDirectory(projectPath, build)
+    FileOps.getFilesWithExtIn(classDir, "class", Int.MaxValue).flatMap { file =>
+      val relative = classDir.relativize(file.normalize()).toString
+      val binary = relative.stripSuffix(".class").replace(java.io.File.separatorChar, '.').replace('/', '.')
+      try Some(binary -> Files.readAllBytes(file))
+      catch { case _: Exception => None }
+    }.toMap
+  }
+
+  /** Returns `true` if the project has any source under `test/`. */
+  private def hasTestSources: Boolean = {
+    val testDir = Bootstrap.getTestDirectory(projectPath)
+    Files.isDirectory(testDir) && FileOps.getFilesWithExtIn(testDir, "flix", Int.MaxValue).nonEmpty
   }
 
   /**
@@ -1356,15 +1983,40 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
   private object Steps {
 
     /**
-      * Adds all class files from `dir` to `zip`.
+      * Adds the class files `products` - relative to the project's class directory - to `zip`.
+      *
+      * The jar is built from the product set the compiler reported rather than from a walk of
+      * the class directory. The two agree after [[reconcileClassDirectory]], and packaging the
+      * set is what makes them agree *by construction*: a class file that appears in the
+      * directory between reconciling and packaging cannot reach the jar, and neither can one
+      * this build did not write.
       */
-    def addClassFilesFromDirToZip(dir: Path, zip: ZipOutputStream): Unit = {
-      // Add all class files.
+    def addProductsToZip(build: Build, products: Set[Path], zip: ZipOutputStream): Unit = {
+      val classDir = Bootstrap.getClassDirectory(projectPath, build)
       // Here we sort entries by relative file name to apply https://reproducible-builds.org/
-      val classFiles = FileOps.getFilesWithExtIn(dir, EXT_CLASS, Int.MaxValue)
-      for ((buildFile, fileNameWithSlashes) <- FileOps.sortPlatformIndependently(dir, classFiles)) {
-        FileOps.addToZip(zip, fileNameWithSlashes, buildFile)
+      val entries = products.toList.map(BuildManifest.nameOf).sorted
+      for (name <- entries) {
+        FileOps.addToZip(zip, name, classDir.resolve(name))
       }
+    }
+
+    /**
+      * Returns `Ok(())` if every product of the build mode `build` is on disk.
+      *
+      * Checked *before* the jar is opened, because opening it truncates the last good one and
+      * `FileOps.addToZip` skips a path that does not exist rather than failing. Without this, a
+      * product that went missing between writing and packaging - another build reconciling the
+      * same directory, something outside the compiler deleting it - yields a jar quietly missing
+      * a class, an exit code of zero, and no previous jar to fall back on.
+      */
+    def validateProducts(build: Build, products: Set[Path]): Result[Unit, BootstrapError] = {
+      val classDir = Bootstrap.getClassDirectory(projectPath, build)
+      val missing = products.toList.map(BuildManifest.nameOf).sorted.filterNot(name => Files.isRegularFile(classDir.resolve(name)))
+      if (missing.nonEmpty) {
+        return Err(BootstrapError.FileError(
+          s"${missing.length} class file(s) the compiler reported are missing from '${projectPath.relativize(classDir)}', so the jar would be incomplete: ${missing.take(5).mkString(", ")}"))
+      }
+      Ok(())
     }
 
     /**
@@ -1458,6 +2110,23 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
       for ((name, providers) <- services) {
         FileOps.addToZip(zip, name, providers.mkString("\n").getBytes)
       }
+    }
+
+    /**
+      * Re-reads which `.flix` files the project has.
+      *
+      * Separate from [[updateStaleSources]] because they answer different questions. That one asks
+      * which of the *known* sources changed; this one asks which sources there are. A file created
+      * since the last scan is in neither list until this runs, and a file deleted since is still in
+      * both.
+      *
+      * Only the sources. Dependencies change when the manifest does, which is a reload rather than a
+      * build, and rescanning `lib/` here would make every build pay for a directory walk it cannot
+      * act on.
+      */
+    def rescanSources(): Unit = {
+      addLocalFlixFiles()
+      ()
     }
 
     /**
@@ -1555,28 +2224,43 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
       * It is up to the caller to set the appropriate options on `flix`.
       * It is often the case that `outputJvm` and `loadClassFiles` must be toggled on or off.
       */
-    def compile(flix: Flix): Result[CompilationResult, BootstrapError] = {
+    def compile(flix: Flix): Result[CompilationResult, BootstrapError] =
+      compileOutcome(flix).toResult
+
+    /**
+      * Compiles, and reports what the compiler said as well as whether it succeeded.
+      *
+      * `compile` collapses that into a `Result`, which is the right shape for a command that either
+      * builds or prints errors. It is the wrong shape for a caller that has to publish diagnostics:
+      * a compile can succeed *and* have messages, and there is nowhere in a `Result` to put them.
+      * The typed root goes with them, because it is what names the sources a previous compile
+      * reported on -- which is what a caller needs to clear a marker that no longer applies.
+      */
+    def compileOutcome(flix: Flix): Bootstrap.CompileOutcome = {
       val (optRoot, errors) = flix.check()
+      // One definition of whether the program has an entry point, so that a caller asking what to run
+      // gets the same answer from a build and from a build that was skipped.
+      val hasMain = optRoot.exists(_.mainEntryPoint.isDefined)
       if (errors.isEmpty) {
-        Ok(flix.codeGen(optRoot.get))
+        Bootstrap.CompileOutcome(Some(flix.codeGen(optRoot.get)), optRoot, errors, hasMain = hasMain)
       } else {
-        Err(BootstrapError.CompilationErrors(errors, optRoot))
+        Bootstrap.CompileOutcome(None, optRoot, errors, hasMain = hasMain)
       }
     }
 
     /**
-      * Configures `flix` to emit class files to the build directory (on the file system)
-      * in production mode.
+      * Configures `flix` to emit class files to the production output directory (on the file
+      * system) in production mode.
       *
-      * @see [[Bootstrap.getBuildDirectory]]
+      * @see [[Bootstrap.getOutputDirectory]]
       * @see [[Build.Production]]
       */
     def configureJarOutput(flix: Flix): Result[Unit, BootstrapError] = {
-      val buildDir = Bootstrap.getBuildDirectory(projectPath)
+      val outputDir = Bootstrap.getOutputDirectory(projectPath, Build.Production)
       for {
-        _ <- validateDirectory(buildDir)
+        _ <- validateDirectory(outputDir)
       } yield {
-        val newOptions = flix.options.copy(build = Build.Production, outputJvm = true, outputPath = buildDir)
+        val newOptions = flix.options.copy(build = Build.Production, outputJvm = true, outputPath = outputDir)
         flix.setOptions(newOptions)
         ()
       }
@@ -1711,9 +2395,35 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
       *
       * When a file watcher is active (REPL mode), drains watcher events instead of polling timestamps.
       */
-    def updateStaleSources(flix: Flix): Unit = fileWatcher match {
-      case Some(fw) => applyWatcherEvents(fw.drain(), flix)
-      case None => updateStaleSourcesByTimestamp(flix)
+    def updateStaleSources(flix: Flix): Unit = {
+      // Both records of what is already loaded - the timestamps, and the watcher events already
+      // drained - are records about one Flix instance. Handing a *different* instance only what
+      // changed since would leave it compiling an empty program, so it is given everything.
+      val sameInstance = lastFlix.exists(_ eq flix)
+      lastFlix = Some(flix)
+
+      fileWatcher match {
+        case Some(fw) =>
+          val events = fw.drain()
+          if (sameInstance) applyWatcherEvents(events, flix) else rescanAndUpdate(flix)
+
+        case None =>
+          // Without a watcher, staleness can only be guessed from modification times - and a guess
+          // is not enough to license reusing a cached AST. `Source` equality is by path and not by
+          // content (`Source.equals`), and `ChangeSet.partition` hands back the *cached* result for
+          // any input not marked changed, so a file whose mtime did not move is compiled as it was
+          // and the edit silently never reaches the output. Modification times are millisecond
+          // resolution at best and whole seconds on some filesystems, so two writes inside one tick
+          // are ordinary rather than exotic. Every source is therefore handed over again, which
+          // marks it changed; the watcher path above is the one that may be selective, because
+          // there an edit is an event rather than an inference.
+          //
+          // Re-offering is *not* the same as forgetting. `timestamps` doubles as the record of which
+          // sources have been loaded, and that record is what identifies a source that has since been
+          // deleted. Clearing it first leaves the deleted file in the compiler's inputs, where the
+          // reader then fails on a file that is not there.
+          updateStaleSourcesByTimestamp(flix, reofferAll = true)
+      }
     }
 
     /**
@@ -1817,29 +2527,44 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
 
     /**
       * Timestamp-based stale source detection (used when no file watcher is active).
+      *
+      * @param reofferAll hand every source to the compiler again rather than only the ones whose
+      *                   modification time moved. What the caller wants when it cannot trust an
+      *                   mtime to prove a file is unchanged - which, without a watcher, it cannot.
+      *                   Note that this is separate from *forgetting* what was loaded: the record of
+      *                   loaded sources is what identifies one that has since been deleted.
       */
-    private def updateStaleSourcesByTimestamp(flix: Flix): Unit = {
+    private def updateStaleSourcesByTimestamp(flix: Flix, reofferAll: Boolean = false): Unit = {
       val previousSources = timestamps.keySet
 
-      for (path <- sourcePaths if hasChanged(path)) {
+      // A path that no longer exists reads as stale - it has no timestamp to match - but it is
+      // gone rather than changed, and every `add` below rejects a file that is not there. It is
+      // removed further down instead. The path stays in the cached lists so that a file which
+      // comes back is picked up again.
+      def isStale(path: Path): Boolean = Files.exists(path) && (reofferAll || hasChanged(path))
+
+      for (path <- sourcePaths if isStale(path)) {
         flix.addFile(path)(SecurityContext.Unrestricted)
       }
 
-      for (path <- flixPackagePaths if hasChanged(path)) {
+      for (path <- flixPackagePaths if isStale(path)) {
         flix.addPkg(path)(securityLevels.getOrElse(path, SecurityContext.Plain))
       }
 
-      for (path <- mavenPackagePaths if hasChanged(path)) {
+      for (path <- mavenPackagePaths if isStale(path)) {
         flix.addJar(path)
       }
 
-      for (path <- jarPackagePaths if hasChanged(path)) {
+      for (path <- jarPackagePaths if isStale(path)) {
         flix.addJar(path)
       }
 
       val currentSources = (sourcePaths ::: flixPackagePaths ::: mavenPackagePaths ::: jarPackagePaths).filter(p => Files.exists(p))
 
-      val deletedSources = previousSources -- currentSources
+      // Only a Flix source can be removed by path: `remFile` rejects anything else, and a
+      // dependency that disappeared is dropped from the classpath by the resolution step, not
+      // here. The extension is read off the name and not off the file, which is gone.
+      val deletedSources = (previousSources -- currentSources).filter(_.toString.endsWith(s".$EXT_FLIX"))
       for (path <- deletedSources) {
         flix.remFile(path)(SecurityContext.Unrestricted)
       }
@@ -1864,31 +2589,55 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
     }
 
     /**
-      * Forgets which sources have already been compiled, so that the next call to
-      * [[updateStaleSources]] hands every source to the compiler again.
+      * Removes every class file from the class directory that is not in `products`, and prunes
+      * the directories left empty.
       *
-      * Required whenever the class directory is wiped: the timestamps are recorded per
-      * `Bootstrap`, but the class files belong to whichever `Flix` instance produced
-      * them. Without this, a second build on the same `Bootstrap` would consider every
-      * source unchanged, add nothing, and emit a jar missing almost all of its classes.
+      * A build only overwrites the class files it generates. Class files left behind by an
+      * earlier build - because the def they belonged to was deleted from the source, or renamed,
+      * or because a specialization is no longer reachable - would otherwise survive and be
+      * packaged into the jar.
+      *
+      * Removing exactly the complement of `products` is sound because `Flix.codeGen` is
+      * whole-program: `products` is every class file the current sources require, so a class
+      * file outside it is one no longer required. This is the same end state a wipe followed by
+      * a full recompile reaches, and unlike a wipe it does not have to be paid for by discarding
+      * the compiler's caches and rewriting every file.
+      *
+      * Refuses to delete anything that is not a class file, so that a mis-configured output path
+      * cannot cause data loss.
       */
-    def invalidateSourceTimestamps(): Unit = {
-      timestamps = Map.empty
+    def reconcileClassDirectory(build: Build, products: Set[Path]): Result[Unit, BootstrapError] = {
+      // A build that wrote nothing makes every class file on disk look stale. Reconciling
+      // against it would empty the directory and then package an empty jar, so it is refused:
+      // any program at all produces class files, and JVM output was configured above.
+      if (products.isEmpty) {
+        return Err(BootstrapError.FileError("The compiler wrote no class files. Refusing to reconcile the class directory."))
+      }
+
+      val classDir = Bootstrap.getClassDirectory(projectPath, build)
+      for {
+        _ <- removeClassFiles(build, keep = products.map(p => classDir.resolve(p).normalize()))
+        _ <- pruneEmptyDirectories(classDir)
+      } yield {
+        ()
+      }
     }
 
     /**
-      * Removes every class file from the class directory of the project.
+      * Removes every class file in the class directory of the build mode `build` except those in
+      * `keep`.
       *
-      * A build only overwrites the class files it generates. Class files left behind by
-      * an earlier build - because the def they belonged to was deleted from the source,
-      * or renamed - would otherwise survive and be packaged into the jar. Wiping the
-      * directory first makes the jar a function of the current sources alone.
+      * Validates every file in the directory before deleting any of it, so that an unexpected
+      * file stops the build with the directory untouched rather than half-emptied.
       *
-      * Refuses to delete anything that is not a class file, so that a mis-configured
-      * output path cannot cause data loss.
+      * The name is not enough: a file called `Notes.class` that is not bytecode is somebody's
+      * file, and this now runs on every ordinary build where before only `clean` deleted here.
+      * So the contents are checked too, the way `clean` checks them - and an empty file is
+      * tolerated for the same reason `JvmWriter` tolerates one, since that is what an interrupted
+      * write leaves behind and refusing it would wedge every later build.
       */
-    def cleanClassDirectory(): Result[Unit, BootstrapError] = {
-      val classDir = Bootstrap.getClassDirectory(projectPath)
+    private def removeClassFiles(build: Build, keep: Set[Path]): Result[Unit, BootstrapError] = {
+      val classDir = Bootstrap.getClassDirectory(projectPath, build)
       if (!Files.exists(classDir)) {
         return Ok(())
       }
@@ -1904,13 +2653,16 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
         if (!FileOps.checkExt(file, EXT_CLASS)) {
           return Err(BootstrapError.FileError(s"Unexpected file extension in class directory (only '$EXT_CLASS' files are allowed): '${projectPath.relativize(file)}'"))
         }
+        if (!(FileOps.isEmpty(file) || FileOps.isClassFile(file))) {
+          return Err(BootstrapError.FileError(s"Refusing to delete a file that is not a class file: '${projectPath.relativize(file)}'"))
+        }
         checkForDangerousPath(file) match {
           case Err(e) => return Err(e)
           case Ok(()) => ()
         }
       }
 
-      for (file <- files) {
+      for (file <- files if !keep.contains(file)) {
         FileOps.delete(file) match {
           case Err(e) => return Err(BootstrapError.FileError(s"Failed to delete file '$file': $e"))
           case Ok(_) => ()
@@ -1918,6 +2670,180 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
       }
 
       Ok(())
+    }
+
+    /**
+      * Removes the directories under `dir` that are now empty, innermost first. `dir` itself is
+      * kept: the next build writes into it.
+      *
+      * A package that loses its last class file leaves a directory behind, and a tree of empty
+      * directories is what a build that only ever deleted files looks like after a rename.
+      */
+    private def pruneEmptyDirectories(dir: Path): Result[Unit, BootstrapError] = {
+      if (!Files.exists(dir)) {
+        return Ok(())
+      }
+
+      val directories = FileOps.getDirectoriesIn(dir, Int.MaxValue).map(_.normalize()).filterNot(_ == dir.normalize())
+      for (d <- directories.reverse) {
+        checkForDangerousPath(d) match {
+          case Err(e) => return Err(e)
+          case Ok(()) => ()
+        }
+        // Only empty directories are removed, and `reverse` puts the innermost first, so a
+        // directory emptied by this loop is itself removed in the same pass.
+        val isEmpty = Using(Files.list(d))(!_.findAny().isPresent)
+        isEmpty match {
+          case Success(true) =>
+            FileOps.delete(d) match {
+              case Err(e) => return Err(BootstrapError.FileError(s"Failed to delete directory '$d': $e"))
+              case Ok(_) => ()
+            }
+          case Success(false) => ()
+          case Failure(e) => return Err(BootstrapError.FileError(s"Failed to inspect directory '$d': ${e.getMessage}"))
+        }
+      }
+
+      Ok(())
+    }
+
+    /**
+      * Discards the state an incremental build would have reused: the compiler's cached ASTs.
+      *
+      * Nothing on disk. A full build does not need to delete the previous build's class files
+      * first - [[reconcileClassDirectory]] reaches the same directory after a successful compile -
+      * and deleting them up front would destroy a working build's output whenever the compile
+      * meant to replace it fails. The same applies to the manifest: leaving the old one in place
+      * costs one more full build if this one fails, where deleting it early costs the products it
+      * describes.
+      *
+      * The record of which sources have been loaded is deliberately *kept*. It looks like state an
+      * incremental build reuses, and it is not: it is the only account of what the compiler was
+      * given, so it is what identifies a source that has since been deleted. Clearing it left the
+      * deleted file in the compiler's inputs and the reader failed on a file that was not there --
+      * on every build after a failed one, since a failed build writes no manifest and so every
+      * later build arrives here. Re-offering every source, which
+      * [[updateStaleSourcesByTimestamp]] does without a watcher, already achieves what clearing was
+      * for.
+      */
+    def discardIncrementalState(flix: Flix): Unit = {
+      flix.clearCaches()
+    }
+
+    /**
+      * Empties the output directory of the build mode `build`: every class file, the directories
+      * that leaves empty, and the build manifest.
+      *
+      * This is the one thing `--clean` does that an ordinary build does not, and it runs *before*
+      * the compile on purpose. The request is to build from nothing, so there must be no moment at
+      * which the previous build's output could be taken for this one's - which is what makes a
+      * `--clean` artifact a function of the sources and nothing else. It follows that a `--clean`
+      * whose compile then fails leaves nothing behind; that is the bargain the caller asked for,
+      * and it is why a full build forced by a *changed fingerprint* deliberately does not come
+      * here.
+      *
+      * The manifest goes first. A manifest that outlived the products it describes is one the next
+      * build would trust; a missing one only costs one more full build.
+      */
+    def emptyOutputDirectory(build: Build): Result[Unit, BootstrapError] = {
+      for {
+        _ <- deleteBuildManifest(build)
+        _ <- removeClassFiles(build, keep = Set.empty)
+        _ <- pruneEmptyDirectories(Bootstrap.getClassDirectory(projectPath, build))
+      } yield {
+        ()
+      }
+    }
+
+    /**
+      * Returns `true` if `recorded` still describes this project, so that building would rewrite
+      * exactly what is already there.
+      *
+      * Three conditions, and each one closes a way of being wrong about it:
+      *
+      *   - the *contents* of every source hash to what the build read. A modification time would not
+      *     do: two writes inside one filesystem tick are ordinary, and a build that trusted a clock
+      *     would report success over the previous program's class files.
+      *   - the class directory holds exactly the products the build wrote -- no more and no fewer.
+      *     Existence alone is not enough: a stray class file left by something else is a directory
+      *     nobody can describe, which is the state the manifest exists to prevent, and a rebuild is
+      *     how it gets described again.
+      *   - the caller has already checked the fingerprint, which covers the compiler, the back-end
+      *     options and the dependencies.
+      *
+      * Note what is *not* checked: whether the class files are the bytes this compiler would emit. A
+      * hand-edited class file of the right name is not detected, and detecting it would mean hashing
+      * every product on every build to catch something nothing does.
+      */
+    def isRecordedBuildCurrent(build: Build, recorded: BuildManifest): Boolean = {
+      val digest = BuildManifest.digestOfSources(projectPath, sourcePaths)
+      if (digest != recorded.sourcesDigest) {
+        return false
+      }
+      currentProducts(build) == recorded.products.toSet
+    }
+
+    /** Returns every file under the class directory of `build`, as manifest names. */
+    private def currentProducts(build: Build): Set[String] = {
+      val classDir = Bootstrap.getClassDirectory(projectPath, build)
+      if (!Files.isDirectory(classDir)) {
+        return Set.empty
+      }
+      val stream = Files.walk(classDir)
+      try {
+        stream.filter(Files.isRegularFile(_))
+          .map[String](p => BuildManifest.relativeName(classDir, p))
+          .toList.asScala.toSet
+      } catch {
+        // An unreadable directory is one nothing can be concluded about, so nothing is.
+        case _: Exception => Set.empty
+      } finally {
+        stream.close()
+      }
+    }
+
+    /**
+      * Returns the recorded manifest of the previous build in the mode `build`, if there is one
+      * this compiler can read.
+      */
+    def readBuildManifest(build: Build): Option[BuildManifest] =
+      BuildManifest.read(Bootstrap.getBuildManifestFile(projectPath, build))
+
+    /**
+      * Records what this build produced, from which inputs.
+      *
+      * Written after the class directory has been reconciled, so that a manifest exists only
+      * once it describes the directory.
+      */
+    def writeBuildManifest(build: Build, fingerprint: String, frontendFingerprint: String,
+                           products: Set[Path], sourcesDigest: String,
+                           hasMain: Boolean): Result[Unit, BootstrapError] = {
+      // Only sources that exist. A deleted path stays in `sourcePaths` on purpose - so that a file
+      // which comes back is noticed - but recording it here would describe the build as having read
+      // a file that is not there.
+      val manifest = BuildManifest(
+        fingerprint,
+        frontendFingerprint,
+        products.toList.map(BuildManifest.nameOf).sorted,
+        sourcePaths.filter(Files.isRegularFile(_)).map(p => BuildManifest.relativeName(projectPath, p)).sorted,
+        sourcesDigest,
+        hasMain
+      )
+      BuildManifest.write(Bootstrap.getBuildManifestFile(projectPath, build), manifest)
+        .mapErr(e => BootstrapError.FileError(s"Failed to write the build manifest: ${e.getMessage}"))
+    }
+
+    /** Deletes the build manifest of the build mode `build`, if there is one. */
+    private def deleteBuildManifest(build: Build): Result[Unit, BootstrapError] = {
+      val path = Bootstrap.getBuildManifestFile(projectPath, build)
+      if (!Files.exists(path)) {
+        return Ok(())
+      }
+      checkForDangerousPath(path) match {
+        case Err(e) => return Err(e)
+        case Ok(()) => ()
+      }
+      FileOps.delete(path).mapErr(e => BootstrapError.FileError(s"Failed to delete the build manifest: ${e.getMessage}"))
     }
 
     /**

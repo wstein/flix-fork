@@ -134,20 +134,42 @@ case class Options(lib: LibLevel,
 /**
   * An option to control whether to run in development or production mode.
   */
-sealed trait Build
+sealed trait Build {
+  /**
+    * The name of the directory this mode's output goes in, under the project's build directory.
+    *
+    * The two modes do not produce the same class files - the mode reaches the typer, so it can
+    * change which program is compiled at all - so they cannot share one output directory without
+    * each build invalidating the other's.
+    *
+    * Named after the mode and not `debug`/`release`, familiar as those are from other toolchains.
+    * This distinction is not theirs: it does not select optimizations, and it does not decide
+    * whether debug information is emitted - `xdebug` does that. Two other things in Flix are
+    * already called debug, the `xdebug` flag and the `Debug` effect, and a `debug/` directory
+    * next to them would promise something the compiler does not do.
+    *
+    * Written out rather than derived from the case object's name, so that renaming one of these
+    * does not silently move a directory that users' projects already contain.
+    */
+  def directoryName: String
+}
 
 object Build {
   /**
     * Run in development mode.
     */
-  case object Development extends Build
+  case object Development extends Build {
+    override val directoryName: String = "development"
+  }
 
   /**
     * Run in production mode.
     *
     * Running the compiler in production mode disables certain features that are allowed during development.
     */
-  case object Production extends Build
+  case object Production extends Build {
+    override val directoryName: String = "production"
+  }
 }
 
 sealed trait LibLevel
