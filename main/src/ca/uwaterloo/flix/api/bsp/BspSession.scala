@@ -574,6 +574,13 @@ class BspSession(val projectPath: Path, options: Options, log: BspLogStream) {
             if (result.timedOut) {
               showMessage(MessageType.ERROR,
                 s"the tests of ${view.packageName} did not finish within ${TestTimeout.toMinutes} minutes and were stopped.")
+            } else if (!result.started && !result.passed) {
+              // A runner that failed before its first event -- a classpath that does not resolve, a `java`
+              // that is not there -- leaves an empty test tree and a red status, which reads as "no tests"
+              // rather than "the runner never ran". Its own output went to the server log, so this says
+              // where to look rather than repeating it.
+              showMessage(MessageType.ERROR,
+                s"the test runner of ${view.packageName} produced no events. Its output is in the build server log.")
             }
             if (cancellation.isCancelled) StatusCode.CANCELLED
             else if (result.passed) StatusCode.OK
