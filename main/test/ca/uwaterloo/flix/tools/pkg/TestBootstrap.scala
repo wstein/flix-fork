@@ -42,6 +42,34 @@ class TestBootstrap extends AnyFunSuite {
       s"init wrote '$declared'; a manifest version must be three numbers and nothing else.")
   }
 
+  test("init ignores everything a build writes, and everything only one machine knows") {
+    // Nothing asserted the generated `.gitignore` at all, so an output directory could be renamed
+    // and start being committed with nothing failing. The directories are read from `Bootstrap`'s
+    // own names rather than written out here, which is what ties the two together.
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out).unsafeGet
+
+    val ignored = Files.readAllLines(p.resolve(".gitignore")).asScala.map(_.trim).toSet
+    val written = List(
+      Bootstrap.artifactDirectoryRaw,
+      Bootstrap.buildDirectoryRaw,
+      Bootstrap.libDirectoryRaw,
+      Bootstrap.bspDirectoryRaw,
+    )
+    for (directory <- written) {
+      assert(ignored.contains(directory), s"'$directory' is written by the build and not ignored")
+    }
+    // A machine's own environment, not the project's: a committed `.envrc` hands every clone one
+    // developer's setup, and a committed token hands them a credential.
+    for (local <- List(".envrc", ".GITHUB_TOKEN")) {
+      assert(ignored.contains(local), s"'$local' is not ignored")
+    }
+    // And what a build produces, which belongs to a release rather than to the history.
+    for (product <- List("*.fpkg", "*.jar")) {
+      assert(ignored.contains(product), s"'$product' is not ignored")
+    }
+  }
+
   test("a project requiring a newer compiler is refused, and says what it wants") {
     // The `flix` field states the oldest compiler a package builds with. It was parsed, written by
     // `init`, and never read, so a project needing a feature this compiler lacks failed somewhere

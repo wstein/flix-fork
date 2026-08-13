@@ -154,8 +154,13 @@ object Bootstrap {
     }
 
     FileOps.newFileIfAbsent(gitignoreFile) {
+      // `.envrc`, its example, and `.GITHUB_TOKEN` hold a developer's own environment rather than
+      // the project's, and committing one shares a machine's setup -- or a credential -- with
+      // everyone who clones.
       s"""*.fpkg
          |*.jar
+         |.envrc
+         |.envrc.example
          |.GITHUB_TOKEN
          |$artifactDirectoryRaw
          |$buildDirectoryRaw
@@ -525,7 +530,7 @@ object Bootstrap {
     *
     * N.B.: Use [[getArtifactDirectory]] if possible.
     */
-  private val artifactDirectoryRaw: String = "artifact/"
+  private[flix] val artifactDirectoryRaw: String = "artifact/"
 
   /**
     * Returns the path to the library directory relative to the given path `p`.
@@ -537,7 +542,7 @@ object Bootstrap {
     *
     * N.B.: Use [[getLibraryDirectory]] if possible.
     */
-  private val libDirectoryRaw: String = "lib/"
+  private[flix] val libDirectoryRaw: String = "lib/"
 
   /**
     * The relative path to the build server's discovery directory as a string.
@@ -547,7 +552,7 @@ object Bootstrap {
     *
     * @see [[ca.uwaterloo.flix.api.bsp.BspDiscovery]]
     */
-  private val bspDirectoryRaw: String = ".bsp/"
+  private[flix] val bspDirectoryRaw: String = ".bsp/"
 
   /**
     * Returns the path to the source directory relative to the given path `p`.
@@ -569,7 +574,7 @@ object Bootstrap {
     *
     * N.B.: Use [[getBuildDirectory]] if possible.
     */
-  private val buildDirectoryRaw: String = "build/"
+  private[flix] val buildDirectoryRaw: String = "build/"
 
   /**
     * Returns the output directory of the build mode `build`, relative to the given path `p`.
