@@ -16,6 +16,9 @@ jobs:
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           path: ./compiler
+          fetch-depth: 0
+          # Tags, so `git describe` can stamp the jar with the version it is; without them
+          # it is `0.0.0+unknown`, which cannot answer what a `flix.toml` requires.
       - name: Check out flix/vscode-flix
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:

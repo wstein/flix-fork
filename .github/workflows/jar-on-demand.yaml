@@ -44,6 +44,9 @@ jobs:
         with:
           repository: ${{ env.feature_repo }}
           ref: ${{ env.feature_ref }}
+          fetch-depth: 0
+          # Tags, so `git describe` can stamp the jar with the version it is; without them
+          # it is `0.0.0+unknown`, which cannot answer what a `flix.toml` requires.
       - name: Build JAR
         run: ./mill flix.assembly
       - name: Upload JAR
