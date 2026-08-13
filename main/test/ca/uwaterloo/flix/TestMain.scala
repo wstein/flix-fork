@@ -20,6 +20,7 @@ import ca.uwaterloo.flix.api.{Bootstrap, Version}
 import ca.uwaterloo.flix.tools.pkg.ManifestParser
 import ca.uwaterloo.flix.util.{DatalogDebug, DocFormat, LibLevel, Subeffecting}
 import org.scalatest.funsuite.AnyFunSuite
+import picocli.CommandLine
 import picocli.CommandLine.Model.CommandSpec
 
 import java.io.File
@@ -670,6 +671,55 @@ class TestMain extends AnyFunSuite {
     assert(helpNames(root) == Set("-h", "--help"))
     for ((name, sub) <- root.subcommands().asScala) {
       assert(helpNames(sub.getCommandSpec) == Set("-h", "--help"), s"'$name' does not answer to -h")
+    }
+  }
+
+  test("the standard usage text names no experimental option or command") {
+    // The list is what a reader is expected to read, so anything on it that is not for them costs
+    // the whole of it. Twenty-two of the forty-odd entries were experimental.
+    // The footer is the one line allowed to name one, since it is what makes the omission
+    // recoverable; the lists themselves may not.
+    val text = Main.usageText(Main.HelpScope.Standard, None, CommandLine.Help.Ansi.OFF)
+    val lists = text.linesIterator.filterNot(_.contains("--Xhelp")).mkString("\n")
+    assert(!lists.contains("--X"))
+    assert(!lists.contains("[experimental]"))
+    for (name <- List("Xperf", "Xmemory", "Xzhegalkin")) {
+      assert(!lists.contains(s"  $name "), s"'$name' is in the standard usage text")
+    }
+  }
+
+  test("--Xhelp names them, and says so where they were") {
+    // Hiding an option is indistinguishable from having removed it unless the reader is told where
+    // it went, which is what the footer is for -- and what makes the omission recoverable.
+    val standard = Main.usageText(Main.HelpScope.Standard, None, CommandLine.Help.Ansi.OFF)
+    assert(standard.contains("--Xhelp"), "the standard usage text does not say how to see the rest")
+
+    val full = Main.usageText(Main.HelpScope.Full, None, CommandLine.Help.Ansi.OFF)
+    for (name <- List("--Xdebug", "--Xlib", "--Xsummary", "--Xhelp", "Xperf", "Xmemory", "Xzhegalkin")) {
+      assert(full.contains(name), s"'$name' is missing from --Xhelp")
+    }
+  }
+
+  test("a hidden option is still an option") {
+    // The two scopes parse one language. An option a reader was once shown is one they may have
+    // saved in a script, so hiding it from the help must not refuse the line.
+    assert(Main.parseCmdOpts(Array("build", "--Xdebug")).get.xdebug)
+    assert(Main.parseCmdOpts(Array("--Xdebug", "build")).get.xdebug)
+    assert(Main.parseCmdOpts(Array("check", "--Xlib", "min")).get.xlib == LibLevel.Min)
+    // Not `--Xhelp` itself: like `--help`, it answers the line by printing and leaving, so parsing
+    // it here would take the test process with it.
+    assert(Main.rootSpec(new Main.OptsCell).findOption("--Xhelp") != null)
+  }
+
+  test("an experimental option is one whose name says so") {
+    // `isExperimental` reads the name, so a `[experimental]` description on an option named without
+    // the X would be hidden by neither scope -- and an X-named option with a plain description
+    // would vanish from the standard help without warning the reader that it is experimental.
+    val root = Main.rootSpec(new Main.OptsCell, Main.HelpScope.Full)
+    for (option <- root.options().asScala) {
+      val named = option.names().exists(_.stripPrefix("--").startsWith("X"))
+      val described = option.description().headOption.exists(_.startsWith("[experimental]"))
+      assert(named == described, s"'${option.longestName()}' marks itself experimental in one way and not the other")
     }
   }
 

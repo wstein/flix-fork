@@ -709,6 +709,9 @@ object Main {
     xbenchmarkThroughput: Boolean = false,
     xnodeprecated: Boolean = false,
     xdebug: Boolean = false,
+    // Read inside `parseCmdOpts`, which prints and leaves: it is a question about the command line
+    // rather than a setting for the run, and no command reads it back.
+    xhelp: Boolean = false,
     xlib: LibLevel = LibLevel.All,
     xprintphases: Boolean = false,
     xsummary: Boolean = false,
@@ -832,12 +835,36 @@ object Main {
 
     // Help and version answer the command line rather than running it, and say so by leaving.
     // scopt did this from inside the parser; doing it here keeps the exit in one place.
+    //
+    // `--Xhelp` is answered first, because a line carrying both asks for the longer of the two
+    // answers: it is `--help` again with nothing left out.
+    if (cell.value.xhelp) {
+      Console.out.print(usageText(HelpScope.Full, commandNameOf(parsed)))
+      System.exit(0)
+    }
     if (CommandLine.printHelpIfRequested(parsed)) {
       System.exit(0)
     }
 
     Some(cell.value.copy(command = commandOf(parsed), args = progArgs.toList))
   }
+
+  /**
+    * The usage text of `command`, or of `flix` itself, written at `scope`.
+    *
+    * Built from a spec of its own rather than from the one that parsed the line: what a usage text
+    * leaves out is decided when the spec is built, and the spec that parsed the line has to be the
+    * one that hides nothing from the parser.
+    */
+  private[flix] def usageText(scope: HelpScope, command: Option[String], ansi: CommandLine.Help.Ansi = CommandLine.Help.Ansi.AUTO): String = {
+    val commandLine = new CommandLine(rootSpec(new OptsCell, scope))
+    val target = command.flatMap(name => Option(commandLine.getSubcommands.get(name))).getOrElse(commandLine)
+    target.getUsageMessage(ansi)
+  }
+
+  /** The name of the command the line names, as picocli spells it, or `None` for bare `flix`. */
+  private def commandNameOf(parsed: CommandLine.ParseResult): Option[String] =
+    if (parsed.hasSubcommand) Some(parsed.subcommand().commandSpec().name()) else None
 
   /**
     * Returns the command the parsed line names, or `Command.None`.
@@ -999,18 +1026,51 @@ object Main {
   }
 
   /**
+    * How much of the command line a usage text describes.
+    *
+    * Only the usage text: both scopes parse the same language, since an option a reader was not
+    * shown is still an option they were once told about, and refusing it would break the line they
+    * saved. Hiding is what a help text leaves out, never what the parser accepts.
+    */
+  private[flix] sealed trait HelpScope
+
+  private[flix] object HelpScope {
+
+    /** What the command takes, without the experimental options and commands. */
+    case object Standard extends HelpScope
+
+    /** Everything, experimental included. What `--Xhelp` prints. */
+    case object Full extends HelpScope
+  }
+
+  /**
+    * True of an option or command whose name marks it experimental.
+    *
+    * The name is the marker rather than a flag beside it, because the name is the part a reader
+    * sees: `--Xdebug` says what it is wherever it is quoted, including in a bug report that quotes
+    * nothing else. `TestMain` holds the description's `[experimental]` prefix to the same rule.
+    */
+  private def isExperimental(name: String): Boolean = name.stripPrefix("--").startsWith("X")
+
+  /**
     * The whole command line, as a tree of commands.
     *
     * Global options are declared once and inherited, so `flix build --threads 4` and `flix
     * --threads 4 build` are the same line -- and so that `flix build --help` lists them, which is
     * the thing a single flat parser cannot do.
     */
-  private[flix] def rootSpec(cell: OptsCell): CommandSpec = {
+  private[flix] def rootSpec(cell: OptsCell, scope: HelpScope = HelpScope.Standard): CommandSpec = {
     val root = CommandSpec.create().name("flix")
     root.usageMessage()
       .header("The Flix Programming Language", Version.CurrentVersion.toString)
       .abbreviateSynopsis(true)
       .synopsisSubcommandLabel("[COMMAND]")
+    // A list is only worth reading if everything on it is meant for the reader, so the experimental
+    // options are off it -- and a reader who is looking for one has to be told where it went, or
+    // hiding it is indistinguishable from removing it.
+    if (scope == HelpScope.Standard) {
+      root.usageMessage().footer("Experimental options and commands are omitted. Run 'flix --Xhelp' to list them.")
+    }
     // What `--version` prints. The release workflow runs the built jar and refuses to publish it
     // unless this contains the tag being released, so a version option that prints nothing does not
     // fail here -- it fails in CI, on the one run that matters.
@@ -1074,17 +1134,21 @@ object Main {
       .required(true)
       .build())
 
+    // The experimental commands are hidden by the same scope as the experimental options, so
+    // `--Xhelp` is one answer rather than two half-answers about what else is there.
+    val hideExperimental = scope == HelpScope.Standard
+
     val xperf = command(cell, "Xperf", "benchmarks the compiler.", takesFiles = false)
-    xperf.usageMessage().hidden(true)
+    xperf.usageMessage().hidden(hideExperimental)
     xperf.addOption(flag(cell, "--frontend", "benchmark only frontend")(_.copy(XPerfFrontend = true)))
     xperf.addOption(flag(cell, "--par", "benchmark only parallel evaluation")(_.copy(XPerfPar = true)))
     xperf.addOption(perfN(cell))
 
     val xmemory = command(cell, "Xmemory", "benchmarks compiler memory use.", takesFiles = false)
-    xmemory.usageMessage().hidden(true)
+    xmemory.usageMessage().hidden(hideExperimental)
 
     val xzhegalkin = command(cell, "Xzhegalkin", "benchmarks Zhegalkin normal forms.", takesFiles = false)
-    xzhegalkin.usageMessage().hidden(true)
+    xzhegalkin.usageMessage().hidden(hideExperimental)
     xzhegalkin.addOption(perfN(cell))
 
     root.addSubcommand("init", init)
@@ -1112,7 +1176,7 @@ object Main {
     root.addSubcommand("Xmemory", xmemory)
     root.addSubcommand("Xzhegalkin", xzhegalkin)
 
-    globalOptions(cell).foreach(root.addOption)
+    globalOptions(cell, scope).foreach(root.addOption)
     root
   }
 
@@ -1134,9 +1198,16 @@ object Main {
     * `ScopeType.INHERIT` is what makes position stop mattering, and it is also what forbids a
     * command from declaring one of these names again -- which is the whole reason `metric` no
     * longer has a `--json` of its own.
+    *
+    * At `Standard` scope the experimental ones are built hidden. An inherited option carries its
+    * visibility into every command, so hiding one here hides it in twenty-four usage texts and
+    * removes it from none of the twenty-four parsers.
     */
-  private def globalOptions(cell: OptsCell): List[OptionSpec] = {
-    def global(spec: OptionSpec): OptionSpec = spec.toBuilder.scopeType(CommandLine.ScopeType.INHERIT).build()
+  private def globalOptions(cell: OptsCell, scope: HelpScope): List[OptionSpec] = {
+    def global(spec: OptionSpec): OptionSpec = {
+      val hidden = scope == HelpScope.Standard && spec.names().exists(isExperimental)
+      spec.toBuilder.scopeType(CommandLine.ScopeType.INHERIT).hidden(hidden).build()
+    }
 
     List(
       global(flag(cell, "--coverage", "enables source-level coverage instrumentation for tests.")(_.copy(coverage = true))),
@@ -1155,7 +1226,7 @@ object Main {
       // One `--json`, read by the commands whose output is either a report or a document and
       // nothing else. `metric` is not one of them: it emits five formats, so it is asked with
       // `--format`, and naming one of the five twice is what made this option two options.
-      global(flag(cell, "--json", "emits machine-readable output from 'Xbenchmark...' and 'Xmemory'.")(_.copy(json = true))),
+      global(flag(cell, "--json", "emits machine-readable output from the benchmarking commands and options.")(_.copy(json = true))),
       global(value[Integer](cell, "--listen", "<port>", classOf[Integer],
         "starts the socket server and listens on the given port.")((c, p) => c.copy(listen = Some(p.intValue())))),
       global(flag(cell, "--no-install", "disables automatic installation of dependencies.")(_.copy(installDeps = false))),
@@ -1173,6 +1244,7 @@ object Main {
       global(values[DatalogDebug](cell, "--Xdatalog-debug", "<choices>", classOf[DatalogDebug], Some(","),
         "[experimental] traces the Datalog solver (rules, facts, ram).")((c, xs) => c.copy(xdatalogDebug = c.xdatalogDebug ++ xs))),
       global(flag(cell, "--Xdebug", "[experimental] emits full debug information so a debugger can step and inspect variables.")(_.copy(xdebug = true))),
+      global(flag(cell, "--Xhelp", "[experimental] prints this usage information, with the experimental options and commands.")(_.copy(xhelp = true))),
       global(value[LibLevel](cell, "--Xlib", "<level>", classOf[LibLevel],
         "[experimental] controls the amount of std. lib. to include (nix, min, all).")((c, l) => c.copy(xlib = l))),
       global(flag(cell, "--Xno-deprecated", "[experimental] disables deprecated features.")(_.copy(xnodeprecated = true))),
