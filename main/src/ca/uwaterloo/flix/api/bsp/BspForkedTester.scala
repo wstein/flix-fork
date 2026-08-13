@@ -80,6 +80,12 @@ object BspForkedTester {
     // The runner quarantines its own standard output for the same reason, so a test's printing arrives as
     // an event rather than as a stray line.
     builder.redirectErrorStream(false)
+    // And separate is not the same as unread. A pipe nobody drains fills at about 64 KB and blocks the
+    // fork in `write` until the timeout kills it -- one GC log, one JIT warning, one stack trace from a
+    // user thread is enough. Inherited rather than drained by a thread of our own, because this server's
+    // standard *error* carries no protocol (docs/BSP.md §13: the frames are on stdout), so the fork's
+    // complaints land where a person reading the server log will see them.
+    builder.redirectError(ProcessBuilder.Redirect.INHERIT)
 
     val process = builder.start()
     process.getOutputStream.close()
