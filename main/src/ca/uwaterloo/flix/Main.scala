@@ -398,9 +398,7 @@ object Main {
           }
 
         case Command.Metric =>
-          // `--format` when it was given, `--json` when it was not, and text otherwise. The global
-          // `--json` means "emit what a program reads", and for this command that is the report.
-          val requested = cmdOpts.metricFormat.getOrElse(if (cmdOpts.json) "json" else "text")
+          val requested = metricFormatOf(cmdOpts)
           val format = Metrics.Format.ofString(requested) match {
             case Some(fmt) => fmt
             case None =>
@@ -684,8 +682,8 @@ object Main {
     coverageLcovOutput: Option[String] = None,
     canonical: Boolean = false,
     docFormat: DocFormat = Options.Default.docFormat,
-    // Absent rather than "text", so that `--json` can mean the report too without a second option
-    // of the same name deciding it by position.
+    // Absent rather than "text": what an unasked-for format resolves to is the command's decision,
+    // and a default recorded here is one the command can no longer tell from an answer.
     metricFormat: Option[String] = None,
     sarifPath: Option[String] = None,
     metricMaxLines: Option[Int] = None,
@@ -783,6 +781,20 @@ object Main {
   }
 
   /**
+    * The report format `metric` was asked for, as the word naming it.
+    *
+    * `--format` when it was given, and text otherwise. The global `--json` is not a second spelling
+    * of `--format json`: this command emits five formats, and a word that names one of them is a
+    * shorthand only for as long as nobody reaches for another.
+    *
+    * Separate from the command that reads it so that the answer is checkable without running a
+    * build: a shorthand withdrawn has to stay withdrawn, and nothing about it is visible in the
+    * parsed options.
+    */
+  private[flix] def metricFormatOf(cmdOpts: CmdOpts): String =
+    cmdOpts.metricFormat.getOrElse("text")
+
+  /**
     * Reads `args` as a command line, or reports why it is not one.
     *
     * Returns `None` when a word cannot be read, having said which and why; the caller decides that
@@ -805,7 +817,8 @@ object Main {
     commandLine.registerConverter(classOf[DocFormat], converter(readDocFormat))
     commandLine.registerConverter(classOf[DatalogDebug], converter(readDatalogDebug))
     commandLine.registerConverter(classOf[Subeffecting], converter(readSubeffecting))
-    // `--format json --json` is a caller saying the same thing twice, not a mistake to report.
+    // `--format csv --format md` is a caller changing their mind -- a line assembled by a script
+    // that appends a flag -- not a mistake to report. The last word wins.
     commandLine.setOverwrittenOptionsAllowed(true)
 
     val parsed =
@@ -870,9 +883,9 @@ object Main {
   /**
     * The options accumulated so far, written by the setter of each option as it is matched.
     *
-    * The order matters and is the reason this is a cell rather than a fold: `--format csv --json`
-    * and `--json --format csv` are different lines, and the difference is only expressible if each
-    * word is applied where it appears. picocli calls a setter once per occurrence, in that order.
+    * The order matters and is the reason this is a cell rather than a fold: a repeated option is
+    * the last word winning and a repeatable one keeps the order it was given in, so each word has
+    * to be applied where it appears. picocli calls a setter once per occurrence, in that order.
     */
   private[flix] final class OptsCell {
     var value: CmdOpts = CmdOpts()
@@ -1136,11 +1149,10 @@ object Main {
       global(value[String](cell, "--github-token", "<token>", classOf[String],
         "API key to use for GitHub dependency resolution.")((c, s) => c.copy(githubToken = Some(s)))),
       global(OptionSpec.builder("--help").usageHelp(true).description("prints this usage information.").build()),
-      // One `--json`, meaning one thing: emit what a program reads rather than what a person does.
-      // `metric` had a second option of the same name selecting its report format, which scopt
-      // resolved by position -- so `flix --json metric` printed text and `flix metric --json` left
-      // `json` false. Both now do the whole of what they say.
-      global(flag(cell, "--json", "emits machine-readable output.")(_.copy(json = true))),
+      // One `--json`, read by the commands whose output is either a report or a document and
+      // nothing else. `metric` is not one of them: it emits five formats, so it is asked with
+      // `--format`, and naming one of the five twice is what made this option two options.
+      global(flag(cell, "--json", "emits machine-readable output from 'Xbenchmark...' and 'Xmemory'.")(_.copy(json = true))),
       global(value[Integer](cell, "--listen", "<port>", classOf[Integer],
         "starts the socket server and listens on the given port.")((c, p) => c.copy(listen = Some(p.intValue())))),
       global(flag(cell, "--no-install", "disables automatic installation of dependencies.")(_.copy(installDeps = false))),

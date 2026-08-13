@@ -463,8 +463,8 @@ class TestMain extends AnyFunSuite {
   test("metric") {
     val opts = Main.parseCmdOpts(Array("metric")).get
     assert(opts.command == Main.Command.Metric)
-    // Absent, not "text": what an unasked-for format resolves to is the command's decision, and
-    // the parser recording a default here is what let `--json` be answered twice.
+    // Absent, not "text": what an unasked-for format resolves to is the command's decision, and a
+    // default recorded here is one the command can no longer tell from an answer.
     assert(opts.metricFormat.isEmpty)
   }
 
@@ -485,24 +485,28 @@ class TestMain extends AnyFunSuite {
   test("`--json` is one option, and means the same on either side of the command") {
     // It used to be two options with one name -- a global setting `json`, and a child of `metric`
     // selecting the report format -- which scopt resolved by position, so each spelling did half of
-    // what it reads as. There is now one, it is global, and `metric` reads it as the format to emit
-    // when no `--format` was given.
+    // what it reads as. There is now one, and it is global.
     for (line <- List(Array("metric", "--json"), Array("--json", "metric"))) {
       val opts = Main.parseCmdOpts(line).get
       assert(opts.command == Main.Command.Metric)
       assert(opts.json)
-      assert(opts.metricFormat.isEmpty)
     }
 
     assert(Main.parseCmdOpts(Array("build", "--json")).get.json)
   }
 
-  test("an explicit --format wins over --json, in either order") {
-    // Not "the last one wins". `--format` names a format and `--json` asks for something a program
-    // can read; the first is the more specific answer to the same question, so order does not come
-    // into it. Under scopt these two lines disagreed.
-    assert(Main.parseCmdOpts(Array("metric", "--json", "--format", "csv")).get.metricFormat.contains("csv"))
-    assert(Main.parseCmdOpts(Array("metric", "--format", "csv", "--json")).get.metricFormat.contains("csv"))
+  test("`--json` does not choose the metric report format") {
+    // `--json` is not a shorthand for `--format json`. The report has five formats and the flag
+    // names one, so the shorthand answered half of the question it appeared to answer -- and it
+    // was that second meaning of the word which made this option two options in the first place.
+    // Asserted on the resolved format, not on the parsed options: a withdrawn shorthand leaves no
+    // trace in `CmdOpts`, so a parse test alone would pass whether or not it came back.
+    for (line <- List(Array("metric", "--json"), Array("--json", "metric"))) {
+      assert(Main.metricFormatOf(Main.parseCmdOpts(line).get) == "text")
+    }
+    assert(Main.metricFormatOf(Main.parseCmdOpts(Array("metric")).get) == "text")
+    assert(Main.metricFormatOf(Main.parseCmdOpts(Array("metric", "--format", "csv")).get) == "csv")
+    assert(Main.metricFormatOf(Main.parseCmdOpts(Array("metric", "--json", "--format", "csv")).get) == "csv")
   }
 
   test("a repeated option takes the last value given") {

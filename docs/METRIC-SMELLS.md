@@ -20,8 +20,10 @@ flix metric --format md        # a ranked work plan
 flix metric --format sarif     # annotations, for a pull request
 ```
 
-`flix metric --json` and `flix --json metric` both mean `--format json`. An
-explicit `--format` wins over `--json` whichever order they are given in.
+`--format` is the only way to ask for one of these. The global `--json` does not
+select the report: it names one of five formats, which is half of the question
+`--format` asks, and a report is easier to script against when one flag decides
+it.
 
 Each smell is addressed by a program:
 
