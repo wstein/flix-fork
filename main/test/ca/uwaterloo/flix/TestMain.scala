@@ -20,6 +20,7 @@ import ca.uwaterloo.flix.api.{Bootstrap, Version}
 import ca.uwaterloo.flix.tools.pkg.ManifestParser
 import ca.uwaterloo.flix.util.{DatalogDebug, DocFormat, LibLevel, Subeffecting}
 import org.scalatest.funsuite.AnyFunSuite
+import picocli.CommandLine.Model.CommandSpec
 
 import java.io.File
 import java.nio.file.{Files, Path}
@@ -656,6 +657,20 @@ class TestMain extends AnyFunSuite {
     val version = Main.rootSpec(new Main.OptsCell).version()
     assert(version.length == 1)
     assert(version.head.contains(Version.CurrentVersion.toString))
+  }
+
+  test("`-h` is a second name for `--help`, on every command") {
+    // Asserted on the spec rather than by parsing, since a matched help option prints and exits.
+    // Every command, not just the root: a short name that works on `flix` and not on `flix build`
+    // is worse than none, because it teaches a habit that then fails.
+    def helpNames(spec: CommandSpec): Set[String] =
+      spec.options().asScala.filter(_.usageHelp()).flatMap(_.names()).toSet
+
+    val root = Main.rootSpec(new Main.OptsCell)
+    assert(helpNames(root) == Set("-h", "--help"))
+    for ((name, sub) <- root.subcommands().asScala) {
+      assert(helpNames(sub.getCommandSpec) == Set("-h", "--help"), s"'$name' does not answer to -h")
+    }
   }
 
   test("every command in the usage text is one the parser accepts") {

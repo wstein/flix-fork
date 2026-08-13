@@ -1148,7 +1148,10 @@ object Main {
         "specifies the main entry point.")((c, s) => c.copy(entryPoint = Some(s)))),
       global(value[String](cell, "--github-token", "<token>", classOf[String],
         "API key to use for GitHub dependency resolution.")((c, s) => c.copy(githubToken = Some(s)))),
-      global(OptionSpec.builder("--help").usageHelp(true).description("prints this usage information.").build()),
+      // `-h` first, so it is the name the usage text leads with. It is the one option a reader
+      // reaches for before having read anything, which is why it is also the only short name here:
+      // a letter is worth its ambiguity for the option you type when you are lost, and for no other.
+      global(OptionSpec.builder("-h", "--help").usageHelp(true).description("prints this usage information.").build()),
       // One `--json`, read by the commands whose output is either a report or a document and
       // nothing else. `metric` is not one of them: it emits five formats, so it is asked with
       // `--format`, and naming one of the five twice is what made this option two options.
