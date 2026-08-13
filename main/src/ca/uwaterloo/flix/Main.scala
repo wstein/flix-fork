@@ -1047,17 +1047,18 @@ object Main {
     * True of an option or command whose name marks it experimental.
     *
     * The name is the marker rather than a flag beside it, because the name is the part a reader
-    * sees: `--Xdebug` says what it is wherever it is quoted, including in a bug report that quotes
-    * nothing else. `TestMain` holds the description's `[experimental]` prefix to the same rule.
+    * sees: `--Xdebug` and `Xperf` say what they are wherever they are quoted, including in a bug
+    * report that quotes nothing else. `TestMain` holds the description's `[experimental]` prefix to
+    * the same rule, so an option cannot be experimental in its name and stable in its description.
     */
   private def isExperimental(name: String): Boolean = name.stripPrefix("--").startsWith("X")
 
   /**
-    * The whole command line, as a tree of commands.
+    * The whole command line, as a tree of commands, described to the depth `scope` asks for.
     *
-    * Global options are declared once and inherited, so `flix build --threads 4` and `flix
-    * --threads 4 build` are the same line -- and so that `flix build --help` lists them, which is
-    * the thing a single flat parser cannot do.
+    * Every command takes the global options as well as its own, so `flix build --threads 4` and
+    * `flix --threads 4 build` are the same line -- which is the thing a single flat parser cannot
+    * do. Which of them a usage text *lists* is [[addGlobalOptions]]'s decision, and no parser's.
     */
   private[flix] def rootSpec(cell: OptsCell, scope: HelpScope = HelpScope.Standard): CommandSpec = {
     val root = CommandSpec.create().name("flix")
@@ -1134,21 +1135,14 @@ object Main {
       .required(true)
       .build())
 
-    // The experimental commands are hidden by the same scope as the experimental options, so
-    // `--Xhelp` is one answer rather than two half-answers about what else is there.
-    val hideExperimental = scope == HelpScope.Standard
-
     val xperf = command(cell, "Xperf", "benchmarks the compiler.", takesFiles = false)
-    xperf.usageMessage().hidden(hideExperimental)
     xperf.addOption(flag(cell, "--frontend", "benchmark only frontend")(_.copy(XPerfFrontend = true)))
     xperf.addOption(flag(cell, "--par", "benchmark only parallel evaluation")(_.copy(XPerfPar = true)))
     xperf.addOption(perfN(cell))
 
     val xmemory = command(cell, "Xmemory", "benchmarks compiler memory use.", takesFiles = false)
-    xmemory.usageMessage().hidden(hideExperimental)
 
     val xzhegalkin = command(cell, "Xzhegalkin", "benchmarks Zhegalkin normal forms.", takesFiles = false)
-    xzhegalkin.usageMessage().hidden(hideExperimental)
     xzhegalkin.addOption(perfN(cell))
 
     root.addSubcommand("init", init)
@@ -1175,6 +1169,15 @@ object Main {
     root.addSubcommand("Xperf", xperf)
     root.addSubcommand("Xmemory", xmemory)
     root.addSubcommand("Xzhegalkin", xzhegalkin)
+
+    // A command is hidden by the same rule as an option, and by reading the same name, so `--Xhelp`
+    // is one answer about what else is there rather than two half-answers -- and a command added
+    // later is covered by having been named `X...`, which is where the claim was made anyway.
+    if (scope == HelpScope.Standard) {
+      for ((name, sub) <- root.subcommands().asScala if isExperimental(name)) {
+        sub.getCommandSpec.usageMessage().hidden(true)
+      }
+    }
 
     addGlobalOptions(cell, root, scope)
     root
