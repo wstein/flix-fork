@@ -102,4 +102,17 @@ case class Version(major: Int, minor: Int, revision: Int, qualifier: Option[Stri
     * qualifier exists for.
     */
   def manifestString: String = s"$major.$minor.$revision"
+
+  /**
+    * True when this build cannot say which version of Flix it is.
+    *
+    * `0.0.0` is what [[Version.parseDescribe]] falls back to when `git describe` found no reachable
+    * release tag -- a shallow clone, a source archive with no `.git`, or a CI checkout that did not
+    * fetch tags. No release is `0.0.0`, so the number is unambiguous as a marker.
+    *
+    * It has to be *asked*, because a build that does not know its version is not a build that is
+    * older than everything: comparing it as `0.0.0` makes every version requirement look
+    * unsatisfied, which is the opposite of what not knowing means.
+    */
+  def isUnknown: Boolean = major == 0 && minor == 0 && revision == 0
 }

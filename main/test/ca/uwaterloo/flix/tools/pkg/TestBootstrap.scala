@@ -52,10 +52,38 @@ class TestBootstrap extends AnyFunSuite {
 
     Bootstrap.bootstrap(p, None)(Formatter.NoFormatter, System.out) match {
       case Result.Err(e: BootstrapError.IncompatibleFlixVersion) =>
+        assert(!Version.CurrentVersion.isUnknown, "the check fired on a build that does not know its own version")
         val text = e.message(Formatter.NoFormatter)
         assert(text.contains("999.0.0"), s"the error does not say what was required:\n$text")
         assert(text.contains(Version.CurrentVersion.toString), s"the error does not say what is running:\n$text")
-      case other => fail(s"Expected the project to be refused, but found: $other")
+      case other =>
+        // Both outcomes are correct, and which one is right depends on the build rather than on the
+        // project: a compiler built without reachable tags does not know its version and does not
+        // check. Asserted as two answers rather than skipped, since a test that cancels itself in
+        // half the builds reports green while proving nothing there.
+        assert(Version.CurrentVersion.isUnknown, s"Expected the project to be refused, but found: $other")
+    }
+  }
+
+  test("a compiler that does not know its version does not refuse anything") {
+    // `0.0.0` is what a shallow clone, a source archive, or a CI checkout without tags produces.
+    // Comparing it as a number makes every floor look unsatisfied, so every community project
+    // stopped building the moment the check was added -- which is how this was found.
+    val required = requiring(SemVer(0, 75, 1))
+    assert(Bootstrap.checkFlixVersion(List(required), Version(0, 0, 0, Some("unknown"))).isInstanceOf[Result.Ok[?, ?]])
+    assert(Bootstrap.checkFlixVersion(List(required), Version(0, 0, 0, Some("v.0.9.0"))).isInstanceOf[Result.Ok[?, ?]])
+  }
+
+  test("the version check compares the numbers, and not the fork qualifier") {
+    val required = requiring(SemVer(0, 75, 1))
+    val forkBuild = Version(0, 75, 1, Some("fork.wstein.260807.1.45.gd3f36dbc3"))
+
+    assert(Bootstrap.checkFlixVersion(List(required), forkBuild).isInstanceOf[Result.Ok[?, ?]])
+    assert(Bootstrap.checkFlixVersion(List(required), Version(0, 75, 2)).isInstanceOf[Result.Ok[?, ?]])
+    Bootstrap.checkFlixVersion(List(required), Version(0, 75, 0)) match {
+      case Result.Err(e: BootstrapError.IncompatibleFlixVersion) =>
+        assert(e.message(Formatter.NoFormatter).contains("0.75.1"))
+      case other => fail(s"Expected 0.75.0 to be too old for 0.75.1, but found: $other")
     }
   }
 
@@ -84,6 +112,10 @@ class TestBootstrap extends AnyFunSuite {
       case _ => succeed
     }
   }
+
+  /** A manifest whose only interesting field is the compiler version it requires. */
+  private def requiring(flix: SemVer): Manifest =
+    Manifest("some-package", "a package", SemVer(1, 0, 0), None, PackageModules.All, flix, None, Nil, Nil)
 
   /** Rewrites the `flix` field of the manifest at `p` to `version`. */
   private def requireFlixVersion(p: Path, version: String): Unit = {

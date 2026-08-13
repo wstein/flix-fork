@@ -425,13 +425,13 @@ object Bootstrap {
       |""".stripMargin
 
   /**
-    * The version of the running compiler, in the form a manifest states versions.
+    * `version` in the form a manifest states versions.
     *
     * The fork qualifier is dropped rather than compared: it records which build this is, not which
     * language it speaks, and ordering by it would make one fork's build look older than another's.
     */
-  private val currentFlixVersion: SemVer =
-    SemVer(Version.CurrentVersion.major, Version.CurrentVersion.minor, Version.CurrentVersion.revision)
+  private def manifestVersionOf(version: Version): SemVer =
+    SemVer(version.major, version.minor, version.revision)
 
   /**
     * Checks that every package in `manifests` can be built by the running compiler.
@@ -443,14 +443,26 @@ object Bootstrap {
     *
     * Every incompatible package is reported rather than the first, so that one upgrade can be
     * chosen knowing everything it has to satisfy.
+    *
+    * A compiler that does not know its own version does not check. `current` is `0.0.0` for a build
+    * whose `git describe` found no release tag -- a shallow clone, a source archive, a CI checkout
+    * without tags -- and comparing that as a number refuses every package that states any floor at
+    * all. "I cannot tell" is not "I am too old": the check exists to replace a confusing failure
+    * with a clear one, and a refusal on no evidence is a third thing, worse than either.
+    *
+    * Takes the version rather than reading it, so that all four answers are testable without a
+    * build of the compiler that has each one.
     */
-  private def checkFlixVersion(manifests: List[Manifest]): Result[Unit, BootstrapError] = {
+  private[flix] def checkFlixVersion(manifests: List[Manifest], current: Version): Result[Unit, BootstrapError] = {
+    if (current.isUnknown) {
+      return Result.Ok(())
+    }
     val tooNew = manifests
-      .filter(m => SemVer.semVerOrdering.gt(m.flix, currentFlixVersion))
+      .filter(m => SemVer.semVerOrdering.gt(m.flix, manifestVersionOf(current)))
       .sortBy(_.name)
     tooNew match {
       case Nil => Result.Ok(())
-      case m :: _ => Result.Err(BootstrapError.IncompatibleFlixVersion(m.name, m.flix, Version.CurrentVersion))
+      case m :: _ => Result.Err(BootstrapError.IncompatibleFlixVersion(m.name, m.flix, current))
     }
   }
 
@@ -866,10 +878,10 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
       manifest <- Steps.parseManifest(tomlPath)
       // Before anything is downloaded: a compiler that cannot build this project should say so
       // rather than spend a request per dependency first.
-      _ <- Bootstrap.checkFlixVersion(List(manifest))
+      _ <- Bootstrap.checkFlixVersion(List(manifest), Version.CurrentVersion)
       deps <- Steps.resolveFlixDependencies(manifest)
       // And again once the dependencies are known, since each states a floor of its own.
-      _ <- Bootstrap.checkFlixVersion(deps.manifests)
+      _ <- Bootstrap.checkFlixVersion(deps.manifests, Version.CurrentVersion)
       _ <- Steps.installDependencies(deps)
       _ = Steps.addLocalFlixFiles()
     } yield {

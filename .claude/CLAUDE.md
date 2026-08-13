@@ -1032,6 +1032,15 @@ version against the tag. That version is derived at build time by `gitDescribe` 
 - The checkout uses `fetch-depth: 0`. Without tag history `git describe` finds nothing
   and the build stamps itself `unknown`.
 
+**Every workflow whose jar then builds a project needs those tags too**, and this is
+not only about what `--version` prints. A project's `flix.toml` states the oldest
+compiler it builds with, and `Bootstrap.checkFlixVersion` compares it against the
+running one — so a jar built without tags reports `0.0.0` and refuses every project
+that states any floor at all. That is what took the whole community build red the day
+the check was merged, in a workflow nobody had thought of as version-sensitive. The
+check now stands down when `Version.isUnknown`, because *cannot tell* is not *too
+old*; the tags are fetched so that it can tell.
+
 This fork publishes no Maven artifacts at all, and `build.mill` deliberately does not mix
 in `PublishModule`: there is no POM, no coordinate, and nothing to keep in sync with a
 registry. Adding one back means adding the module, `pomSettings`, and `publishVersion`
