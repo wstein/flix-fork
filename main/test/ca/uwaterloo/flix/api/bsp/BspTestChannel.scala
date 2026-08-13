@@ -63,15 +63,20 @@ object BspTestChannel {
   }
 
   /**
-    * Silences lsp4j's report that the stream it was reading has closed.
+    * Silences lsp4j's report that the stream it was reading has closed, and nothing louder.
     *
     * Closing the pipe is how a suite ends a session, so the report is expected -- but it arrives through
     * `java.util.logging` at INFO with a full stack trace, once per session, and a suite that opens dozens
     * buries its own output under them. Suppressed here rather than in the server, because in production
     * that same report is the only notice that a client vanished.
+    *
+    * `WARNING` and not `OFF`: the same logger carries "Unsupported notification method" and every
+    * complaint about a message lsp4j could not deserialize, which is the only channel that answers
+    * empirically what a client makes of what this server sends. Turning it off turns off the evidence
+    * along with the noise.
     */
   private def quietEndOfStream(): Unit =
-    Logger.getLogger("org.eclipse.lsp4j.jsonrpc").setLevel(Level.OFF)
+    Logger.getLogger("org.eclipse.lsp4j.jsonrpc").setLevel(Level.WARNING)
 
   /** Opens a fresh connection. */
   def open(): Channel = {

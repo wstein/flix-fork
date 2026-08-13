@@ -1774,6 +1774,18 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
           "no test record for the build on disk; run a build before asking for its tests"))
 
       case Some(manifest) =>
+        // Said, and not acted on. The fingerprint cannot be compared here -- this process would compute
+        // it under its own options and disagree with the parent that wrote it, for reasons no user
+        // caused -- but the source digest is about the sources' contents alone, so the two processes
+        // agree whenever the sources do. On the server path they always do, and this is silent.
+        //
+        // `--reuse-build` is a public flag, so the caller need not be a build server that has just
+        // built. A user who edits a source and reuses the previous build gets a green run over the
+        // previous build's classes, which is the worst outcome a test runner has. Reported rather than
+        // refused, because doing the work anyway is what the flag asks for.
+        if (manifest.sourcesDigest != BuildManifest.digestOfSources(projectPath, sourcePaths)) {
+          println("Note: the build on disk was made from different sources; its tests are the ones that ran.")
+        }
         // An empty table is taken at its word here, unlike on the path that may be reading a record from
         // an older build. The caller has just built, and every successful build rewrites this file, so
         // "no tests" is what the build found rather than something it failed to write down. A project
