@@ -1,6 +1,14 @@
 # Changelog
 
 Unreleased:
+- BSP: A program's output reaches a client on BSP 2.1 again. `run/printStdout` arrived in 2.2 and a 2.1 client has no method to receive it, so the output was lost rather than shown elsewhere; the channel is now chosen from the version the client declares.
+- BSP: `buildTarget/run` honours `workingDirectory` and `environmentVariables`, which were accepted and dropped.
+- BSP: The forked test runner's standard error is drained, so a fork that writes more than a pipeful no longer blocks until the timeout.
+- BSP: A test run that produced no events says so, instead of showing an empty test tree.
+- BSP: A test's output is decoded as UTF-8 rather than one byte per character.
+- BSP: `flix bsp` serves the Build Server Protocol on stdio, so an editor can drive a real Flix build; `flix bsp-install` writes `.bsp/flix.json` so a client can find it. Two commands rather than one with a flag, since a flag would also be accepted while serving, and writing a JSON document onto the protocol stream is the failure the endpoint is arranged to avoid.
+- Build: `check`, `build`, `run` and `test` answer from the last successful build when the sources and the `--lib` jars have not changed, and say so rather than printing nothing. `--clean` does the work regardless, and is declared on those four plus `build-jar` and `build-fatjar`, where it empties the output directory first for a reproducible release.
+- CLI: `flix run` exits with the program's own exit code. A program that failed and a compiler that could not build one are different outcomes, and a script has to tell them apart.
 - Compiler: `@Export`ed functions may now return `Option[t]`, which is converted to a `java.util.Optional` at the boundary. The element type is declared in the method's `Signature`, so callers see `Optional<String>` rather than a raw `Optional`; a primitive element is boxed.
 - Compiler: Generated classes are now named beside their namespace class (`Acme.Api$Def$get`) instead of beneath it (`Acme.Api.Def$get`), so a namespace never denotes both a class and a package. Exported functions are now reachable from Scala and Kotlin, which rejected the former layout.
 - Compiler: Monomorphized enum-case JVM class names now replace fresh identifiers with XXH3-64/Base58 components.
