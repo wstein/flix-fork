@@ -1,6 +1,8 @@
 # Changelog
 
 Unreleased:
+- CLI: Every command now has its own help. `flix build --help` lists what `build` accepts; it used to reprint the whole of `flix --help`, byte for byte, for all twenty-four commands.
+- CLI: `--json` is one option again. It was declared twice -- globally, and under `metric` where it selected the report format -- and which one a word meant depended on whether it came before or after the command, so `flix --json metric` printed a text report and `flix metric --json` left `json` unset. Both now do the whole of what they say, and an explicit `--format` wins over `--json` in either order.
 - Compiler: `@Export`ed functions may now return `Option[t]`, which is converted to a `java.util.Optional` at the boundary. The element type is declared in the method's `Signature`, so callers see `Optional<String>` rather than a raw `Optional`; a primitive element is boxed.
 - Compiler: Generated classes are now named beside their namespace class (`Acme.Api$Def$get`) instead of beneath it (`Acme.Api.Def$get`), so a namespace never denotes both a class and a package. Exported functions are now reachable from Scala and Kotlin, which rejected the former layout.
 - Compiler: Monomorphized enum-case JVM class names now replace fresh identifiers with XXH3-64/Base58 components.

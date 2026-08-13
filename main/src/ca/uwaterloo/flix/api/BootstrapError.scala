@@ -18,7 +18,7 @@ package ca.uwaterloo.flix.api
 import ca.uwaterloo.flix.language.CompilationMessage
 import ca.uwaterloo.flix.language.ast.{Scheme, SourceLocation, TypedAst}
 import ca.uwaterloo.flix.tools.pkg
-import ca.uwaterloo.flix.tools.pkg.{ManifestError, PackageError}
+import ca.uwaterloo.flix.tools.pkg.{ManifestError, PackageError, SemVer}
 import ca.uwaterloo.flix.util.Formatter
 
 sealed trait BootstrapError {
@@ -66,6 +66,27 @@ object BootstrapError {
 
   case class FileError(e: String) extends BootstrapError {
     override def message(f: Formatter): String = e
+  }
+
+  /**
+    * An error raised when a package requires a newer compiler than the one running.
+    *
+    * An error rather than a warning because Flix has no warnings -- every diagnostic is an error --
+    * and because the alternative to stopping is compiling a package against a language that does
+    * not yet have what it was written for, which fails later and less clearly.
+    *
+    * @param packageName the package whose `flix` field is not satisfied.
+    * @param required    the oldest compiler that package declares itself compatible with.
+    * @param current     the version of the running compiler.
+    */
+  case class IncompatibleFlixVersion(packageName: String, required: SemVer, current: Version) extends BootstrapError {
+    override def message(f: Formatter): String =
+      s"""The package ${f.bold(packageName)} requires Flix ${f.bold(required.toString)} or newer.
+         |This is Flix ${f.bold(current.toString)}.
+         |
+         |  Either upgrade Flix, or lower the ${f.bold("flix")} field in its ${f.bold("flix.toml")} if the
+         |  package does in fact build with this version.
+         |""".stripMargin
   }
 
   case class GeneralError(e: String) extends BootstrapError {

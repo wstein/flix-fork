@@ -48,7 +48,7 @@ object flix extends ScalaModule {
     mvn"org.ow2.asm:asm:9.9.1",
     mvn"org.commonmark:commonmark:0.24.0",
     mvn"org.commonmark:commonmark-ext-gfm-tables:0.24.0",
-    mvn"com.github.scopt::scopt:4.1.0",
+    mvn"info.picocli:picocli:4.7.7",
     mvn"org.apache.commons:commons-lang3:3.20.0",
     mvn"io.get-coursier::coursier:2.1.24",
     mvn"org.tomlj:tomlj:1.1.1",            // determines antlr version

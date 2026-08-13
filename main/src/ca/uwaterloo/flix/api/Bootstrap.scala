@@ -27,7 +27,7 @@ import ca.uwaterloo.flix.runtime.shell.FileWatcher
 import ca.uwaterloo.flix.tools.Tester
 import ca.uwaterloo.flix.tools.fmt.PrettyPrinter
 import ca.uwaterloo.flix.tools.pkg.github.GitHub
-import ca.uwaterloo.flix.tools.pkg.{FlixPackageManager, JarPackageManager, Manifest, ManifestParser, MavenPackageManager, PackageModules, ReleaseError}
+import ca.uwaterloo.flix.tools.pkg.{FlixPackageManager, JarPackageManager, Manifest, ManifestParser, MavenPackageManager, PackageModules, ReleaseError, SemVer}
 import ca.uwaterloo.flix.util.Result.{Err, Ok}
 import ca.uwaterloo.flix.util.collection.ListMap
 import ca.uwaterloo.flix.util.{Build, FileOps, Formatter, Result}
@@ -144,7 +144,7 @@ object Bootstrap {
         s"name        = \"$packageName\"",
         s"description = \"${escapeTomlString(options.description)}\"",
         "version     = \"0.1.0\"",
-        s"flix        = \"${Version.CurrentVersion}\""
+        s"flix        = \"${Version.CurrentVersion.manifestString}\""
       ) ++ options.license.spdxId.map(id => s"license     = \"$id\"") ++ List(
         s"authors     = [\"${escapeTomlString(options.author)}\"]"
       )
@@ -420,6 +420,36 @@ object Bootstrap {
       |
       |Read and follow [`AGENTS.md`](../AGENTS.md) for this project's commands, layout, and Flix guidance.
       |""".stripMargin
+
+  /**
+    * The version of the running compiler, in the form a manifest states versions.
+    *
+    * The fork qualifier is dropped rather than compared: it records which build this is, not which
+    * language it speaks, and ordering by it would make one fork's build look older than another's.
+    */
+  private val currentFlixVersion: SemVer =
+    SemVer(Version.CurrentVersion.major, Version.CurrentVersion.minor, Version.CurrentVersion.revision)
+
+  /**
+    * Checks that every package in `manifests` can be built by the running compiler.
+    *
+    * A manifest's `flix` field states the oldest compiler that package is compatible with, so a
+    * package asking for a newer one cannot be built here. Until now the field was parsed, written
+    * by `init`, and never read, which meant a project pinned to a language feature it needed failed
+    * somewhere in the middle of type checking instead of at the point the requirement was stated.
+    *
+    * Every incompatible package is reported rather than the first, so that one upgrade can be
+    * chosen knowing everything it has to satisfy.
+    */
+  private def checkFlixVersion(manifests: List[Manifest]): Result[Unit, BootstrapError] = {
+    val tooNew = manifests
+      .filter(m => SemVer.semVerOrdering.gt(m.flix, currentFlixVersion))
+      .sortBy(_.name)
+    tooNew match {
+      case Nil => Result.Ok(())
+      case m :: _ => Result.Err(BootstrapError.IncompatibleFlixVersion(m.name, m.flix, Version.CurrentVersion))
+    }
+  }
 
   /** The class file extension. Does not contain leading '.' */
   private val EXT_CLASS: String = "class"
@@ -720,7 +750,12 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
     val tomlPath = Bootstrap.getManifestFile(projectPath)
     for {
       manifest <- Steps.parseManifest(tomlPath)
+      // Before anything is downloaded: a compiler that cannot build this project should say so
+      // rather than spend a request per dependency first.
+      _ <- Bootstrap.checkFlixVersion(List(manifest))
       deps <- Steps.resolveFlixDependencies(manifest)
+      // And again once the dependencies are known, since each states a floor of its own.
+      _ <- Bootstrap.checkFlixVersion(deps.manifests)
       _ <- Steps.installDependencies(deps)
       _ = Steps.addLocalFlixFiles()
     } yield {
