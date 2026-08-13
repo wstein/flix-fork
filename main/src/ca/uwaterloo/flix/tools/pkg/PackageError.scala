@@ -17,7 +17,7 @@ package ca.uwaterloo.flix.tools.pkg
 
 import ca.uwaterloo.flix.language.ast.shared.SecurityContext
 import ca.uwaterloo.flix.tools.pkg.Dependency.FlixDependency
-import ca.uwaterloo.flix.tools.pkg.github.GitHub.{Asset, Project}
+import ca.uwaterloo.flix.tools.pkg.github.GitHub.Project
 import ca.uwaterloo.flix.util.Formatter
 
 import java.io.IOException
@@ -31,9 +31,158 @@ sealed trait PackageError {
 }
 
 object PackageError {
+  /**
+    * An error raised when the GitHub API refuses a request, which for an anonymous caller means the
+    * hourly limit is spent.
+    *
+    * The reset time is reported because it is the only thing that makes the error actionable: the
+    * answer is to wait, or to authenticate, and without a time neither is a decision anyone can
+    * make.
+    */
+  case class ApiRateLimited(project: Project, url: URL, resetAt: Option[Long]) extends PackageError {
+    override def message(f: Formatter): String = {
+      val when = resetAt
+        .map(epochSeconds => s"The limit resets at ${f.bold(java.time.Instant.ofEpochSecond(epochSeconds).toString)}.")
+        .getOrElse("")
+      s"""GitHub refused the request for ${f.bold(project.toString)}: the API rate limit is spent.
+         |$when
+         |Set a token with ${f.bold("--github-token")} to raise the limit.
+         |Asked at ${f.cyan(url.toString)}.
+         |""".stripMargin
+    }
+  }
+
+  /**
+    * An error raised when the GitHub API refuses a request for a reason other than a spent limit.
+    *
+    * A private repository, a repository that does not exist, and a token without the rights to see
+    * it all answer this way. Reporting it as a rate limit would tell someone to wait an hour for
+    * something waiting cannot fix.
+    */
+  case class ApiForbidden(project: Project, url: URL) extends PackageError {
+    override def message(f: Formatter): String =
+      s"""GitHub refused access to ${f.bold(project.toString)}.
+         |The repository may be private, or may not exist. If it is private, supply a token with
+         |${f.bold("--github-token")} that is allowed to read it.
+         |Asked at ${f.cyan(url.toString)}.
+         |""".stripMargin
+  }
+
   case class VersionDoesNotExist(version: SemVer, project: Project) extends PackageError {
     override def message(f: Formatter): String =
       s"Version ${f.bold(version.toString)} does not exist for project ${f.bold(project.toString)}"
+  }
+
+  case class NoSuchFile(project: String, extension: String) extends PackageError {
+    override def message(f: Formatter): String =
+      s"""There are no files in project '${f.bold(project)}' with extension '${f.bold(s".$extension")}'.
+         |""".stripMargin
+  }
+
+  case class TooManyFiles(project: String, extension: String) extends PackageError {
+    override def message(f: Formatter): String =
+      s"""There are too many files in project '${f.bold(project)}' with extension '${f.bold(s".$extension")}'.
+         |There should only be one $extension file in each project.
+         |""".stripMargin
+  }
+
+  /**
+    * An error raised when a release asset is not where its address says it should be.
+    *
+    * A download of an exact version is built from the version and the asset name, so a 404 says one
+    * of two things and cannot say which: the release does not exist, or it exists without this
+    * asset. The message names both possibilities and the address, rather than guessing.
+    */
+  case class ReleaseAssetNotFound(project: Project, version: SemVer, assetName: String, url: URL) extends PackageError {
+    override def message(f: Formatter): String =
+      s"""Could not find ${f.bold(assetName)} in release ${f.bold(s"v$version")} of ${f.bold(project.toString)}.
+         |Either the release does not exist, or it does not publish that file.
+         |Looked at ${f.cyan(url.toString)}.
+         |""".stripMargin
+  }
+
+  /**
+    * An error raised when a download is refused, which for an anonymous request usually means a
+    * rate limit.
+    */
+  case class DownloadRefused(url: URL, status: Int, retryAfter: Option[String]) extends PackageError {
+    override def message(f: Formatter): String = {
+      val when = retryAfter.map(s => s"Retry after $s seconds.").getOrElse("This is usually a rate limit.")
+      s"""Refused (HTTP ${f.red(status.toString)}) by ${f.cyan(url.toString)}.
+         |$when
+         |""".stripMargin
+    }
+  }
+
+  /**
+    * An error raised when a download answers with a status that is neither success nor a refusal.
+    */
+  case class DownloadFailed(url: URL, status: Int) extends PackageError {
+    override def message(f: Formatter): String = {
+      val detail =
+        if (status >= 300 && status < 400) "The address redirected somewhere that could not be followed."
+        else "Unexpected response."
+      s"""Could not download ${f.cyan(url.toString)}: HTTP ${f.red(status.toString)}.
+         |$detail
+         |""".stripMargin
+    }
+  }
+
+  /**
+    * An error raised when a download never reached a server at all.
+    */
+  case class DownloadUnreachable(url: URL, message: String) extends PackageError {
+    override def message(f: Formatter): String =
+      s"""Could not reach ${f.cyan(url.toString)}.
+         |$message
+         |""".stripMargin
+  }
+
+  /**
+    * An error raised when a download does not match the digest published beside it.
+    *
+    * The file is discarded rather than installed: a package that does not hash to what its
+    * publisher said it does is not the package that was asked for, whether it was corrupted in
+    * transit or replaced.
+    */
+  case class ChecksumMismatch(project: Project, version: SemVer, assetName: String, expected: String, actual: String) extends PackageError {
+    override def message(f: Formatter): String =
+      s"""${f.bold(assetName)} from release ${f.bold(s"v$version")} of ${f.bold(project.toString)} is not what was published.
+         |Expected sha256 ${f.green(expected)}
+         |but downloaded ${f.red(actual)}.
+         |The download was discarded.
+         |""".stripMargin
+  }
+
+  /**
+    * An error raised when a download stops short of the length the server promised.
+    */
+  case class DownloadTruncated(project: Project, version: SemVer, assetName: String, expected: Long, actual: Long) extends PackageError {
+    override def message(f: Formatter): String =
+      s"""${f.bold(assetName)} from release ${f.bold(s"v$version")} of ${f.bold(project.toString)} arrived incomplete.
+         |Expected ${f.green(s"$expected bytes")} but received ${f.red(s"$actual bytes")}.
+         |The download was discarded.
+         |""".stripMargin
+  }
+
+  /**
+    * An error raised when a published checksum cannot be read.
+    */
+  case class ChecksumUnreadable(project: Project, version: SemVer, assetName: String, url: URL) extends PackageError {
+    override def message(f: Formatter): String =
+      s"""The checksum published for ${f.bold(assetName)} in release ${f.bold(s"v$version")} of ${f.bold(project.toString)} is empty.
+         |Read from ${f.cyan(url.toString)}.
+         |""".stripMargin
+  }
+
+  /**
+    * An error raised when a download was served but could not be written to disk.
+    */
+  case class DownloadIncomplete(project: Project, version: SemVer, assetName: String, message: Option[String]) extends PackageError {
+    override def message(f: Formatter): String =
+      s"""Could not save ${f.bold(assetName)} from release ${f.bold(s"v$version")} of ${f.bold(project.toString)}.
+         |${message.getOrElse("The file was not created.")}
+         |""".stripMargin
   }
 
   case class InvalidProjectName(projectString: String) extends PackageError {
@@ -60,18 +209,6 @@ object PackageError {
          |""".stripMargin
   }
 
-  case class DownloadError(asset: Asset, message: Option[String]) extends PackageError {
-    override def message(f: Formatter): String =
-      s"""A download error occurred while downloading ${f.bold(asset.name)}
-         |${
-        message match {
-          case Some(e) => e
-          case None => ""
-        }
-      }
-         |""".stripMargin
-  }
-
   case class DownloadErrorJar(url: String, fileName: String, message: Option[String]) extends PackageError {
     override def message(f: Formatter): String =
       s"""A download error occurred while downloading ${f.bold(fileName)} from $url
@@ -88,19 +225,6 @@ object PackageError {
     override def message(f: Formatter): String =
       s"""An error occurred with Coursier:
          |$errorMsg
-         |""".stripMargin
-  }
-
-  case class NoSuchFile(project: String, extension: String) extends PackageError {
-    override def message(f: Formatter): String =
-      s"""There are no files in project '${f.bold(project)}' with extension '${f.bold(s".$extension")}'.
-         |""".stripMargin
-  }
-
-  case class TooManyFiles(project: String, extension: String) extends PackageError {
-    override def message(f: Formatter): String =
-      s"""There are too many files in project '${f.bold(project)}' with extension '${f.bold(s".$extension")}'.
-         |There should only be one $extension file in each project.
          |""".stripMargin
   }
 

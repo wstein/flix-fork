@@ -75,6 +75,84 @@ wrong:
 - `max_line_length = off`. Some editors read a width as an instruction to
   hard-wrap, which reformats code without understanding it.
 
+## Dependency Downloads
+
+Installing a dependency fetches two files from a GitHub release, and **the
+address of each is computed rather than looked up**. Asking the REST API for a
+release listing in order to rediscover a URL cost one request per file, and
+anonymous REST traffic is capped at 60 requests an hour per address — which is
+why bootstrapping a project with a handful of dependencies used to fail, and why
+`./mill flix.testPackageManager` used to report a double-digit number of
+failures whose count changed between runs.
+
+What is computable and what is not is the thing to understand before changing
+`FlixPackageManager.install`:
+
+- The **manifest** is always `flix.toml`. `Bootstrap.release` uploads the
+  project's manifest unchanged, so this holds for every package ever published.
+  Resolving a dependency graph — the recursive phase, one manifest per
+  transitive dependency — therefore reads no API at all.
+- The **package** is `<repo>.fpkg` *for releases made by a current compiler*.
+  It did not used to be: `release` uploaded whatever `getPkgFile` named the file
+  after, which is the directory it was built in. `AssetSource.NamedOrLookedUp`
+  therefore tries two computed names before spending a request — the repository
+  name, which is not a guess for anything published from now on, then the
+  manifest's `name`, which is what the old `release` effectively used. The
+  measured hit rates are tabulated on that type; read them before touching the
+  order.
+
+Neither name is guaranteed, so the listing has to stay:
+`flix-test-pkg-trust-transitive-plain` declares
+`name = "test-pkg-trust-transitive-java"` and publishes
+`test-pkg-trust-transitive-plain.fpkg`. Do not "simplify" the fallback away.
+Guesses are cheap only because they are unmetered — a candidate costs a plain
+404, the listing costs rate-limited quota — so adding a *third* guess needs
+evidence that it hits, not a symmetry argument.
+
+`getReleases` is the only function that spends REST quota. Two paths reach it:
+`outdated`, which genuinely needs metadata, and the legacy half of the package
+lookup above. `outdated` goes through `ReleaseCache`, which answers from a
+per-user copy inside a fifteen minute window, revalidates with an entity tag
+past it, and falls back to a stale listing — saying so — when the limit is
+spent. A refusal that is *not* a rate limit never gets that fallback: waiting
+does not fix a repository nobody may read, which is why `fetchReleases` reads
+`x-ratelimit-remaining` before deciding between `ApiRateLimited` and
+`ApiForbidden`.
+
+Downloading is deliberately strict, and each rule is there for a failure that
+otherwise installs something:
+
+- **Only `200` is a download.** A `204` is a success with nothing in it, and
+  accepting it caches an empty file as a package.
+- **Nothing lands on the final path until it is whole.** The bytes go to a
+  temp file with a name of its own — not `<asset>.part`, which two concurrent
+  builds would fight over — and are checked against `Content-Length` and, when
+  the release publishes one, the SHA-256 beside it, before an atomic move.
+  `AtomicMoveNotSupportedException` falls back to a plain move rather than
+  refusing to install on filesystems that lack it.
+- **A cache hit is checked, not assumed.** Every install writes a receipt next
+  to the asset; `cacheState` re-hashes against it, so a file truncated by an
+  older version is replaced instead of trusted forever. An asset without a
+  receipt predates them and is reported as unverified rather than silently
+  believed.
+- **Checksums are parsed strictly** — 64 hex characters, and the optional
+  filename must match the asset. Loose parsing turns broken metadata into a
+  digest mismatch, which sends the reader to inspect the package instead of the
+  release.
+
+The shared `HttpClient` follows redirects because a release download address
+redirects to storage (Java's default is to follow nothing), and carries connect
+and request timeouts so a stalled connection cannot hang a build forever. An
+`InterruptedException` restores the interrupt flag before returning.
+
+**Test the network layer offline.** `TestGitHubDownload` serves every status
+from a local `HttpServer`, and `TestReleaseCache` supplies responses through
+`ReleaseCache.Fetch`. Neither touches GitHub — a suite that spends the rate
+limit to test rate-limit handling is self-defeating, and the interesting
+responses (304, 403, an unfollowable redirect) cannot be asked for on demand
+anyway. `TestFlixPackageManager` still uses the real registry, which is what
+keeps the URL shapes honest.
+
 ## Source Code Formatting
 
 `flix format` parses `.flix` sources and rewrites them through

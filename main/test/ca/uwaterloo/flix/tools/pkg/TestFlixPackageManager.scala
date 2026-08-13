@@ -56,7 +56,7 @@ class TestFlixPackageManager extends AnyFunSuite with BeforeAndAfter {
       }
 
       val path = Files.createTempDirectory("")
-      val resolution = FlixPackageManager.findTransitiveDependencies(manifest, path, PkgTestUtils.gitHubToken).map(FlixPackageManager.resolveSecurityLevels) match {
+      val resolution = FlixPackageManager.findTransitiveDependencies(manifest, path).map(FlixPackageManager.resolveSecurityLevels) match {
         case Ok(res) => res
         case Err(e) => fail(e.message(formatter))
       }
@@ -96,7 +96,7 @@ class TestFlixPackageManager extends AnyFunSuite with BeforeAndAfter {
 
       val path = Files.createTempDirectory("")
       val manifests =
-        FlixPackageManager.findTransitiveDependencies(manifest, path, PkgTestUtils.gitHubToken) match {
+        FlixPackageManager.findTransitiveDependencies(manifest, path) match {
           case Ok(resolution) => FlixPackageManager.resolveSecurityLevels(resolution)
           case Err(e) => fail(e.message(formatter))
         }
@@ -155,11 +155,11 @@ class TestFlixPackageManager extends AnyFunSuite with BeforeAndAfter {
 
       val path = Files.createTempDirectory("")
 
-      val resolution1 = FlixPackageManager.findTransitiveDependencies(manifest1, path, PkgTestUtils.gitHubToken).map(FlixPackageManager.resolveSecurityLevels) match {
+      val resolution1 = FlixPackageManager.findTransitiveDependencies(manifest1, path).map(FlixPackageManager.resolveSecurityLevels) match {
         case Ok(res) => res
         case Err(e) => fail(e.message(formatter))
       }
-      val resolution2 = FlixPackageManager.findTransitiveDependencies(manifest2, path, PkgTestUtils.gitHubToken).map(FlixPackageManager.resolveSecurityLevels) match {
+      val resolution2 = FlixPackageManager.findTransitiveDependencies(manifest2, path).map(FlixPackageManager.resolveSecurityLevels) match {
         case Ok(res) => res
         case Err(e) => fail(e.message(formatter))
       }
@@ -200,7 +200,7 @@ class TestFlixPackageManager extends AnyFunSuite with BeforeAndAfter {
 
       val path = Files.createTempDirectory("")
 
-      val resolution = FlixPackageManager.findTransitiveDependencies(manifest, path, PkgTestUtils.gitHubToken).map(FlixPackageManager.resolveSecurityLevels) match {
+      val resolution = FlixPackageManager.findTransitiveDependencies(manifest, path).map(FlixPackageManager.resolveSecurityLevels) match {
         case Ok(res) => res
         case Err(e) => fail(e.message(formatter))
       }
@@ -238,7 +238,7 @@ class TestFlixPackageManager extends AnyFunSuite with BeforeAndAfter {
       }
 
       val path = Files.createTempDirectory("")
-      FlixPackageManager.findTransitiveDependencies(manifest, path, PkgTestUtils.gitHubToken) match {
+      FlixPackageManager.findTransitiveDependencies(manifest, path) match {
         case Ok(resolution) => resolution.manifests.contains(manifest) && resolution.manifests.exists(m => m.name == "museum-clerk")
         case Err(e) => e.message(formatter)
       }
@@ -269,7 +269,7 @@ class TestFlixPackageManager extends AnyFunSuite with BeforeAndAfter {
     }
 
     val path = Files.createTempDirectory("")
-    FlixPackageManager.findTransitiveDependencies(manifest, path, PkgTestUtils.gitHubToken).map(FlixPackageManager.resolveSecurityLevels) match {
+    FlixPackageManager.findTransitiveDependencies(manifest, path).map(FlixPackageManager.resolveSecurityLevels) match {
       case Ok(res) => fail(res.toString)
       case Err(e) =>
         e.message(formatter)
@@ -278,7 +278,10 @@ class TestFlixPackageManager extends AnyFunSuite with BeforeAndAfter {
   }
 
   test("Give error for missing version") {
-    assertResult(expected = PackageError.VersionDoesNotExist(SemVer(0, 0, 1), Project("flix", "museum")).message(formatter))(actual = {
+    // A version that does not exist is now a 404 on the asset's own address rather than a version
+    // missing from a listing, so this reports which asset was looked for and where. It also no
+    // longer spends a REST request, which is why it still runs when the API is rate limited.
+    {
       val toml = {
         """
           |[package]
@@ -302,11 +305,16 @@ class TestFlixPackageManager extends AnyFunSuite with BeforeAndAfter {
       }
 
       val path = Files.createTempDirectory("")
-      FlixPackageManager.findTransitiveDependencies(manifest, path, PkgTestUtils.gitHubToken).map(FlixPackageManager.resolveSecurityLevels) match {
-        case Ok(res) => res
-        case Err(e) => e.message(formatter)
+      FlixPackageManager.findTransitiveDependencies(manifest, path) match {
+        case Ok(res) => fail(s"Expected a missing asset, but resolved: $res")
+        case Err(PackageError.ReleaseAssetNotFound(project, version, assetName, url)) =>
+          assertResult(Project("flix", "museum"))(project)
+          assertResult(SemVer(0, 0, 1))(version)
+          assertResult("flix.toml")(assetName)
+          assertResult("https://github.com/flix/museum/releases/download/v0.0.1/flix.toml")(url.toString)
+        case Err(e) => fail(s"Expected a missing asset, but found: ${e.message(formatter)}")
       }
-    })
+    }
   }
 
   test("Install transitive dependency") {
@@ -333,7 +341,7 @@ class TestFlixPackageManager extends AnyFunSuite with BeforeAndAfter {
 
       val path = Files.createTempDirectory("")
 
-      val manifests = FlixPackageManager.findTransitiveDependencies(manifest, path, PkgTestUtils.gitHubToken) match {
+      val manifests = FlixPackageManager.findTransitiveDependencies(manifest, path) match {
         case Ok(resolution) => FlixPackageManager.resolveSecurityLevels(resolution)
         case Err(e) => fail(e.message(formatter))
       }
@@ -653,7 +661,7 @@ class TestFlixPackageManager extends AnyFunSuite with BeforeAndAfter {
     }
 
     val path = Files.createTempDirectory("")
-    FlixPackageManager.findTransitiveDependencies(manifest, path, PkgTestUtils.gitHubToken) match {
+    FlixPackageManager.findTransitiveDependencies(manifest, path) match {
       case Ok(_) => fail("expected error, got success")
       case Err(_: PackageError.MismatchedVersions) => succeed
       case Err(e) => fail(e.message(formatter))
@@ -673,7 +681,7 @@ class TestFlixPackageManager extends AnyFunSuite with BeforeAndAfter {
       case Err(e) => fail(e.message(formatter))
     }
 
-    val allManifests = FlixPackageManager.findTransitiveDependencies(manifest, path, PkgTestUtils.gitHubToken) match {
+    val allManifests = FlixPackageManager.findTransitiveDependencies(manifest, path) match {
       case Ok(ms) => ms
       case Err(e) => fail(e.message(formatter))
     }

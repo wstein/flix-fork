@@ -20,7 +20,8 @@ import org.json4s.JValue
 import org.json4s.native.JsonMethods
 
 import java.nio.file.{Files, LinkOption, Path, StandardOpenOption}
-import java.util.{Calendar, GregorianCalendar}
+import java.security.MessageDigest
+import java.util.{Calendar, GregorianCalendar, HexFormat}
 import java.util.zip.{ZipEntry, ZipOutputStream}
 import scala.jdk.CollectionConverters.IteratorHasAsScala
 import scala.util.Using
@@ -242,6 +243,24 @@ object FileOps {
 
   /** Returns `true` if the given `path` exists and has 0 bytes of data. */
   def isEmpty(path: Path): Boolean = Files.size(path) == 0L
+
+  /**
+    * Returns the SHA-256 digest of the file at `p`, as lowercase hex.
+    *
+    * The file is read in blocks rather than into memory, since a package can be any size.
+    */
+  def sha256(p: Path): String = {
+    val digest = MessageDigest.getInstance("SHA-256")
+    Using.resource(Files.newInputStream(p)) { stream =>
+      val buffer = new Array[Byte](8192)
+      var read = stream.read(buffer)
+      while (read >= 0) {
+        digest.update(buffer, 0, read)
+        read = stream.read(buffer)
+      }
+    }
+    HexFormat.of().formatHex(digest.digest())
+  }
 
   /**
     * Checks if the given path is a regular file with the expected extension.

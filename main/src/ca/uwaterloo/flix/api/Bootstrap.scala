@@ -1224,8 +1224,27 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
 
     // Publish to GitHub
     out.println("Publishing a new release...")
-    val artifacts = List(Bootstrap.getPkgFile(projectPath), Bootstrap.getManifestFile(projectPath))
-    val publishResult = GitHub.publishRelease(githubRepo, manifest.version, artifacts, githubToken)
+    // Both assets are published under names a consumer can compute, so that installing a dependency
+    // needs no REST request to discover what the release called its files. The package file is
+    // named after the repository rather than after the directory it was built in, which is what
+    // `getPkgFile` uses and what made the old names unpredictable.
+    val artifacts = List(
+      (Bootstrap.getPkgFile(projectPath), s"${githubRepo.repo}.$EXT_FPKG"),
+      (Bootstrap.getManifestFile(projectPath), FLIX_TOML)
+    )
+
+    // Each asset is published with its SHA-256 beside it, so that whoever downloads it can tell
+    // that they received what was published. It is not a signature -- anyone who can replace an
+    // asset can replace the digest next to it -- so it guards against corruption and truncation,
+    // which are the failures that actually happen and that a silent short read otherwise caches
+    // forever.
+    val checksums = artifacts.map { case (path, name) =>
+      val checksumPath = Bootstrap.getArtifactDirectory(projectPath).resolve(s"$name.sha256")
+      FileOps.writeString(checksumPath, s"${FileOps.sha256(path)}  $name${System.lineSeparator()}")
+      (checksumPath, s"$name.sha256")
+    }
+
+    val publishResult = GitHub.publishRelease(githubRepo, manifest.version, artifacts ++ checksums, githubToken)
     publishResult match {
       case Ok(()) => // Continue
       case Err(e) => return Result.Err(BootstrapError.ReleaseError(e))
@@ -1638,7 +1657,7 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
       * Requires network access.
       */
     def resolveFlixDependencies(manifest: Manifest)(implicit formatter: Formatter, out: PrintStream): Result[FlixPackageManager.SecureResolution, BootstrapError] = {
-      FlixPackageManager.findTransitiveDependencies(manifest, projectPath, apiKey).map(FlixPackageManager.resolveSecurityLevels) match {
+      FlixPackageManager.findTransitiveDependencies(manifest, projectPath).map(FlixPackageManager.resolveSecurityLevels) match {
         case Err(e) => Err(BootstrapError.FlixPackageError(e))
         case Ok(securityMap) =>
           val securityResolutionErrors = FlixPackageManager.checkSecurity(securityMap)
