@@ -8,6 +8,44 @@ The project uses [Mill](https://mill-build.org/) as its build tool.
 - `./mill flix.run <file.flix>` — Run a Flix source file through the compiler (should take at most 3 minutes)
 - `./mill flix.assembly` — Build a fat JAR at `out/flix/assembly.dest/out.jar`
 
+## The Command Line
+
+`Main.scala` builds the command line as a picocli `CommandSpec` tree — one
+subcommand per command, options carrying a setter that writes one field of
+`CmdOpts` through an `OptsCell`. The spec is the only description of the line,
+so `TestMain` asserts against it rather than against a hand-written list: which
+commands exist, which of them parse, what `--version` prints, which names answer
+`-h`. A claim about the help that is not read from the spec will drift.
+
+One invariant governs the help, and breaking it turns a tidier page into a
+broken script: **hiding is a property of the usage text and never of the
+parser.** `HelpScope` decides how much a usage text describes; both scopes parse
+the same language. An option a reader was once shown may be in a line they
+saved.
+
+Three rules decide what a page lists, and each answers a different reader:
+
+- The shared options are listed on `flix` and hidden on every command, since
+  `flix build --help` is opened to find out what `build` takes. They are
+  **copied onto each command rather than inherited** — `ScopeType.INHERIT`
+  carries one visibility everywhere an option lands, and these need two. A
+  footer says where they went, or a shorter page reads as a smaller command.
+- An option or command whose name begins with `X` is experimental and is off the
+  standard help entirely; `--Xhelp` prints the same page with nothing left out.
+  The **name** is the marker — `isExperimental` reads it — because the name is
+  what survives being quoted in a bug report. `TestMain` holds the
+  `[experimental]` description prefix to the same rule, in both directions.
+- `-h`/`--help` is listed wherever it is answered. It is the only short name:
+  a letter is worth its ambiguity for the option you type when lost.
+
+`--help`, `--version` and `--Xhelp` print and then leave, from inside
+`parseCmdOpts`. A test that parses one of them exits the test process, so assert
+on `rootSpec` or on `usageText` instead.
+
+Decisions taken here, with the alternatives rejected and two open problems —
+globals that only some commands read, and generated completions — are in
+`docs/CLI-DECISIONS.md`.
+
 ## Project Scaffolding
 
 `flix init [directory]` (`Bootstrap.init`) writes a new project into the current

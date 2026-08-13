@@ -205,7 +205,9 @@ Did you know that:
 
 - the performance of the Flix compiler is tracked at https://arewefast.flix.dev/
 
-- `--Xdebug` makes a compiled Flix program steppable in a Java debugger. The
+- `--Xdebug` makes a compiled Flix program steppable in a Java debugger. Like
+  every option whose name begins with `X`, it is off `flix --help` and listed by
+  `flix --Xhelp`. The
   inliner normally substitutes away a let-binding that is pure and used once, and
   only one line is recorded per function, so there is nothing to name and nowhere
   to step. The flag retains those bindings and records a line per statement and a
