@@ -21,6 +21,7 @@ import org.json4s.native.JsonMethods
 import org.json4s.{JArray, JObject, JValue}
 
 import java.io.PrintStream
+import java.nio.charset.StandardCharsets
 
 /**
   * Reports a test run as one JSON object per line, for another process to read.
@@ -79,33 +80,45 @@ class JsonTestSink(out: PrintStream) extends Tester.TestEventSink {
   def output(line: String): Unit = emit(("event" -> "output") ~ ("line" -> line))
 
   /**
-    * Returns a stream that turns everything written to it into `output` events.
+    * The stream that turns everything written to it into `output` events.
     *
     * The runner installs this as `System.out` before a test can write to it. Line-buffered, because an
     * event is a line and a partial write is not one yet.
+    *
+    * One stream, not one per call: a `def` handed each caller a buffer of its own, so two writers
+    * splitting a line between them -- which is what `System.out` and a direct reference to this are --
+    * would each report half of it.
+    *
+    * The line is buffered as *bytes* and decoded once, at its end. A `PrintStream` encodes a character
+    * before it arrives here, so reading each byte as a character is Latin-1: `héllo` becomes `hÃ©llo`,
+    * and every non-ASCII character a test prints is corrupted on the way to the client.
     */
-  def outputStream: java.io.OutputStream = new java.io.OutputStream {
-    private val line = new StringBuilder
+  val outputStream: java.io.OutputStream = new java.io.OutputStream {
+    private val line = new java.io.ByteArrayOutputStream()
 
     override def write(b: Int): Unit = synchronized {
       if (b == '\n') {
-        output(line.toString)
-        line.setLength(0)
+        emitLine()
       } else if (b != '\r') {
-        line.append((b & 0xff).toChar)
-        // A program writing without newlines must not be able to grow this without bound.
-        if (line.length >= MaxLine) {
-          output(line.toString)
-          line.setLength(0)
+        line.write(b)
+        // A program writing without newlines must not be able to grow this without bound. The cut is by
+        // byte count, so a multi-byte character landing exactly on it is split; at eight kilobytes that
+        // is rarer than the unbounded buffer it replaces.
+        if (line.size() >= MaxLine) {
+          emitLine()
         }
       }
     }
 
     override def flush(): Unit = synchronized {
-      if (line.nonEmpty) {
-        output(line.toString)
-        line.setLength(0)
+      if (line.size() > 0) {
+        emitLine()
       }
+    }
+
+    private def emitLine(): Unit = {
+      output(new String(line.toByteArray, StandardCharsets.UTF_8))
+      line.reset()
     }
   }
 
