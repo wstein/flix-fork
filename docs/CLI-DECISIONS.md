@@ -6,8 +6,9 @@ here because most of them are about what a reader is *shown*, and a help text is
 the one part of a compiler that has no test until somebody writes one.
 
 Status values are **Settled** (in the repository, asserted by `TestMain`),
-**Proposed** (our choice, reversible on objection), and **Deferred** (knowingly
-unresolved, with the blocker named).
+**Proposed** (implemented and asserted, but a judgement call the team may want to
+overturn -- D3, D4 and D5 are the three worth arguing about), and **Deferred**
+(knowingly unresolved, with the blocker named).
 
 The invariant that binds the rest: **hiding is a property of the usage text and
 never of the parser.** `Main.HelpScope` decides how much of the line a usage text
@@ -59,7 +60,7 @@ one -- see D7.
 
 ## D3 — `-h`, and it is the only short name
 
-**Status: Settled.**
+**Status: Proposed.**
 
 `-h` is what a reader types before having read anything, and every other tool on
 their machine takes it. It is declared on the global `--help`, so it is answered
@@ -72,7 +73,7 @@ nothing else; the rest are typed by scripts, which do not save keystrokes.
 
 ## D4 — The experimental surface is off the standard help, and `--Xhelp` shows it
 
-**Status: Settled.**
+**Status: Proposed.**
 
 `flix --help` listed forty-odd options, twenty-two of them experimental. A list
 is only worth reading if everything on it is meant for the reader, so the
@@ -97,7 +98,7 @@ for it would be a promise about options that carry no promise.
 
 ## D5 — A command's help is about that command
 
-**Status: Settled.**
+**Status: Proposed.**
 
 `flix init --help` listed twenty-one options, of which `init` takes one. The page
 a reader opens to learn what a command takes has to answer that before anything

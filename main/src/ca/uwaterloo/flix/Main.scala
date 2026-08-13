@@ -1136,8 +1136,8 @@ object Main {
       .build())
 
     val xperf = command(cell, "Xperf", "benchmarks the compiler.", takesFiles = false)
-    xperf.addOption(flag(cell, "--frontend", "benchmark only frontend")(_.copy(XPerfFrontend = true)))
-    xperf.addOption(flag(cell, "--par", "benchmark only parallel evaluation")(_.copy(XPerfPar = true)))
+    xperf.addOption(flag(cell, "--frontend", "benchmarks the frontend only.")(_.copy(XPerfFrontend = true)))
+    xperf.addOption(flag(cell, "--par", "benchmarks parallel evaluation only.")(_.copy(XPerfPar = true)))
     xperf.addOption(perfN(cell))
 
     val xmemory = command(cell, "Xmemory", "benchmarks compiler memory use.", takesFiles = false)
@@ -1223,7 +1223,7 @@ object Main {
       "writes diagnostics to stdout as JSON, for a build tool to read.")(_.copy(jsonDiagnostics = true))
 
   private def perfN(cell: OptsCell): OptionSpec =
-    value[Integer](cell, "--n", "<n>", classOf[Integer], "number of compilations")((c, n) => c.copy(XPerfN = Some(n.intValue())))
+    value[Integer](cell, "--n", "<n>", classOf[Integer], "the number of compilations to run.")((c, n) => c.copy(XPerfN = Some(n.intValue())))
 
   /**
     * The options every command takes, wherever they appear on the line, as they are listed on
@@ -1281,10 +1281,10 @@ object Main {
       global(value[LibLevel](cell, "--Xlib", "<level>", classOf[LibLevel],
         "[experimental] controls the amount of std. lib. to include (nix, min, all).")((c, l) => c.copy(xlib = l))),
       global(flag(cell, "--Xno-deprecated", "[experimental] disables deprecated features.")(_.copy(xnodeprecated = true))),
-      global(flag(cell, "--Xprint-phases", "[experimental] prints the ASTs after the each phase.")(_.copy(xprintphases = true))),
+      global(flag(cell, "--Xprint-phases", "[experimental] prints the ASTs after each phase.")(_.copy(xprintphases = true))),
       global(flag(cell, "--Xsummary", "[experimental] prints a summary of the compiled modules.")(_.copy(xsummary = true))),
       global(values[Subeffecting](cell, "--Xsubeffecting", "<choices>", classOf[Subeffecting], Some(","),
-        "[experimental] enables sub-effecting in select places")((c, xs) => c.copy(xsubeffecting = c.xsubeffecting ++ xs))),
+        "[experimental] enables sub-effecting in select places.")((c, xs) => c.copy(xsubeffecting = c.xsubeffecting ++ xs))),
       global(flag(cell, "--Xnewmono", "[experimental] uses the constraint-based monomorphization pipeline instead of the demand-driven one.")(_.copy(xnewmono = true)))
     )
   }
