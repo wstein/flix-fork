@@ -1229,6 +1229,87 @@ class TestWeeder extends AnyFunSuite with TestUtils {
     expectError[WeederError.InlineAndDontInline](result)
   }
 
+  //////////////////////////////////////////////////////////////////////////////
+  /// A unary minus on a literal is folded structurally, not textually         ///
+  //////////////////////////////////////////////////////////////////////////////
+  //
+  // The fold used to rebuild the literal by slicing the source from the minus to the
+  // digits, so whatever sat between them went to `parseLong`. The parser has already
+  // decided the minus is a sign -- `unaryExpr` is reached only in prefix position, and
+  // `-1` and `- 1` produce the same tree -- so consulting the spacing again was both
+  // redundant and wrong.
+
+  test("NegativeLiteral.Spaced.Int32") {
+    // Rejected before this as "Malformed int literal", which was false twice over: the
+    // literal is well formed, and the user wrote a negation.
+    val input = "def f(): Int32 = - 123"
+    expectSuccess(check(input, Options.TestWithLibNix))
+  }
+
+  test("NegativeLiteral.Spaced.Float64") {
+    val input = "def f(): Float64 = - 1.5f64"
+    expectSuccess(check(input, Options.TestWithLibNix))
+  }
+
+  test("NegativeLiteral.Spaced.MinValue") {
+    // The case the textual fold existed for. `9223372036854775808` has no positive
+    // Int64, so it is representable only as the operand of a minus -- and now the
+    // spacing does not decide whether it is one.
+    val spaced = "def f(): Int64 = - 9223372036854775808i64"
+    val tight = "def f(): Int64 = -9223372036854775808i64"
+    expectSuccess(check(spaced, Options.TestWithLibNix))
+    expectSuccess(check(tight, Options.TestWithLibNix))
+  }
+
+  test("NegativeLiteral.MinValue.EachWidth") {
+    val inputs = List(
+      "def f(): Int8 = -128i8",
+      "def f(): Int16 = -32768i16",
+      "def f(): Int32 = -2147483648i32",
+      "def f(): Int64 = -9223372036854775808i64"
+    )
+    inputs.foreach(i => expectSuccess(check(i, Options.TestWithLibNix)))
+  }
+
+  test("NegativeLiteral.OutOfRange.ByOne") {
+    // One past the least value of each width still fails: the range check runs on the
+    // signed value, in a type wide enough to hold it, rather than on the magnitude.
+    val inputs = List(
+      "def f(): Int8 = -129i8",
+      "def f(): Int16 = -32769i16",
+      "def f(): Int32 = -2147483649i32",
+      "def f(): Int64 = -9223372036854775809i64"
+    )
+    inputs.foreach(i => expectError[WeederError.MalformedInt](check(i, Options.TestWithLibNix)))
+  }
+
+  test("NegativeLiteral.PositiveMinValueStillRejected") {
+    // Unnegated, the least value is out of range and must stay so.
+    val inputs = List(
+      "def f(): Int8 = 128i8",
+      "def f(): Int64 = 9223372036854775808i64"
+    )
+    inputs.foreach(i => expectError[WeederError.MalformedInt](check(i, Options.TestWithLibNix)))
+  }
+
+  test("NegativeLiteral.InPattern") {
+    // The pattern path had the same textual fold and the same fix.
+    val input =
+      """def f(x: Int32): Bool = match x {
+        |    case - 1 => true
+        |    case -2147483648 => true
+        |    case _ => false
+        |}
+        |""".stripMargin
+    expectSuccess(check(input, Options.TestWithLibNix))
+  }
+
+  test("NegativeLiteral.BigIntAndBigDecimal") {
+    // Unbounded, so only the sign matters and there is no range check to get wrong.
+    expectSuccess(check("def f(): BigInt = - 123ii", Options.TestWithLibNix))
+    expectSuccess(check("def f(): BigDecimal = - 1.5ff", Options.TestWithLibNix))
+  }
+
   test("MalformedInt16.01") {
     val input = "def f(): Int16 = -100000i16"
     val result = check(input, Options.TestWithLibNix)

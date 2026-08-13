@@ -457,12 +457,28 @@ part that can be made true and kept true today.
 
 **Status: Settled.**
 
-**Minus.** `-9223372036854775808i64` is `Int64`'s least value and is representable
-only as a negative literal; `- 9223372036854775808i64` is out of range and does
-not compile. Nothing tells that apart from ordinary subtraction in a pair of
+**Minus.** Nothing tells a sign apart from ordinary subtraction in a pair of
 adjacent tokens, so the source's spacing is kept whenever a minus precedes a
 numeric literal: `-1` stays `-1`, `x - 1` stays `x - 1`, and the policy gives up
-normalising `x-1`. Correctness outranks the tidier output.
+normalising `x-1`.
+
+**The reason changed after this was written, and the rule outlived it.** As
+written, the justification was correctness: `-9223372036854775808i64` is `Int64`'s
+least value, `- 9223372036854775808i64` was *out of range and did not compile*,
+and detaching a sign therefore broke the build — which is what the amendment
+below records happening. That was a defect in the compiler, not a property of the
+language. `Weeder2` folded a unary minus into its literal by slicing the source
+text from the minus to the digits, so whatever whitespace sat between them was
+handed to `parseLong`; `- 123` was rejected as a "Malformed int literal" for the
+same reason. The fold is structural now — the weeder takes the sign from the tree,
+the parser having already settled that a prefix minus is unary — so `- 1` and `-1`
+are the same expression and every width's least value can be written either way.
+
+The rule stays, with a smaller claim behind it. It is now about reading, not
+compiling: `-1` reads as a number, `x-1` reads as an expression, and a pair of
+adjacent tokens still cannot say which is meant. What is gone is the *severity* —
+getting this wrong once produced source that would not compile, and now produces
+source that is merely ugly.
 
 **Braces.** `{` and `}` open blocks, records, record types, Datalog values, and
 handler bodies, and the corpus spaces them differently in each. A rule that

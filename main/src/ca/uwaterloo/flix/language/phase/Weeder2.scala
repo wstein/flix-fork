@@ -947,7 +947,15 @@ object Weeder2 {
       Expr.Use(use, pickExpr(tree), tree.loc)
     }
 
-    def visitLiteralExpr(tree: Tree)(implicit sctx: SharedContext): Expr = {
+    /**
+      * Visits a literal, negating it when it is the operand of a unary minus.
+      *
+      * `negated` comes from the tree, never from the text between the `-` and the digits:
+      * the parser reaches `unaryExpr` only in prefix position, so it has already settled
+      * that the minus is a sign rather than a subtraction, and `-1` and `- 1` produce the
+      * same tree. See `Constants.digitsOf`.
+      */
+    def visitLiteralExpr(tree: Tree, negated: Boolean = false)(implicit sctx: SharedContext): Expr = {
       // Note: This visitor is used by both expression literals and pattern literals.
       expectAny(tree, List(TreeKind.Expr.Literal, TreeKind.Pattern.Literal))
       tree.children(0) match {
@@ -963,16 +971,16 @@ object Weeder2 {
           case TokenKind.KeywordFalse => Expr.Cst(Constant.Bool(false), token.mkSourceLocation())
           case TokenKind.LiteralString => Constants.toStringCst(token)
           case TokenKind.LiteralChar => Constants.toChar(token)
-          case TokenKind.LiteralInt => Constants.toInt32(token)
-          case TokenKind.LiteralInt8 => Constants.toInt8(token)
-          case TokenKind.LiteralInt16 => Constants.toInt16(token)
-          case TokenKind.LiteralInt32 => Constants.toInt32(token)
-          case TokenKind.LiteralInt64 => Constants.toInt64(token)
-          case TokenKind.LiteralBigInt => Constants.toBigInt(token)
-          case TokenKind.LiteralFloat => Constants.toFloat64(token)
-          case TokenKind.LiteralFloat32 => Constants.toFloat32(token)
-          case TokenKind.LiteralFloat64 => Constants.toFloat64(token)
-          case TokenKind.LiteralBigDecimal => Constants.toBigDecimal(token)
+          case TokenKind.LiteralInt => Constants.toInt32(token, negated)
+          case TokenKind.LiteralInt8 => Constants.toInt8(token, negated)
+          case TokenKind.LiteralInt16 => Constants.toInt16(token, negated)
+          case TokenKind.LiteralInt32 => Constants.toInt32(token, negated)
+          case TokenKind.LiteralInt64 => Constants.toInt64(token, negated)
+          case TokenKind.LiteralBigInt => Constants.toBigInt(token, negated)
+          case TokenKind.LiteralFloat => Constants.toFloat64(token, negated)
+          case TokenKind.LiteralFloat32 => Constants.toFloat32(token, negated)
+          case TokenKind.LiteralFloat64 => Constants.toFloat64(token, negated)
+          case TokenKind.LiteralBigDecimal => Constants.toBigDecimal(token, negated)
           case TokenKind.LiteralRegex => Constants.toRegex(token)
           case TokenKind.NameLowercase
                | TokenKind.NameUppercase
@@ -1122,12 +1130,10 @@ object Weeder2 {
         case Some(opToken@Token(_, _, _, _, _, _)) =>
           val literalToken = tryPickNumberLiteralToken(exprTree)
           literalToken match {
-            // fold unary minus into a constant
-            case Some(lit) if opToken.text == "-" =>
-              // Construct a synthetic literal tree with the unary minus and visit that like any other literal expression
-              val syntheticToken = Token(lit.kind, lit.src, opToken.startIndex, lit.endIndex, lit.start, lit.end)
-              val syntheticLiteral = Tree(TreeKind.Expr.Literal, Array(syntheticToken), exprTree.loc.asSynthetic)
-              visitLiteralExpr(syntheticLiteral)
+            // Fold unary minus into the constant, by telling the literal it is negated
+            // rather than by rebuilding it from the source text between the two.
+            case Some(_) if opToken.text == "-" =>
+              visitLiteralExpr(pick(TreeKind.Expr.Literal, exprTree), negated = true)
             case _ =>
               val expr = visitExpr(exprTree)
               opToken.text match {
@@ -2362,9 +2368,9 @@ object Weeder2 {
       }
     }
 
-    private def visitLiteralPat(tree: Tree)(implicit sctx: SharedContext): Pattern = {
+    private def visitLiteralPat(tree: Tree, negated: Boolean = false)(implicit sctx: SharedContext): Pattern = {
       expect(tree, TreeKind.Pattern.Literal)
-      Exprs.visitLiteralExpr(tree) match {
+      Exprs.visitLiteralExpr(tree, negated) match {
         case Expr.Cst(cst, _) => cst match {
           case Constant.Null =>
             val error = IllegalNullPattern(tree.loc)
@@ -2497,12 +2503,12 @@ object Weeder2 {
       pick(TreeKind.Operator, tree).children(0) match {
         case opToken@Token(_, _, _, _, _, _) =>
           literalToken match {
-            // fold unary minus into a constant, and visit it like any other constant
+            // As in `visitUnaryExpr`: the sign is structural, not textual. The literal is
+            // a direct child here rather than a `Pattern.Literal` subtree, so it is wrapped
+            // in one — with the token exactly as the lexer produced it, which is the whole
+            // difference from the synthetic span this replaced.
             case Some(lit) if opToken.text == "-" =>
-              // Construct a synthetic literal tree with the unary minus and visit that like any other literal expression
-              val syntheticToken = Token(lit.kind, lit.src, opToken.startIndex, lit.endIndex, lit.start, lit.end)
-              val syntheticLiteral = Tree(TreeKind.Pattern.Literal, Array(syntheticToken), tree.loc.asSynthetic)
-              visitLiteralPat(syntheticLiteral)
+              visitLiteralPat(Tree(TreeKind.Pattern.Literal, Array(lit), tree.loc.asSynthetic), negated = true)
             case _ =>
               sctx.errors.add(WeederError.MalformedInt(tree.loc))
               Pattern.Error(tree.loc)
@@ -2525,6 +2531,59 @@ object Weeder2 {
   }
 
   private object Constants {
+
+    /**
+      * The digits of a numeric literal, with grouping underscores, any `0x` and any type
+      * suffix removed, together with its radix.
+      *
+      * The sign is deliberately not here. It reaches these functions as a `negated` flag
+      * taken from the *tree*, because the parser has already decided that a leading `-`
+      * is unary — `unaryExpr` is reached only in prefix position, so `-1` and `- 1` parse
+      * to the same `Expr.Unary`. Reconstructing the literal by slicing the source from
+      * the minus to the digits, which is what this used to do, fed the whitespace between
+      * them to `parseLong` and made `- 123` a "Malformed int literal". Whitespace had
+      * already done its job in the lexer; consulting it again here was the defect.
+      */
+    private def digitsOf(token: Token, suffix: String): (Int, String) = {
+      val radix = if (token.text.startsWith("0x")) 16 else 10
+      (radix, token.text.stripPrefix("0x").stripSuffix(suffix).filterNot(_ == '_'))
+    }
+
+    /**
+      * Parses an integer literal of a fixed width, negating it first when it is the
+      * operand of a unary minus.
+      *
+      * The magnitude is read into a `BigInteger` and the sign applied to *that*, so the
+      * range check happens once, on the final value, in a type wide enough to hold every
+      * width's bounds. Reading it into the target type instead cannot express the least
+      * value of any signed width — `9223372036854775808` overflows an `Int64` on its way
+      * to becoming `Int64.MinValue` — which is why the sign has to be applied before the
+      * check rather than after.
+      */
+    private def toFixedInt(token: Token, suffix: String, negated: Boolean,
+                           bits: Int, mk: java.math.BigInteger => Constant)(implicit sctx: SharedContext): Expr = {
+      val loc = token.mkSourceLocation()
+      val (radix, digits) = digitsOf(token, suffix)
+      val magnitude =
+        try new java.math.BigInteger(digits, radix)
+        catch {
+          case _: NumberFormatException =>
+            val error = MalformedInt(loc)
+            sctx.errors.add(error)
+            return WeededAst.Expr.Error(error)
+        }
+      val value = if (negated) magnitude.negate() else magnitude
+      val min = java.math.BigInteger.ONE.shiftLeft(bits - 1).negate()
+      val max = java.math.BigInteger.ONE.shiftLeft(bits - 1).subtract(java.math.BigInteger.ONE)
+      if (value.compareTo(min) < 0 || value.compareTo(max) > 0) {
+        val error = MalformedInt(loc)
+        sctx.errors.add(error)
+        WeededAst.Expr.Error(error)
+      } else {
+        Expr.Cst(mk(value), loc)
+      }
+    }
+
     private def tryParseFloat(token: Token, after: (String, SourceLocation) => Expr)(implicit sctx: SharedContext): Expr = {
       val loc = token.mkSourceLocation()
       try {
@@ -2554,9 +2613,10 @@ object Weeder2 {
     /**
       * Attempts to parse the given tree to a float32.
       */
-    def toFloat32(token: Token)(implicit sctx: SharedContext): Expr =
+    def toFloat32(token: Token, negated: Boolean)(implicit sctx: SharedContext): Expr =
       tryParseFloat(token, (text, loc) => {
-        val value = java.lang.Float.parseFloat(text.stripSuffix("f32"))
+        val magnitude = java.lang.Float.parseFloat(text.stripSuffix("f32"))
+        val value = if (negated) -magnitude else magnitude
         if (java.lang.Float.isInfinite(value)) {
           throw new NumberFormatException()
         }
@@ -2566,9 +2626,10 @@ object Weeder2 {
     /**
       * Attempts to parse the given tree to a float64.
       */
-    def toFloat64(token: Token)(implicit sctx: SharedContext): Expr =
+    def toFloat64(token: Token, negated: Boolean)(implicit sctx: SharedContext): Expr =
       tryParseFloat(token, (text, loc) => {
-        val value = java.lang.Double.parseDouble(text.stripSuffix("f64"))
+        val magnitude = java.lang.Double.parseDouble(text.stripSuffix("f64"))
+        val value = if (negated) -magnitude else magnitude
         if (java.lang.Double.isInfinite(value)) {
           throw new NumberFormatException()
         }
@@ -2578,53 +2639,47 @@ object Weeder2 {
     /**
       * Attempts to parse the given tree to a big decimal.
       */
-    def toBigDecimal(token: Token)(implicit sctx: SharedContext): Expr =
+    def toBigDecimal(token: Token, negated: Boolean)(implicit sctx: SharedContext): Expr =
       tryParseFloat(token, (text, loc) => {
-        val bigDecimal = new java.math.BigDecimal(text.stripSuffix("ff"))
-        Expr.Cst(Constant.BigDecimal(bigDecimal), loc)
+        val magnitude = new java.math.BigDecimal(text.stripSuffix("ff"))
+        Expr.Cst(Constant.BigDecimal(if (negated) magnitude.negate() else magnitude), loc)
       })
 
-    /**
-      * Attempts to parse the given tree to a int8.
-      */
-    def toInt8(token: Token)(implicit sctx: SharedContext): Expr =
-      tryParseInt(token, "i8", (radix, digits, loc) =>
-        Expr.Cst(Constant.Int8(JByte.parseByte(digits, radix)), loc)
-      )
+    /** Parses the token as an `Int8`, negated when it is the operand of a unary minus. */
+    def toInt8(token: Token, negated: Boolean)(implicit sctx: SharedContext): Expr =
+      toFixedInt(token, "i8", negated, 8, v => Constant.Int8(v.byteValue()))
+
+    /** Parses the token as an `Int16`, negated when it is the operand of a unary minus. */
+    def toInt16(token: Token, negated: Boolean)(implicit sctx: SharedContext): Expr =
+      toFixedInt(token, "i16", negated, 16, v => Constant.Int16(v.shortValue()))
+
+    /** Parses the token as an `Int32`, negated when it is the operand of a unary minus. */
+    def toInt32(token: Token, negated: Boolean)(implicit sctx: SharedContext): Expr =
+      toFixedInt(token, "i32", negated, 32, v => Constant.Int32(v.intValue()))
+
+    /** Parses the token as an `Int64`, negated when it is the operand of a unary minus. */
+    def toInt64(token: Token, negated: Boolean)(implicit sctx: SharedContext): Expr =
+      toFixedInt(token, "i64", negated, 64, v => Constant.Int64(v.longValue()))
 
     /**
-      * Attempts to parse the given tree to a int16.
+      * Parses the token as a `BigInt`, negated when it is the operand of a unary minus.
+      *
+      * No range check: `BigInteger` has no bounds, so the only failure is text that is not
+      * a numeral at all.
       */
-    def toInt16(token: Token)(implicit sctx: SharedContext): Expr = {
-      tryParseInt(token, "i16", (radix, digits, loc) =>
-        Expr.Cst(Constant.Int16(JShort.parseShort(digits, radix)), loc)
-      )
+    def toBigInt(token: Token, negated: Boolean)(implicit sctx: SharedContext): Expr = {
+      val loc = token.mkSourceLocation()
+      val (radix, digits) = digitsOf(token, "ii")
+      try {
+        val magnitude = new java.math.BigInteger(digits, radix)
+        Expr.Cst(Constant.BigInt(if (negated) magnitude.negate() else magnitude), loc)
+      } catch {
+        case _: NumberFormatException =>
+          val error = MalformedInt(loc)
+          sctx.errors.add(error)
+          WeededAst.Expr.Error(error)
+      }
     }
-
-    /**
-      * Attempts to parse the given tree to a int32.
-      */
-    def toInt32(token: Token)(implicit sctx: SharedContext): Expr =
-      tryParseInt(token, "i32", (radix, digits, loc) =>
-        Expr.Cst(Constant.Int32(JInt.parseInt(digits, radix)), loc)
-      )
-
-    /**
-      * Attempts to parse the given tree to a int64.
-      */
-    def toInt64(token: Token)(implicit sctx: SharedContext): Expr = {
-      tryParseInt(token, "i64", (radix, digits, loc) =>
-        Expr.Cst(Constant.Int64(JLong.parseLong(digits, radix)), loc)
-      )
-    }
-
-    /**
-      * Attempts to parse the given tree to a int64.
-      */
-    def toBigInt(token: Token)(implicit sctx: SharedContext): Expr =
-      tryParseInt(token, "ii", (radix, digits, loc) =>
-        Expr.Cst(Constant.BigInt(new java.math.BigInteger(digits, radix)), loc)
-      )
 
     /**
       * Attempts to compile the given regular expression into a Pattern.

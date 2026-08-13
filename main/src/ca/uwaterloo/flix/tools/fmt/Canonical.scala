@@ -72,13 +72,23 @@ object Canonical extends PrettyPrinter.Separators {
 
   /**
     * Returns `true` if `left` is a minus sign attached to the numeric literal
-    * `right`, where the spacing decides whether the literal is negative.
+    * `right`.
     *
-    * Separating them is not cosmetic. `-9223372036854775808i64` is `Int64`'s least
-    * value and is only representable as a *negative* literal, so `- 9223…i64` is
-    * out of range and does not compile. Nothing distinguishes that case from
-    * ordinary subtraction in a pair of adjacent tokens, so the source's own
-    * spacing is kept for all of them: `-1` stays `-1` and `x - 1` stays `x - 1`.
+    * Nothing distinguishes a sign from ordinary subtraction in a pair of adjacent
+    * tokens, so the source's own spacing is kept for all of them: `-1` stays `-1`
+    * and `x - 1` stays `x - 1`.
+    *
+    * '''This used to be a correctness guard and is now a readability one.''' The
+    * weeder folded a unary minus into its literal by slicing the source from the
+    * minus to the digits, so the spacing reached `parseLong`: `- 123` was a
+    * "Malformed int literal", and `Int64`'s least value could be written only
+    * without a space. Detaching a sign therefore produced code that did not
+    * compile, and D18 records the day the formatter did that to the standard
+    * library. The fold is structural now — the weeder takes the sign from the
+    * tree, the parser having already settled that a prefix minus is unary — so
+    * `- 1` and `-1` are the same expression. Keeping the rule is still right:
+    * `-1` reads as a number and `x-1` reads as an expression, and a token pair
+    * cannot say which is meant. What is gone is the severity.
     */
   private def signsLiteral(left: TokenKind, right: TokenKind): Boolean =
     left == TokenKind.Minus && numericLiteral(right)
