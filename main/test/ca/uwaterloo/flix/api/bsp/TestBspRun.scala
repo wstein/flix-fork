@@ -47,7 +47,7 @@ class TestBspRun extends AnyFunSuite {
       assert(result.getStatusCode == StatusCode.OK, s"unexpected status: ${result.getStatusCode}")
       // The program's own output, as log messages rather than diagnostics: it is not a problem with
       // the code, and a client shows the two in different places.
-      assert(s.logs.exists(_.contains("PROGRAM-RAN")), s"the program's output never arrived: ${s.logs}")
+      assert(s.output.exists(_.contains("PROGRAM-RAN")), s"the program's output never arrived: ${s.output}")
     }
   }
 
@@ -65,10 +65,10 @@ class TestBspRun extends AnyFunSuite {
       val result = s.run(List("alpha", "beta gamma"))
 
       assert(result.getStatusCode == StatusCode.OK, s"unexpected status: ${result.getStatusCode}")
-      assert(s.logs.exists(_.contains("ARG:alpha")), s"the first argument did not arrive: ${s.logs}")
+      assert(s.output.exists(_.contains("ARG:alpha")), s"the first argument did not arrive: ${s.output}")
       // With a space in it, so that a runner joining arguments into one string is caught rather than
       // passing by luck.
-      assert(s.logs.exists(_.contains("ARG:beta gamma")), s"the second argument did not arrive: ${s.logs}")
+      assert(s.output.exists(_.contains("ARG:beta gamma")), s"the second argument did not arrive: ${s.output}")
     }
   }
 
@@ -86,7 +86,7 @@ class TestBspRun extends AnyFunSuite {
       // Falsifiable only with this. A program that never compiled also reports `ERROR`, so the earlier
       // version of this test passed against a fixture whose syntax was wrong -- it proved that
       // something went wrong, not that the program ran and failed.
-      assert(s.logs.exists(_.contains("PROGRAM-RAN")), s"the program never ran: ${s.logs}")
+      assert(s.output.exists(_.contains("PROGRAM-RAN")), s"the program never ran: ${s.output}")
     }
   }
 
@@ -107,7 +107,7 @@ class TestBspRun extends AnyFunSuite {
     withSession("""def main(): Unit \ IO = println(undefinedFunction())""") { s =>
       assert(s.run().getStatusCode == StatusCode.ERROR)
       assert(s.diagnostics.nonEmpty, "a run that failed to compile published no diagnostics")
-      assert(!s.logs.exists(_.contains("PROGRAM-RAN")), "a program that did not compile was run anyway")
+      assert(!s.output.exists(_.contains("PROGRAM-RAN")), "a program that did not compile was run anyway")
     }
   }
 
@@ -121,7 +121,7 @@ class TestBspRun extends AnyFunSuite {
 
       val result = s.run()
       assert(result.getStatusCode == StatusCode.OK, s"unexpected status: ${result.getStatusCode}")
-      assert(s.logs.exists(_.contains("PROGRAM-RAN")), s"the program did not run: ${s.logs}")
+      assert(s.output.exists(_.contains("PROGRAM-RAN")), s"the program did not run: ${s.output}")
       assert(s.jvmRunEnvironment().getMainClasses.asScala.map(_.getClassName).toList == List(ProgramRunner.MainClass),
         "the main class was forgotten by a compile that had nothing to do")
     }
@@ -354,6 +354,14 @@ class TestBspRun extends AnyFunSuite {
     def view: ca.uwaterloo.flix.api.ProjectView =
       Bootstrap.bootstrap(project, None)(ca.uwaterloo.flix.util.Formatter.NoFormatter, System.out).unsafeGet.view
 
+    /**
+      * What the program wrote, as the protocol's own channel for it.
+      *
+      * Not the build log: this version of the protocol has `run/printStdout` for a program's output, and
+      * a client shows it in a run console rather than beside dependency resolution.
+      */
+    def output: List[String] = received.output.asScala.toList
+
     def logs: List[String] = received.logs.asScala.toList
 
     def shown: List[String] = received.shown.asScala.toList
@@ -362,6 +370,7 @@ class TestBspRun extends AnyFunSuite {
   }
 
   private class Received {
+    val output = new ConcurrentLinkedQueue[String]()
     val taskStarts = new ConcurrentLinkedQueue[TaskStartParams]()
     val taskFinishes = new ConcurrentLinkedQueue[TaskFinishParams]()
     val logs = new ConcurrentLinkedQueue[String]()
@@ -420,6 +429,8 @@ class TestBspRun extends AnyFunSuite {
   private class RecordingClient(received: Received) extends BuildClient {
     override def onBuildLogMessage(params: LogMessageParams): Unit = received.logs.add(params.getMessage)
     override def onBuildShowMessage(params: ShowMessageParams): Unit = received.shown.add(params.getMessage)
+    override def onRunPrintStdout(params: PrintParams): Unit = received.output.add(params.getMessage)
+    override def onRunPrintStderr(params: PrintParams): Unit = ()
     override def onBuildPublishDiagnostics(params: PublishDiagnosticsParams): Unit = received.diagnostics.add(params)
     override def onBuildTargetDidChange(params: DidChangeBuildTarget): Unit = ()
     override def onBuildTaskStart(params: TaskStartParams): Unit = received.taskStarts.add(params)

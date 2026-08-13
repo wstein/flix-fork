@@ -86,9 +86,12 @@ class TestBspCompile extends AnyFunSuite {
       // The stable identifier, not the category. `lsp.Diagnostic.code` carries the *kind* --
       // "Resolution Error" -- which hundreds of distinct errors share and nothing can key on. Copying
       // the language server's field here is the obvious mistake, so it is asserted against.
+      // `Diagnostic.code` is an `Either[String, Integer]` in this protocol version, matching LSP: a
+      // server may key on a number instead. Ours is always the string form, which is the assertion.
+      assert(diagnostic.getCode.isLeft, s"code is not a string: ${diagnostic.getCode}")
       assert(
-        diagnostic.getCode.matches("E\\d+"),
-        s"code is '${diagnostic.getCode}', which is not a stable error code")
+        diagnostic.getCode.getLeft.matches("E\\d+"),
+        s"code is '${diagnostic.getCode.getLeft}', which is not a stable error code")
       // Zero-based, which is the whole reason `CliContract` chose zero-based ranges -- they cross a
       // BSP hop untranslated. `lsp.Position` is one-indexed internally, so reading it without the
       // conversion reports every diagnostic one line low; the error here is on the first line.
@@ -353,6 +356,8 @@ class TestBspCompile extends AnyFunSuite {
     override def onBuildTaskStart(params: TaskStartParams): Unit = received.taskStarts.add(params)
     override def onBuildTaskFinish(params: TaskFinishParams): Unit = received.taskFinishes.add(params)
     override def onBuildShowMessage(params: ShowMessageParams): Unit = ()
+    override def onRunPrintStdout(params: PrintParams): Unit = ()
+    override def onRunPrintStderr(params: PrintParams): Unit = ()
     override def onBuildLogMessage(params: LogMessageParams): Unit = ()
     override def onBuildTargetDidChange(params: DidChangeBuildTarget): Unit = ()
     override def onBuildTaskProgress(params: TaskProgressParams): Unit = ()

@@ -42,7 +42,8 @@ import ch.epfl.scala.bsp4j.*
   * `test-finish`, one per test, under a parent task for the run. The location on each is what makes
   * a result clickable, and `Symbol.DefnSym` already carries it, so it costs nothing to provide.
   */
-class BspTestSink(tasks: BspTasks, target: BuildTargetIdentifier, parent: TaskId) extends Tester.TestEventSink {
+class BspTestSink(tasks: BspTasks, target: BuildTargetIdentifier, parent: TaskId,
+                  onOutput: String => Unit = _ => ()) extends Tester.TestEventSink {
 
   /** The task opened for each test, so its finish can name the same id. */
   private var open: Map[String, TaskId] = Map.empty
@@ -55,6 +56,15 @@ class BspTestSink(tasks: BspTasks, target: BuildTargetIdentifier, parent: TaskId
   private var elapsedTotal: Duration = Duration(0)
 
   override def start(tests: Vector[Tester.TestCase])(implicit flix: Flix): Unit = ()
+
+  /**
+    * Passes a program's own printing on as a log message.
+    *
+    * Not as part of a test's result: it arrives while some test is running, but the runner reports which
+    * test failed with its own captured output, and attributing a stray line to whichever test happens to
+    * be in flight would be a guess presented as a fact.
+    */
+  override def output(line: String)(implicit flix: Flix): Unit = onOutput(line)
 
   override def accept(event: Tester.TestEvent)(implicit flix: Flix): Unit = event match {
     case Tester.TestEvent.Before(id) =>

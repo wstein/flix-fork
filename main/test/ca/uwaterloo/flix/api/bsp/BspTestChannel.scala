@@ -17,6 +17,7 @@ package ca.uwaterloo.flix.api.bsp
 
 import java.io.{InputStream, OutputStream}
 import java.nio.channels.{Channels, Pipe}
+import java.util.logging.{Level, Logger}
 
 /**
   * The two byte streams a BSP suite connects a client and a server over.
@@ -61,8 +62,20 @@ object BspTestChannel {
       }
   }
 
+  /**
+    * Silences lsp4j's report that the stream it was reading has closed.
+    *
+    * Closing the pipe is how a suite ends a session, so the report is expected -- but it arrives through
+    * `java.util.logging` at INFO with a full stack trace, once per session, and a suite that opens dozens
+    * buries its own output under them. Suppressed here rather than in the server, because in production
+    * that same report is the only notice that a client vanished.
+    */
+  private def quietEndOfStream(): Unit =
+    Logger.getLogger("org.eclipse.lsp4j.jsonrpc").setLevel(Level.OFF)
+
   /** Opens a fresh connection. */
   def open(): Channel = {
+    quietEndOfStream()
     val toServer = Pipe.open()
     val toClient = Pipe.open()
     Channel(

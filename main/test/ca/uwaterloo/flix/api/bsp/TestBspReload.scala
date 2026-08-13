@@ -222,6 +222,8 @@ class TestBspReload extends AnyFunSuite {
     override def onBuildPublishDiagnostics(params: PublishDiagnosticsParams): Unit = received.diagnostics.add(params)
     override def onBuildTargetDidChange(params: DidChangeBuildTarget): Unit = received.targetChanges.add(params)
     override def onBuildShowMessage(params: ShowMessageParams): Unit = received.shown.add(params.getMessage)
+    override def onRunPrintStdout(params: PrintParams): Unit = ()
+    override def onRunPrintStderr(params: PrintParams): Unit = ()
     override def onBuildLogMessage(params: LogMessageParams): Unit = ()
     override def onBuildTaskStart(params: TaskStartParams): Unit = ()
     override def onBuildTaskProgress(params: TaskProgressParams): Unit = ()

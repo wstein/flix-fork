@@ -32,8 +32,19 @@ object JvmLoader {
   case class LoaderResult(
                            main: Option[Array[String] => Unit],
                            tests: Map[Symbol.DefnSym, TestFn],
+                           testEntryPoints: Map[Symbol.DefnSym, TestEntryPoint],
                            sources: Map[Source, SourceLocation]
                          )
+
+  /**
+    * Where a test's generated shim is, without the means to call it.
+    *
+    * `CodeGen` knows this for every build; only a build that *loads* its classes can turn it into
+    * something callable. Reporting it either way is what lets a later process -- a forked test runner --
+    * reach the same test from the class files a build left behind, instead of the build having to be
+    * repeated with loading turned on.
+    */
+  case class TestEntryPoint(className: String, methodName: String, skip: Boolean)
 
   /**
     * Loads `classes` if enabled by [[Flix.options.loadClassFiles]] and returns handles to the methods.
@@ -41,11 +52,14 @@ object JvmLoader {
     * Additionally computes the total byte size of `classes`
     */
   def run(root: Root)(implicit flix: Flix): LoaderResult = {
+    val entryPoints = MapOps.mapValues(root.tests) { defn =>
+      TestEntryPoint(defn.className.toBinaryName, defn.methodName, defn.isSkip)
+    }
     if (flix.options.loadClassFiles) {
       val (main, tests) = load(root)
-      LoaderResult(main, tests, root.sources)
+      LoaderResult(main, tests, entryPoints, root.sources)
     } else {
-      LoaderResult(None, Map.empty, root.sources)
+      LoaderResult(None, Map.empty, entryPoints, root.sources)
     }
   }
 

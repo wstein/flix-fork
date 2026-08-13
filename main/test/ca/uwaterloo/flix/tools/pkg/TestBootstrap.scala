@@ -1367,15 +1367,18 @@ class TestBootstrap extends AnyFunSuite {
     val b = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
     b.build(PkgTestUtils.mkFlix)
     val buildDir = p.resolve("./build/").normalize()
-    // The build manifest is the one file in the build directory that is not a class file, and
-    // 'clean' has to remove it with the products it describes. `build` is development mode, so
-    // it is the debug output that exists here.
+    // Two files in the build directory are not class files, and 'clean' has to remove both with the
+    // products they describe: what the build produced, and where it put each test's shim. `build` is
+    // development mode, so it is the development output that exists here.
     val manifestFile = manifestFileOf(p, Build.Development)
+    val testRecord = outputDirOf(p, Build.Development).resolve(TestManifest.FileName).normalize()
     assert(Files.exists(manifestFile), "the build wrote no build manifest")
+    assert(Files.exists(testRecord), "the build recorded no tests, so a test run would compile again")
     assert(
       !Files.exists(outputDirOf(p, Build.Production)),
       "a development build wrote into the production output directory")
-    val buildFiles = FileOps.getFilesIn(buildDir, Int.MaxValue).filterNot(_.normalize() == manifestFile)
+    val records = Set(manifestFile, testRecord)
+    val buildFiles = FileOps.getFilesIn(buildDir, Int.MaxValue).filterNot(f => records.contains(f.normalize()))
     if (buildFiles.isEmpty || buildFiles.exists(!FileOps.checkExt(_, "class"))) {
       fail(
         s"""build output is not as expected:

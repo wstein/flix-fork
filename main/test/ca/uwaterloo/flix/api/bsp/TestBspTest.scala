@@ -151,6 +151,31 @@ class TestBspTest extends AnyFunSuite {
     }
   }
 
+  test("a test that exits the JVM does not take the server with it") {
+    // The reason the tests run in a process of their own, and the failure that made it worth the cost: a
+    // test is a compiled function reflected and called, so `System.exit` inside one used to end the
+    // server an editor was talking to -- with no diagnostic anywhere, because the process that would have
+    // reported it was the one that died.
+    withSession(
+      """use Sys.Exit
+        |
+        |@Test
+        |def testExits(): Unit \ { Exit, IO } =
+        |    println("ABOUT-TO-EXIT");
+        |    Exit.exit(7)
+        |""".stripMargin) { s =>
+      val result = s.test()
+
+      // The run failed, which is the honest report of a runner that died mid-suite.
+      assert(result.getStatusCode == StatusCode.ERROR, s"unexpected status: ${result.getStatusCode}")
+
+      // And the session is still there. This is the whole assertion; everything else is detail.
+      assert(s.compile().getStatusCode == StatusCode.OK,
+        "a test that exited the JVM took the server with it")
+      assert(s.test().getStatusCode == StatusCode.ERROR, "the session could not run tests again")
+    }
+  }
+
   test("a project that does not compile runs no tests") {
     withSession(MixedTests, brokenSource = true) { s =>
       val result = s.test()
@@ -189,6 +214,9 @@ class TestBspTest extends AnyFunSuite {
       if (filters.nonEmpty) params.setArguments(filters.asJava)
       client.buildTargetTest(params).get(Timeout, TimeUnit.SECONDS)
     }
+
+    def compile(): CompileResult =
+      client.buildTargetCompile(new CompileParams(List(target).asJava)).get(Timeout, TimeUnit.SECONDS)
 
     def taskStarts: List[TaskStartParams] = received.taskStarts.asScala.toList
 
@@ -281,6 +309,8 @@ class TestBspTest extends AnyFunSuite {
     override def onBuildTaskFinish(params: TaskFinishParams): Unit = received.taskFinishes.add(params)
     override def onBuildPublishDiagnostics(params: PublishDiagnosticsParams): Unit = received.diagnostics.add(params)
     override def onBuildShowMessage(params: ShowMessageParams): Unit = ()
+    override def onRunPrintStdout(params: PrintParams): Unit = ()
+    override def onRunPrintStderr(params: PrintParams): Unit = ()
     override def onBuildLogMessage(params: LogMessageParams): Unit = ()
     override def onBuildTargetDidChange(params: DidChangeBuildTarget): Unit = ()
     override def onBuildTaskProgress(params: TaskProgressParams): Unit = ()

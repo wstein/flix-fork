@@ -50,6 +50,7 @@ class TestBspCapabilities extends AnyFunSuite {
     check(BspFeature.OutputPaths, advertised.getOutputPathsProvider)
     check(BspFeature.JvmRunEnvironment, advertised.getJvmRunEnvironmentProvider)
     check(BspFeature.JvmTestEnvironment, advertised.getJvmTestEnvironmentProvider)
+    check(BspFeature.JvmCompileClasspath, advertised.getJvmCompileClasspathProvider)
     check(BspFeature.Reload, advertised.getCanReload)
     check(BspFeature.BuildTargetChanged, advertised.getBuildTargetChangedProvider)
   }
@@ -78,7 +79,7 @@ class TestBspCapabilities extends AnyFunSuite {
       BspFeature.Compile, BspFeature.Run, BspFeature.Test, BspFeature.Debug, BspFeature.InverseSources,
       BspFeature.DependencySources, BspFeature.DependencyModules, BspFeature.Resources,
       BspFeature.OutputPaths, BspFeature.JvmRunEnvironment, BspFeature.JvmTestEnvironment,
-      BspFeature.Reload, BspFeature.BuildTargetChanged)
+      BspFeature.JvmCompileClasspath, BspFeature.Reload, BspFeature.BuildTargetChanged)
     val missing = BspFeature.All.filterNot(counted.contains)
     assert(missing.isEmpty, s"these features are in BspFeature.All but checked nowhere: $missing")
   }

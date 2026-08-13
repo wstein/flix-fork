@@ -388,6 +388,8 @@ class TestBspLifecycle extends AnyFunSuite {
   /** A client that accepts every notification and records none: these tests assert on responses. */
   private class SilentClient extends BuildClient {
     override def onBuildShowMessage(params: ShowMessageParams): Unit = ()
+    override def onRunPrintStdout(params: PrintParams): Unit = ()
+    override def onRunPrintStderr(params: PrintParams): Unit = ()
     override def onBuildLogMessage(params: LogMessageParams): Unit = ()
     override def onBuildPublishDiagnostics(params: PublishDiagnosticsParams): Unit = ()
     override def onBuildTargetDidChange(params: DidChangeBuildTarget): Unit = ()

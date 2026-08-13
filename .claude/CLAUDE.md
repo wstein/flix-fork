@@ -452,6 +452,28 @@ classpath so a client can fork it itself, and `jvmTestEnvironment` reports the s
 again — `@Test` defs are entry points in the same output, so there is no test-only
 classpath to invent.
 
+**`buildTarget/test` forks, and the fork is this same compiler.** Tests used to run in the
+server's JVM, where a `System.exit` in one took the server with it. The fork is `flix test
+--events-json --reuse-build` in the project: it reads `tests.json` and the class directory, reports
+each test as a line of JSON, and the server parses those back into `Tester.TestEvent`s for the same
+sink an in-process run used — one opinion about what an outcome is, not two. Three things not to
+undo:
+
+- **`--reuse-build` is required, not an optimisation.** The server has just compiled and is the
+  authority; a fork that asked again would ask under *its* options, compute a different fingerprint,
+  and write a manifest the server then reads as stale. Two processes invalidating each other's build
+  is two full compiles per test run, forever, with nothing reporting it.
+- **The events own standard output**, so the runner quarantines `System.out` the way `flix bsp` does
+  and a test's `println` arrives as an `output` event. A line that is not an event is reported as
+  output too — never as a failed test called `<runner>`, which is what the first version did.
+- **An empty test table is authoritative in `testRecorded`** and not on the in-process path: there
+  the record was written by the build that just ran, so "no tests" is a fact rather than a gap.
+
+**`canDebug` stays false, and `docs/BSP.md` §11 carries the JDWP attach recipe instead.**
+`debugSessionStart` must return a DAP address, and JDWP is not DAP; but this compiler emits JSR-45
+tables under `--Xdebug`, and editors attach to JDWP directly, so the capability a user wants is a
+page of documentation away rather than a protocol implementation away.
+
 **`buildTarget/test` reports each test, and there is only one runner.** `Tester` decides
 what a test outcome *is* — a `false` result is a failure, a non-false result that wrote to
 standard error is also one, a `@Skip`ped test never starts the clock — and callers choose
@@ -521,11 +543,28 @@ refused beyond that rather than parked — surplus work costs a platform thread 
 is deliberately unbounded so a long run cannot starve a query. And `BspLogStream` truncates a
 line past 32 KB once, then discards the rest of it.
 
-**Two things the pinned wire model cannot express**, both documented rather than half-done:
-bsp4j 2.1.1's `RunParams`/`TestParams` have no `workingDirectory` or `environmentVariables`, so
-a client sending them is sending fields gson drops before this code sees them; and
-`TaskStartParams`/`TaskFinishParams` have no `originId`, so it goes on the `CompileReport` and
-`TestReport` payloads, which do.
+**The wire model is bsp4j 2.2.0-M2, and that is a decision with a reason.** On 2.1.1
+`RunParams`/`TestParams` have no `workingDirectory` or `environmentVariables` and `BuildClient` has
+no `run/printStdout`, so those facilities could only be documented as missing. A milestone with no
+successor is a real risk; `flix.testBsp` is the gate, because a renamed wire field shows up in
+serialisation and nowhere else. `TaskStartParams`/`TaskFinishParams` still have no `originId`, so it
+goes on the `CompileReport` and `TestReport` payloads, which do.
+
+**A program's output is `run/printStdout`, not `build/logMessage`.** A client shows a run in its own
+console; the build log is for the build. Both streams are merged before they get there, so stderr
+arrives on the stdout channel -- deliberate, since the program's own interleaving is what a reader
+needs.
+
+**`CompileReport.errors` is a count of diagnostics**, not of files with diagnostics, and the count
+comes from the session because only it sees the messages. It was `0 | 1` for as long as the report
+was built from the status alone.
+
+**Every successful build records the test table** (`TestManifest`), not only a run that loaded the
+classes: `CodeGen` computes where each shim went for every build, and `JvmLoader.LoaderResult`
+reports it either way. Recording it only when the classes were loaded meant a test run after
+`flix build` compiled the whole program again to learn what the build already knew. `clean` had to be
+taught about the file -- an output type it does not recognise makes the build directory uncleanable,
+which is how this was caught.
 
 **Requests do not run on lsp4j's message thread, and that has two consequences.** A
 handler that ran there would stop the connection being read for the length of a compile,

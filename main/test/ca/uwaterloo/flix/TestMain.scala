@@ -804,6 +804,23 @@ class TestMain extends AnyFunSuite {
     }
   }
 
+  test("test takes the options a forked run is driven by") {
+    // Ported by hand from the flat parser to the spec tree, which is where a per-command option
+    // goes missing without anything failing to compile: `--events-json` is how another process
+    // reads a test run, and a caller that cannot pass it gets a human-readable report instead.
+    val opts = Main.parseCmdOpts(Array("test", "--filter", "Foo.*", "--filter", "Bar", "--events-json", "--reuse-build")).get
+    assert(opts.command == Main.Command.Test)
+    assert(opts.testFilters == Seq("Foo.*", "Bar"))
+    assert(opts.eventsJson)
+    assert(opts.reuseBuild)
+
+    val bare = Main.parseCmdOpts(Array("test")).get
+    assert(bare.testFilters.isEmpty && !bare.eventsJson && !bare.reuseBuild)
+    // They belong to `test`: no other command runs one.
+    assert(Main.parseCmdOpts(Array("build", "--events-json")).isEmpty)
+    assert(Main.parseCmdOpts(Array("run", "--filter", "Foo")).isEmpty)
+  }
+
   test("`--clean` is declared on the commands that can skip work, and nowhere else") {
     // It is per-command on purpose: a command that never skips has no use for a flag saying do the
     // work anyway, and a flag the parser knows but nothing reads is worse than one it rejects --

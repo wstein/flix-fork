@@ -324,7 +324,7 @@ class BspSession(val projectPath: Path, options: Options, log: BspLogStream) {
     * condition that makes that sound; the visible consequence here is that only the request whose
     * build ran publishes the diagnostics.
     */
-  def compile(target: BuildTargetIdentifier, originId: Option[String]): CompileResult = {
+  def compile(target: BuildTargetIdentifier, originId: Option[String]): BspSession.CompileAnswer = {
     val startedAt = currentGeneration
 
     val (outcome, ran) = compileOrJoin()
@@ -335,7 +335,7 @@ class BspSession(val projectPath: Path, options: Options, log: BspLogStream) {
       // id it arrived with, since a client correlates every answer by it, cancelled ones included.
       val cancelled = new CompileResult(StatusCode.CANCELLED)
       originId.foreach(cancelled.setOriginId)
-      return cancelled
+      return BspSession.CompileAnswer(cancelled, diagnostics = 0)
     }
 
     // Only the request whose build actually ran publishes. The ledger is the record of what the client
@@ -347,7 +347,9 @@ class BspSession(val projectPath: Path, options: Options, log: BspLogStream) {
 
     val result = new CompileResult(if (outcome.isSuccess) StatusCode.OK else StatusCode.ERROR)
     originId.foreach(result.setOriginId)
-    result
+    // The count travels with the status because only this side has it: the messages are the compiler's,
+    // and a report built from the status alone can say no more than "some" or "none".
+    BspSession.CompileAnswer(result, diagnostics = outcome.messages.length)
   }
 
   /**
@@ -462,7 +464,9 @@ class BspSession(val projectPath: Path, options: Options, log: BspLogStream) {
     * holding the lock across it would block every later compile behind it.
     */
   def run(target: BuildTargetIdentifier, arguments: List[String], originId: Option[String],
-          cancellation: Cancellation): RunResult = {
+          cancellation: Cancellation,
+          workingDirectory: Option[Path] = None,
+          environment: Map[String, String] = Map.empty): RunResult = {
     val startedAt = currentGeneration
 
     val (outcome, view) = buildLock.synchronized {
@@ -491,10 +495,15 @@ class BspSession(val projectPath: Path, options: Options, log: BspLogStream) {
 
     val result = BspRunner.run(
       view, Build.Development, arguments,
-      // The program's own output, as log messages. A client shows these in its run console; they are
-      // not diagnostics and must not be mistaken for them.
-      line => logMessage(line),
+      // `run/printStdout`, which is what this protocol version gives a program's output. It used to go
+      // to `build/logMessage` for want of anywhere better, and a client showed a run's output in its
+      // build log beside dependency resolution. The two streams are merged before they get here, so a
+      // program's writes to standard error arrive on this one -- the price of preserving the program's
+      // own interleaving, which is what a reader of the output actually needs.
+      line => printStdout(line, originId),
       RunTimeout,
+      workingDirectory = workingDirectory,
+      environment = environment,
       // A cancelled run stops its program. Dropping the reply and leaving the process running would
       // hold the terminal, the build lock and the output stream until it happened to end, which is not
       // cancellation in any sense a user would recognise.
@@ -526,35 +535,49 @@ class BspSession(val projectPath: Path, options: Options, log: BspLogStream) {
     * descriptor, which here carries the protocol. The events go to a [[BspTestSink]] instead, and both
     * renderings agree about pass and fail because both watch the same runner.
     */
-  def test(target: BuildTargetIdentifier, filters: List[Regex], originId: Option[String],
-           cancellation: Cancellation): TestResult = {
+  def test(target: BuildTargetIdentifier, filters: List[String], originId: Option[String],
+           cancellation: Cancellation,
+           environment: Map[String, String] = Map.empty): TestResult = {
     val startedAt = currentGeneration
     val view = requireView()
 
     val parent = tasks.newTask()
-    val sink = new BspTestSink(tasks, target, parent)
+    val sink = new BspTestSink(tasks, target, parent, onOutput = line => logMessage(line))
     tasks.start(parent, s"Testing ${view.packageName}", Some((TaskStartDataKind.TEST_TASK, new TestTask(target))))
 
-    // The finish is in a `finally` for the same reason `BspTasks.bracket` puts it there, which this
-    // cannot use because the pairs interleave with the events driving them: a throw between the start
-    // and the finish -- a shutdown, a project that stopped loading -- would leave the client's progress
-    // indicator turning forever and report the failure nowhere.
     var status: StatusCode = StatusCode.ERROR
     try {
-      val (outcome, ran) = buildLock.synchronized {
+      // Compiled here, and only here: the diagnostics are the server's to publish, and a client must not
+      // have to read a test runner's output to learn that its program does not compile. The fork then
+      // finds the build current and compiles nothing.
+      val outcome = buildLock.synchronized {
         val b = requireBootstrapForBuild()
-        b.testWith(flix, filters, sink, isCancelled = () => cancellation.isCancelled)
+        compileWith(b, view)
       }
 
       status =
-        if (cancellation.isCancelled) StatusCode.CANCELLED
-        else if (!isCurrent(startedAt)) StatusCode.CANCELLED
+        if (cancellation.isCancelled || !isCurrent(startedAt)) StatusCode.CANCELLED
         else {
           publish(target, outcome)
-          ran match {
-            // The program did not compile, so no test ran. The diagnostics just published say why.
-            case None => StatusCode.ERROR
-            case Some(succeeded) => if (succeeded) StatusCode.OK else StatusCode.ERROR
+          if (!outcome.isSuccess) {
+            // No test ran. The diagnostics just published say why.
+            StatusCode.ERROR
+          } else {
+            val result = BspForkedTester.run(
+              view, filters, sink,
+              // A cancelled test run kills the fork, which is the whole reason the tests are over there:
+              // stopping a process is an ordinary operation where stopping a thread is not one at all.
+              onStart = process => cancellation.onCancel(() => ProgramRunner.terminateTree(process, KillGrace)),
+              TestTimeout,
+              environment)(flix)
+
+            if (result.timedOut) {
+              showMessage(MessageType.ERROR,
+                s"the tests of ${view.packageName} did not finish within ${TestTimeout.toMinutes} minutes and were stopped.")
+            }
+            if (cancellation.isCancelled) StatusCode.CANCELLED
+            else if (result.passed) StatusCode.OK
+            else StatusCode.ERROR
           }
         }
 
@@ -562,9 +585,6 @@ class BspSession(val projectPath: Path, options: Options, log: BspLogStream) {
       originId.foreach(result.setOriginId)
       result
     } finally {
-      // The report carries the origin id, like a compile report does: it is how a client ties an
-      // aggregate back to the request that asked for it. `TaskStart` and `TaskFinish` themselves have no
-      // such field in this protocol version, so the payload is where it can go.
       val report = sink.report()
       originId.foreach(report.setOriginId)
       tasks.finish(parent, s"Tested ${view.packageName}", status,
@@ -752,6 +772,13 @@ class BspSession(val projectPath: Path, options: Options, log: BspLogStream) {
     */
   private def liveClient: Option[BuildClient] = if (isShutDown) None else client
 
+  /** Sends a line of a running program's output, which is not a message about the build. */
+  private def printStdout(line: String, originId: Option[String]): Unit =
+    liveClient.foreach { c =>
+      val params = new PrintParams(originId.getOrElse(""), line + System.lineSeparator())
+      c.onRunPrintStdout(params)
+    }
+
   /** Sends `message` to the client's log, if there is a client. */
   def logMessage(message: String): Unit =
     liveClient.foreach(_.onBuildLogMessage(new LogMessageParams(MessageType.LOG, message)))
@@ -806,6 +833,20 @@ class BspSession(val projectPath: Path, options: Options, log: BspLogStream) {
 object BspSession {
 
   /**
+    * What a compile answers with: the result a client waits for, and how much the compiler said.
+    *
+    * The two travel together because they come from different places. The status is a fact about the
+    * build; the count is a fact about the diagnostics, which only the session sees -- and a report built
+    * from the status alone could distinguish nothing finer than "some" from "none", which is what a
+    * client then puts in front of a user who has forty errors.
+    *
+    * @param diagnostics how many diagnostics the compile reported. Diagnostics, not files with
+    *                    diagnostics: a client summing across targets wants the former, and Flix has no
+    *                    warnings, so every one of them is an error.
+    */
+  case class CompileAnswer(result: CompileResult, diagnostics: Int)
+
+  /**
     * How long a run may take before the server stops it.
     *
     * A server that waited forever would be held open by any program that does not end, and a client
@@ -820,6 +861,15 @@ object BspSession {
     * because a process that ignores a forcible kill for five seconds is not going to be reasoned with.
     */
   private val KillGrace: java.time.Duration = java.time.Duration.ofSeconds(5)
+
+  /**
+    * How long a test run may take before the server stops it.
+    *
+    * Longer than a run's, because a suite legitimately takes longer than a program, and bounded for the
+    * same reason: a client cannot cancel a process it cannot see, and one test that never returns must
+    * not hold a session open indefinitely. The fork is what makes stopping it possible at all.
+    */
+  private val TestTimeout: java.time.Duration = java.time.Duration.ofMinutes(30)
 
   /** What this server calls itself in the initialize result and in `.bsp/flix.json`. */
   val ServerName: String = "flix"

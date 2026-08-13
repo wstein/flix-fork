@@ -16,6 +16,8 @@
 package ca.uwaterloo.flix.api.bsp
 
 import ca.uwaterloo.flix.api.{ProgramRunner, ProjectView}
+
+import java.nio.file.Path
 import ca.uwaterloo.flix.util.Build
 
 import java.io.{BufferedReader, InputStreamReader}
@@ -55,6 +57,8 @@ object BspRunner {
     * @param arguments  passed to the program, after the class name.
     * @param onOutput   called for each line the program writes.
     * @param onStart    called with the process as soon as it exists, so a caller can stop it.
+    * @param workingDirectory where to start the program. The project root when absent.
+    * @param environment      variables to set, on top of the ones this process inherited.
     * @param timeout    how long to wait before giving up and killing the process. A server must not
     *                   be held open forever by a program that does not end.
     */
@@ -63,13 +67,22 @@ object BspRunner {
           arguments: List[String],
           onOutput: String => Unit,
           timeout: java.time.Duration,
-          onStart: Process => Unit = _ => ()): Outcome = {
-    val process = new ProcessBuilder(ProgramRunner.command(view, build, arguments)*)
-      // In the project, so a program that reads a relative path finds what the user would expect.
-      .directory(view.projectPath.toFile)
+          onStart: Process => Unit = _ => (),
+          workingDirectory: Option[Path] = None,
+          environment: Map[String, String] = Map.empty): Outcome = {
+    val builder = new ProcessBuilder(ProgramRunner.command(view, build, arguments)*)
+      // The client's directory when it named one, and the project otherwise, so that a program reading a
+      // relative path finds what whoever started it would expect.
+      .directory(workingDirectory.getOrElse(view.projectPath).toFile)
       // Merged, so the program's own interleaving survives.
       .redirectErrorStream(true)
-      .start()
+
+    // Added to the inherited environment rather than replacing it: the protocol calls these variables to
+    // *set*, and a program that suddenly had no `PATH` or `HOME` would fail for reasons no client asked
+    // for. A client that wants a variable gone sets it empty.
+    environment.foreach { case (name, value) => builder.environment().put(name, value) }
+
+    val process = builder.start()
 
     // Nothing is written to the program's input. Closing it means a program that reads stdin sees the
     // end of it rather than blocking until the timeout.

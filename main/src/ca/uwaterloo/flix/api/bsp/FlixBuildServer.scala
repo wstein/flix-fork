@@ -225,12 +225,12 @@ class FlixBuildServer(session: BspSession, onExit: () => Unit, executor: Executo
     val target = targets.headOption.getOrElse(BuildTargets.id(view))
     val originId = Option(params.getOriginId)
 
-    tasks.bracket[CompileResult](
+    tasks.bracket[BspSession.CompileAnswer](
       message = s"Compiling ${view.packageName}",
       startData = _ => Some((TaskStartDataKind.COMPILE_TASK, new CompileTask(target))),
-      finishData = (_, result) => Some((TaskFinishDataKind.COMPILE_REPORT, compileReport(target, result, originId))),
-      statusOf = _.getStatusCode
-    )(_ => session.compile(target, originId))
+      finishData = (_, answer) => Some((TaskFinishDataKind.COMPILE_REPORT, compileReport(target, answer, originId))),
+      statusOf = _.result.getStatusCode
+    )(_ => session.compile(target, originId)).result
   }
 
   /**
@@ -268,9 +268,18 @@ class FlixBuildServer(session: BspSession, onExit: () => Unit, executor: Executo
     val view = session.requireView()
     val targets = requireKnownTargets(view, params.getTargets)
     val target = targets.headOption.getOrElse(BuildTargets.id(view))
-    val filters = Option(params.getArguments).map(_.asScala.toList).getOrElse(Nil).map(_.r)
+    val filters = Option(params.getArguments).map(_.asScala.toList).getOrElse(Nil)
 
-    session.test(target, filters, Option(params.getOriginId), cancellation)
+    // A working directory cannot be honoured for a test run: the runner is `flix test` in the project,
+    // which is where it finds `flix.toml`. Refused rather than ignored -- a field dropped in silence is
+    // the outcome a client cannot tell from one that was applied.
+    Option(params.getWorkingDirectory).filter(_.nonEmpty).foreach { given =>
+      throw new ResponseErrorException(new ResponseError(ResponseErrorCode.InvalidParams,
+        s"workingDirectory is not supported for a test run: the runner starts in the project ($given)", null))
+    }
+
+    session.test(target, filters, Option(params.getOriginId), cancellation,
+      environment = Option(params.getEnvironmentVariables).map(_.asScala.toMap).getOrElse(Map.empty))
   }
 
   /**
@@ -296,6 +305,30 @@ class FlixBuildServer(session: BspSession, onExit: () => Unit, executor: Executo
     session.reload()
     null
   }
+
+  /**
+    * Refused: there is no separate compile classpath to report.
+    *
+    * The protocol asks for the jars a *compilation* needs, which for a JVM language is where the
+    * javac-visible dependencies live. A Flix build resolves its own dependencies from `flix.toml` and
+    * compiles Flix, so the only classpath a client can act on is the runtime one -- and answering with
+    * that under this name would be describing something else. `jvmCompileClasspathProvider` stays false.
+    */
+  override def buildTargetJvmCompileClasspath(params: JvmCompileClasspathParams): CompletableFuture[JvmCompileClasspathResult] =
+    refuse(BspFeature.JvmCompileClasspath)
+
+  /**
+    * Ignored, with a line in the client's log saying so.
+    *
+    * `run/readStdin` exists for a client to type into a running program. Honouring it means keeping the
+    * program's standard input open for the length of the run, and today it is closed immediately and on
+    * purpose: a program that reads input then sees end-of-stream and proceeds, where one waiting on input
+    * a client may never send would hang until the run's timeout. Trading a clean end-of-stream for a
+    * possible hang is not an improvement, so this stays a notification that reports itself unsupported --
+    * a notification has no reply to refuse with.
+    */
+  override def onRunReadStdin(params: ReadParams): Unit =
+    session.logMessage("run/readStdin is not supported: a run's standard input is closed when it starts.")
 
   /**
     * Describes what a client needs to run the program itself.
@@ -336,15 +369,17 @@ class FlixBuildServer(session: BspSession, onExit: () => Unit, executor: Executo
   /**
     * Returns the report that ends a compile task.
     *
-    * The counts are what a client puts in its status bar. Warnings are always zero because
-    * `CompilationMessage` has no severity and `Flix.check` returns only errors -- reporting a warning
-    * here would be inventing one.
+    * The counts are what a client puts in its status bar, so `errors` is the number of *diagnostics*
+    * rather than of files that have them: a client summing across targets wants the former, and it used
+    * to be 1 for a file with forty errors because the report was built from the status alone.
+    *
+    * Warnings are always zero because `CompilationMessage` has no severity and `Flix.check` returns only
+    * errors -- reporting a warning here would be inventing one.
     */
   private def compileReport(target: BuildTargetIdentifier,
-                            result: CompileResult,
+                            answer: BspSession.CompileAnswer,
                             originId: Option[String]): CompileReport = {
-    val errors = if (result.getStatusCode == StatusCode.OK) 0 else 1
-    val report = new CompileReport(target, errors, 0)
+    val report = new CompileReport(target, answer.diagnostics, 0)
     originId.foreach(report.setOriginId)
     report
   }
@@ -512,6 +547,24 @@ class FlixBuildServer(session: BspSession, onExit: () => Unit, executor: Executo
   private def internalError(e: Exception): ResponseErrorException =
     new ResponseErrorException(
       new ResponseError(ResponseErrorCode.InternalError, Option(e.getMessage).getOrElse(e.toString), null))
+
+  /**
+    * Returns the directory `uri` names, or fails if it is not one.
+    *
+    * Checked rather than passed through: `ProcessBuilder` reports a missing working directory as a
+    * generic failure to start the program, which a user reads as "the build server cannot run my code".
+    * Naming the directory instead turns it into a request the client got wrong.
+    */
+  private def requireDirectory(uri: String): Option[Path] = Option(uri).filter(_.nonEmpty).map { given =>
+    val path = BspUri.toPath(given).getOrElse(
+      throw new ResponseErrorException(new ResponseError(ResponseErrorCode.InvalidParams,
+        s"workingDirectory is not a file uri: $given", null)))
+    if (!Files.isDirectory(path)) {
+      throw new ResponseErrorException(new ResponseError(ResponseErrorCode.InvalidParams,
+        s"workingDirectory is not a directory: $path", null))
+    }
+    path
+  }
 
   /**
     * Fails unless this client was offered a target.
