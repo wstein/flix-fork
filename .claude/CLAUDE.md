@@ -38,6 +38,11 @@ Three rules decide what a page lists, and each answers a different reader:
 - `-h`/`--help` is listed wherever it is answered. It is the only short name:
   a letter is worth its ambiguity for the option you type when lost.
 
+The root synopsis spells out every command rather than saying `[COMMAND]`, and
+`synopsisLines` wraps it by hand — picocli sees the bracketed group as one word
+and broke `metric` into `metr|ic`. Generated from the visible subcommands, so it
+cannot drift from what the parser takes.
+
 `--help`, `--version` and `--Xhelp` print and then leave, from inside
 `parseCmdOpts`. A test that parses one of them exits the test process, so assert
 on `rootSpec` or on `usageText` instead.

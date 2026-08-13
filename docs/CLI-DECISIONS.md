@@ -7,7 +7,7 @@ the one part of a compiler that has no test until somebody writes one.
 
 Status values are **Settled** (in the repository, asserted by `TestMain`),
 **Proposed** (implemented and asserted, but a judgement call the team may want to
-overturn -- D3, D4 and D5 are the three worth arguing about), and **Deferred**
+overturn -- D3, D4, D5 and D7 are the ones worth arguing about), and **Deferred**
 (knowingly unresolved, with the blocker named).
 
 The invariant that binds the rest: **hiding is a property of the usage text and
@@ -56,7 +56,7 @@ would pass whether or not it came back.
 **Consequence, accepted:** `flix metric --json` is accepted and prints the text
 report, since `--json` is global and every command takes it. Refusing it there
 would mean a command rejecting a global, which is a larger decision than this
-one -- see D7.
+one -- see D8.
 
 ## D3 — `-h`, and it is the only short name
 
@@ -138,7 +138,33 @@ That is also why the duplicate-name lint written against scopt is not carried
 over: picocli refuses a duplicate name within a command when the spec is built,
 which is the same check, earlier, and without a list of exceptions to maintain.
 
-## D7 — A global that only some commands read
+## D7 — The synopsis names the commands
+
+**Status: Proposed.**
+
+`Usage: flix [OPTIONS] <file>... [COMMAND]` is picocli's default and it says that
+a command exists without saying which, so the first line a reader sees named
+nothing they could type. It now reads `flix [init|check|build|...] [options]
+<file>...`, which is the shape the scopt parser printed before the migration.
+
+The list is generated from the visible subcommands rather than written out. A
+hand-written synopsis is a second list of commands, and the one it replaced had
+already gone stale -- it named eighteen commands when the parser took
+twenty-four.
+
+Wrapping it is the part that needed code: picocli treats the bracketed group as
+one word and breaks it wherever the width runs out, which produced `metr|ic` and
+`eff-|check`. `synopsisLines` wraps at name boundaries, keeps the separator on
+the line that breaks, and carries the closing bracket with the last name so it is
+never orphaned. `TestMain` rejoins the wrapped lines and compares against the
+parser's own list, which is the one check a split name cannot pass.
+
+**Rejected:** `synopsisSubcommandLabel`, picocli's supported hook for this. It
+replaces the `[COMMAND]` token in place, so the list lands after the options and
+the line reads `flix [OPTIONS] <file>... [init|check|...]` -- the commands last,
+which is the opposite of what makes them findable.
+
+## D8 — A global that only some commands read
 
 **Status: Deferred.**
 
@@ -153,7 +179,7 @@ name-per-command bookkeeping D1 removed; a "which command reads this" table is a
 second source of truth beside the setters unless it is derived from them, and
 nothing derives it today.
 
-## D8 — Completions and a machine-readable spec
+## D9 — Completions and a machine-readable spec
 
 **Status: Deferred.**
 

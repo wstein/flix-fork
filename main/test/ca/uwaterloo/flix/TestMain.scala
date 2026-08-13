@@ -774,6 +774,36 @@ class TestMain extends AnyFunSuite {
     }
   }
 
+  test("the synopsis names every command, unbroken and inside the width") {
+    // picocli's `[COMMAND]` says a command exists without saying which, so the first line a reader
+    // sees named nothing they could type. Spelling them out means wrapping them, and picocli sees
+    // the bracketed group as one word -- it broke `metric` into `metr|ic`. Asserted by rejoining
+    // the wrapped lines, which is the one check a split name cannot pass.
+    def synopsisOf(scope: Main.HelpScope): List[String] = {
+      val lines = Main.usageText(scope, None, CommandLine.Help.Ansi.OFF).linesIterator.toList
+      val start = lines.indexWhere(_.startsWith("Usage:"))
+      val end = lines.indexWhere(_.startsWith("      <file>"), start)
+      lines.slice(start, end)
+    }
+
+    val root = Main.rootSpec(new Main.OptsCell)
+    val listed = root.subcommands().asScala.collect {
+      case (name, sub) if !sub.getCommandSpec.usageMessage().hidden() => name
+    }
+    val synopsis = synopsisOf(Main.HelpScope.Standard)
+    assert(synopsis.head + synopsis.tail.map(_.trim).mkString == s"Usage: flix [${listed.mkString("|")}] [options] <file>...")
+    for (line <- synopsis) {
+      assert(line.length <= 80, s"'$line' is ${line.length} columns")
+    }
+
+    // And the experimental commands are in the one a reader asked for.
+    val full = synopsisOf(Main.HelpScope.Full).map(_.trim).mkString
+    for (name <- List("Xperf", "Xmemory", "Xzhegalkin")) {
+      assert(full.contains(name), s"'$name' is missing from the --Xhelp synopsis")
+      assert(!synopsis.map(_.trim).mkString.contains(name), s"'$name' is in the standard synopsis")
+    }
+  }
+
   test("`--clean` is declared on the commands that can skip work, and nowhere else") {
     // It is per-command on purpose: a command that never skips has no use for a flag saying do the
     // work anyway, and a flag the parser knows but nothing reads is worse than one it rejects --

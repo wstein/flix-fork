@@ -38,6 +38,7 @@ import picocli.CommandLine.Model.{CommandSpec, OptionSpec, PositionalParamSpec}
 import java.io.{File, IOException, PrintStream}
 import java.net.BindException
 import java.nio.file.{Files, Paths}
+import scala.collection.mutable
 import scala.jdk.CollectionConverters.*
 
 object Main {
@@ -1091,6 +1092,46 @@ object Main {
   }
 
   /**
+    * The synopsis, as lines that fit a terminal, listing every command a reader may type.
+    *
+    * Wrapped here rather than by picocli, which sees the whole bracketed group as one word and so
+    * breaks it wherever the width runs out -- `metr|ic`, `eff-|check`. A command name split across
+    * two lines is not a command name.
+    *
+    * The continuation indent aligns under the first name, which is `"Usage: "` plus `"flix ["`, so
+    * every line has the same room for names.
+    */
+  private def synopsisLines(names: Seq[String]): Array[String] = {
+    val head = "flix ["
+    val tail = "] [options] <file>..."
+    val indent = " " * ("Usage: ".length + head.length)
+    val budget = 80 - indent.length
+
+    val lines = mutable.ArrayBuffer.empty[String]
+    var current = new StringBuilder
+    for ((name, i) <- names.zipWithIndex) {
+      // The tail is carried by the last name rather than appended afterwards, so the bracket that
+      // closes the list is never orphaned on a line of its own.
+      val last = i == names.length - 1
+      val token = if (last) name + tail else name
+      val word = if (current.isEmpty) token else s"|$token"
+      // A broken line keeps the separator that follows it, or the names either side of the break
+      // read as a list and a name standing apart from it. Room for that separator is reserved by
+      // packing every continued line to one character less than the width.
+      val limit = if (last) budget else budget - 1
+      if (current.nonEmpty && current.length + word.length > limit) {
+        lines += current.append("|").toString()
+        current = new StringBuilder(token)
+      } else {
+        current ++= word
+      }
+    }
+    lines += current.toString()
+
+    (head + lines.head) +: lines.tail.map(indent + _).toArray
+  }
+
+  /**
     * True of an option or command whose name marks it experimental.
     *
     * The name is the marker rather than a flag beside it, because the name is the part a reader
@@ -1252,6 +1293,15 @@ object Main {
         sub.getCommandSpec.usageMessage().hidden(true)
       }
     }
+
+    // The commands, spelled out. picocli's `[COMMAND]` says that a command exists without saying
+    // which, so the first line a reader sees named nothing they could type. Generated from the
+    // visible subcommands rather than written out, so it cannot drift from what the parser takes --
+    // which is exactly what the hand-written synopsis it replaces had done.
+    val visible = root.subcommands().asScala.collect {
+      case (name, sub) if !sub.getCommandSpec.usageMessage().hidden() => name
+    }
+    root.usageMessage().customSynopsis(synopsisLines(visible.toSeq) *)
 
     addGlobalOptions(cell, root, scope)
     root
