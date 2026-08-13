@@ -1,6 +1,7 @@
 package ca.uwaterloo.flix.tools.pkg
 
 import ca.uwaterloo.flix.api.{Bootstrap, BootstrapError, BuildManifest, Flix, TestManifest, Version}
+import ca.uwaterloo.flix.tools.Tester
 import ca.uwaterloo.flix.util.{Build, FileOps, Formatter, LibLevel, Options, Result}
 import org.scalatest.DoNotDiscover
 import org.scalatest.funsuite.AnyFunSuite
@@ -687,6 +688,38 @@ class TestBootstrap extends AnyFunSuite {
         |""".stripMargin)
 
     assert(b.test(mkDeterministicFlix).isInstanceOf[Result.Err[?, ?]], "an edited test was not compiled")
+  }
+
+  test("reusing a build made from other sources says so, and runs it anyway") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out)
+    val b = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
+    assert(b.test(mkDeterministicFlix).isInstanceOf[Result.Ok[?, ?]])
+
+    // `testRecorded` asks no question about currency, on purpose: a forked runner computing the
+    // fingerprint under its own options would disagree with the parent that wrote it. But
+    // `--reuse-build` is a public flag, so the caller need not have just built -- and a green run over
+    // the previous build's classes is the worst outcome a test runner has. The source digest is about
+    // contents alone, so it is comparable across processes and is the one thing worth saying.
+    Files.writeString(p.resolve("test").resolve("TestMain.flix"),
+      """use Assert.assertEq
+        |
+        |@Test
+        |def testEdited(): Unit \ Assert = assertEq(expected = 2, 1 + 1)
+        |""".stripMargin)
+
+    val said = new ByteArrayOutputStream()
+    val result = Console.withOut(new PrintStream(said, true)) {
+      b.testRecorded(mkDeterministicFlix, Nil, new Tester.TestEventSink {
+        override def start(tests: Vector[Tester.TestCase])(implicit flix: Flix): Unit = ()
+
+        override def accept(event: Tester.TestEvent)(implicit flix: Flix): Unit = ()
+      })
+    }
+
+    assert(result.isInstanceOf[Result.Ok[?, ?]], s"the reused run refused instead of reporting: $result")
+    assert(said.toString.contains("different sources"),
+      s"a stale reused build was not reported: ${said.toString}")
   }
 
   test("a recorded test that is not in the class files is not trusted") {

@@ -51,6 +51,78 @@ class TestBspRun extends AnyFunSuite {
     }
   }
 
+  test("a client that cannot receive run/printStdout is sent the output it can receive") {
+    // `run/printStdout` arrived in BSP 2.2. `BuildClient` in bsp4j 2.1.1 declares `onBuildLogMessage`
+    // and no `onRunPrintStdout` at all, so a 2.1 client does not ignore the notification politely --
+    // it has no method to receive it, lsp4j reports an unsupported method on its side, and a program's
+    // entire output is lost. To a user that is a program that printed nothing.
+    withSession("""def main(): Unit \ IO = println("PROGRAM-RAN")""", bspVersion = "2.1.0") { s =>
+      val result = s.run()
+
+      assert(result.getStatusCode == StatusCode.OK, s"unexpected status: ${result.getStatusCode}")
+      assert(s.logs.exists(_.contains("PROGRAM-RAN")), s"the output never arrived anywhere: ${s.logs}")
+      assert(!s.output.exists(_.contains("PROGRAM-RAN")),
+        "the output was sent as run/printStdout to a client that predates it")
+    }
+  }
+
+  test("the program starts in the working directory the client named") {
+    // `RunParams.workingDirectory` was accepted and dropped: the plumbing through `BspSession.run` and
+    // `BspRunner` was written and correct, and the server never read the field. A dropped field is the
+    // outcome a client cannot tell from an applied one -- the program runs, in the wrong place.
+    withSession(
+      """import java.lang.System
+        |
+        |def main(): Unit \ IO =
+        |    let cwd = System.getProperty("user.dir");
+        |    println("CWD:${cwd}")
+        |""".stripMargin) { s =>
+      val elsewhere = Files.createTempDirectory("flix-bsp-cwd-").toRealPath()
+      val result = s.run(workingDirectory = Some(elsewhere.toUri.toString))
+
+      assert(result.getStatusCode == StatusCode.OK, s"unexpected status: ${result.getStatusCode}")
+      assert(s.output.exists(_.contains(s"CWD:$elsewhere")), s"the program did not start in $elsewhere: ${s.output}")
+    }
+  }
+
+  test("the program's environment is added to, not replaced") {
+    // The protocol calls these variables to *set*, so they are merged: a program that suddenly had no
+    // `PATH` would fail for a reason no client asked for. Asserted from inside the program, since that
+    // is the only place the merge is observable.
+    withSession(
+      """import java.lang.System
+        |
+        |def main(): Unit \ IO =
+        |    let given = System.getenv("FLIX_TEST_VAR");
+        |    println("VAR:${given}");
+        |    let path = System.getenv("PATH");
+        |    let inherited = if (Object.isNull(path)) "false" else "true";
+        |    println("PATH-SET:${inherited}")
+        |""".stripMargin) { s =>
+      val result = s.run(environment = Map("FLIX_TEST_VAR" -> "from-the-client"))
+
+      assert(result.getStatusCode == StatusCode.OK, s"unexpected status: ${result.getStatusCode}")
+      assert(s.output.exists(_.contains("VAR:from-the-client")), s"the variable never arrived: ${s.output}")
+      assert(s.output.exists(_.contains("PATH-SET:true")), s"the inherited environment was replaced: ${s.output}")
+    }
+  }
+
+  test("a working directory that is not a directory is refused, and named") {
+    // Refused rather than ignored, and refused *before* the build: a client that named a file has made
+    // a mistake it can only find out about from an answer.
+    withSession("""def main(): Unit \ IO = println("PROGRAM-RAN")""") { s =>
+      val file = Files.createTempFile("flix-bsp-not-a-dir-", ".txt")
+      val thrown = intercept[java.util.concurrent.ExecutionException] {
+        s.run(workingDirectory = Some(file.toUri.toString))
+      }
+
+      val message = Option(thrown.getCause).map(_.getMessage).getOrElse("")
+      assert(message.contains("workingDirectory"), s"the refusal does not name the field: $message")
+      assert(message.contains(file.toString), s"the refusal does not name what was given: $message")
+      assert(!s.output.exists(_.contains("PROGRAM-RAN")), s"the program ran anyway: ${s.output}")
+    }
+  }
+
   test("the program receives its arguments") {
     withSession(
       """use Sys.Env
@@ -328,13 +400,19 @@ class TestBspRun extends AnyFunSuite {
     def compile(): CompileResult =
       client.buildTargetCompile(new CompileParams(List(target).asJava)).get(Timeout, TimeUnit.SECONDS)
 
-    def run(arguments: List[String] = Nil): RunResult =
-      runFuture(arguments).get(Timeout, TimeUnit.SECONDS)
+    def run(arguments: List[String] = Nil,
+            workingDirectory: Option[String] = None,
+            environment: Map[String, String] = Map.empty): RunResult =
+      runFuture(arguments, workingDirectory, environment).get(Timeout, TimeUnit.SECONDS)
 
     /** Issues a run without waiting for it, so that it can be cancelled. */
-    def runFuture(arguments: List[String] = Nil): java.util.concurrent.CompletableFuture[RunResult] = {
+    def runFuture(arguments: List[String] = Nil,
+                  workingDirectory: Option[String] = None,
+                  environment: Map[String, String] = Map.empty): java.util.concurrent.CompletableFuture[RunResult] = {
       val params = new RunParams(target)
       if (arguments.nonEmpty) params.setArguments(arguments.asJava)
+      workingDirectory.foreach(params.setWorkingDirectory)
+      if (environment.nonEmpty) params.setEnvironmentVariables(environment.asJava)
       client.buildTargetRun(params)
     }
 
@@ -379,7 +457,7 @@ class TestBspRun extends AnyFunSuite {
   }
 
   /** Runs `f` against an initialised server whose project's `Main.flix` is `source`. */
-  private def withSession(source: String)(f: Session => Unit): Unit = {
+  private def withSession(source: String, bspVersion: String = Bsp4j.PROTOCOL_VERSION)(f: Session => Unit): Unit = {
     val project = Files.createTempDirectory("flix-bsp-run-")
     Bootstrap.init(project)(System.out).unsafeGet
     Files.writeString(project.resolve("src").resolve("Main.flix"), source + "\n")
@@ -414,7 +492,7 @@ class TestBspRun extends AnyFunSuite {
 
       val client = launcher.getRemoteProxy
       client.buildInitialize(new InitializeBuildParams(
-        "test-client", "1.0", Bsp4j.PROTOCOL_VERSION, BspUri.ofDirectory(project),
+        "test-client", "1.0", bspVersion, BspUri.ofDirectory(project),
         new BuildClientCapabilities(List("flix").asJava))).get(Timeout, TimeUnit.SECONDS)
       client.onBuildInitialized()
 

@@ -25,6 +25,7 @@ import java.io.{BufferedReader, InputStreamReader}
 import java.nio.charset.StandardCharsets
 import java.nio.file.Path
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
   * Runs a project's tests in a JVM of its own, and reports them as if they had run here.
@@ -91,14 +92,17 @@ object BspForkedTester {
     process.getOutputStream.close()
     onStart(process)
 
-    var started = false
+    // Written by the reader thread and read by this one after `join`, which returns on a timeout as
+    // well as on termination -- so both threads can be at it at once, and a plain `var` would let this
+    // one read a value the other has already replaced.
+    val started = new AtomicBoolean(false)
     val reader = new Thread(() => {
       val lines = new BufferedReader(new InputStreamReader(process.getInputStream, StandardCharsets.UTF_8))
       try {
         var line = lines.readLine()
         while (line != null) {
           if (accept(line, sink)) {
-            started = true
+            started.set(true)
           }
           line = lines.readLine()
         }
@@ -115,17 +119,17 @@ object BspForkedTester {
     try {
       if (process.waitFor(timeout.toMillis, TimeUnit.MILLISECONDS)) {
         reader.join(DrainGrace.toMillis)
-        Outcome(passed = process.exitValue() == 0, timedOut = false, started = started)
+        Outcome(passed = process.exitValue() == 0, timedOut = false, started = started.get())
       } else {
         ProgramRunner.terminateTree(process, DrainGrace)
         reader.join(DrainGrace.toMillis)
-        Outcome(passed = false, timedOut = true, started = started)
+        Outcome(passed = false, timedOut = true, started = started.get())
       }
     } catch {
       case _: InterruptedException =>
         ProgramRunner.terminateTree(process, DrainGrace)
         Thread.currentThread().interrupt()
-        Outcome(passed = false, timedOut = true, started = started)
+        Outcome(passed = false, timedOut = true, started = started.get())
     }
   }
 

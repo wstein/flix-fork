@@ -198,7 +198,21 @@ The program's output arrives as `run/printStdout`, the channel this protocol ver
 client shows it in a run console rather than beside dependency resolution in a build log. The two
 streams are merged before they get there, so a program's writes to standard error arrive on that one
 as well — the price of preserving the program's own interleaving, which is what someone reading the
-output actually needs. A project with no `main` is refused with a message rather than treated as a
+output actually needs.
+
+**But only to a client that can receive it.** `run/printStdout` arrived in BSP 2.2, and the
+specification still marks it unstable. `BuildClient` in bsp4j 2.1.1 declares `onBuildLogMessage` and
+no `onRunPrintStdout` at all, so a 2.1 client does not ignore the notification politely — it has no
+method to receive it, lsp4j reports an unsupported method on its side, and the output is lost. To a
+user that is a program that printed nothing. The channel is therefore chosen from the version the
+client declares in `build/initialize`: 2.2 and later get the print, everything else — including a
+client that declared no version — gets `build/logMessage`, which has existed in every version of the
+protocol. JetBrains' BSP client declares bsp4j `2.2.0-M2`, the same milestone this fork takes, so it
+gets the print; a client still on 2.1 gets its output rather than nothing.
+
+A test's own printing stays on `build/logMessage` regardless. It is not a run, no client is known to
+render it better elsewhere, and moving it would put a second thing behind an unstable notification
+for no measured gain. A project with no `main` is refused with a message rather than treated as a
 run that did nothing: "nothing happened" and "there was nothing to happen" call for different words.
 
 **`workingDirectory` and `environmentVariables` are honoured.** A directory that is not one is

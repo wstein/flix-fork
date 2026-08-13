@@ -238,6 +238,11 @@ class FlixBuildServer(session: BspSession, onExit: () => Unit, executor: Executo
     *
     * Bracketed like a compile so a client can show that something is happening, and the program's own
     * output arrives as log messages rather than as diagnostics -- it is not a problem with the code.
+    *
+    * `workingDirectory` and `environmentVariables` are honoured here, unlike on a test run, because a
+    * program is the client's to place: `flix run` starts it, and where it starts decides what a relative
+    * path in it means. A test run's runner is `flix test` in the project, which is where it finds
+    * `flix.toml`, so the same field is refused there rather than ignored.
     */
   override def buildTargetRun(params: RunParams): CompletableFuture[RunResult] = admittedCancellable("a run") { cancellation =>
     val view = session.requireView()
@@ -245,13 +250,15 @@ class FlixBuildServer(session: BspSession, onExit: () => Unit, executor: Executo
     val target = params.getTarget
     val originId = Option(params.getOriginId)
     val arguments = Option(params.getArguments).map(_.asScala.toList).getOrElse(Nil)
+    val workingDirectory = requireDirectory(params.getWorkingDirectory)
+    val environment = Option(params.getEnvironmentVariables).map(_.asScala.toMap).getOrElse(Map.empty)
 
     tasks.bracket[RunResult](
       message = s"Running ${view.packageName}",
       startData = _ => None,
       finishData = (_, _) => None,
       statusOf = _.getStatusCode
-    )(_ => session.run(target, arguments, originId, cancellation))
+    )(_ => session.run(target, arguments, originId, cancellation, workingDirectory, environment))
   }
 
   /**
