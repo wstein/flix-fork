@@ -36,7 +36,7 @@ object ExecutionMode {
     * Sequential execution with the guarded parallelism compiled away.
     *
     * Note: This is never a guarantee that the compiled program is free of concurrency primitives.
-    * See `docs/datalog-execution-mode.md` for what each option does and does not remove.
+    * See `docs/sequential-execution.md` for what each option does and does not remove.
     */
   case object Sequential extends ExecutionMode
 }

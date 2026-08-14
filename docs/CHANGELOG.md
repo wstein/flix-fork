@@ -12,6 +12,7 @@ Version 0.75.3:
 
 Version 0.75.2:
 - Compiler: Added experimental `--Xdatalog-execution` to select sequential Datalog evaluation (thanks Werner!)
+- Compiler: Added experimental `--Xcollection-execution` to compile out parallel `Map` and `Set` evaluation (thanks Werner!)
 - Compiler: Improved tree shaking of lowering-related library functions (thanks Simon!)
 - Compiler: Reduced the size of generated HTML documentation (thanks Magnus!)
 - Compiler: Fixed a few bugs (thanks Matt!)
