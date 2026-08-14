@@ -31,6 +31,7 @@ class TestLibraryOptions extends AnyFunSuite with TestUtils {
     */
   private val DatalogSym = Symbol.mkDefnSym("Fixpoint3.Options.enableParallelExecution")
   private val CollectionSym = Symbol.mkDefnSym("Concurrent.Options.enableParallelEvaluation")
+  private val LockingSym = Symbol.mkDefnSym("Concurrent.Options.enableLocking")
 
   test("CLI.Parse.DatalogExecution.Default") {
     val cmdOpts = Main.parseCmdOpts(Array("build")).get
@@ -78,10 +79,26 @@ class TestLibraryOptions extends AnyFunSuite with TestUtils {
     assert(cmdOpts.xcollectionExecution == ExecutionMode.Parallel)
   }
 
+  test("CLI.Parse.Sequential.SetsAllThree") {
+    val cmdOpts = Main.parseCmdOpts(Array("--Xsequential", "build")).get
+    assert(cmdOpts.xdatalogExecution == ExecutionMode.Sequential)
+    assert(cmdOpts.xcollectionExecution == ExecutionMode.Sequential)
+    assert(cmdOpts.xsequential)
+  }
+
+  test("CLI.Parse.LockElision.HasNoOptionOfItsOwn") {
+    // Lock elision is sound only where nothing can create a thread, so it must not be settable on
+    // its own. `--Xsequential` is the only way to ask for it.
+    assert(Main.parseCmdOpts(Array("--Xassume-single-threaded", "build")).isEmpty)
+    assert(Main.parseCmdOpts(Array("--Xlock-elision=on", "build")).isEmpty)
+    assert(Main.parseCmdOpts(Array("--Xcollection-execution=sequential", "build")).get.xsequential == false)
+  }
+
   test("AST.Rewrite.Parallel") {
     val root = check(Options.TestWithLibAll)
     assertBody(root, DatalogSym, expected = true)
     assertBody(root, CollectionSym, expected = true)
+    assertBody(root, LockingSym, expected = true)
   }
 
   test("AST.Rewrite.Datalog.Sequential") {
@@ -103,16 +120,31 @@ class TestLibraryOptions extends AnyFunSuite with TestUtils {
     ))
     assertBody(root, DatalogSym, expected = false)
     assertBody(root, CollectionSym, expected = false)
+    // The two mode options do not imply lock elision.
+    assertBody(root, LockingSym, expected = true)
+  }
+
+  test("AST.Rewrite.Sequential.Umbrella") {
+    val root = check(Options.TestWithLibAll.copy(
+      xdatalogExecution = ExecutionMode.Sequential,
+      xcollectionExecution = ExecutionMode.Sequential,
+      xassumeSingleThreaded = true
+    ))
+    assertBody(root, DatalogSym, expected = false)
+    assertBody(root, CollectionSym, expected = false)
+    assertBody(root, LockingSym, expected = false)
   }
 
   test("AST.Rewrite.Sequential.WithoutStandardLibrary") {
     // Both options live in the standard library, so there is nothing to rewrite without it.
     val root = check(Options.TestWithLibMin.copy(
       xdatalogExecution = ExecutionMode.Sequential,
-      xcollectionExecution = ExecutionMode.Sequential
+      xcollectionExecution = ExecutionMode.Sequential,
+      xassumeSingleThreaded = true
     ))
     assert(root.defs.get(DatalogSym).isEmpty)
     assert(root.defs.get(CollectionSym).isEmpty)
+    assert(root.defs.get(LockingSym).isEmpty)
   }
 
   test("Incremental.ModeChange.TakesEffectOnWarmCaches") {
