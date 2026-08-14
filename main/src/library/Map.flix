@@ -144,9 +144,12 @@ pub mod Map {
     /// By default we only enable parallel evaluation if the map has a certain size.
     ///
     def useParallelEvaluation(m: Map[k, v]): Bool =
-        let Map(t) = m;
-        let minSize = Int32.pow(base = 2, RedBlackTree.blackHeight(t));
-        minSize >= 1024
+        if (Concurrent.Options.enableParallelEvaluation()) {
+            let Map(t) = m;
+            let minSize = Int32.pow(base = 2, RedBlackTree.blackHeight(t));
+            minSize >= 1024
+        } else
+            false
 
     ///
     /// Returns the number of keys in `m`.

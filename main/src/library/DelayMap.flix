@@ -96,9 +96,12 @@ pub mod DelayMap {
     /// By default we only enable parallel evaluation if the map has a certain size.
     ///
     def useParallelEvaluation(m: DelayMap[k, v]): Bool =
-        let DMap(t) = m;
-        let minSize = Int32.pow(base = 2, RedBlackTree.blackHeight(t));
-        minSize >= 1024
+        if (Concurrent.Options.enableParallelEvaluation()) {
+            let DMap(t) = m;
+            let minSize = Int32.pow(base = 2, RedBlackTree.blackHeight(t));
+            minSize >= 1024
+        } else
+            false
 
     ///
     /// Returns the empty map.
