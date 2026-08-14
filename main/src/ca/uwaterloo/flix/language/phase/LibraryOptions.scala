@@ -41,9 +41,16 @@ object LibraryOptions {
     */
   private val EnableParallelExecutionSym = Symbol.mkDefnSym("Fixpoint3.Options.enableParallelExecution")
 
+  /**
+    * Guards the parallel evaluation of pure operations on `Map`, `Set`, `DelayMap`, and
+    * `RedBlackTree`.
+    */
+  private val EnableParallelEvaluationSym = Symbol.mkDefnSym("Concurrent.Options.enableParallelEvaluation")
+
   def run(root: TypedAst.Root)(implicit flix: Flix): TypedAst.Root = flix.phase("LibraryOptions") {
     val disabled = List(
-      EnableParallelExecutionSym -> (flix.options.xdatalogExecution == ExecutionMode.Sequential)
+      EnableParallelExecutionSym -> (flix.options.xdatalogExecution == ExecutionMode.Sequential),
+      EnableParallelEvaluationSym -> (flix.options.xcollectionExecution == ExecutionMode.Sequential)
     ).collect { case (sym, true) => sym }
 
     disabled.foldLeft(root)(setToFalse)
