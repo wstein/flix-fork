@@ -454,9 +454,6 @@ class Flix {
   def setOptions(opts: Options): Flix = {
     if (opts == null)
       throw new IllegalArgumentException("'opts' must be non-null.")
-    if (this.options.xdatalogExecution != opts.xdatalogExecution) {
-      clearCaches()
-    }
     options = opts
     if (opts.compilerTop && compilerTop.isEmpty) {
       val p = new Profiler(() => getCurrentPhaseName)
@@ -592,6 +589,9 @@ class Flix {
         errors ++= terminationErrors
 
         val (afterDependencies, _) = Dependencies.run(afterTerminator, cachedTyperAst, changeSet)
+
+        // Keep the incremental cache independent of this option-specific rewrite.
+        // It is recomputed from the current options on every compilation.
         val afterDatalogExecutionMode = DatalogExecutionMode.run(afterDependencies)
 
         if (options.incremental) {

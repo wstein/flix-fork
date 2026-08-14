@@ -50,45 +50,50 @@ class TestDatalogExecutionMode extends AnyFunSuite with TestUtils {
     val flix = new Flix().setOptions(Options.TestWithLibAll.copy(xdatalogExecution = DatalogExecution.Parallel))
     val (optRoot, errors) = flix.check()
     assert(errors.isEmpty)
-    val root = optRoot.get
-    val defn = root.defs(Symbol.mkDefnSym("Fixpoint3.Options.enableParallelExecution"))
-    defn.exp match {
-      case TypedAst.Expr.Cst(Constant.Bool(true), _, _) => ()
-      case other => fail(s"Expected Constant.Bool(true), but got: $other")
-    }
+    assertBody(optRoot.get, expected = true)
   }
 
   test("AST.Rewrite.Sequential") {
     val flix = new Flix().setOptions(Options.TestWithLibAll.copy(xdatalogExecution = DatalogExecution.Sequential))
     val (optRoot, errors) = flix.check()
     assert(errors.isEmpty)
-    val root = optRoot.get
-    val defn = root.defs(Symbol.mkDefnSym("Fixpoint3.Options.enableParallelExecution"))
-    defn.exp match {
-      case TypedAst.Expr.Cst(Constant.Bool(false), _, _) => ()
-      case other => fail(s"Expected Constant.Bool(false), but got: $other")
-    }
+    assertBody(optRoot.get, expected = false)
   }
 
-  test("Incremental.CacheInvalidation.OnModeChange") {
+  test("Incremental.ModeChange.TakesEffectOnWarmCaches") {
     val flix = new Flix().setOptions(Options.TestWithLibAll.copy(incremental = true, xdatalogExecution = DatalogExecution.Parallel))
     val (root1, errors1) = flix.check()
     assert(errors1.isEmpty)
     assert(root1.isDefined)
+    assertBody(root1.get, expected = true)
 
-    // Verify cache has been populated
+    // The caches are now warm.
     assert(flix.getParsedAst.units.nonEmpty)
 
-    // Changing xdatalogExecution mode must invalidate caches
+    // Switching the mode must take effect on the very next run, even though the incremental
+    // caches are kept: the rewrite is recomputed from the current options on every run.
     flix.setOptions(flix.options.copy(xdatalogExecution = DatalogExecution.Sequential))
-    assert(flix.getParsedAst.units.isEmpty)
+    assert(flix.getParsedAst.units.nonEmpty, "changing the mode must not discard the incremental caches")
 
     val (root2, errors2) = flix.check()
     assert(errors2.isEmpty)
-    val defn = root2.get.defs(Symbol.mkDefnSym("Fixpoint3.Options.enableParallelExecution"))
+    assertBody(root2.get, expected = false)
+
+    // ... and switching back must restore the original body.
+    flix.setOptions(flix.options.copy(xdatalogExecution = DatalogExecution.Parallel))
+    val (root3, errors3) = flix.check()
+    assert(errors3.isEmpty)
+    assertBody(root3.get, expected = true)
+  }
+
+  /**
+    * Asserts that the body of `Fixpoint3.Options.enableParallelExecution` in `root` is `expected`.
+    */
+  private def assertBody(root: TypedAst.Root, expected: Boolean): Unit = {
+    val defn = root.defs(Symbol.mkDefnSym("Fixpoint3.Options.enableParallelExecution"))
     defn.exp match {
-      case TypedAst.Expr.Cst(Constant.Bool(false), _, _) => ()
-      case other => fail(s"Expected Constant.Bool(false) after mode change, but got: $other")
+      case TypedAst.Expr.Cst(Constant.Bool(b), _, _) if b == expected => ()
+      case other => fail(s"Expected Constant.Bool($expected), but got: $other")
     }
   }
 }
