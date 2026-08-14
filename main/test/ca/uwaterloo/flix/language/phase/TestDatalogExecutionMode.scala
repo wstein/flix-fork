@@ -60,6 +60,14 @@ class TestDatalogExecutionMode extends AnyFunSuite with TestUtils {
     assertBody(optRoot.get, expected = false)
   }
 
+  test("AST.Rewrite.Sequential.WithoutStandardLibrary") {
+    // Fixpoint3 is unavailable without the full standard library, so there is nothing to rewrite.
+    val flix = new Flix().setOptions(Options.TestWithLibMin.copy(xdatalogExecution = DatalogExecution.Sequential))
+    val (optRoot, errors) = flix.check()
+    assert(errors.isEmpty)
+    assert(optRoot.get.defs.get(Symbol.mkDefnSym("Fixpoint3.Options.enableParallelExecution")).isEmpty)
+  }
+
   test("Incremental.ModeChange.TakesEffectOnWarmCaches") {
     val flix = new Flix().setOptions(Options.TestWithLibAll.copy(incremental = true, xdatalogExecution = DatalogExecution.Parallel))
     val (root1, errors1) = flix.check()
