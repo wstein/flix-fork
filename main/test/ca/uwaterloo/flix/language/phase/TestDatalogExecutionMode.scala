@@ -47,7 +47,7 @@ class TestDatalogExecutionMode extends AnyFunSuite with TestUtils {
   }
 
   test("AST.Rewrite.Parallel") {
-    val flix = new Flix().setOptions(Options.TestWithLibAll.copy(datalogExecution = DatalogExecution.Parallel))
+    val flix = new Flix().setOptions(Options.TestWithLibAll.copy(xdatalogExecution = DatalogExecution.Parallel))
     val (optRoot, errors) = flix.check()
     assert(errors.isEmpty)
     val root = optRoot.get
@@ -59,7 +59,7 @@ class TestDatalogExecutionMode extends AnyFunSuite with TestUtils {
   }
 
   test("AST.Rewrite.Sequential") {
-    val flix = new Flix().setOptions(Options.TestWithLibAll.copy(datalogExecution = DatalogExecution.Sequential))
+    val flix = new Flix().setOptions(Options.TestWithLibAll.copy(xdatalogExecution = DatalogExecution.Sequential))
     val (optRoot, errors) = flix.check()
     assert(errors.isEmpty)
     val root = optRoot.get
@@ -71,7 +71,7 @@ class TestDatalogExecutionMode extends AnyFunSuite with TestUtils {
   }
 
   test("Incremental.CacheInvalidation.OnModeChange") {
-    val flix = new Flix().setOptions(Options.TestWithLibAll.copy(incremental = true, datalogExecution = DatalogExecution.Parallel))
+    val flix = new Flix().setOptions(Options.TestWithLibAll.copy(incremental = true, xdatalogExecution = DatalogExecution.Parallel))
     val (root1, errors1) = flix.check()
     assert(errors1.isEmpty)
     assert(root1.isDefined)
@@ -79,8 +79,8 @@ class TestDatalogExecutionMode extends AnyFunSuite with TestUtils {
     // Verify cache has been populated
     assert(flix.getParsedAst.units.nonEmpty)
 
-    // Changing datalogExecution mode must invalidate caches
-    flix.setOptions(flix.options.copy(datalogExecution = DatalogExecution.Sequential))
+    // Changing xdatalogExecution mode must invalidate caches
+    flix.setOptions(flix.options.copy(xdatalogExecution = DatalogExecution.Sequential))
     assert(flix.getParsedAst.units.isEmpty)
 
     val (root2, errors2) = flix.check()

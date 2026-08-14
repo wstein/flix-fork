@@ -94,7 +94,7 @@ object Main {
       XPerfN = cmdOpts.XPerfN,
       xchaosMonkey = Options.Default.xchaosMonkey,
       xverify = cmdOpts.xverify,
-      datalogExecution = cmdOpts.xdatalogExecution
+      xdatalogExecution = cmdOpts.xdatalogExecution
     )
 
     // Don't use progress bar if benchmarking.

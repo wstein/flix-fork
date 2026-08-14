@@ -55,7 +55,7 @@ class TestDatalogReachability extends AnyFunSuite with TestUtils {
     val tempDir = Files.createTempDirectory("flix-reachability-test-")
     val options = Options.Default.copy(
       lib = LibLevel.All,
-      datalogExecution = mode,
+      xdatalogExecution = mode,
       entryPoint = Some(Symbol.mkDefnSym("main")),
       outputJvm = true,
       outputPath = tempDir
