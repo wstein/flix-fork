@@ -187,11 +187,15 @@ class TestDatalogReachability extends AnyFunSuite with TestUtils {
     Bytecode(classes.toSet, calls.toSet)
   }
 
-  ///
   /// The two builds under comparison. They are scanned once and shared by the tests below.
   ///
-  private lazy val ParallelBuild: Bytecode = compileAndScan(ExecutionMode.Parallel)
-  private lazy val SequentialBuild: Bytecode = compileAndScan(ExecutionMode.Sequential)
+  /// Only `xdatalogExecution` differs, so that everything observed here is attributable to it.
+  ///
+  private lazy val ParallelBuild: Bytecode =
+    compileAndScan(DatalogProgram, Options.Default.copy(xdatalogExecution = ExecutionMode.Parallel))
+
+  private lazy val SequentialBuild: Bytecode =
+    compileAndScan(DatalogProgram, Options.Default.copy(xdatalogExecution = ExecutionMode.Sequential))
 
   ///
   /// The positive control for the erasure test below.
@@ -213,9 +217,9 @@ class TestDatalogReachability extends AnyFunSuite with TestUtils {
     // Both kinds of parallelism must be present: statement parallelism (`RamStmt.Par`, spawned by
     // `evalStmtParallel`) and search parallelism (`BPlusTree.parForEach`, which the inliner folds
     // into `evalOpParallel`, so it is identified by its spawn site rather than by its own class).
-    val spawns = res.spawnSitesIn(Interpreter).filter(_._3 == "spawn")
-    assert(spawns.exists(_._1.contains("$evalStmtParallel$")), s"Expected statement parallelism in a parallel build, but found: $spawns")
-    assert(spawns.exists(_._1.contains("$evalOpParallel$")), s"Expected search parallelism in a parallel build, but found: $spawns")
+    val spawns = res.regionSpawningDefsIn(Interpreter)
+    assert(spawns.contains("evalStmtParallel"), s"Expected statement parallelism in a parallel build, but found: $spawns")
+    assert(spawns.contains("evalOpParallel"), s"Expected search parallelism in a parallel build, but found: $spawns")
   }
 
   test("Reachability.SequentialMode.ErasesParallelConstructs") {
@@ -230,13 +234,8 @@ class TestDatalogReachability extends AnyFunSuite with TestUtils {
     }
 
     // 2. Neither statement parallelism nor search parallelism spawns threads any more.
-    //
-    // Note: This is deliberately scoped to `Fixpoint3.Interpreter`. The solver's setup phases
-    // (index selection, provenance augmentation, marshalling) call `Map` operations that are
-    // `@ParallelWhenPure` and may still spawn threads via `RedBlackTree`. Erasing those is out of
-    // scope for this option -- see `docs/datalog-execution-mode.md`.
-    val spawns = res.spawnSitesIn(Interpreter).filter(_._3 == "spawn")
-    assert(spawns.isEmpty, s"Found a reachable region spawn in the interpreter: $spawns")
+    val spawns = res.regionSpawningDefsIn(Interpreter)
+    assert(spawns.isEmpty, s"Found a reachable region spawn in the interpreter, in: $spawns")
   }
 
   ///
@@ -265,9 +264,10 @@ class TestDatalogReachability extends AnyFunSuite with TestUtils {
     // 2. A `spawn ... @ Static` compiles to `Thread.startVirtualThread`. The interpreter never
     //    writes one; the sites that do appear come from `par (...) yield` in `RedBlackTree`,
     //    reached through the `@ParallelWhenPure` operations on `Map` that the interpreter uses to
-    //    build and marshal its indexes. Those are outside the scope of this option, so they are
-    //    expected to survive -- but only identically in both builds. A site that exists in the
-    //    sequential build and not in the parallel one could only come from the erased evaluator.
+    //    build and marshal its indexes. Removing those is the job of `--Xcollection-execution`,
+    //    which is not varied here, so they are expected to survive -- but only identically in both
+    //    builds. A site that exists in the sequential build and not in the parallel one could only
+    //    come from the erased evaluator.
     val parallelVirtualSpawns = ParallelBuild.virtualThreadSpawningDefsIn(Interpreter)
     val sequentialVirtualSpawns = SequentialBuild.virtualThreadSpawningDefsIn(Interpreter)
     assert(
