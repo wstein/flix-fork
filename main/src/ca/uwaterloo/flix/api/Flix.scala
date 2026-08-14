@@ -590,9 +590,9 @@ class Flix {
 
         val (afterDependencies, _) = Dependencies.run(afterTerminator, cachedTyperAst, changeSet)
 
-        // Keep the incremental cache independent of this option-specific rewrite.
-        // It is recomputed from the current options on every compilation.
-        val afterDatalogExecutionMode = DatalogExecutionMode.run(afterDependencies)
+        // Keep the incremental cache independent of these option-specific rewrites.
+        // They are recomputed from the current options on every compilation.
+        val afterLibraryOptions = LibraryOptions.run(afterDependencies)
 
         if (options.incremental) {
           this.cachedLexerTokens = afterLexer
@@ -610,7 +610,7 @@ class Flix {
           this.cachedErrors = errors.toList
         }
 
-        Some(afterDatalogExecutionMode)
+        Some(afterLibraryOptions)
     }
 
     // Shutdown the thread pool.

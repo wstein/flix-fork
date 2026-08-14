@@ -46,7 +46,7 @@ object Options {
     XPerfPar = false,
     xchaosMonkey = false,
     xverify = false,
-    xdatalogExecution = DatalogExecution.Parallel
+    xdatalogExecution = ExecutionMode.Parallel
   )
 
   /**
@@ -125,7 +125,7 @@ case class Options(lib: LibLevel,
                    XPerfN: Option[Int],
                    xchaosMonkey: Boolean,
                    xverify: Boolean,
-                   xdatalogExecution: DatalogExecution
+                   xdatalogExecution: ExecutionMode
                   )
 
 /**
