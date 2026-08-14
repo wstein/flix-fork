@@ -540,7 +540,7 @@ object Main {
     XPerfN: Option[Int] = None,
     XPerfFrontend: Boolean = false,
     XPerfPar: Boolean = false,
-    xdatalogExecution: DatalogExecution = DatalogExecution.Parallel,
+    xdatalogExecution: ExecutionMode = ExecutionMode.Parallel,
     files: Seq[File] = Seq()
   )
 
@@ -622,9 +622,9 @@ object Main {
       case arg => throw new IllegalArgumentException(s"'$arg' is not a valid library level. Valid options are 'all', 'min', and 'nix'.")
     }
 
-    implicit val readDatalogExecution: scopt.Read[DatalogExecution] = scopt.Read.reads {
-      case "parallel" => DatalogExecution.Parallel
-      case "sequential" => DatalogExecution.Sequential
+    implicit val readExecutionMode: scopt.Read[ExecutionMode] = scopt.Read.reads {
+      case "parallel" => ExecutionMode.Parallel
+      case "sequential" => ExecutionMode.Sequential
       case arg => throw new IllegalArgumentException(s"'$arg' is not a valid Datalog execution mode. Valid options are 'parallel' and 'sequential'.")
     }
 
@@ -789,7 +789,7 @@ object Main {
         text("[experimental] enables sub-effecting in select places")
 
       // Xdatalog-execution
-      opt[DatalogExecution]("Xdatalog-execution").action((arg, c) => c.copy(xdatalogExecution = arg)).
+      opt[ExecutionMode]("Xdatalog-execution").action((arg, c) => c.copy(xdatalogExecution = arg)).
         text("[experimental] selects the Datalog execution mode (parallel, sequential).")
 
       // Xnewmono
