@@ -31,8 +31,10 @@ class TestCollectionExecutionParity extends AnyFunSuite with TestUtils {
   ///
   private val Size = 2000
 
-  private def runWithMode(src: String, mode: ExecutionMode): Unit = {
-    val options = Options.TestWithLibAll.copy(xcollectionExecution = mode)
+  private def runWithMode(src: String, mode: ExecutionMode): Unit =
+    run(src, Options.TestWithLibAll.copy(xcollectionExecution = mode), mode.toString)
+
+  private def run(src: String, options: Options, label: String): Unit = {
     val flix = new Flix().setOptions(options)
     implicit val sctx: SecurityContext = SecurityContext.Unrestricted
     flix.addVirtualPath(CompilerConstants.VirtualTestFile, src)
@@ -42,13 +44,26 @@ class TestCollectionExecutionParity extends AnyFunSuite with TestUtils {
         val (_, testFn) = tests.headOption.getOrElse(fail("No @Test found in compilation result"))
         testFn.run()
       case Result.Err(errors) =>
-        fail(s"Compilation failed under mode $mode with errors: $errors")
+        fail(s"Compilation failed under mode $label with errors: $errors")
     }
   }
 
   private def assertParity(src: String): Unit = {
     runWithMode(src, ExecutionMode.Parallel)
     runWithMode(src, ExecutionMode.Sequential)
+    runFullySequential(src)
+  }
+
+  ///
+  /// Runs `src` under `--Xsequential`, which additionally erases the locks in `BPlusTree`.
+  ///
+  private def runFullySequential(src: String): Unit = {
+    val options = Options.TestWithLibAll.copy(
+      xdatalogExecution = ExecutionMode.Sequential,
+      xcollectionExecution = ExecutionMode.Sequential,
+      xassumeSingleThreaded = true
+    )
+    run(src, options, "fully sequential")
   }
 
   test("Parity.Map.Count") {
