@@ -21,7 +21,7 @@ pub mod Concurrent.Options {
     ///
     /// Rewritten by the compiler before optimization. When it is `false`, every parallel branch
     /// guarded by it becomes dead code, and the tree shaker removes the `par` evaluation it kept
-    /// alive. See `docs/datalog-execution-mode.md`.
+    /// alive. See `docs/sequential-execution.md`.
     ///
     pub def enableParallelEvaluation(): Bool = true
 
