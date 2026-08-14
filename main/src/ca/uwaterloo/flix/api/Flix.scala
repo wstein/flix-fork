@@ -454,6 +454,9 @@ class Flix {
   def setOptions(opts: Options): Flix = {
     if (opts == null)
       throw new IllegalArgumentException("'opts' must be non-null.")
+    if (this.options.datalogExecution != opts.datalogExecution) {
+      clearCaches()
+    }
     options = opts
     if (opts.compilerTop && compilerTop.isEmpty) {
       val p = new Profiler(() => getCurrentPhaseName)
@@ -589,6 +592,7 @@ class Flix {
         errors ++= terminationErrors
 
         val (afterDependencies, _) = Dependencies.run(afterTerminator, cachedTyperAst, changeSet)
+        val afterDatalogExecutionMode = DatalogExecutionMode.run(afterDependencies)
 
         if (options.incremental) {
           this.cachedLexerTokens = afterLexer
@@ -606,7 +610,7 @@ class Flix {
           this.cachedErrors = errors.toList
         }
 
-        Some(afterDependencies)
+        Some(afterDatalogExecutionMode)
     }
 
     // Shutdown the thread pool.
