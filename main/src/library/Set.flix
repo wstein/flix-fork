@@ -126,9 +126,12 @@ pub mod Set {
     /// By default we only enable parallel evaluation if the set has a certain size.
     ///
     def useParallelEvaluation(s: Set[a]): Bool =
-        let Set(t) = s;
-        let minSize = Int32.pow(base = 2, RedBlackTree.blackHeight(t));
-        minSize >= 1024
+        if (Concurrent.Options.enableParallelEvaluation()) {
+            let Set(t) = s;
+            let minSize = Int32.pow(base = 2, RedBlackTree.blackHeight(t));
+            minSize >= 1024
+        } else
+            false
 
     ///
     /// Returns the number of elements in `s`.
