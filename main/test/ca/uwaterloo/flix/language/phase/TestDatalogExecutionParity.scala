@@ -25,8 +25,10 @@ import org.scalatest.funsuite.AnyFunSuite
 
 class TestDatalogExecutionParity extends AnyFunSuite with TestUtils {
 
-  private def runWithMode(src: String, mode: ExecutionMode): Unit = {
-    val options = Options.TestWithLibAll.copy(xdatalogExecution = mode)
+  private def runWithMode(src: String, mode: ExecutionMode): Unit =
+    run(src, Options.TestWithLibAll.copy(xdatalogExecution = mode), mode.toString)
+
+  private def run(src: String, options: Options, label: String): Unit = {
     val flix = new Flix().setOptions(options)
     implicit val sctx: SecurityContext = SecurityContext.Unrestricted
     flix.addVirtualPath(CompilerConstants.VirtualTestFile, src)
@@ -36,13 +38,29 @@ class TestDatalogExecutionParity extends AnyFunSuite with TestUtils {
         val (_, testFn) = tests.headOption.getOrElse(fail("No @Test found in compilation result"))
         testFn.run()
       case Result.Err(errors) =>
-        fail(s"Compilation failed under mode $mode with errors: $errors")
+        fail(s"Compilation failed under mode $label with errors: $errors")
     }
   }
 
   private def assertParity(src: String): Unit = {
     runWithMode(src, ExecutionMode.Parallel)
     runWithMode(src, ExecutionMode.Sequential)
+    runFullySequential(src)
+  }
+
+  ///
+  /// Runs `src` under `--Xsequential`, where the solver's B+ tree indexes carry no locks.
+  ///
+  /// Erasing the locks is a compile-time change that only shows up at run time, so every program
+  /// below is executed in this configuration as well as the two above.
+  ///
+  private def runFullySequential(src: String): Unit = {
+    val options = Options.TestWithLibAll.copy(
+      xdatalogExecution = ExecutionMode.Sequential,
+      xcollectionExecution = ExecutionMode.Sequential,
+      xassumeSingleThreaded = true
+    )
+    run(src, options, "fully sequential")
   }
 
   test("Parity.TransitiveClosure") {
