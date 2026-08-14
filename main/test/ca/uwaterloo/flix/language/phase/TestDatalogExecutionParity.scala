@@ -177,13 +177,13 @@ class TestDatalogExecutionParity extends AnyFunSuite with TestUtils {
     assertParity(src)
   }
 
-  test("Parity.Provenance") {
+  test("Parity.MultiStageDerivation") {
     val src =
       """
         |use Assert.assertEq;
         |
         |@Test
-        |def testProvenance(): Unit \ Assert = {
+        |def testMultiStageDerivation(): Unit \ Assert = {
         |    let p = #{
         |        A(1). A(2).
         |        B(x) :- A(x).
@@ -192,6 +192,98 @@ class TestDatalogExecutionParity extends AnyFunSuite with TestUtils {
         |    let res = solve p;
         |    let q = query res select (x, y) from C(x, y) |> Vector.sort;
         |    assertEq(expected = Vector#{(1, 11), (2, 12)}, q)
+        |}
+      """.stripMargin
+    assertParity(src)
+  }
+
+  test("Parity.Provenance") {
+    // Exercises `RelOp.ProvProject`, which is only reachable through `psolve`/`pquery`.
+    val src =
+      """
+        |use Assert.assertEq;
+        |
+        |@Test
+        |def testProvenance(): Unit \ Assert = {
+        |    let p = #{
+        |        Edge(1, 2). Edge(2, 3). Edge(3, 4).
+        |        Path(x, y) :- Edge(x, y).
+        |        Path(x, z) :- Path(x, y), Edge(y, z).
+        |    };
+        |    let pm = psolve p;
+        |    let result = pquery pm select Path(1, 3) with {Edge, Path};
+        |    let actual = result |> Vector.map(v -> ematch v {
+        |        case Edge(x, y) => "Edge(${x}, ${y})"
+        |        case Path(x, y) => "Path(${x}, ${y})"
+        |    });
+        |    assertEq(expected = Vector#{"Path(1, 3)", "Path(1, 2)", "Edge(1, 2)", "Edge(2, 3)"}, actual)
+        |}
+      """.stripMargin
+    assertParity(src)
+  }
+
+  test("Parity.FunctionalPredicate") {
+    // Exercises `RelOp.Functional`.
+    val src =
+      """
+        |use Assert.assertEq;
+        |
+        |def divisors(x: Int32): Vector[Int32] =
+        |    Vector.range(1, x + 1) |> Vector.filter(d -> Int32.modulo(x, d) == 0)
+        |
+        |@Test
+        |def testFunctional(): Unit \ Assert = {
+        |    let p = #{
+        |        Num(6). Num(10).
+        |        Divisor(n, d) :- Num(n), let d = divisors(n).
+        |    };
+        |    let res = solve p;
+        |    let q = query res select (n, d) from Divisor(n, d) |> Vector.sort;
+        |    assertEq(expected = Vector#{(6, 1), (6, 2), (6, 3), (6, 6), (10, 1), (10, 2), (10, 5), (10, 10)}, q)
+        |}
+      """.stripMargin
+    assertParity(src)
+  }
+
+  test("Parity.Inject") {
+    val src =
+      """
+        |use Assert.assertEq;
+        |
+        |@Test
+        |def testInject(): Unit \ Assert = {
+        |    let facts = Vector#{1, 2, 3, 4};
+        |    let p = inject facts into Seed/1;
+        |    let rules = #{
+        |        Even(x) :- Seed(x), if (Int32.modulo(x, 2) == 0).
+        |        Doubled(x + x) :- Even(x).
+        |    };
+        |    let res = solve (p <+> rules);
+        |    let q = query res select x from Doubled(x) |> Vector.sort;
+        |    assertEq(expected = Vector#{4, 8}, q)
+        |}
+      """.stripMargin
+    assertParity(src)
+  }
+
+  test("Parity.SolveProject") {
+    val src =
+      """
+        |use Assert.assertEq;
+        |
+        |@Test
+        |def testSolveProject(): Unit \ Assert = {
+        |    let p = #{
+        |        Edge(1, 2). Edge(2, 3).
+        |        Path(x, y) :- Edge(x, y).
+        |        Path(x, z) :- Path(x, y), Edge(y, z).
+        |        Unrelated(42).
+        |    };
+        |    let res = solve p project Path;
+        |    let paths = query res select (x, y) from Path(x, y) |> Vector.sort;
+        |    assertEq(expected = Vector#{(1, 2), (1, 3), (2, 3)}, paths);
+        |    let others: Vector[Int32] = query res select x from Unrelated(x);
+        |    assertEq(expected = Vector#{}, others)
         |}
       """.stripMargin
     assertParity(src)
