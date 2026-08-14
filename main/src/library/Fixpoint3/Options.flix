@@ -19,6 +19,11 @@
 pub mod Fixpoint3.Options {
 
     ///
+    /// Rewritten by the compiler before optimization.
+    ///
+    pub def enableParallelExecution(): Bool = true
+
+    ///
     /// Prints the Datalog program before the fixpoint computation.
     ///
     pub def enableDebugging(): Bool = false

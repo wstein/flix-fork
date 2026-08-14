@@ -45,7 +45,8 @@ object Options {
     XPerfFrontend = false,
     XPerfPar = false,
     xchaosMonkey = false,
-    xverify = false
+    xverify = false,
+    datalogExecution = DatalogExecution.Parallel
   )
 
   /**
@@ -72,17 +73,22 @@ object Options {
 /**
   * General Flix options.
   *
-  * @param lib            selects the level of libraries to include.
-  * @param build          selects development or production mode.
-  * @param compilerTop    shows a live TUI of where the compiler spends its time.
-  * @param entryPoint     specifies the main entry point.
-  * @param githubToken    the API key to use for GitHub dependency resolution.
-  * @param incremental    enables incremental compilation.
-  * @param installDeps    enables automatic installation of dependencies.
-  * @param json           enable json output.
-  * @param progress       print progress during compilation.
-  * @param threads        selects the number of threads to use.
-  * @param assumeYes      run non-interactively and assume answer to all prompts is yes.
+  * @param lib              selects the level of libraries to include.
+  * @param build            selects development or production mode.
+  * @param compilerTop      shows a live TUI of where the compiler spends its time.
+  * @param entryPoint       specifies the main entry point.
+  * @param githubToken      the API key to use for GitHub dependency resolution.
+  * @param incremental      enables incremental compilation.
+  * @param installDeps      enables automatic installation of dependencies.
+  * @param json             enable json output.
+  * @param outputJvm        Enable JVM bytecode output.
+  * @param outputPath       The path to the output folder.
+  * @param progress         print progress during compilation.
+  * @param threads          selects the number of threads to use.
+  * @param loadClassFiles   loads the generated class files into the JVM.
+  * @param assumeYes        run non-interactively and assume answer to all prompts is yes.
+  * @param xverify          verifies compiler invariants after selected phases.
+  * @param datalogExecution selects parallel or sequential execution mode for Datalog.
   */
 case class Options(lib: LibLevel,
                    build: Build,
@@ -103,7 +109,8 @@ case class Options(lib: LibLevel,
                    XPerfPar: Boolean,
                    XPerfN: Option[Int],
                    xchaosMonkey: Boolean,
-                   xverify: Boolean
+                   xverify: Boolean,
+                   datalogExecution: DatalogExecution
                   )
 
 /**

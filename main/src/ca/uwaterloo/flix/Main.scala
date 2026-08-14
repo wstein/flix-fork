@@ -93,7 +93,8 @@ object Main {
       XPerfPar = cmdOpts.XPerfPar,
       XPerfN = cmdOpts.XPerfN,
       xchaosMonkey = Options.Default.xchaosMonkey,
-      xverify = cmdOpts.xverify
+      xverify = cmdOpts.xverify,
+      datalogExecution = cmdOpts.xdatalogExecution
     )
 
     // Don't use progress bar if benchmarking.
@@ -539,6 +540,7 @@ object Main {
     XPerfN: Option[Int] = None,
     XPerfFrontend: Boolean = false,
     XPerfPar: Boolean = false,
+    xdatalogExecution: DatalogExecution = DatalogExecution.Parallel,
     files: Seq[File] = Seq()
   )
 
@@ -618,6 +620,12 @@ object Main {
       case "min" => LibLevel.Min
       case "all" => LibLevel.All
       case arg => throw new IllegalArgumentException(s"'$arg' is not a valid library level. Valid options are 'all', 'min', and 'nix'.")
+    }
+
+    implicit val readDatalogExecution: scopt.Read[DatalogExecution] = scopt.Read.reads {
+      case "parallel" => DatalogExecution.Parallel
+      case "sequential" => DatalogExecution.Sequential
+      case arg => throw new IllegalArgumentException(s"'$arg' is not a valid Datalog execution mode. Valid options are 'parallel' and 'sequential'.")
     }
 
     implicit val readSubEffectLevel: scopt.Read[Subeffecting] = scopt.Read.reads {
@@ -779,6 +787,10 @@ object Main {
       // Xsubeffecting
       opt[Seq[Subeffecting]]("Xsubeffecting").action((subeffectings, c) => c.copy(xsubeffecting = subeffectings.toSet)).
         text("[experimental] enables sub-effecting in select places")
+
+      // Xdatalog-execution
+      opt[DatalogExecution]("Xdatalog-execution").action((arg, c) => c.copy(xdatalogExecution = arg)).
+        text("[experimental] selects the Datalog execution mode (parallel, sequential).")
 
       // Xnewmono
       opt[Unit]("Xnewmono").action((_, c) => c.copy(xnewmono = true)).
