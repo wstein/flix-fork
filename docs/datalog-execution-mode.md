@@ -38,11 +38,13 @@ Everything else is identical in both builds and is therefore *not* affected by t
 | `Fixpoint3.Interpreter.interpret` → `Thread.startVirtualThread` | `Map` operations used to build and marshal indexes, which inline `RedBlackTree`'s `par (...) yield` |
 | `RedBlackTree.parMapWithKey`, `RedBlackTree.parExists` → `Thread.startVirtualThread` | the `@ParallelWhenPure` operations on `Map` and `Set` |
 | `BPlusTree.Lock`, `Fixpoint3.ReadWriteLock` → `java.util.concurrent.locks.StampedLock` | the B+ tree's concurrent index locking |
-| `Concurrent.ReentrantLock`, `Concurrent.Condition`, `Concurrent.CyclicBarrier` | `Concurrent.Channel` |
+| `Concurrent.ReentrantLock`, `Concurrent.Condition`, `Concurrent.CyclicBarrier` | `Concurrent.Channel`, which is itself reached only from the `par (...) yield` above |
 
 Note in particular that `interpret` calls `Thread.startVirtualThread` in **both** builds. This is not a remnant of the erased evaluator: the interpreter's own parallelism spawns into the dynamic region `rc2` and therefore compiles to `Region.spawn`, never to `startVirtualThread` (see `GenExpression.scala`, `AtomicOp.Spawn`, where only a `Static` region takes the direct path). The call comes from `RedBlackTree` code inlined into `interpret`, which is why it is present regardless of the mode. `TestDatalogReachability` asserts this distinction explicitly rather than relying on the absence of the parallel def names, because the inliner can fold a def into its caller and thereby remove the symbol without removing the behavior.
 
-Removing the remaining constructs would mean giving `Map`, `Set`, `BPlusTree`, and `Concurrent` the same compile-time treatment. That is a larger change than a Datalog execution option and is deliberately not attempted here.
+These constructs are not independent of each other. `par (...) yield` does not spawn threads directly: `Lowering.mkParChannels` allocates one channel per fragment, spawns each fragment at the `Static` region, and waits on the channels. The `Concurrent` locking layer is therefore a *consequence* of `RedBlackTree`'s use of `par`, not a separate dependency -- which is why it appears for a Datalog program yet not for a small program that merely uses regions and laziness. Only the two `StampedLock` sites stand on their own.
+
+Removing what remains would mean giving `Map`, `Set`, and `BPlusTree` the same compile-time treatment. That is a larger change than a Datalog execution option and is deliberately not attempted here.
 
 ---
 
