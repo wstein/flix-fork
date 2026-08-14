@@ -62,10 +62,10 @@ flix compile --Xdatalog-execution=parallel|sequential <files>
 ### Compiler API Options
 In Scala:
 ```scala
-import ca.uwaterloo.flix.util.{DatalogExecution, Options}
+import ca.uwaterloo.flix.util.{ExecutionMode, Options}
 
 val options = Options.Default.copy(
-  xdatalogExecution = DatalogExecution.Sequential // or DatalogExecution.Parallel
+  xdatalogExecution = ExecutionMode.Sequential // or ExecutionMode.Parallel
 )
 ```
 
@@ -73,9 +73,9 @@ val options = Options.Default.copy(
 
 ## 3. Architecture and Implementation
 
-### Phase Pipeline Integration (`DatalogExecutionMode`)
+### Phase Pipeline Integration (`LibraryOptions`)
 1. **Flix Standard Library Stub**: `Fixpoint3.Options.enableParallelExecution(): Bool` returns `true` by default in Flix source.
-2. **AST Rewrite Phase**: When `xdatalogExecution == DatalogExecution.Sequential`, the compiler phase `DatalogExecutionMode` intercepts `TypedAst.Root` and rewrites `Fixpoint3.Options.enableParallelExecution`'s body to `Constant.Bool(false)`. If the definition is missing while the full standard library is loaded, the phase fails with an `InternalCompilerException` rather than silently producing a parallel build.
+2. **AST Rewrite Phase**: When `xdatalogExecution == ExecutionMode.Sequential`, the compiler phase `LibraryOptions` intercepts `TypedAst.Root` and rewrites `Fixpoint3.Options.enableParallelExecution`'s body to `Constant.Bool(false)`. If the definition is missing while the full standard library is loaded, the phase fails with an `InternalCompilerException` rather than silently producing a parallel build.
 3. **Dispatch & Inlining**: In `Fixpoint3.Interpreter.interpretWithDatabase`:
    ```flix
    if (Options.enableParallelExecution())

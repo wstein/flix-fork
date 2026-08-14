@@ -21,40 +21,40 @@ import ca.uwaterloo.flix.TestUtils
 import ca.uwaterloo.flix.api.Flix
 import ca.uwaterloo.flix.language.ast.shared.Constant
 import ca.uwaterloo.flix.language.ast.{Symbol, TypedAst}
-import ca.uwaterloo.flix.util.{DatalogExecution, Options}
+import ca.uwaterloo.flix.util.{ExecutionMode, Options}
 import org.scalatest.funsuite.AnyFunSuite
 
 class TestDatalogExecutionMode extends AnyFunSuite with TestUtils {
 
-  test("CLI.Parse.DatalogExecution.Default") {
+  test("CLI.Parse.ExecutionMode.Default") {
     val cmdOpts = Main.parseCmdOpts(Array("build")).get
-    assert(cmdOpts.xdatalogExecution == DatalogExecution.Parallel)
+    assert(cmdOpts.xdatalogExecution == ExecutionMode.Parallel)
   }
 
-  test("CLI.Parse.DatalogExecution.Parallel") {
+  test("CLI.Parse.ExecutionMode.Parallel") {
     val cmdOpts = Main.parseCmdOpts(Array("--Xdatalog-execution=parallel", "build")).get
-    assert(cmdOpts.xdatalogExecution == DatalogExecution.Parallel)
+    assert(cmdOpts.xdatalogExecution == ExecutionMode.Parallel)
   }
 
-  test("CLI.Parse.DatalogExecution.Sequential") {
+  test("CLI.Parse.ExecutionMode.Sequential") {
     val cmdOpts = Main.parseCmdOpts(Array("--Xdatalog-execution=sequential", "build")).get
-    assert(cmdOpts.xdatalogExecution == DatalogExecution.Sequential)
+    assert(cmdOpts.xdatalogExecution == ExecutionMode.Sequential)
   }
 
-  test("CLI.Parse.DatalogExecution.Invalid") {
+  test("CLI.Parse.ExecutionMode.Invalid") {
     val result = Main.parseCmdOpts(Array("--Xdatalog-execution=invalid", "build"))
     assert(result.isEmpty)
   }
 
   test("AST.Rewrite.Parallel") {
-    val flix = new Flix().setOptions(Options.TestWithLibAll.copy(xdatalogExecution = DatalogExecution.Parallel))
+    val flix = new Flix().setOptions(Options.TestWithLibAll.copy(xdatalogExecution = ExecutionMode.Parallel))
     val (optRoot, errors) = flix.check()
     assert(errors.isEmpty)
     assertBody(optRoot.get, expected = true)
   }
 
   test("AST.Rewrite.Sequential") {
-    val flix = new Flix().setOptions(Options.TestWithLibAll.copy(xdatalogExecution = DatalogExecution.Sequential))
+    val flix = new Flix().setOptions(Options.TestWithLibAll.copy(xdatalogExecution = ExecutionMode.Sequential))
     val (optRoot, errors) = flix.check()
     assert(errors.isEmpty)
     assertBody(optRoot.get, expected = false)
@@ -62,14 +62,14 @@ class TestDatalogExecutionMode extends AnyFunSuite with TestUtils {
 
   test("AST.Rewrite.Sequential.WithoutStandardLibrary") {
     // Fixpoint3 is unavailable without the full standard library, so there is nothing to rewrite.
-    val flix = new Flix().setOptions(Options.TestWithLibMin.copy(xdatalogExecution = DatalogExecution.Sequential))
+    val flix = new Flix().setOptions(Options.TestWithLibMin.copy(xdatalogExecution = ExecutionMode.Sequential))
     val (optRoot, errors) = flix.check()
     assert(errors.isEmpty)
     assert(optRoot.get.defs.get(Symbol.mkDefnSym("Fixpoint3.Options.enableParallelExecution")).isEmpty)
   }
 
   test("Incremental.ModeChange.TakesEffectOnWarmCaches") {
-    val flix = new Flix().setOptions(Options.TestWithLibAll.copy(incremental = true, xdatalogExecution = DatalogExecution.Parallel))
+    val flix = new Flix().setOptions(Options.TestWithLibAll.copy(incremental = true, xdatalogExecution = ExecutionMode.Parallel))
     val (root1, errors1) = flix.check()
     assert(errors1.isEmpty)
     assert(root1.isDefined)
@@ -80,7 +80,7 @@ class TestDatalogExecutionMode extends AnyFunSuite with TestUtils {
 
     // Switching the mode must take effect on the very next run, even though the incremental
     // caches are kept: the rewrite is recomputed from the current options on every run.
-    flix.setOptions(flix.options.copy(xdatalogExecution = DatalogExecution.Sequential))
+    flix.setOptions(flix.options.copy(xdatalogExecution = ExecutionMode.Sequential))
     assert(flix.getParsedAst.units.nonEmpty, "changing the mode must not discard the incremental caches")
 
     val (root2, errors2) = flix.check()
@@ -88,7 +88,7 @@ class TestDatalogExecutionMode extends AnyFunSuite with TestUtils {
     assertBody(root2.get, expected = false)
 
     // ... and switching back must restore the original body.
-    flix.setOptions(flix.options.copy(xdatalogExecution = DatalogExecution.Parallel))
+    flix.setOptions(flix.options.copy(xdatalogExecution = ExecutionMode.Parallel))
     val (root3, errors3) = flix.check()
     assert(errors3.isEmpty)
     assertBody(root3.get, expected = true)

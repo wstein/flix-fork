@@ -20,12 +20,12 @@ import ca.uwaterloo.flix.TestUtils
 import ca.uwaterloo.flix.api.{CompilerConstants, Flix}
 import ca.uwaterloo.flix.language.ast.shared.SecurityContext
 import ca.uwaterloo.flix.runtime.JvmLoader
-import ca.uwaterloo.flix.util.{DatalogExecution, Options, Result}
+import ca.uwaterloo.flix.util.{ExecutionMode, Options, Result}
 import org.scalatest.funsuite.AnyFunSuite
 
 class TestDatalogExecutionParity extends AnyFunSuite with TestUtils {
 
-  private def runWithMode(src: String, mode: DatalogExecution): Unit = {
+  private def runWithMode(src: String, mode: ExecutionMode): Unit = {
     val options = Options.TestWithLibAll.copy(xdatalogExecution = mode)
     val flix = new Flix().setOptions(options)
     implicit val sctx: SecurityContext = SecurityContext.Unrestricted
@@ -41,8 +41,8 @@ class TestDatalogExecutionParity extends AnyFunSuite with TestUtils {
   }
 
   private def assertParity(src: String): Unit = {
-    runWithMode(src, DatalogExecution.Parallel)
-    runWithMode(src, DatalogExecution.Sequential)
+    runWithMode(src, ExecutionMode.Parallel)
+    runWithMode(src, ExecutionMode.Sequential)
   }
 
   test("Parity.TransitiveClosure") {
