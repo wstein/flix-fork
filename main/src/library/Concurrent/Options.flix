@@ -25,4 +25,15 @@ pub mod Concurrent.Options {
     ///
     pub def enableParallelEvaluation(): Bool = true
 
+    ///
+    /// Returns `true` if the standard library's concurrent data structures must lock.
+    ///
+    /// Rewritten by the compiler before optimization. Unlike the switches above, this one does not
+    /// choose between two implementations of the same contract: making it `false` gives up thread
+    /// safety in `BPlusTree` and `Fixpoint3`. It is therefore only ever set by `--Xsequential`,
+    /// which also compiles out every way the program could create a thread. See
+    /// `docs/sequential-execution.md`.
+    ///
+    pub def enableLocking(): Bool = true
+
 }
