@@ -33,7 +33,7 @@ object DatalogExecutionMode {
   private val EnableParallelExecutionSym = Symbol.mkDefnSym("Fixpoint3.Options.enableParallelExecution")
 
   def run(root: TypedAst.Root)(implicit flix: Flix): TypedAst.Root = flix.phase("DatalogExecutionMode") {
-    if (flix.options.datalogExecution == DatalogExecution.Sequential) {
+    if (flix.options.xdatalogExecution == DatalogExecution.Sequential) {
       root.defs.get(EnableParallelExecutionSym) match {
         case Some(defn) =>
           val newExp = TypedAst.Expr.Cst(Constant.Bool(false), Type.Bool, defn.loc.asSynthetic)

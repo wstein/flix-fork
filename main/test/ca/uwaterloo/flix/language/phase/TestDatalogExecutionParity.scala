@@ -26,7 +26,7 @@ import org.scalatest.funsuite.AnyFunSuite
 class TestDatalogExecutionParity extends AnyFunSuite with TestUtils {
 
   private def runWithMode(src: String, mode: DatalogExecution): Unit = {
-    val options = Options.TestWithLibAll.copy(datalogExecution = mode)
+    val options = Options.TestWithLibAll.copy(xdatalogExecution = mode)
     val flix = new Flix().setOptions(options)
     implicit val sctx: SecurityContext = SecurityContext.Unrestricted
     flix.addVirtualPath(CompilerConstants.VirtualTestFile, src)
