@@ -47,7 +47,8 @@ object Options {
     xchaosMonkey = false,
     xverify = false,
     xdatalogExecution = ExecutionMode.Parallel,
-    xcollectionExecution = ExecutionMode.Parallel
+    xcollectionExecution = ExecutionMode.Parallel,
+    xassumeSingleThreaded = false
   )
 
   /**
@@ -106,6 +107,10 @@ object Options {
   * @param xverify           verifies compiler invariants after selected phases.
   * @param xdatalogExecution selects parallel or sequential execution mode for Datalog.
   * @param xcollectionExecution selects parallel or sequential evaluation of pure collection operations.
+  * @param xassumeSingleThreaded asserts that the program never creates a thread, which allows the
+  *                              standard library's concurrent data structures to drop their locks.
+  *                              Only sound together with the two options above set to sequential,
+  *                              which is why `--Xsequential` is the only way to set it from the CLI.
   */
 case class Options(lib: LibLevel,
                    build: Build,
@@ -124,11 +129,11 @@ case class Options(lib: LibLevel,
                    xnewmono: Boolean,
                    XPerfFrontend: Boolean,
                    XPerfPar: Boolean,
-                   XPerfN: Option[Int],
                     xchaosMonkey: Boolean,
                     xverify: Boolean,
                     xdatalogExecution: ExecutionMode,
-                    xcollectionExecution: ExecutionMode
+                    xcollectionExecution: ExecutionMode,
+                    xassumeSingleThreaded: Boolean
                   )
 
 /**
