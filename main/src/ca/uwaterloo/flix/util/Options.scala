@@ -46,7 +46,8 @@ object Options {
     XPerfPar = false,
     xchaosMonkey = false,
     xverify = false,
-    xdatalogExecution = ExecutionMode.Parallel
+    xdatalogExecution = ExecutionMode.Parallel,
+    xcollectionExecution = ExecutionMode.Parallel
   )
 
   /**
@@ -104,6 +105,7 @@ object Options {
   * @param assumeYes         run non-interactively and assume answer to all prompts is yes.
   * @param xverify           verifies compiler invariants after selected phases.
   * @param xdatalogExecution selects parallel or sequential execution mode for Datalog.
+  * @param xcollectionExecution selects parallel or sequential evaluation of pure collection operations.
   */
 case class Options(lib: LibLevel,
                    build: Build,
@@ -123,9 +125,10 @@ case class Options(lib: LibLevel,
                    XPerfFrontend: Boolean,
                    XPerfPar: Boolean,
                    XPerfN: Option[Int],
-                   xchaosMonkey: Boolean,
-                   xverify: Boolean,
-                   xdatalogExecution: ExecutionMode
+                    xchaosMonkey: Boolean,
+                    xverify: Boolean,
+                    xdatalogExecution: ExecutionMode,
+                    xcollectionExecution: ExecutionMode
                   )
 
 /**

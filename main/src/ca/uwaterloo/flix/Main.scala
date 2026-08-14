@@ -94,7 +94,8 @@ object Main {
       XPerfN = cmdOpts.XPerfN,
       xchaosMonkey = Options.Default.xchaosMonkey,
       xverify = cmdOpts.xverify,
-      xdatalogExecution = cmdOpts.xdatalogExecution
+      xdatalogExecution = cmdOpts.xdatalogExecution,
+      xcollectionExecution = cmdOpts.xcollectionExecution
     )
 
     // Don't use progress bar if benchmarking.
@@ -541,6 +542,7 @@ object Main {
     XPerfFrontend: Boolean = false,
     XPerfPar: Boolean = false,
     xdatalogExecution: ExecutionMode = ExecutionMode.Parallel,
+    xcollectionExecution: ExecutionMode = ExecutionMode.Parallel,
     files: Seq[File] = Seq()
   )
 
@@ -791,6 +793,10 @@ object Main {
       // Xdatalog-execution
       opt[ExecutionMode]("Xdatalog-execution").action((arg, c) => c.copy(xdatalogExecution = arg)).
         text("[experimental] selects the Datalog execution mode (parallel, sequential).")
+
+      // Xcollection-execution
+      opt[ExecutionMode]("Xcollection-execution").action((arg, c) => c.copy(xcollectionExecution = arg)).
+        text("[experimental] selects the evaluation mode for pure collection operations (parallel, sequential).")
 
       // Xnewmono
       opt[Unit]("Xnewmono").action((_, c) => c.copy(xnewmono = true)).
