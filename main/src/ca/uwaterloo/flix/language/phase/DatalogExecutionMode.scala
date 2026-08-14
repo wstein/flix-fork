@@ -18,9 +18,9 @@ package ca.uwaterloo.flix.language.phase
 
 import ca.uwaterloo.flix.api.Flix
 import ca.uwaterloo.flix.language.ast.shared.Constant
-import ca.uwaterloo.flix.language.ast.{Symbol, Type, TypedAst}
+import ca.uwaterloo.flix.language.ast.{SourceLocation, Symbol, Type, TypedAst}
 import ca.uwaterloo.flix.language.dbg.AstPrinter.DebugTypedAst
-import ca.uwaterloo.flix.util.DatalogExecution
+import ca.uwaterloo.flix.util.{DatalogExecution, InternalCompilerException, LibLevel}
 
 /**
   * Rewrites compile-time Datalog options in the TypedAst.
@@ -39,8 +39,12 @@ object DatalogExecutionMode {
           val newExp = TypedAst.Expr.Cst(Constant.Bool(false), Type.Bool, defn.loc.asSynthetic)
           val newDef = defn.copy(exp = newExp)
           root.copy(defs = root.defs + (EnableParallelExecutionSym -> newDef))
-        case None =>
+        case None if flix.options.lib != LibLevel.All =>
+          // Fixpoint3 is only available with the full standard library. Without it there is no
+          // Datalog solver to configure, so there is nothing to rewrite.
           root
+        case None =>
+          throw InternalCompilerException(s"The definition '$EnableParallelExecutionSym' is not defined.", SourceLocation.Unknown)
       }
     } else {
       root
