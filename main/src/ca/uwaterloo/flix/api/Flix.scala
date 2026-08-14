@@ -454,7 +454,7 @@ class Flix {
   def setOptions(opts: Options): Flix = {
     if (opts == null)
       throw new IllegalArgumentException("'opts' must be non-null.")
-    if (this.options.datalogExecution != opts.datalogExecution) {
+    if (this.options.xdatalogExecution != opts.xdatalogExecution) {
       clearCaches()
     }
     options = opts

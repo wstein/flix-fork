@@ -39,7 +39,7 @@ In Scala:
 import ca.uwaterloo.flix.util.{DatalogExecution, Options}
 
 val options = Options.Default.copy(
-  datalogExecution = DatalogExecution.Sequential // or DatalogExecution.Parallel
+  xdatalogExecution = DatalogExecution.Sequential // or DatalogExecution.Parallel
 )
 ```
 
@@ -49,7 +49,7 @@ val options = Options.Default.copy(
 
 ### Phase Pipeline Integration (`DatalogExecutionMode`)
 1. **Flix Standard Library Stub**: `Fixpoint3.Options.enableParallelExecution(): Bool` returns `true` by default in Flix source.
-2. **AST Rewrite Phase**: When `datalogExecution == DatalogExecution.Sequential`, the compiler phase `DatalogExecutionMode` intercepts `TypedAst.Root` and rewrites `Fixpoint3.Options.enableParallelExecution`'s body to `Constant.Bool(false)`.
+2. **AST Rewrite Phase**: When `xdatalogExecution == DatalogExecution.Sequential`, the compiler phase `DatalogExecutionMode` intercepts `TypedAst.Root` and rewrites `Fixpoint3.Options.enableParallelExecution`'s body to `Constant.Bool(false)`.
 3. **Dispatch & Inlining**: In `Fixpoint3.Interpreter.interpretWithDatabase`:
    ```flix
    if (Options.enableParallelExecution())
@@ -60,7 +60,7 @@ val options = Options.Default.copy(
 4. **Optimization and Tree Shaking**:
    - `Optimizer` / `Inliner` inlines the constant condition `if (false)` and eliminates the dead branch.
    - `TreeShaker1` and `TreeShaker2` strip `evalStmtParallel`, `evalOpParallel`, `parEvalSearchOrQueryOp`, `copyCtx`, and `BPlusTree.parForEach`.
-5. **Incremental Cache Invalidation**: Switching `datalogExecution` on a `Flix` compiler instance automatically invalidates AST caches to force recompilation of solver paths.
+5. **Incremental Cache Invalidation**: Switching `xdatalogExecution` on a `Flix` compiler instance automatically invalidates AST caches to force recompilation of solver paths.
 
 ---
 
