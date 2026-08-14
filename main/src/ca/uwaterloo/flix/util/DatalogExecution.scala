@@ -28,7 +28,11 @@ object DatalogExecution {
   case object Parallel extends DatalogExecution
 
   /**
-    * Sequential execution with all concurrency primitives compiled away.
+    * Sequential execution with the RAM interpreter's own parallelism compiled away.
+    *
+    * Note: This is not a guarantee that the compiled program is free of concurrency primitives.
+    * The B+ tree still locks its indexes, and the `Map` operations used to build and marshal them
+    * are `@ParallelWhenPure` and may still spawn threads. See `docs/datalog-execution-mode.md`.
     */
   case object Sequential extends DatalogExecution
 }
