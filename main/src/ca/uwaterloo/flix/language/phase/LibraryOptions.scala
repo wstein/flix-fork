@@ -47,10 +47,21 @@ object LibraryOptions {
     */
   private val EnableParallelEvaluationSym = Symbol.mkDefnSym("Concurrent.Options.enableParallelEvaluation")
 
+  /**
+    * Guards the locking in `BPlusTree` and `Fixpoint3`.
+    *
+    * Unlike the two above, disabling this gives up thread safety rather than selecting another
+    * implementation of the same contract. It is only sound in a program that cannot create a
+    * thread, which is why the only option that sets it, `--Xsequential`, also disables the other
+    * two.
+    */
+  private val EnableLockingSym = Symbol.mkDefnSym("Concurrent.Options.enableLocking")
+
   def run(root: TypedAst.Root)(implicit flix: Flix): TypedAst.Root = flix.phase("LibraryOptions") {
     val disabled = List(
       EnableParallelExecutionSym -> (flix.options.xdatalogExecution == ExecutionMode.Sequential),
-      EnableParallelEvaluationSym -> (flix.options.xcollectionExecution == ExecutionMode.Sequential)
+      EnableParallelEvaluationSym -> (flix.options.xcollectionExecution == ExecutionMode.Sequential),
+      EnableLockingSym -> flix.options.xassumeSingleThreaded
     ).collect { case (sym, true) => sym }
 
     disabled.foldLeft(root)(setToFalse)

@@ -95,7 +95,8 @@ object Main {
       xchaosMonkey = Options.Default.xchaosMonkey,
       xverify = cmdOpts.xverify,
       xdatalogExecution = cmdOpts.xdatalogExecution,
-      xcollectionExecution = cmdOpts.xcollectionExecution
+      xcollectionExecution = cmdOpts.xcollectionExecution,
+      xassumeSingleThreaded = cmdOpts.xsequential
     )
 
     // Don't use progress bar if benchmarking.
@@ -543,6 +544,7 @@ object Main {
     XPerfPar: Boolean = false,
     xdatalogExecution: ExecutionMode = ExecutionMode.Parallel,
     xcollectionExecution: ExecutionMode = ExecutionMode.Parallel,
+    xsequential: Boolean = false,
     files: Seq[File] = Seq()
   )
 
@@ -797,6 +799,13 @@ object Main {
       // Xcollection-execution
       opt[ExecutionMode]("Xcollection-execution").action((arg, c) => c.copy(xcollectionExecution = arg)).
         text("[experimental] selects the evaluation mode for pure collection operations (parallel, sequential).")
+
+      // Xsequential
+      opt[Unit]("Xsequential").action((_, c) => c.copy(
+        xdatalogExecution = ExecutionMode.Sequential,
+        xcollectionExecution = ExecutionMode.Sequential,
+        xsequential = true
+      )).text("[experimental] compiles out every use of threads in the standard library.")
 
       // Xnewmono
       opt[Unit]("Xnewmono").action((_, c) => c.copy(xnewmono = true)).
