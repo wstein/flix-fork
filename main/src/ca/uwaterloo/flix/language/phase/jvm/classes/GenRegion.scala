@@ -40,7 +40,10 @@ object GenRegion {
   val Desc: ClassDesc = mkDesc(DevFlixRuntime, Mangle.mkClassName("Region"))
 
 
-  def genByteCode()(implicit flix: Flix): Array[Byte] = {
+  def genByteCode()(implicit flix: Flix): Array[Byte] =
+    if (flix.options.isSingleThreaded) genSequentialByteCode() else genConcurrentByteCode()
+
+  private def genConcurrentByteCode()(implicit flix: Flix): Array[Byte] = {
     val cm = mkClass(this.Desc, IsFinal)
 
     cm.mkField(ThreadsField, IsPrivate, IsFinal, NotVolatile)
@@ -54,6 +57,19 @@ object GenRegion {
     cm.mkMethod(Nil, ExitMethod, IsPublic, IsFinal, exitIns(_))
     cm.mkMethod(Nil, ReportChildExceptionMethod, IsPublic, IsFinal, reportChildExceptionIns(_))
     cm.mkMethod(Nil, ReThrowChildExceptionMethod, IsPublic, IsFinal, reThrowChildExceptionIns(_))
+    cm.mkMethod(Nil, RunOnExitMethod, IsPublic, IsFinal, runOnExitIns(_))
+
+    cm.closeClassMaker()
+  }
+
+  private def genSequentialByteCode()(implicit flix: Flix): Array[Byte] = {
+    val cm = mkClass(this.Desc, IsFinal)
+
+    cm.mkField(OnExitField, IsPrivate, IsFinal, NotVolatile)
+    cm.mkConstructor(Constructor, IsPublic, sequentialConstructorIns(_))
+    cm.mkMethod(Nil, ExitMethod, IsPublic, IsFinal, sequentialExitIns(_))
+    cm.mkMethod(Nil, ReportChildExceptionMethod, IsPublic, IsFinal, noOpIns(_))
+    cm.mkMethod(Nil, ReThrowChildExceptionMethod, IsPublic, IsFinal, noOpIns(_))
     cm.mkMethod(Nil, RunOnExitMethod, IsPublic, IsFinal, runOnExitIns(_))
 
     cm.closeClassMaker()
@@ -87,6 +103,17 @@ object GenRegion {
     thisLoad()
     ACONST_NULL()
     PUTFIELD(ChildExceptionField)
+    thisLoad()
+    NEW(JavaClasses.LinkedList)
+    DUP()
+    invokeConstructor(JavaClasses.LinkedList, MethodTypeDescs.NothingToVoid)
+    PUTFIELD(OnExitField)
+    RETURN()
+  }
+
+  private def sequentialConstructorIns(implicit mv: MethodVisitor): Unit = {
+    thisLoad()
+    INVOKESPECIAL(ClassConstants.Object.Constructor)
     thisLoad()
     NEW(JavaClasses.LinkedList)
     DUP()
@@ -163,6 +190,31 @@ object GenRegion {
         }
       }
       RETURN()
+    }
+  }
+
+  private def sequentialExitIns(implicit mv: MethodVisitor): Unit = {
+    runOnExitHandlersIns(1)
+    RETURN()
+  }
+
+  private def noOpIns(implicit mv: MethodVisitor): Unit = RETURN()
+
+  private def runOnExitHandlersIns(index: Int)(implicit mv: MethodVisitor): Unit = {
+    withName(index, JavaClasses.Iterator) { i =>
+      thisLoad()
+      GETFIELD(OnExitField)
+      INVOKEVIRTUAL(ClassConstants.LinkedList.IteratorMethod)
+      i.store()
+      whileLoop(Condition.NE) {
+        i.load()
+        INVOKEINTERFACE(ClassConstants.Iterator.HasNextMethod)
+      } {
+        i.load()
+        INVOKEINTERFACE(ClassConstants.Iterator.NextMethod)
+        CHECKCAST(JavaClasses.Runnable)
+        INVOKEINTERFACE(ClassConstants.Runnable.RunMethod)
+      }
     }
   }
 
