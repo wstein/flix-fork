@@ -50,10 +50,12 @@ pub mod BPlusTree.Lock {
     ///
     /// For Java's memory model see: https://docs.oracle.com/javase/specs/jls/se8/html/jls-17.html#jls-17.4
     ///
-    /// Note: `Unsynchronized` is only ever constructed when `enableLocking` is `false`, which the
-    /// compiler guarantees is only the case in a build that cannot create threads. Every operation
-    /// below therefore tests `enableLocking` rather than matching on the lock, so that in such a
-    /// build the branch holding the `JStampedLock` folds away and the class becomes unreachable.
+    /// Note: `Unsynchronized` is only ever constructed when `enableLocking` is `false`, which only
+    /// `--Xsequential` asks for. That option compiles out the standard library's own threading; it
+    /// does not stop a program from calling `spawn` itself, so this is an asserted precondition
+    /// rather than a compiler guarantee. Every operation below tests `enableLocking` rather than
+    /// matching on the lock, so that the branch holding the `JStampedLock` folds away and the
+    /// class becomes unreachable.
     pub enum Lock[_: Region] {
         case Synchronized(JStampedLock)
         case Unsynchronized

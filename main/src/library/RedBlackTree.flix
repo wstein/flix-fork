@@ -383,7 +383,14 @@ pub mod RedBlackTree {
     /// Traverses the tree `t` in parallel.
     ///
     @Parallel
-    pub def parExists(f: (k, v) -> Bool, t: RedBlackTree[k, v]): Bool = {
+    pub def parExists(f: (k, v) -> Bool, t: RedBlackTree[k, v]): Bool =
+        if (Concurrent.Options.enableParallelEvaluation())
+            parExistsInternal(f, t)
+        else
+            seqExists(f, t)
+
+    @Parallel
+    def parExistsInternal(f: (k, v) -> Bool, t: RedBlackTree[k, v]): Bool = {
         def visitSubtree(n, st) = {
             if (n <= 1)
                 seqExists(f, st)
@@ -441,7 +448,14 @@ pub mod RedBlackTree {
     /// Traverses the tree `t` in parallel.
     ///
     @Parallel
-    pub def parForAll(f: (k, v) -> Bool, t: RedBlackTree[k, v]): Bool = {
+    pub def parForAll(f: (k, v) -> Bool, t: RedBlackTree[k, v]): Bool =
+        if (Concurrent.Options.enableParallelEvaluation())
+            parForAllInternal(f, t)
+        else
+            seqForAll(f, t)
+
+    @Parallel
+    def parForAllInternal(f: (k, v) -> Bool, t: RedBlackTree[k, v]): Bool = {
         def visitSubtree(n, st) = {
             if (n <= 1)
                 seqForAll(f, st)
@@ -735,7 +749,14 @@ pub mod RedBlackTree {
     /// the threads.
     ///
     @Parallel
-    def parMapWithKey(f: (k, v1) -> v2, t: RedBlackTree[k, v1]): RedBlackTree[k, v2] = {
+    def parMapWithKey(f: (k, v1) -> v2, t: RedBlackTree[k, v1]): RedBlackTree[k, v2] =
+        if (Concurrent.Options.enableParallelEvaluation())
+            parMapWithKeyInternal(f, t)
+        else
+            seqMapWithKey(f, t)
+
+    @Parallel
+    def parMapWithKeyInternal(f: (k, v1) -> v2, t: RedBlackTree[k, v1]): RedBlackTree[k, v2] = {
         def visitSubtree(n, st) = {
             if (n <= 1)
                 parSeqMapWithKey(f, st)
@@ -797,7 +818,14 @@ pub mod RedBlackTree {
     /// the threads.
     ///
     @Parallel
-    pub def parCount(f: (k, v) -> Bool, t: RedBlackTree[k, v]): Int32 = {
+    pub def parCount(f: (k, v) -> Bool, t: RedBlackTree[k, v]): Int32 =
+        if (Concurrent.Options.enableParallelEvaluation())
+            parCountInternal(f, t)
+        else
+            seqCount(f, t)
+
+    @Parallel
+    def parCountInternal(f: (k, v) -> Bool, t: RedBlackTree[k, v]): Int32 = {
         def visitSubtree(n, st) = {
             if (n <= 1)
                 seqCount(f, st)
@@ -868,7 +896,14 @@ pub mod RedBlackTree {
     /// the threads.
     ///
     @Parallel
-    pub def parSumWith(f: (k, v) -> Int32, t: RedBlackTree[k, v]): Int32 = {
+    pub def parSumWith(f: (k, v) -> Int32, t: RedBlackTree[k, v]): Int32 =
+        if (Concurrent.Options.enableParallelEvaluation())
+            parSumWithInternal(f, t)
+        else
+            seqSumWith(f, t)
+
+    @Parallel
+    def parSumWithInternal(f: (k, v) -> Int32, t: RedBlackTree[k, v]): Int32 = {
         def visitSubtree(n, st) = {
             if (n <= 1)
                 seqSumWith(f, st)
@@ -970,7 +1005,14 @@ pub mod RedBlackTree {
     /// the threads.
     ///
     @Parallel
-    def parLimitBy(cmp: (k, v, k, v) -> (k, v), t: RedBlackTree[k, v]): Option[(k, v)] = {
+    def parLimitBy(cmp: (k, v, k, v) -> (k, v), t: RedBlackTree[k, v]): Option[(k, v)] =
+        if (Concurrent.Options.enableParallelEvaluation())
+            parLimitByInternal(cmp, t)
+        else
+            seqLimitBy(cmp, t)
+
+    @Parallel
+    def parLimitByInternal(cmp: (k, v, k, v) -> (k, v), t: RedBlackTree[k, v]): Option[(k, v)] = {
         def visitSubtree(n, st) = {
             if (n <= 0)
                 seqLimitBy(cmp, st)
