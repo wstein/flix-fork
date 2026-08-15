@@ -107,7 +107,9 @@ The eleven in the first row are the floor: a program that mentions no concurrenc
 
 Under the option all of it is gone, in every program: a region has no children and no `spawn`, a lazy value is forced without a lock, `Global` counts with a plain field, and a `par (...) yield` becomes one binding per fragment. The `par` case is also the largest single saving in the table -- 238 classes down to 164 -- because the channel machinery goes with it.
 
-That last one deserves a word, since it is a change in how a *program's* own code is compiled rather than the library's. `par (a <- e1; b <- e2) yield e` says the fragments may be evaluated independently, not that they must be evaluated at once; evaluating them in order is one of the schedules it permits. The fragments are pure, which is what makes their order immaterial. A `spawn`, by contrast, has no sequential reading at all, and is rejected rather than reinterpreted.
+Measured downstream: the `flix-wasm` proof of concept compiles this output to WebAssembly with TeaVM -- 2484 classes and 9400 methods, and its 22-line corpus prints the same thing under WasmGC as on the JVM. That build had carried hand-written stand-ins for `ReentrantLock`, `ConcurrentLinkedQueue`, and `LongAdder`, substituted into the class path because Flix reached all three. Its `workaround-audit` target withholds each in turn and requires the build to fail; with this option all three now build without their stand-in, which is that target's way of reporting that a workaround has become dead weight.
+
+The `par (...) yield` row deserves a word, since it is a change in how a *program's* own code is compiled rather than the library's. `par (a <- e1; b <- e2) yield e` says the fragments may be evaluated independently, not that they must be evaluated at once; evaluating them in order is one of the schedules it permits. The fragments are pure, which is what makes their order immaterial. A `spawn`, by contrast, has no sequential reading at all, and is rejected rather than reinterpreted.
 
 This is the configuration to use for a target that has no threads, such as a WebAssembly runtime.
 
@@ -126,6 +128,16 @@ The seven corpus files that spawn are therefore excluded from `CompilerFullySequ
 listed there by name. `par (...) yield` is not among them: it is a way of writing an expression
 rather than a way of writing a thread, so the option lowers it to a binding per fragment instead of
 rejecting it.
+
+Rejecting at run time rather than at compile time has one cost, and it is worth stating. On a
+target that refuses the thread API outright, a `spawn` used to be caught when the program was
+compiled *for that target*, because the emitted code reached `Thread.ofVirtual`. It no longer
+reaches it, so that build now succeeds and fails when the `spawn` is evaluated. The trade is still
+worth taking: what the old behavior bought on the JVM was a program that quietly created a thread
+while holding data structures whose locks this same option had removed, which is a race rather than
+an error. Doing the check in the compiler instead would mean reporting an error from a stage that
+today cannot fail -- `codeGen` returns a result, not a `Validation` -- since it is the only stage
+that knows which `spawn`s survived tree shaking.
 
 One route out remains: a program can call `java.lang.Thread` itself through Java interop, which the
 compiler has no say over. It is therefore worth being precise about what such a program could
