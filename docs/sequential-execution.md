@@ -81,6 +81,32 @@ One operation does not get a lockless answer. `BPlusTree.Lock.isLocked` asks whe
 
 This is the configuration to use for a target that has no threads, such as a WebAssembly runtime.
 
+### What the elision is exposed to
+
+`xassumeSingleThreaded` asserts that nothing in the program creates a thread, and nothing checks
+that. `--Xsequential` removes the standard library's threading, but a `spawn` in user code survives
+it. On a target that rejects thread creation the build then fails, which is the assertion being
+enforced from the other end; on the JVM it compiles and runs. It is therefore worth being precise
+about what such a program could actually race on.
+
+The solver does not expose either elided lock to user threads:
+
+- The working indexes (`Indexes[r]`) and the `Boxing` that owns the `ReadWriteLock`s are scoped to
+  the region of a single `solve` and never escape it. The only thing that ever shared them was the
+  parallel evaluator, which this option erases.
+- Solving an existing model does not adopt its trees. `Boxing.initializeFacts` reads them and builds
+  fresh region-local facts keyed by `Int64`, so evaluation never mutates a tree that escaped an
+  earlier solve.
+- The trees that do escape, built by `marshallDb` in the `Static` region, are complete before they
+  become reachable and are only read afterwards: `union` merges them as the *source* into a fresh
+  destination, `factsOfInternal` reads into a region-local buffer, and `injectIntoX` builds before
+  escaping. Concurrent readers of a structure nobody writes need no lock.
+
+What remains is that `BPlusTree` is a public module. A program that constructs one directly, shares
+it between threads it spawned itself, and is compiled with `--Xsequential` has an unsynchronized
+concurrent structure. That combination -- direct `BPlusTree` use, `spawn`, and this option -- is the
+exposure, not `spawn` on its own.
+
 Note also that `Fixpoint3.Interpreter.interpret` calls `Thread.startVirtualThread` whenever `enableParallelEvaluation` is on, whatever the Datalog switch is set to. This is not a remnant of the erased evaluator: the interpreter's own parallelism spawns into a dynamic region and therefore compiles to `Region.spawn`, never to `startVirtualThread` (see `GenExpression.scala`, `AtomicOp.Spawn`, where only a `Static` region takes the direct path). The call comes from `RedBlackTree` code inlined into `interpret` through the `Map` operations that build and marshal the solver's indexes, which is why only the collection switch removes it.
 
 ---
