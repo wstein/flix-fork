@@ -52,7 +52,7 @@ object LibraryOptions {
     *
     * Unlike the two above, disabling this gives up thread safety rather than selecting another
     * implementation of the same contract. It is only sound in a program where nothing is left that
-    * could run in parallel, which is why `Options.elideLocks` requires the other two to be disabled
+    * could run in parallel, which is why `Options.isSingleThreaded` requires the other two to be disabled
     * as well, and why `--Xsequential` is the only option that asks for it.
     */
   private val EnableLockingSym = Symbol.mkDefnSym("Concurrent.Options.enableLocking")
@@ -61,7 +61,7 @@ object LibraryOptions {
     val disabled = List(
       EnableParallelExecutionSym -> (flix.options.xdatalogExecution == ExecutionMode.Sequential),
       EnableParallelEvaluationSym -> (flix.options.xcollectionExecution == ExecutionMode.Sequential),
-      EnableLockingSym -> flix.options.elideLocks
+      EnableLockingSym -> flix.options.isSingleThreaded
     ).collect { case (sym, true) => sym }
 
     disabled.foldLeft(root)(setToFalse)
