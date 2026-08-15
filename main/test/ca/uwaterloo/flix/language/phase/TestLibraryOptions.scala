@@ -103,7 +103,7 @@ class TestLibraryOptions extends AnyFunSuite with TestUtils {
       Options.TestWithLibAll.copy(xassumeSingleThreaded = true, xdatalogExecution = ExecutionMode.Sequential),
       Options.TestWithLibAll.copy(xassumeSingleThreaded = true, xcollectionExecution = ExecutionMode.Sequential)
     )) {
-      assert(!partial.elideLocks)
+      assert(!partial.isSingleThreaded)
       assertBody(check(partial), LockingSym, expected = true)
     }
   }

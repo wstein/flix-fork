@@ -138,14 +138,17 @@ case class Options(lib: LibLevel,
                   ) {
 
   /**
-    * Returns `true` if the standard library's locks may be compiled out.
+    * Returns `true` if the program may be compiled as if it were single-threaded.
     *
-    * Asserting [[xassumeSingleThreaded]] is not enough on its own. Eliding the locks gives up
-    * thread safety, which is only sound if nothing is left that could run in parallel, so both
-    * execution modes must be sequential as well. `--Xsequential` sets all three together; this
-    * keeps the compiler API from eliding locks under a configuration that would race.
+    * This governs the parts of the library whose only purpose is to be safe under concurrency: the
+    * locks in `BPlusTree` and `Fixpoint3`.
+    *
+    * Asserting [[xassumeSingleThreaded]] is not enough on its own. Giving those up is only sound if
+    * nothing is left that could run in parallel, so both execution modes must be sequential as
+    * well. `--Xsequential` sets all three together; this keeps the compiler API from producing an
+    * unsynchronized program under a configuration that would race.
     */
-  def elideLocks: Boolean =
+  def isSingleThreaded: Boolean =
     xassumeSingleThreaded &&
       xdatalogExecution == ExecutionMode.Sequential &&
       xcollectionExecution == ExecutionMode.Sequential
