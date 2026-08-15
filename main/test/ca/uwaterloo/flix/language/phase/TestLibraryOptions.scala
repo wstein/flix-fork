@@ -94,6 +94,20 @@ class TestLibraryOptions extends AnyFunSuite with TestUtils {
     assertBody(root, LockingSym, expected = false)
   }
 
+  test("AST.Rewrite.LockElision.RequiresBothModesSequential") {
+    // Asserting the precondition is not enough on its own: eliding the locks while anything can
+    // still run in parallel is exactly the race the option exists to avoid. The compiler API can
+    // express that combination, so it must be inert rather than obeyed.
+    for (partial <- List(
+      Options.TestWithLibAll.copy(xassumeSingleThreaded = true),
+      Options.TestWithLibAll.copy(xassumeSingleThreaded = true, xdatalogExecution = ExecutionMode.Sequential),
+      Options.TestWithLibAll.copy(xassumeSingleThreaded = true, xcollectionExecution = ExecutionMode.Sequential)
+    )) {
+      assert(!partial.elideLocks)
+      assertBody(check(partial), LockingSym, expected = true)
+    }
+  }
+
   test("AST.Rewrite.Sequential.WithoutStandardLibrary") {
     // Both options live in the standard library, so there is nothing to rewrite without it.
     val root = check(Options.TestWithLibMin.copy(

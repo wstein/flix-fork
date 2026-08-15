@@ -128,13 +128,29 @@ case class Options(lib: LibLevel,
                    xsubeffecting: Set[Subeffecting],
                    xnewmono: Boolean,
                    XPerfFrontend: Boolean,
-                   XPerfPar: Boolean,
+                    XPerfN: Option[Int],
+                    XPerfPar: Boolean,
                     xchaosMonkey: Boolean,
                     xverify: Boolean,
                     xdatalogExecution: ExecutionMode,
                     xcollectionExecution: ExecutionMode,
                     xassumeSingleThreaded: Boolean
-                  )
+                  ) {
+
+  /**
+    * Returns `true` if the standard library's locks may be compiled out.
+    *
+    * Asserting [[xassumeSingleThreaded]] is not enough on its own. Eliding the locks gives up
+    * thread safety, which is only sound if nothing is left that could run in parallel, so both
+    * execution modes must be sequential as well. `--Xsequential` sets all three together; this
+    * keeps the compiler API from eliding locks under a configuration that would race.
+    */
+  def elideLocks: Boolean =
+    xassumeSingleThreaded &&
+      xdatalogExecution == ExecutionMode.Sequential &&
+      xcollectionExecution == ExecutionMode.Sequential
+
+}
 
 /**
   * An option to control whether to run in development or production mode.

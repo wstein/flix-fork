@@ -137,6 +137,25 @@ class TestCollectionExecutionParity extends AnyFunSuite with TestUtils {
       """.stripMargin)
   }
 
+  test("Parity.DelayMap.ForcesTheSameValues") {
+    // `DelayMap` forces its lazy values in parallel, through a different code path than `Map` and
+    // `Set`, so the switch has to be exercised here separately.
+    assertParity(
+      s"""
+         |use Assert.assertEq;
+         |
+         |@Test
+         |def testDelayMap(): Unit \\ Assert = {
+         |    let m = List.foldLeft((acc, i) -> DelayMap.insert(i, i * 2, acc), DelayMap.empty(), List.range(0, $Size));
+         |    assertEq(expected = $Size, DelayMap.size(m));
+         |    let forced = DelayMap.toMap(m);
+         |    assertEq(expected = $Size, Map.size(forced));
+         |    assertEq(expected = Some(${(Size - 1) * 2}), Map.get(${Size - 1}, forced));
+         |    assertEq(expected = ${(Size - 1) * Size}, Map.sumWith((_, v) -> v, forced))
+         |}
+      """.stripMargin)
+  }
+
   test("Parity.Map.ImpureFunctionIsUnaffected") {
     // An impure function always takes the sequential path, in both modes.
     assertParity(
