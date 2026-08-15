@@ -33,65 +33,24 @@ class TestLibraryOptions extends AnyFunSuite with TestUtils {
   private val CollectionSym = Symbol.mkDefnSym("Concurrent.Options.enableParallelEvaluation")
   private val LockingSym = Symbol.mkDefnSym("Concurrent.Options.enableLocking")
 
-  test("CLI.Parse.DatalogExecution.Default") {
+  test("CLI.Parse.Sequential.Default") {
     val cmdOpts = Main.parseCmdOpts(Array("build")).get
-    assert(cmdOpts.xdatalogExecution == ExecutionMode.Parallel)
+    assert(!cmdOpts.xsequential)
   }
 
-  test("CLI.Parse.DatalogExecution.Parallel") {
-    val cmdOpts = Main.parseCmdOpts(Array("--Xdatalog-execution=parallel", "build")).get
-    assert(cmdOpts.xdatalogExecution == ExecutionMode.Parallel)
-  }
-
-  test("CLI.Parse.DatalogExecution.Sequential") {
-    val cmdOpts = Main.parseCmdOpts(Array("--Xdatalog-execution=sequential", "build")).get
-    assert(cmdOpts.xdatalogExecution == ExecutionMode.Sequential)
-  }
-
-  test("CLI.Parse.DatalogExecution.Invalid") {
-    val result = Main.parseCmdOpts(Array("--Xdatalog-execution=invalid", "build"))
-    assert(result.isEmpty)
-  }
-
-  test("CLI.Parse.CollectionExecution.Default") {
-    val cmdOpts = Main.parseCmdOpts(Array("build")).get
-    assert(cmdOpts.xcollectionExecution == ExecutionMode.Parallel)
-  }
-
-  test("CLI.Parse.CollectionExecution.Parallel") {
-    val cmdOpts = Main.parseCmdOpts(Array("--Xcollection-execution=parallel", "build")).get
-    assert(cmdOpts.xcollectionExecution == ExecutionMode.Parallel)
-  }
-
-  test("CLI.Parse.CollectionExecution.Sequential") {
-    val cmdOpts = Main.parseCmdOpts(Array("--Xcollection-execution=sequential", "build")).get
-    assert(cmdOpts.xcollectionExecution == ExecutionMode.Sequential)
-  }
-
-  test("CLI.Parse.CollectionExecution.Invalid") {
-    val result = Main.parseCmdOpts(Array("--Xcollection-execution=invalid", "build"))
-    assert(result.isEmpty)
-  }
-
-  test("CLI.Parse.BothOptions.AreIndependent") {
-    val cmdOpts = Main.parseCmdOpts(Array("--Xdatalog-execution=sequential", "--Xcollection-execution=parallel", "build")).get
-    assert(cmdOpts.xdatalogExecution == ExecutionMode.Sequential)
-    assert(cmdOpts.xcollectionExecution == ExecutionMode.Parallel)
-  }
-
-  test("CLI.Parse.Sequential.SetsAllThree") {
+  test("CLI.Parse.Sequential.SetsEveryAxis") {
     val cmdOpts = Main.parseCmdOpts(Array("--Xsequential", "build")).get
-    assert(cmdOpts.xdatalogExecution == ExecutionMode.Sequential)
-    assert(cmdOpts.xcollectionExecution == ExecutionMode.Sequential)
     assert(cmdOpts.xsequential)
   }
 
-  test("CLI.Parse.LockElision.HasNoOptionOfItsOwn") {
-    // Lock elision is sound only where nothing can create a thread, so it must not be settable on
-    // its own. `--Xsequential` is the only way to ask for it.
-    assert(Main.parseCmdOpts(Array("--Xassume-single-threaded", "build")).isEmpty)
-    assert(Main.parseCmdOpts(Array("--Xlock-elision=on", "build")).isEmpty)
-    assert(Main.parseCmdOpts(Array("--Xcollection-execution=sequential", "build")).get.xsequential == false)
+  test("CLI.Parse.Sequential.IsTheOnlyKnob") {
+    // The library switches are set together or not at all. Exposing an option per switch would make
+    // the unsound combination -- locks elided while something still runs in parallel -- reachable,
+    // and reachable by flag order alone, since a later flag would undo what `--Xsequential` set.
+    for (rejected <- List("--Xdatalog-execution=sequential", "--Xcollection-execution=sequential",
+      "--Xassume-single-threaded", "--Xlock-elision=on")) {
+      assert(Main.parseCmdOpts(Array(rejected, "build")).isEmpty, s"Expected '$rejected' to be rejected.")
+    }
   }
 
   test("AST.Rewrite.Parallel") {
