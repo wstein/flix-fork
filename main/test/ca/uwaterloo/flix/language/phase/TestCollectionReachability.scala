@@ -44,7 +44,12 @@ class TestCollectionReachability extends AnyFunSuite with TestUtils with Bytecod
   /// The `RedBlackTree` operations that evaluate in parallel, and that back the `Map` and `Set`
   /// operations above.
   ///
-  private val ParallelTreeDefs = List("parCount", "parExists", "parMapWithKey", "parSumWith")
+  /// Note: the names carry the `Internal` suffix because each public `par*` is now a wrapper that
+  /// tests the switch and delegates either to its parallel body or to its sequential twin. The
+  /// wrapper folds away in both builds; the body is what must be present in one and absent in the
+  /// other.
+  private val ParallelTreeDefs =
+    List("parCountInternal", "parExistsInternal", "parMapWithKeyInternal", "parSumWithInternal")
 
   ///
   /// The concurrency machinery that `par (...) yield` lowers to. `Lowering.mkParChannels` turns
