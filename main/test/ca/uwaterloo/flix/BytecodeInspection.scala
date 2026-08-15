@@ -23,9 +23,7 @@ import ca.uwaterloo.flix.util.{LibLevel, Options, Result}
 import org.objectweb.asm.{ClassReader, ClassVisitor, MethodVisitor, Opcodes}
 import org.scalatest.Assertions
 
-import java.nio.file.{Files, Path}
 import scala.collection.mutable
-import scala.jdk.CollectionConverters.*
 
 /**
   * Support for asserting what a compiled program can and cannot reach.
@@ -45,35 +43,25 @@ trait BytecodeInspection extends Assertions {
     * The entry point is assumed to be `main`.
     */
   def compileAndScan(program: String, options: Options): Bytecode = {
-    val tempDir = Files.createTempDirectory("flix-bytecode-inspection-")
     val opts = options.copy(
       lib = LibLevel.All,
-      entryPoint = Some(Symbol.mkDefnSym("main")),
-      outputJvm = true,
-      outputPath = tempDir
+      entryPoint = Some(Symbol.mkDefnSym("main"))
     )
     val flix = new Flix().setOptions(opts)
     implicit val sctx: SecurityContext = SecurityContext.Unrestricted
     flix.addVirtualPath(CompilerConstants.VirtualTestFile, program)
 
-    flix.compile().toResult match {
-      case Result.Ok(_) => ()
+    val compilationResult = flix.compile() match {
+      case Result.Ok(result) => result
       case Result.Err(errors) => fail(s"Expected a successful compilation, got: $errors")
     }
-
-    val classDir = tempDir.resolve("class")
-    val classFiles: List[Path] = if (Files.exists(classDir)) {
-      Files.walk(classDir).filter(p => Files.isRegularFile(p) && p.toString.endsWith(".class")).iterator().asScala.toList
-    } else {
-      Nil
-    }
-    assert(classFiles.nonEmpty, s"No class files were written to '$classDir'.")
 
     val classes = mutable.Set.empty[String]
     val calls = mutable.Set.empty[(String, String, String)]
 
-    for (p <- classFiles) {
-      val reader = new ClassReader(Files.readAllBytes(p))
+    assert(compilationResult.getClasses.nonEmpty, "No classes were generated.")
+    for (clazz <- compilationResult.getClasses.values) {
+      val reader = new ClassReader(clazz.bytecode)
       var current = ""
       reader.accept(new ClassVisitor(Opcodes.ASM9) {
         override def visit(version: Int, access: Int, name: String, signature: String, superName: String, interfaces: Array[String]): Unit = {

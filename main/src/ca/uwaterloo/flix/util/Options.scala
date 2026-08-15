@@ -140,8 +140,11 @@ case class Options(lib: LibLevel,
   /**
     * Returns `true` if the program may be compiled as if it were single-threaded.
     *
-    * This governs the parts of the library whose only purpose is to be safe under concurrency: the
-    * locks in `BPlusTree` and `Fixpoint3`.
+    * This governs the parts of the library and the generated runtime whose only purpose is to be
+    * safe under concurrency: the locks in `BPlusTree` and `Fixpoint3`, the counter in a
+    * `BPlusTree`, the lock in a `Lazy`, the atomic behind `Global.newId`, and the region's
+    * bookkeeping of its child threads. It also decides how the two ways of writing concurrency are
+    * compiled: `par (...) yield` binds its fragments in order, and `spawn` is rejected.
     *
     * Asserting [[xassumeSingleThreaded]] is not enough on its own. Giving those up is only sound if
     * nothing is left that could run in parallel, so both execution modes must be sequential as

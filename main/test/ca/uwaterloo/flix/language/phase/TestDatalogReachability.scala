@@ -191,11 +191,9 @@ class TestDatalogReachability extends AnyFunSuite with TestUtils {
   ///
   /// Only `xdatalogExecution` differs, so that everything observed here is attributable to it.
   ///
-  private lazy val ParallelBuild: Bytecode =
-    compileAndScan(DatalogProgram, Options.Default.copy(xdatalogExecution = ExecutionMode.Parallel))
+  private lazy val ParallelBuild: Bytecode = compileAndScan(ExecutionMode.Parallel)
 
-  private lazy val SequentialBuild: Bytecode =
-    compileAndScan(DatalogProgram, Options.Default.copy(xdatalogExecution = ExecutionMode.Sequential))
+  private lazy val SequentialBuild: Bytecode = compileAndScan(ExecutionMode.Sequential)
 
   ///
   /// The positive control for the erasure test below.

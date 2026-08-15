@@ -959,6 +959,18 @@ object GenExpression {
         compileExpr(exp)
         ATHROW()
 
+      case AtomicOp.Spawn if flix.options.isSingleThreaded =>
+        // The program asserted that it creates no thread, and here it does. Say so where it
+        // happens: running the child on the current thread instead would deadlock the moment the
+        // child waited for its parent, as both ends of a channel do.
+        addLoc(loc)
+        throwUnsupportedOperationException(
+          "Cannot spawn a thread: the program was compiled with --Xsequential, which asserts that it never does."
+        )
+        // The unit a spawn evaluates to, left for the stack shape the surrounding code expects.
+        // It is unreachable, and the class writer drops it when it computes the frames.
+        GETSTATIC(GenUnit.SingletonField)
+
       case AtomicOp.Spawn =>
         val List(exp1, exp2) = exps
         exp2 match {

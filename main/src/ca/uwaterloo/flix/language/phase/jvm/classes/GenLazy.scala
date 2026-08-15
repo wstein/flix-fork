@@ -42,11 +42,11 @@ object GenLazy {
   def genByteCode(tpe: ClassDesc)(implicit flix: Flix): Array[Byte] = {
     val cm = ClassMaker.mkClass(desc(tpe), IsFinal)
 
-    cm.mkConstructor(Constructor(tpe), IsPublic, constructorIns(tpe)(_))
+    cm.mkConstructor(Constructor(tpe), IsPublic, constructorIns(tpe, flix.options.isSingleThreaded)(_))
     cm.mkField(ExpField(tpe), IsPublic, NotFinal, IsVolatile)
     cm.mkField(ValueField(tpe), IsPublic, NotFinal, NotVolatile)
-    cm.mkField(LockField(tpe), IsPrivate, NotFinal, NotVolatile)
-    cm.mkMethod(Nil, ForceMethod(tpe), IsPublic, IsFinal, forceIns(tpe)(_))
+    if (!flix.options.isSingleThreaded) cm.mkField(LockField(tpe), IsPrivate, NotFinal, NotVolatile)
+    cm.mkMethod(Nil, ForceMethod(tpe), IsPublic, IsFinal, forceIns(tpe, flix.options.isSingleThreaded)(_))
 
     cm.closeClassMaker()
   }
@@ -60,7 +60,7 @@ object GenLazy {
   def Constructor(tpe: ClassDesc): ConstructorMethod = ConstructorMethod(desc(tpe), List(CD_Object))
 
   /** `[] --> return` */
-  private def constructorIns(tpe: ClassDesc)(implicit mv: MethodVisitor): Unit =
+  private def constructorIns(tpe: ClassDesc, singleThreaded: Boolean)(implicit mv: MethodVisitor): Unit =
     withName(1, CD_Object)(exp => {
       // super()
       thisLoad()
@@ -69,12 +69,13 @@ object GenLazy {
       thisLoad()
       exp.load()
       PUTFIELD(ExpField(tpe))
-      // this.lock = new ReentrantLock()
-      thisLoad()
-      NEW(JavaClasses.ReentrantLock)
-      DUP()
-      INVOKESPECIAL(ClassConstants.ReentrantLock.Constructor)
-      PUTFIELD(LockField(tpe))
+      if (!singleThreaded) {
+        thisLoad()
+        NEW(JavaClasses.ReentrantLock)
+        DUP()
+        INVOKESPECIAL(ClassConstants.ReentrantLock.Constructor)
+        PUTFIELD(LockField(tpe))
+      }
       // return
       RETURN()
     })
@@ -82,7 +83,12 @@ object GenLazy {
   def ForceMethod(tpe: ClassDesc): InstanceMethod = InstanceMethod(desc(tpe), "force", mkDescriptor()(tpe))
 
   /** `[] --> return tpe` */
-  private def forceIns(tpe: ClassDesc)(implicit mv: MethodVisitor): Unit = {
+  private def forceIns(tpe: ClassDesc, singleThreaded: Boolean)(implicit mv: MethodVisitor): Unit = {
+    if (singleThreaded) {
+      memoizeIns(tpe)
+      xReturn(tpe)
+      return
+    }
     def unlockLock(): Unit = {
       thisLoad()
       GETFIELD(LockField(tpe))
@@ -93,25 +99,7 @@ object GenLazy {
     GETFIELD(LockField(tpe))
     INVOKEVIRTUAL(ClassConstants.ReentrantLock.LockInterruptiblyMethod)
     tryCatch {
-      thisLoad()
-      GETFIELD(ExpField(tpe))
-      // if the expression is not null, compute the value and erase the expression
-      ifCondition(Condition.NONNULL) {
-        thisLoad()
-        // get expression as thunk
-        DUP()
-        GETFIELD(ExpField(tpe))
-        CHECKCAST(GenThunk.Desc)
-        // this.value = thunk.unwind()
-        GenResult.unwindSuspensionFreeThunkToType(tpe, "during call to Lazy.force", SourceLocation.Unknown)
-        PUTFIELD(ValueField(tpe))
-        // this.exp = null
-        thisLoad()
-        pushNull()
-        PUTFIELD(ExpField(tpe))
-      }
-      thisLoad()
-      GETFIELD(ValueField(tpe))
+      memoizeIns(tpe)
     } {
       // catch
       unlockLock()
@@ -119,6 +107,24 @@ object GenLazy {
     }
     unlockLock()
     xReturn(tpe)
+  }
+
+  private def memoizeIns(tpe: ClassDesc)(implicit mv: MethodVisitor): Unit = {
+    thisLoad()
+    GETFIELD(ExpField(tpe))
+    ifCondition(Condition.NONNULL) {
+      thisLoad()
+      DUP()
+      GETFIELD(ExpField(tpe))
+      CHECKCAST(GenThunk.Desc)
+      GenResult.unwindSuspensionFreeThunkToType(tpe, "during call to Lazy.force", SourceLocation.Unknown)
+      PUTFIELD(ValueField(tpe))
+      thisLoad()
+      pushNull()
+      PUTFIELD(ExpField(tpe))
+    }
+    thisLoad()
+    GETFIELD(ValueField(tpe))
   }
 
 }
