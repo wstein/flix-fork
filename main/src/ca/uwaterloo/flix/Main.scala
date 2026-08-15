@@ -72,6 +72,12 @@ object Main {
       case Some(s) => Some(Symbol.mkDefnSym(s))
     }
 
+    // `--Xsequential` is all-or-nothing: it is the only way to elide the standard library's locks,
+    // and eliding them is only sound if nothing is left that could run in parallel. Deriving both
+    // execution modes from it here, rather than letting a separate flag set them, is what keeps the
+    // unsound combination out of reach.
+    val sequentialMode = if (cmdOpts.xsequential) ExecutionMode.Sequential else ExecutionMode.Parallel
+
     // construct flix options.
     var options = Options(
       lib = cmdOpts.xlib,
@@ -94,8 +100,8 @@ object Main {
       XPerfN = cmdOpts.XPerfN,
       xchaosMonkey = Options.Default.xchaosMonkey,
       xverify = cmdOpts.xverify,
-      xdatalogExecution = cmdOpts.xdatalogExecution,
-      xcollectionExecution = cmdOpts.xcollectionExecution,
+      xdatalogExecution = sequentialMode,
+      xcollectionExecution = sequentialMode,
       xassumeSingleThreaded = cmdOpts.xsequential
     )
 
@@ -542,8 +548,6 @@ object Main {
     XPerfN: Option[Int] = None,
     XPerfFrontend: Boolean = false,
     XPerfPar: Boolean = false,
-    xdatalogExecution: ExecutionMode = ExecutionMode.Parallel,
-    xcollectionExecution: ExecutionMode = ExecutionMode.Parallel,
     xsequential: Boolean = false,
     files: Seq[File] = Seq()
   )
@@ -624,12 +628,6 @@ object Main {
       case "min" => LibLevel.Min
       case "all" => LibLevel.All
       case arg => throw new IllegalArgumentException(s"'$arg' is not a valid library level. Valid options are 'all', 'min', and 'nix'.")
-    }
-
-    implicit val readExecutionMode: scopt.Read[ExecutionMode] = scopt.Read.reads {
-      case "parallel" => ExecutionMode.Parallel
-      case "sequential" => ExecutionMode.Sequential
-      case arg => throw new IllegalArgumentException(s"'$arg' is not a valid Datalog execution mode. Valid options are 'parallel' and 'sequential'.")
     }
 
     implicit val readSubEffectLevel: scopt.Read[Subeffecting] = scopt.Read.reads {
@@ -792,20 +790,11 @@ object Main {
       opt[Seq[Subeffecting]]("Xsubeffecting").action((subeffectings, c) => c.copy(xsubeffecting = subeffectings.toSet)).
         text("[experimental] enables sub-effecting in select places")
 
-      // Xdatalog-execution
-      opt[ExecutionMode]("Xdatalog-execution").action((arg, c) => c.copy(xdatalogExecution = arg)).
-        text("[experimental] selects the Datalog execution mode (parallel, sequential).")
-
-      // Xcollection-execution
-      opt[ExecutionMode]("Xcollection-execution").action((arg, c) => c.copy(xcollectionExecution = arg)).
-        text("[experimental] selects the evaluation mode for pure collection operations (parallel, sequential).")
-
       // Xsequential
-      opt[Unit]("Xsequential").action((_, c) => c.copy(
-        xdatalogExecution = ExecutionMode.Sequential,
-        xcollectionExecution = ExecutionMode.Sequential,
-        xsequential = true
-      )).text("[experimental] compiles out every use of threads in the standard library.")
+      opt[Unit]("Xsequential").action((_, c) => c.copy(xsequential = true)).
+        text("[experimental] compiles out the standard library's threading and locking: the Datalog " +
+          "solver and the pure operations on Map and Set are evaluated sequentially, and the " +
+          "concurrent data structures drop their locks.")
 
       // Xnewmono
       opt[Unit]("Xnewmono").action((_, c) => c.copy(xnewmono = true)).
