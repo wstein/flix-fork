@@ -50,15 +50,40 @@ class TestSequentialReachability extends AnyFunSuite with TestUtils with Bytecod
       |}
     """.stripMargin
 
+  ///
+  /// A program with no concurrency of any kind, not even through the library.
+  ///
+  /// A region is emitted for every program, so its thread bookkeeping is reachable from every
+  /// program. This is where removing it is visible on its own.
+  ///
+  private val TrivialProgram =
+    """
+      |def main(): Unit \ IO = println(List.range(0, 10) |> List.sum)
+    """.stripMargin
+
+  ///
+  /// A program whose only concurrency is its own `par (...) yield`, which the option lowers to
+  /// bindings on the current thread rather than to a channel and a thread per fragment.
+  ///
+  private val ParYieldProgram =
+    """
+      |def main(): Unit \ IO = {
+      |    let r = par (a <- List.range(0, 100) |> List.sum; b <- 2) yield a + b;
+      |    println(r)
+      |}
+    """.stripMargin
+
+  private val Sequential: Options = Options.Default.copy(
+    xdatalogExecution = ExecutionMode.Sequential,
+    xcollectionExecution = ExecutionMode.Sequential,
+    xassumeSingleThreaded = true
+  )
+
   private lazy val DefaultBuild: Bytecode =
     compileAndScan(Program, Options.Default)
 
   private lazy val SequentialBuild: Bytecode =
-    compileAndScan(Program, Options.Default.copy(
-      xdatalogExecution = ExecutionMode.Sequential,
-      xcollectionExecution = ExecutionMode.Sequential,
-      xassumeSingleThreaded = true
-    ))
+    compileAndScan(Program, Sequential)
 
   ///
   /// The positive control. See [[TestDatalogReachability]] for why this test must exist.
@@ -69,11 +94,57 @@ class TestSequentialReachability extends AnyFunSuite with TestUtils with Bytecod
   }
 
   test("Reachability.Sequential.RemovesEveryThreadAndLock") {
-    val spawns = SequentialBuild.spawnSites()
-    assert(spawns.isEmpty, s"Found reachable thread spawning under --Xsequential: $spawns")
+    val concurrency = concurrencyCalls(SequentialBuild)
+    assert(concurrency.isEmpty, s"Found reachable concurrency support under --Xsequential: $concurrency")
 
-    val locks = stampedLockCalls(SequentialBuild)
-    assert(locks.isEmpty, s"Found reachable locking under --Xsequential: $locks")
+    // Note that asserting the absence of spawn *sites* would prove nothing here: under this option
+    // the backend compiles every `spawn` into a rejection, so no build ever has one. What has to be
+    // absent instead is the rejection, which is where a `spawn` the library still reached would
+    // show up.
+    val rejected = rejectedSpawns(SequentialBuild)
+    assert(rejected.isEmpty, s"Found a reachable spawn that was compiled into a rejection: $rejected")
+  }
+
+  ///
+  /// The positive control for the test below.
+  ///
+  test("Reachability.Default.CarriesConcurrencySupportIntoEveryProgram") {
+    val res = compileAndScan(TrivialProgram, Options.Default)
+    assert(concurrencyCalls(res).nonEmpty, "Expected a program without concurrency to still carry the runtime's concurrency support.")
+  }
+
+  test("Reachability.Sequential.RemovesConcurrencySupportFromEveryProgram") {
+    // The runtime's concurrency support is not reached through the library: a region, a lazy
+    // value, and the counter behind a fresh identity are emitted for every program, and each held
+    // a thread, a lock, or an atomic. Under the option a program touches `java.util.concurrent`
+    // nowhere at all, which is the property a target without threads needs.
+    val res = compileAndScan(TrivialProgram, Sequential)
+    val concurrency = concurrencyCalls(res)
+    assert(concurrency.isEmpty, s"Found reachable concurrency support under --Xsequential: $concurrency")
+  }
+
+  ///
+  /// The positive control for the test below.
+  ///
+  test("Reachability.Default.LowersParYieldToChannelsAndThreads") {
+    val res = compileAndScan(ParYieldProgram, Options.Default)
+    assert(res.spawnSites().nonEmpty, "Expected a par yield to spawn threads by default.")
+    assert(res.classesOfNamespace("Concurrent/Channel").nonEmpty, "Expected a par yield to use channels by default.")
+  }
+
+  test("Reachability.Sequential.LowersParYieldWithoutChannelsOrThreads") {
+    // A program's own `par (...) yield` is not the library's, so no library switch reaches it. It
+    // is lowered as a sequence of bindings instead, which is one of the schedules it allows.
+    val res = compileAndScan(ParYieldProgram, Sequential)
+
+    val channels = res.classesOfNamespace("Concurrent/Channel")
+    assert(channels.isEmpty, s"Found reachable channels under --Xsequential: ${channels.take(5)}")
+
+    val rejected = rejectedSpawns(res)
+    assert(rejected.isEmpty, s"Found a reachable spawn that was compiled into a rejection: $rejected")
+
+    val concurrency = concurrencyCalls(res)
+    assert(concurrency.isEmpty, s"Found reachable concurrency support under --Xsequential: $concurrency")
   }
 
   test("Reachability.Sequential.LocksSurviveWithoutTheUmbrella") {
@@ -93,4 +164,25 @@ class TestSequentialReachability extends AnyFunSuite with TestUtils with Bytecod
     */
   private def stampedLockCalls(bytecode: Bytecode): Set[(String, String, String)] =
     bytecode.calls.filter { case (_, owner, _) => owner.contains("StampedLock") }
+
+  /**
+    * Returns the sites in `bytecode` where a `spawn` was compiled into a rejection.
+    *
+    * `RecordEmpty$` throws the same exception for an unrelated reason -- an empty record has no
+    * field to look up -- so it is not counted.
+    */
+  private def rejectedSpawns(bytecode: Bytecode): Set[(String, String, String)] =
+    bytecode.calls.filter {
+      case (caller, owner, _) =>
+        owner == "java/lang/UnsupportedOperationException" && caller != "RecordEmpty$"
+    }
+
+  /**
+    * Returns the calls in `bytecode` that only exist to make the program safe to run on more than
+    * one thread, or to put it on one.
+    */
+  private def concurrencyCalls(bytecode: Bytecode): Set[(String, String, String)] =
+    bytecode.calls.filter {
+      case (_, owner, _) => owner.startsWith("java/util/concurrent") || owner == "java/lang/Thread"
+    }
 }

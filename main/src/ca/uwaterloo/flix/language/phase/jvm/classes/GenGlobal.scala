@@ -46,10 +46,16 @@ object GenGlobal {
     val cm = ClassMaker.mkClass(this.Desc, IsFinal)
 
     cm.mkConstructor(Constructor, IsPublic, nullarySuperConstructor(ClassConstants.Object.Constructor)(_))
-    cm.mkStaticConstructor(StaticConstructorMethod(this.Desc), staticConstructorIns(_))
+    val singleThreaded = flix.options.isSingleThreaded
+    cm.mkStaticConstructor(StaticConstructorMethod(this.Desc), staticConstructorIns(singleThreaded)(_))
 
-    cm.mkField(CounterField, IsPrivate, IsFinal, NotVolatile)
-    cm.mkStaticMethod(NewIdMethod, IsPublic, IsFinal, newIdIns(_))
+    if (singleThreaded) {
+      cm.mkField(SequentialCounterField, IsPrivate, NotFinal, NotVolatile)
+      cm.mkStaticMethod(NewIdMethod, IsPublic, IsFinal, sequentialNewIdIns(_))
+    } else {
+      cm.mkField(CounterField, IsPrivate, IsFinal, NotVolatile)
+      cm.mkStaticMethod(NewIdMethod, IsPublic, IsFinal, newIdIns(_))
+    }
 
     cm.mkField(ArgsField, IsPrivate, NotFinal, NotVolatile)
     cm.mkStaticMethod(GetArgsMethod, IsPublic, IsFinal, getArgsIns(_))
@@ -60,11 +66,16 @@ object GenGlobal {
 
   private def Constructor: ConstructorMethod = ConstructorMethod(this.Desc, Nil)
 
-  private def staticConstructorIns(implicit mv: MethodVisitor): Unit = {
-    NEW(JavaClasses.AtomicLong)
-    DUP()
-    invokeConstructor(JavaClasses.AtomicLong, MethodTypeDescs.NothingToVoid)
-    PUTSTATIC(CounterField)
+  private def staticConstructorIns(singleThreaded: Boolean)(implicit mv: MethodVisitor): Unit = {
+    if (singleThreaded) {
+      LCONST_0()
+      PUTSTATIC(SequentialCounterField)
+    } else {
+      NEW(JavaClasses.AtomicLong)
+      DUP()
+      invokeConstructor(JavaClasses.AtomicLong, MethodTypeDescs.NothingToVoid)
+      PUTSTATIC(CounterField)
+    }
     ICONST_0()
     ANEWARRAY(JavaClasses.String)
     PUTSTATIC(ArgsField)
@@ -77,6 +88,15 @@ object GenGlobal {
     GETSTATIC(CounterField)
     INVOKEVIRTUAL(JavaClasses.AtomicLong, "getAndIncrement",
       mkDescriptor()(CD_long))
+    LRETURN()
+  }
+
+  private def sequentialNewIdIns(implicit mv: MethodVisitor): Unit = {
+    GETSTATIC(SequentialCounterField)
+    DUP2()
+    LCONST_1()
+    LADD()
+    PUTSTATIC(SequentialCounterField)
     LRETURN()
   }
 
@@ -120,6 +140,8 @@ object GenGlobal {
   }
 
   private def CounterField: StaticField = StaticField(this.Desc, "counter", JavaClasses.AtomicLong)
+
+  private def SequentialCounterField: StaticField = StaticField(this.Desc, "counter", CD_long)
 
   private def ArgsField: StaticField = StaticField(this.Desc, "args", JavaClasses.String.arrayType())
 

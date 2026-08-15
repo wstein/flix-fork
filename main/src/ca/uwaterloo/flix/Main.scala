@@ -792,9 +792,10 @@ object Main {
 
       // Xsequential
       opt[Unit]("Xsequential").action((_, c) => c.copy(xsequential = true)).
-        text("[experimental] compiles out the standard library's threading and locking: the Datalog " +
-          "solver and the pure operations on Map and Set are evaluated sequentially, and the " +
-          "concurrent data structures drop their locks.")
+        text("[experimental] compiles out every use of a thread or a lock: the Datalog solver and " +
+          "the pure operations on Map and Set are evaluated sequentially, the concurrent data " +
+          "structures drop their locks, a par yield binds its fragments in order, and a spawn is " +
+          "rejected. Asserts that the program is single-threaded.")
 
       // Xnewmono
       opt[Unit]("Xnewmono").action((_, c) => c.copy(xnewmono = true)).

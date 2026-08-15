@@ -19,6 +19,7 @@ package ca.uwaterloo.flix.language.phase
 import ca.uwaterloo.flix.api.{CompilerConstants, Flix}
 import ca.uwaterloo.flix.language.ast.Symbol
 import ca.uwaterloo.flix.language.ast.shared.SecurityContext
+import ca.uwaterloo.flix.runtime.JvmLoader
 import ca.uwaterloo.flix.util.{ExecutionMode, Options, Result}
 import ca.uwaterloo.flix.{BytecodeInspection, TestUtils}
 import org.scalatest.funsuite.AnyFunSuite
@@ -117,13 +118,13 @@ class TestPublicParallelApis extends AnyFunSuite with TestUtils with BytecodeIns
     val flix = new Flix().setOptions(options.copy(entryPoint = Some(Symbol.mkDefnSym("main"))))
     implicit val sctx: SecurityContext = SecurityContext.Unrestricted
     flix.addVirtualPath(CompilerConstants.VirtualTestFile, program)
-    flix.compile().toResult match {
+    flix.compile() match {
       case Result.Ok(result) =>
         val buffer = new ByteArrayOutputStream()
         val original = System.out
         try {
           System.setOut(new PrintStream(buffer, true))
-          result.getMain.get.apply(Array.empty)
+          JvmLoader.load(result).main.get.apply(Array.empty)
         } finally {
           System.setOut(original)
         }

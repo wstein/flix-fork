@@ -19,6 +19,7 @@ package ca.uwaterloo.flix.language.phase
 import ca.uwaterloo.flix.TestUtils
 import ca.uwaterloo.flix.api.{CompilerConstants, Flix}
 import ca.uwaterloo.flix.language.ast.shared.SecurityContext
+import ca.uwaterloo.flix.runtime.JvmLoader
 import ca.uwaterloo.flix.util.{ExecutionMode, Options, Result}
 import org.scalatest.funsuite.AnyFunSuite
 
@@ -98,9 +99,9 @@ class TestLockElision extends AnyFunSuite with TestUtils {
     val flix = new Flix().setOptions(options)
     implicit val sctx: SecurityContext = SecurityContext.Unrestricted
     flix.addVirtualPath(CompilerConstants.VirtualTestFile, src)
-    flix.compile().toResult match {
+    flix.compile() match {
       case Result.Ok(res) =>
-        val (_, testFn) = res.getTests.headOption.getOrElse(fail("No @Test found in compilation result"))
+        val (_, testFn) = JvmLoader.load(res).tests.headOption.getOrElse(fail("No @Test found in compilation result"))
         testFn.run()
       case Result.Err(errors) => fail(s"Compilation failed with errors: $errors")
     }
