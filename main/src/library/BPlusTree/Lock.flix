@@ -109,12 +109,16 @@ pub mod BPlusTree.Lock {
     ///
     /// Only supposed to be used for testing.
     ///
+    /// Aborts when locking is compiled out. There is then no lock to observe, and answering
+    /// `false` would let an invariant check of the form `not isLocked(..)` pass without having
+    /// checked anything. Callers that are useful in both builds must ask `enableLocking` first.
+    ///
     pub def isLocked(lock: Lock[r]): Bool \ r =
         if (Concurrent.Options.enableLocking()) {
             let l = getJavaLock(lock);
             unsafe IO as r { l.isWriteLocked() or l.isReadLocked() }
         } else
-            false
+            bug!("BPlusTree.Lock.isLocked is unavailable when locking is compiled out.")
 
     ///
     /// Executes `onValid` if `stamp` is still valid on `lock`.

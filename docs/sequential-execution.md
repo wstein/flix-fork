@@ -72,6 +72,8 @@ The ten `StampedLock` calls are untouched by either mode option. They come from 
 
 Both lock wrappers gain a second, lockless case, and every operation on them tests `enableLocking` rather than matching on the wrapper, so that the branch holding the Java lock folds away. Without a lock, no writer can invalidate an optimistic stamp, so `valid` is always `true`, the stamp accessors return a non-zero constant, and the unlock and yield operations do nothing.
 
+One operation does not get a lockless answer. `BPlusTree.Lock.isLocked` asks whether a thread holds the lock, and a build with no locks cannot answer it. Returning `false` would be worse than useless: the three callers of `isLocked` are invariant checks of the form `not isLocked(..)`, which would then pass without having checked anything. So `isLocked` aborts under elision, and those callers ask `enableLocking` first and skip the conjunct explicitly. A build without locks checks the structural invariants and openly does not check the lock ones.
+
 This is the configuration to use for a target that has no threads, such as a WebAssembly runtime.
 
 Note also that `Fixpoint3.Interpreter.interpret` calls `Thread.startVirtualThread` whenever `--Xcollection-execution=parallel`, in both Datalog modes. This is not a remnant of the erased evaluator: the interpreter's own parallelism spawns into a dynamic region and therefore compiles to `Region.spawn`, never to `startVirtualThread` (see `GenExpression.scala`, `AtomicOp.Spawn`, where only a `Static` region takes the direct path). The call comes from `RedBlackTree` code inlined into `interpret` through the `Map` operations that build and marshal the solver's indexes, which is why only the collection option removes it.
