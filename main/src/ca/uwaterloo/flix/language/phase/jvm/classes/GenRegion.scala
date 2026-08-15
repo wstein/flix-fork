@@ -65,12 +65,10 @@ object GenRegion {
   private def genSequentialByteCode()(implicit flix: Flix): Array[Byte] = {
     val cm = mkClass(this.Desc, IsFinal)
 
-    cm.mkField(OnExitField, IsPrivate, IsFinal, NotVolatile)
     cm.mkConstructor(Constructor, IsPublic, sequentialConstructorIns(_))
     cm.mkMethod(Nil, ExitMethod, IsPublic, IsFinal, sequentialExitIns(_))
     cm.mkMethod(Nil, ReportChildExceptionMethod, IsPublic, IsFinal, noOpIns(_))
     cm.mkMethod(Nil, ReThrowChildExceptionMethod, IsPublic, IsFinal, noOpIns(_))
-    cm.mkMethod(Nil, RunOnExitMethod, IsPublic, IsFinal, runOnExitIns(_))
 
     cm.closeClassMaker()
   }
@@ -114,11 +112,6 @@ object GenRegion {
   private def sequentialConstructorIns(implicit mv: MethodVisitor): Unit = {
     thisLoad()
     INVOKESPECIAL(ClassConstants.Object.Constructor)
-    thisLoad()
-    NEW(JavaClasses.LinkedList)
-    DUP()
-    invokeConstructor(JavaClasses.LinkedList, MethodTypeDescs.NothingToVoid)
-    PUTFIELD(OnExitField)
     RETURN()
   }
 
@@ -194,7 +187,6 @@ object GenRegion {
   }
 
   private def sequentialExitIns(implicit mv: MethodVisitor): Unit = {
-    runOnExitHandlersIns(1)
     RETURN()
   }
 
