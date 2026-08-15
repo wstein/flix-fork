@@ -274,7 +274,9 @@ mod BPlusTree.Node {
             );
             let lastHasNoNext = not isRightMost or Option.isEmpty(unwrapNode(Vector.last(children))->next);
             let noLeaves = Array.size(node->values) == 0;
-            let nodeIsUnlocked = not BPlusTree.Lock.isLocked(node->lock);
+            // See `BPlusTree.assertTreeInvariant` for why this is conditional.
+            let nodeIsUnlocked =
+                if (Concurrent.Options.enableLocking()) not BPlusTree.Lock.isLocked(node->lock) else true;
             let isBiggerThanPrev = match shouldBeBiggerThan {
                 case None    => true
                 case Some(v) => comparison(Vector.get(0, keys), v, search) == 1
@@ -292,7 +294,9 @@ mod BPlusTree.Node {
             let keysInOrder = isSorted(toLength(keys, size), search);
             let sizeInRange = size <= arity and 0 <= size;
             let noChildren = Array.size(node->children) == 0;
-            let leafIsUnlocked = not BPlusTree.Lock.isLocked(node->lock);
+            // See `BPlusTree.assertTreeInvariant` for why this is conditional.
+            let leafIsUnlocked =
+                if (Concurrent.Options.enableLocking()) not BPlusTree.Lock.isLocked(node->lock) else true;
             sizeInRange and keysInOrder and leafIsUnlocked and noChildren
     }
 

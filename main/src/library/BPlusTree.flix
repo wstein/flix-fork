@@ -109,7 +109,10 @@ pub mod BPlusTree {
         let root = t->root;
         let arity = BPlusTree.arity(t);
         let nodeWorks = Node.assertNodeInvariant(root, arity, true, None, t->search);
-        let rootIsUnlocked = not BPlusTree.Lock.isLocked(t->rootLock);
+        // There is no lock to inspect when locking is compiled out, so this part of the
+        // invariant does not apply. Asking `isLocked` there aborts rather than answering.
+        let rootIsUnlocked =
+            if (Concurrent.Options.enableLocking()) not BPlusTree.Lock.isLocked(t->rootLock) else true;
         let rootHasNoParent = Option.isEmpty(Node.parent(root));
         nodeWorks and rootHasNoParent and rootIsUnlocked
     }
