@@ -236,12 +236,22 @@ Two things outside `BackendObjType` follow from the same predicate. `GenExpressi
 
 ## 6. Performance
 
-Both options cost throughput. Measured with a warmed-up JIT, nine runs per configuration, timing only the work and not compilation:
+Measured with [`bench/sequential-execution.flix`](bench/sequential-execution.flix), on an Apple M2 Pro with 12 cores under JDK 21. Each run does three warm-up iterations and nine timed ones and reports the median; only the work is timed, not compilation. The table gives the *lowest* median over seven runs per configuration, because the machine was not quiet: individual runs came in as much as three times higher, in both configurations, and the lowest observation is the one least contaminated by whatever else was running.
 
-| Workload | Parallel (median) | Sequential (median) |
+| Workload | Default | `--Xsequential` |
 |---|---|---|
-| Datalog, sparse: 900 nodes, 1 out-edge each | 70 ms | 67 ms |
-| Datalog, dense: 260 nodes, 2 out-edges each | 314 ms | 391 ms |
-| Collections: two `Map.count` passes over 200,000 entries | 129 ms | 140 ms |
+| Datalog: 400-node chain, 79,800 derived paths | 536 ms | 207 ms |
+| Datalog: 260 nodes, 2 out-edges each, 67,600 paths | 356 ms | 196 ms |
+| Datalog: 700-node cycle, 490,000 paths | 2766 ms | 1625 ms |
+| Collections: two `Map.count` passes over 200,000 entries | 120 ms | 127 ms |
+| 1,000,000 forces of already-forced `lazy` values | 5 ms | 3 ms |
+| 1,000,000 region entries, each allocating an array | 12 ms | 5 ms |
+| `BPlusTree`: 200,000 puts and a `size` | 30 ms | 24 ms |
 
-On workloads with little available parallelism the two modes are equivalent, and sequential mode has a visibly tighter spread because it creates no threads. On workloads with real parallelism, sequential Datalog costs roughly 20-25% and sequential collections roughly 10%. Choose either when determinism, single-threaded execution, or the absence of threads matters — not to make a program faster.
+Three things are worth reading carefully here.
+
+**Sequential Datalog did not cost throughput at any size measured.** An earlier revision of this document recorded it as 20-25% *slower* on a workload of the same shape. That no longer reproduces: at every size tried, including one deriving nearly half a million tuples, the sequential solver finished sooner, and with a far tighter spread. This is not a claim that the parallel evaluator is pointless — it is a claim that the size at which it repays its thread, channel, and lock overhead is larger than anything measured here. Measure your own workload before concluding either way.
+
+**Sequential collections still cost a little**, about 6% on this one, which is the only row where the option is slower. Two `Map.count` passes over 200,000 entries is exactly the shape the parallel evaluation was written for.
+
+**The runtime replacements are neutral to slightly positive, and for a reason worth knowing.** Removing a lock, an atomic, and a queue halved two microbenchmarks, but the absolute numbers — 5 ns per region entry, 5 ns per force — say that the JIT had already made the originals nearly free: an uncontended lock is biased, and a queue that never escapes is scalar-replaced. Do not choose this option for speed on the JVM. Choose it when the code must not merely be fast but must not *exist*, which is what a target without threads requires.
