@@ -235,23 +235,97 @@ object GitHub {
   }
 
   /**
-    * Gets the project release with the relevant semantic version.
+    * Opens a stream over the asset `assetName` of the given project's release `version`, without
+    * consulting the REST API.
+    *
+    * The caller is responsible for closing the stream.
+    *
+    * A release asset has a permanent address built from the owner, the repository, the tag and the
+    * asset's own name, so an asset whose name is known needs no lookup. Asking the REST API to hand
+    * back a URL that could be computed costs one rate-limited request per dependency, and anonymous
+    * REST traffic is capped at 60 requests an hour per address.
+    *
+    * The caller does not always know the true name in advance -- see [[findReleaseAsset]] for the
+    * fallback when a computed address 404s.
     */
-  def getSpecificRelease(project: Project, version: SemVer, apiKey: Option[String]): Result[Release, PackageError] = {
-    getReleases(project, apiKey).flatMap {
-      releases =>
-        releases.find(r => r.version == version) match {
-          case None => Err(PackageError.VersionDoesNotExist(version, project))
-          case Some(release) => Ok(release)
+  def downloadReleaseAsset(project: Project, version: SemVer, assetName: String): Result[InputStream, PackageError] = {
+    val url = releaseAssetUrl(project, version, assetName)
+    download(url) match {
+      // At this address a 404 means the release or the asset is absent, which is worth saying in
+      // those terms rather than as a status code.
+      case Err(PackageError.DownloadFailed(_, 404)) => Err(PackageError.ReleaseAssetNotFound(project, version, assetName, url))
+      case other => other
+    }
+  }
+
+  /**
+    * Opens a stream over `url`, following redirects.
+    *
+    * The caller is responsible for closing the stream. The ways a download can fail are kept apart:
+    * a refusal (which for an anonymous request usually means a rate limit), any other unexpected
+    * status including a redirect that could not be followed, and never reaching a server at all.
+    */
+  def download(url: URL): Result[InputStream, PackageError] = {
+    val request = HttpRequest.newBuilder(url.toURI).GET().build()
+
+    val response = try {
+      Client.sendStreamingRequest(request)
+    } catch {
+      case ex: IOException => return Err(PackageError.DownloadUnreachable(url, ex.getMessage))
+      case ex: InterruptedException => return Err(PackageError.DownloadUnreachable(url, ex.getMessage))
+    }
+
+    response.statusCode() match {
+      case status if status >= 200 && status < 300 =>
+        Ok(response.body())
+      case status =>
+        // Every non-success response still carries a body, and leaving it open holds the connection.
+        response.body().close()
+        status match {
+          case 403 | 429 => Err(PackageError.DownloadRefused(url, status, retryAfter(response)))
+          case _ => Err(PackageError.DownloadFailed(url, status))
         }
     }
   }
 
   /**
-    * Downloads the given asset.
+    * Returns the `Retry-After` header of `response`, if it has one.
     */
-  def downloadAsset(asset: Asset): InputStream =
-    asset.url.openStream()
+  private def retryAfter(response: HttpResponse[InputStream]): Option[String] = {
+    val header = response.headers().firstValue("Retry-After")
+    if (header.isPresent) Some(header.get()) else None
+  }
+
+  /**
+    * Finds the single asset with the given extension in the project's release `version`.
+    *
+    * This reads the REST API, and does so because it has to: a release publishes its package under
+    * a name the publisher chose, and nothing the consumer holds is guaranteed to predict it.
+    * [[downloadReleaseAsset]] tries the likely names first; this is the fallback for when none hit.
+    */
+  def findReleaseAsset(project: Project, version: SemVer, extension: String, apiKey: Option[String]): Result[Asset, PackageError] = {
+    getReleases(project, apiKey).flatMap { releases =>
+      releases.find(r => r.version == version) match {
+        case None => Err(PackageError.VersionDoesNotExist(version, project))
+        case Some(release) =>
+          release.assets.filter(_.name.endsWith(s".$extension")) match {
+            case Nil => Err(PackageError.NoSuchFile(project.toString, extension))
+            case asset :: Nil => Ok(asset)
+            case _ => Err(PackageError.TooManyFiles(project.toString, extension))
+          }
+      }
+    }
+  }
+
+  /**
+    * Returns the address of a release asset.
+    *
+    * This is the permanent form of a release download link. It is not the REST API and does not
+    * consume its quota.
+    */
+  private def releaseAssetUrl(project: Project, version: SemVer, assetName: String): URL = {
+    new URI(s"https://github.com/${project.owner}/${project.repo}/releases/download/v$version/$assetName").toURL
+  }
 
   /**
     * Returns the URL that returns data related to the project's releases.
@@ -328,7 +402,10 @@ object GitHub {
       * This field should only be accessed in a thread-safe manner, e.g.,
       * such as using `this.synchronized` blocks or some other locking mechanism.
       */
-    private val HTTP_CLIENT: HttpClient = HttpClient.newHttpClient()
+    private val HTTP_CLIENT: HttpClient =
+      // A release download address redirects to the storage the asset actually lives on, and the
+      // default policy is to follow nothing at all, which would turn every download into a 302.
+      HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NORMAL).build()
 
     /**
       * Sends the HTTP request, `request`, and returns the response.
@@ -339,6 +416,18 @@ object GitHub {
       */
     def sendRequest(request: HttpRequest): HttpResponse[String] = this.synchronized {
       HTTP_CLIENT.send(request, HttpResponse.BodyHandlers.ofString())
+    }
+
+    /**
+      * Sends the HTTP request, `request`, and returns a response whose body is a stream.
+      *
+      * Returns once the response headers have arrived; the body is read afterwards, and the caller
+      * closes it. Blocking and thread-safe.
+      *
+      * May throw [[IOException]].
+      */
+    def sendStreamingRequest(request: HttpRequest): HttpResponse[InputStream] = this.synchronized {
+      HTTP_CLIENT.send(request, HttpResponse.BodyHandlers.ofInputStream())
     }
 
   }
