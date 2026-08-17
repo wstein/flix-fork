@@ -159,9 +159,15 @@ class TestArtifactStability extends AnyFunSuite {
 
   test("fixedWidthIds.02") {
     // Pins the specific id in the fixture above whose value has a leading zero digit, so the
-    // padding is asserted on a real case rather than merely on a likely one. Regenerate it if
-    // the fixture source or a naming key changes: unpadded, this one renders as z56ok3gyegs.
-    assert(emittedIds(RepeatedSpecializations).contains("0z56ok3gyegs"))
+    // padding is asserted on a real case rather than merely on a likely one. Regenerate both
+    // spellings if the fixture source or a naming key changes.
+    //
+    // The two are the same id: 36^11 <= 0z56ok3gyegs < 36^12, so its twelfth digit is a zero
+    // and an unpadded render drops it. Padding changes how the value is spelled and nothing
+    // about which value it is.
+    val ids = emittedIds(RepeatedSpecializations)
+    assert(ids.contains("0z56ok3gyegs"))
+    assert(!ids.contains("z56ok3gyegs"))
   }
 
   test("unrelatedEdit.01") {
