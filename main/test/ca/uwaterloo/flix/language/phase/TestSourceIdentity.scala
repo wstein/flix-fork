@@ -27,17 +27,18 @@ import java.nio.file.Paths
 import java.util.concurrent.ForkJoinPool
 
 /**
-  * Characterization fixtures for docs/adr/0001-source-identity-vs-generated-name-identity.md.
+  * The evidence behind docs/adr/0001-source-identity-vs-generated-name-identity.md.
   *
-  * These pin what the compiler does *today*, not what it should do: an instance member's id is
-  * derived from `(instance, member name)`, so two duplicate declarations of one member mint an
-  * equal [[ca.uwaterloo.flix.language.ast.Symbol.DefnSym]] before either has been validated.
-  * When the ADR's follow-up lands, the assertions marked GAP below are the ones to invert, and
-  * the ignored test at the end is the invariant to enable.
+  * An instance member's id is derived from `(instance, member name)`, so two declarations that
+  * say the same thing mint an equal [[ca.uwaterloo.flix.language.ast.Symbol.DefnSym]]. The ADR
+  * accepts that and bounds the claim instead: *in a program that passes validation, distinct
+  * declarations have distinct symbols*. These tests hold both halves of that sentence -- the
+  * cases where duplicates share a symbol, and the invariant on the validated population.
   *
-  * The front end is driven directly rather than through `Flix.check()` because the gap is only
-  * observable in `NamedAst`: `Resolver.checkDuplicateInstanceDefs` filters later duplicates out,
-  * so nothing downstream of it holds two declarations to compare.
+  * Some of them drive the front end directly rather than going through `Flix.check()`, because
+  * a shared symbol among duplicate *members* is only observable in `NamedAst`:
+  * `Resolver.checkDuplicateInstanceDefs` filters the repeat, so nothing downstream of it holds
+  * two declarations to compare.
   */
 class TestSourceIdentity extends AnyFunSuite with TestUtils {
 
@@ -95,7 +96,7 @@ class TestSourceIdentity extends AnyFunSuite with TestUtils {
     assert(defs.head.loc != defs(1).loc)
   }
 
-  test("GAP: two duplicate instance members carry one symbol in NamedAst") {
+  test("two duplicate instance members carry one symbol in NamedAst") {
     val defs = instanceDefs(namedRootOf(DuplicateInstanceMember))
     assert(defs.head.sym == defs(1).sym)
     // A consumer that keys pre-validation declarations by symbol therefore sees one, not two.
@@ -151,7 +152,7 @@ class TestSourceIdentity extends AnyFunSuite with TestUtils {
     assert(eqInstances.flatMap(_.defs.map(_.sym)).distinct.length == 1)
   }
 
-  test("GAP: two overlapping instances mint one member symbol") {
+  test("two overlapping instances mint one member symbol") {
     // The case an ordinal within one instance cannot reach: the two members are content-identical
     // and live in *different* instance declarations, so `(instance, member name)` is the same key
     // for both, and nothing local to either declaration distinguishes them. Shown here in one
@@ -211,9 +212,36 @@ class TestSourceIdentity extends AnyFunSuite with TestUtils {
     assert(syms.head == syms(1))
   }
 
-  ignore("INVARIANT (not yet implemented): an instance's member symbols are pairwise distinct") {
-    val defs = instanceDefs(namedRootOf(DuplicateInstanceMember))
-    assert(defs.map(_.sym).distinct.length == defs.length)
+  test("INVARIANT: a validated program's instance members have pairwise distinct symbols") {
+    // The property the ADR commits to. Written instances of one trait at different types,
+    // written instances of different traits, and a derived instance all coexist here; every
+    // member of every one of them must be individually addressable.
+    val source =
+      """
+        |trait Describable[a] {
+        |    pub def describe(x: a): String
+        |}
+        |
+        |enum Color with Eq, ToString { case Red }
+        |
+        |instance Describable[Int32] {
+        |    pub def describe(_x: Int32): String = "int"
+        |}
+        |
+        |instance Describable[Bool] {
+        |    pub def describe(_x: Bool): String = "bool"
+        |}
+        |
+        |instance Describable[Color] {
+        |    pub def describe(_x: Color): String = "color"
+        |}
+        |""".stripMargin
+    val (result, errors) = check(source, Options.TestWithLibMin)
+    assert(errors.isEmpty, s"expected a clean program, got: ${errors.map(_.getClass.getName)}")
+    val root = result.getOrElse(fail("Expected a typed root."))
+    val members = root.instances.values.flatMap(_.defs).toList
+    assert(members.length > 4)
+    assert(members.map(_.sym).distinct.length == members.length)
   }
 
 }
