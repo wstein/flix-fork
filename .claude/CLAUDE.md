@@ -52,6 +52,11 @@ not exactly `width` lowercase base-36 digits, so a rendering that loses a leadin
 zero fails the compile instead of reaching a class name where nothing can tell it
 from a narrower id or a counter.
 
+Instance-member ids are minted in `Resolver`, not `Namer`: a member is
+identified by the instance it belongs to, and which trait that is is not known
+until the name is resolved. Keying on the name as written meant `instance M.D[a]`
+and `instance D[a]` — one instance — produced different class names.
+
 Mint through the named functions on `Symbol` — `specializedDefnSym`,
 `liftedDefnSym`, `memberDefnSym`, and the enum/struct/anon-class equivalents —
 never by calling `StableName.suffix` directly. Each of them routes through one
