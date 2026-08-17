@@ -23,7 +23,7 @@ import ca.uwaterloo.flix.language.ast.{NamedAst, *}
 import ca.uwaterloo.flix.language.dbg.AstPrinter.*
 import ca.uwaterloo.flix.language.errors.NameError
 import ca.uwaterloo.flix.util.collection.{ListMap, Nel}
-import ca.uwaterloo.flix.util.{ChaosMonkey, CollisionRegistry, InternalCompilerException, ParOps, StableName}
+import ca.uwaterloo.flix.util.{ChaosMonkey, CollisionRegistry, InternalCompilerException, ParOps}
 
 import java.nio.file.{FileSystemNotFoundException, Path}
 import java.util.concurrent.ConcurrentLinkedQueue
@@ -813,19 +813,18 @@ object Namer {
 
       // The id is derived from the instance rather than taken from a counter, so that it
       // is the same in every compilation; specialized names are built on top of it.
-      val (id, claimKey) = defKind match {
+      val sym = defKind match {
         case DefKind.Member(instance) =>
-          val key = s"$instance#${ident.name}"
-          (Some(SymId.Hash(StableName.suffix(key))), Some(key))
-        case DefKind.NonMember => (None, None)
+          val memberSym = Symbol.memberDefnSym(ns0, ident, instance)
+          // Claimed by the full symbol, not by its id alone: two members whose ids happen to
+          // collide are only a real problem if they also share a namespace and text, since
+          // that is what makes them render to the same JVM name.
+          sctx.claimedIds.claim(memberSym, Symbol.memberKey(instance, ident.name), SourceLocation.Unknown)(
+            (existing, incoming) => s"Instance-member id collision on '$memberSym': '$existing' and '$incoming'."
+          )
+          memberSym
+        case DefKind.NonMember => Symbol.mkDefnSym(ns0, ident, None)
       }
-      val sym = Symbol.mkDefnSym(ns0, ident, id)
-      // Claimed by the full symbol, not by its id alone: two members whose ids happen to
-      // collide are only a real problem if they also share a namespace and text, since
-      // that is what makes them render to the same JVM name.
-      claimKey.foreach(key => sctx.claimedIds.claim(sym, key, SourceLocation.Unknown)(
-        (existing, incoming) => s"Instance-member id collision on '$sym': '$existing' and '$incoming'."
-      ))
       val spec = NamedAst.Spec(doc, ann, mod, tparams, fps, t, ef, tcsts, ecsts)
       NamedAst.Declaration.Def(sym, spec, e, loc)
   }

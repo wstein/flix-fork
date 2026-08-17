@@ -103,14 +103,24 @@ class TestSourceIdentity extends AnyFunSuite with TestUtils {
     assert(defs.map(_.sym).distinct.length == 1)
   }
 
-  test("GAP: --Xstable-name-length=0 does not opt these ids out of content-addressing") {
-    // The flag documents 0 as "falls back to classic incrementing ids", and Symbol.
-    // stableOrCounterId honours it -- but Namer's instance-member site calls StableName.suffix
-    // directly, so the opt-out never reaches it and duplicates still share a symbol.
+  test("--Xstable-name-length=0 opts instance-member ids out of content-addressing") {
+    // The flag documents 0 as "falls back to classic incrementing ids". Opted out, the ids come
+    // from the GenSym counter, so two declarations of one member are distinct symbols again.
     val opts = Options.TestWithLibNix.copy(xstableNameLength = 0)
     val defs = instanceDefs(namedRootOf(DuplicateInstanceMember, opts))
-    assert(defs.head.sym == defs(1).sym)
-    assert(defs.head.sym.id.exists(_.isInstanceOf[SymId.Hash]))
+    assert(defs.forall(_.sym.id.exists(_.isInstanceOf[SymId.Counter])))
+    assert(defs.head.sym != defs(1).sym)
+  }
+
+  test("--Xstable-name-length=0 opts derived-def ids out of content-addressing") {
+    val opts = Options.TestWithLibMin.copy(xstableNameLength = 0)
+    val (result, _) = check("enum Color with Eq { case Red }", opts)
+    val root = result.getOrElse(fail("Expected a typed root."))
+    val derived = root.instances.m.collect {
+      case (sym, instances) if sym.name == "Eq" => instances
+    }.flatten.filter(_.tpe.toString.contains("Color")).flatMap(_.defs).toList
+    assert(derived.nonEmpty)
+    assert(derived.forall(_.sym.id.exists(_.isInstanceOf[SymId.Counter])))
   }
 
   test("the invariant never held for non-member defs") {

@@ -19,11 +19,11 @@ import ca.uwaterloo.flix.api.Flix
 import ca.uwaterloo.flix.language.ast.KindedAst.TypeParam
 import ca.uwaterloo.flix.language.ast.shared.*
 import ca.uwaterloo.flix.language.ast.shared.SymUse.*
-import ca.uwaterloo.flix.language.ast.{Kind, KindedAst, Name, Scheme, SemanticOp, SourceLocation, Symbol, SymId, Type, TypeConstructor}
+import ca.uwaterloo.flix.language.ast.{Kind, KindedAst, Name, Scheme, SemanticOp, SourceLocation, Symbol, Type, TypeConstructor}
 import ca.uwaterloo.flix.language.dbg.AstPrinter.DebugKindedAst
 import ca.uwaterloo.flix.language.errors.DerivationError
 import ca.uwaterloo.flix.language.phase.util.PredefinedTraits
-import ca.uwaterloo.flix.util.{CollisionRegistry, ParOps, StableName}
+import ca.uwaterloo.flix.util.{CollisionRegistry, ParOps}
 import ca.uwaterloo.flix.util.collection.{ListOps, Nel}
 
 import java.util.concurrent.ConcurrentLinkedQueue
@@ -123,9 +123,7 @@ object Deriver {
       val tpe = getEnumType(sym, tparams)
 
       val eqTraitSym = PredefinedTraits.lookupTraitSym("Eq", root)
-      val eqKey = s"Eq[${sym}]#eq"
-      val eqDefSym = Symbol.mkDefnSym("Eq.eq", Some(SymId.Hash(StableName.suffix(eqKey))))
-      claimDefId(eqDefSym, eqKey)
+      val eqDefSym = derivedDefnSym("Eq.eq", s"Eq[$sym]")
 
       val param1 = Symbol.freshVarSym("x", BoundBy.FormalParam, loc)
       val param2 = Symbol.freshVarSym("y", BoundBy.FormalParam, loc)
@@ -306,9 +304,7 @@ object Deriver {
       val tpe = getEnumType(sym, tparams)
 
       val orderTraitSym = PredefinedTraits.lookupTraitSym("Order", root)
-      val compareKey = s"Order[${sym}]#compare"
-      val compareDefSym = Symbol.mkDefnSym("Order.compare", Some(SymId.Hash(StableName.suffix(compareKey))))
-      claimDefId(compareDefSym, compareKey)
+      val compareDefSym = derivedDefnSym("Order.compare", s"Order[$sym]")
 
       val param1 = Symbol.freshVarSym("x", BoundBy.FormalParam, loc)
       val param2 = Symbol.freshVarSym("y", BoundBy.FormalParam, loc)
@@ -506,9 +502,7 @@ object Deriver {
       val tpe = getEnumType(sym, tparams)
 
       val toStringTraitSym = PredefinedTraits.lookupTraitSym("ToString", root)
-      val toStringKey = s"ToString[${sym}]#toString"
-      val toStringDefSym = Symbol.mkDefnSym("ToString.toString", Some(SymId.Hash(StableName.suffix(toStringKey))))
-      claimDefId(toStringDefSym, toStringKey)
+      val toStringDefSym = derivedDefnSym("ToString.toString", s"ToString[$sym]")
 
       val param = Symbol.freshVarSym("x", BoundBy.FormalParam, loc)
       val exp = mkToStringImpl(enum0, param, loc, root)
@@ -717,9 +711,7 @@ object Deriver {
       val tpe = getEnumType(sym, tparams)
 
       val hashTraitSym = PredefinedTraits.lookupTraitSym("Hash", root)
-      val hashKey = s"Hash[${sym}]#hash"
-      val hashDefSym = Symbol.mkDefnSym("Hash.hash", Some(SymId.Hash(StableName.suffix(hashKey))))
-      claimDefId(hashDefSym, hashKey)
+      val hashDefSym = derivedDefnSym("Hash.hash", s"Hash[$sym]")
 
       val param = Symbol.freshVarSym("x", BoundBy.FormalParam, loc)
       val exp = mkHashImpl(enum0, param, loc, root)
@@ -860,9 +852,7 @@ object Deriver {
 
       if (cases.size == 1) {
         val coerceTraitSym = PredefinedTraits.lookupTraitSym("Coerce", root)
-        val coerceKey = s"Coerce[${sym}]#coerce"
-        val coerceDefSym = Symbol.mkDefnSym("Coerce.coerce", Some(SymId.Hash(StableName.suffix(coerceKey))))
-        claimDefId(coerceDefSym, coerceKey)
+        val coerceDefSym = derivedDefnSym("Coerce.coerce", s"Coerce[$sym]")
 
         val (_, caze) = cases.head
 
@@ -1129,9 +1119,19 @@ object Deriver {
     * tell them apart. Only a same-namespace, same-text sym minted from two different
     * keys is a real collision.
     */
-  private def claimDefId(sym: Symbol.DefnSym, key: String)(implicit sctx: SharedContext): Unit =
-    sctx.claimedIds.claim(sym, key, SourceLocation.Unknown)(
+  /**
+    * Returns the def symbol for the derived member `fqn` of `instance`, claiming its id.
+    *
+    * A derived member is named exactly as a written one would be -- both go through
+    * [[Symbol.memberDefnSym]] -- so deriving `Eq` and writing `instance Eq` by hand cannot
+    * produce two different names for the same member.
+    */
+  private def derivedDefnSym(fqn: String, instance: String)(implicit sctx: SharedContext, flix: Flix): Symbol.DefnSym = {
+    val sym = Symbol.memberDefnSym(fqn, instance)
+    sctx.claimedIds.claim(sym, Symbol.memberKey(instance, sym.text), SourceLocation.Unknown)(
       (existing, incoming) => s"Derived-def id collision on '$sym': '$existing' and '$incoming'."
     )
+    sym
+  }
 
 }

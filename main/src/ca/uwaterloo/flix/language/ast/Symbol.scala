@@ -109,6 +109,39 @@ object Symbol {
     new DefnSym(Some(stableOrCounterId(s"$sym#lift$index")), sym.namespace, sym.text, sym.loc)
 
   /**
+    * Returns the content key of the member `member` of `instance`.
+    *
+    * The key is the only description of what an instance member's id is derived from, so
+    * both ways of minting one -- [[memberDefnSym]]'s two forms -- and every collision claim
+    * made about the result go through it rather than spelling the format out again.
+    */
+  def memberKey(instance: String, member: String): String = s"$instance#$member"
+
+  /**
+    * Returns the def symbol for the member `ident` of `instance` in namespace `ns`.
+    *
+    * Consumes no [[ca.uwaterloo.flix.language.GenSym]] id: an instance's members live only in
+    * that instance's own declaration, so the enclosing instance and the member name are what
+    * identify one. Two declarations of the same member therefore mint the same symbol; see
+    * `docs/adr/0001-source-identity-vs-generated-name-identity.md` for why that is accepted.
+    */
+  def memberDefnSym(ns: Name.NName, ident: Name.Ident, instance: String)(implicit flix: Flix): DefnSym =
+    mkDefnSym(ns, ident, Some(stableOrCounterId(memberKey(instance, ident.name))))
+
+  /**
+    * Returns the def symbol for the member named `fqn` of `instance`, where `fqn` is the
+    * member's fully-qualified name (`"Eq.eq"` for the `eq` member of `"Eq[Color]"`).
+    *
+    * The form [[ca.uwaterloo.flix.language.phase.Deriver]] uses, since a derived member has a
+    * qualified name rather than a namespace and an identifier. Agrees with the other form on
+    * the key, so a derived member and a written one are named the same way.
+    */
+  def memberDefnSym(fqn: String, instance: String)(implicit flix: Flix): DefnSym = {
+    val member = fqn.substring(fqn.lastIndexOf('.') + 1)
+    mkDefnSym(fqn, Some(stableOrCounterId(memberKey(instance, member))))
+  }
+
+  /**
     * Returns the enum symbol for the specialization of `sym` identified by `key`.
     *
     * Consumes no [[ca.uwaterloo.flix.language.GenSym]] id; see [[specializedDefnSym]].

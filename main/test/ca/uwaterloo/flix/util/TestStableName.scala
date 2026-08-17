@@ -72,12 +72,17 @@ class TestStableName extends AnyFunSuite {
     assert(StableName.suffix("a", StableName.MaxWidth) == "s890t8stu899xyob7506ge857")
   }
 
-  test("suffix.LengthBound.01") {
-    // Not left-padded: length is at most `width`, and can be shorter when the
-    // reduced value happens to have a base-36 leading zero digit.
+  test("suffix.FixedWidth.01") {
+    // Left-padded: every suffix is exactly `width` digits, so a generated name's
+    // shape does not depend on whether its digest happened to start with a zero.
     for (width <- 1 to StableName.MaxWidth) {
-      assert(StableName.suffix("some-key", width).length <= width)
+      assert(StableName.suffix("some-key", width).length == width)
     }
+  }
+
+  test("suffix.Golden.Padded.01") {
+    // A key whose reduced value has a base-36 leading zero digit at the default width.
+    assert(StableName.suffix("key-13") == "0uastab1iwpp")
   }
 
   test("suffix.NotEmpty.01") {

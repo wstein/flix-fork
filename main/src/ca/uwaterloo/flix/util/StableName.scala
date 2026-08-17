@@ -61,12 +61,18 @@ object StableName {
   }
 
   /**
-    * Renders `id` as lowercase base-36. Not left-padded: an id with a leading
-    * zero digit renders shorter than the `width` it was computed with.
+    * Renders `id` as lowercase base-36, left-padded with zeros to `width` digits.
+    *
+    * Padding is what makes `width` a width rather than an upper bound: roughly one
+    * id in 36 reduces to a value with a leading zero digit, and an unpadded render
+    * of it is indistinguishable in shape from a shorter id or from a counter.
     */
-  def render(id: BigInt): String = id.toString(36)
+  private def render(id: BigInt, width: Int): String = {
+    val digits = id.toString(36)
+    if (digits.length >= width) digits else "0" * (width - digits.length) + digits
+  }
 
   /** Returns the stable, content-addressed suffix for `key` at the given `width`. */
-  def suffix(key: String, width: Int = DefaultWidth): String = render(of(key, width))
+  def suffix(key: String, width: Int = DefaultWidth): String = render(of(key, width), width)
 
 }

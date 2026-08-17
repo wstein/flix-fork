@@ -68,6 +68,45 @@ class TestSymbol extends AnyFunSuite {
     assert(first.id != second.id)
   }
 
+  test("memberDefnSym.RespectsWidth.01") {
+    val ident = Name.Ident("eq", SourceLocation.Unknown)
+    for (width <- List(1, 4, 8, 12, StableName.MaxWidth)) {
+      implicit val flix: Flix = flixWithWidth(width)
+      val sym = Symbol.memberDefnSym(Name.RootNS, ident, "Eq[Color]")
+      assert(hashOf(sym.id) == StableName.suffix(Symbol.memberKey("Eq[Color]", "eq"), width))
+    }
+  }
+
+  test("memberDefnSym.OptOut.01") {
+    implicit val flix: Flix = flixWithWidth(0)
+    val ident = Name.Ident("eq", SourceLocation.Unknown)
+    val sym = Symbol.memberDefnSym(Name.RootNS, ident, "Eq[Color]")
+    sym.id match {
+      case Some(SymId.Counter(_)) => // expected
+      case other => fail(s"expected a Counter id, got $other")
+    }
+  }
+
+  test("memberDefnSym.OptOut.02") {
+    // Opted out, two declarations of one member no longer collapse onto one symbol.
+    implicit val flix: Flix = flixWithWidth(0)
+    val ident = Name.Ident("eq", SourceLocation.Unknown)
+    val first = Symbol.memberDefnSym(Name.RootNS, ident, "Eq[Color]")
+    val second = Symbol.memberDefnSym(Name.RootNS, ident, "Eq[Color]")
+    assert(first.id != second.id)
+  }
+
+  test("memberDefnSym.QualifiedOverloadAgrees.01") {
+    // The two ways of minting a member symbol -- from a namespace and identifier, and from a
+    // fully-qualified name -- must derive the same id, or a derived instance and a written one
+    // would name the same member differently.
+    implicit val flix: Flix = flixWithWidth(12)
+    val ident = Name.Ident("eq", SourceLocation.Unknown)
+    val fromIdent = Symbol.memberDefnSym(Name.RootNS, ident, "Eq[Color]")
+    val fromName = Symbol.memberDefnSym("Eq.eq", "Eq[Color]")
+    assert(fromIdent.id == fromName.id)
+  }
+
   test("liftedDefnSym.RespectsWidth.01") {
     val enclosing = Symbol.mkDefnSym("f")
     implicit val flix: Flix = flixWithWidth(6)
