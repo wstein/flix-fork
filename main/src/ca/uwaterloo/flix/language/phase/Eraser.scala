@@ -5,7 +5,7 @@ import ca.uwaterloo.flix.language.ast.SimpleType.erase
 import ca.uwaterloo.flix.language.ast.{AtomicOp, ErasedAst, Purity, ReducedAst, SimpleType, SourceLocation, Symbol, Type, TypeConstructor}
 import ca.uwaterloo.flix.language.dbg.AstPrinter.DebugNoOp
 import ca.uwaterloo.flix.util.collection.ListOps
-import ca.uwaterloo.flix.util.{CollisionRegistry, InternalCompilerException, ParOps}
+import ca.uwaterloo.flix.util.{CollisionRegistry, InternalCompilerException, NameFormat, ParOps}
 
 import java.util.concurrent.ConcurrentHashMap
 import java.util.function.BiConsumer
@@ -41,7 +41,7 @@ object Eraser {
 
   def run(root: ReducedAst.Root)(implicit flix: Flix): ErasedAst.Root = flix.phase("Eraser") {
     implicit val r: ReducedAst.Root = root
-    implicit val ctx: SharedContext = new SharedContext()
+    implicit val ctx: SharedContext = new SharedContext(flix.options.xstableNameLength)
     val newDefs = ParOps.parMapValues(root.defs)(defn => flix.profile(defn.sym, defn.loc)(visitDef(defn)))
     val newEffects = ParOps.parMapValues(root.effects)(visitEffect)
     // Specializations must happen after all other types and expressions are visited.
@@ -365,7 +365,7 @@ object Eraser {
 
   private def box(@unused tpe: SimpleType): SimpleType = SimpleType.Object
 
-  private final class SharedContext {
+  private final class SharedContext(idWidth: Int) {
 
     /**
       * `(Option, List(Int32)) -> Option$42` means that `Option` is specialized wrt. `Int32` under the name `Option$42`.
@@ -396,7 +396,8 @@ object Eraser {
 
     /** Returns a message describing an erasure name collision on `specializedSym`. */
     private def describeCollision[S](specializedSym: S)(existing: (S, List[SimpleType]), incoming: (S, List[SimpleType])): String =
-      s"Erasure name collision on '$specializedSym': '${existing._1}' at '${existing._2}' and '${incoming._1}' at '${incoming._2}'."
+      s"Erasure name collision on '$specializedSym': '${existing._1}' at '${existing._2}' and '${incoming._1}' at '${incoming._2}'." +
+        NameFormat.collisionAdvice(idWidth)
 
     /** Returns the specialized version of `sym` according to `targs`, creating a new symbol if not done already. */
     def getSpecializedEnumName(sym: Symbol.EnumSym, targs: List[SimpleType])(implicit flix: Flix): Symbol.EnumSym = {

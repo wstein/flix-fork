@@ -19,7 +19,7 @@ package ca.uwaterloo.flix.language.ast
 import ca.uwaterloo.flix.api.Flix
 import ca.uwaterloo.flix.language.ast.Name.{Ident, NName}
 import ca.uwaterloo.flix.language.ast.shared.*
-import ca.uwaterloo.flix.util.{InternalCompilerException, StableName}
+import ca.uwaterloo.flix.util.{InternalCompilerException, NameFormat, StableName}
 
 import java.util.Objects
 import scala.collection.immutable.SortedSet
@@ -84,7 +84,7 @@ object Symbol {
   private def stableOrCounterId(key: => String)(implicit flix: Flix): SymId = {
     val width = flix.options.xstableNameLength
     if (width == 0) SymId.Counter(flix.genSym.freshId())
-    else SymId.Hash(StableName.suffix(key, width))
+    else SymId.Hash(StableName.suffix(NameFormat.preimage(key), width))
   }
 
   /**

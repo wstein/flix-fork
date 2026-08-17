@@ -21,7 +21,7 @@ import ca.uwaterloo.flix.language.ast.shared.*
 import ca.uwaterloo.flix.language.ast.{AtomicOp, LiftedAst, SimpleType, Purity, SimplifiedAst, Symbol}
 import ca.uwaterloo.flix.language.dbg.AstPrinter.*
 import ca.uwaterloo.flix.util.collection.MapOps
-import ca.uwaterloo.flix.util.{InternalCompilerException, ParOps}
+import ca.uwaterloo.flix.util.{InternalCompilerException, NameFormat, ParOps}
 
 import java.util.concurrent.ConcurrentLinkedQueue
 import scala.jdk.CollectionConverters.*
@@ -50,7 +50,7 @@ object LambdaLift {
     val collisions = liftedBySym.filter(_._2.sizeIs > 1)
     if (collisions.nonEmpty) {
       val (sym, defns) = collisions.head
-      throw InternalCompilerException(s"Lifted name collision on '$sym': ${defns.size} definitions.", defns.head._2.loc)
+      throw InternalCompilerException(s"Lifted name collision on '$sym': ${defns.size} definitions." + NameFormat.collisionAdvice(flix.options.xstableNameLength), defns.head._2.loc)
     }
 
     // A lifted symbol must also not already name a definition that survived unlifted:
@@ -58,7 +58,7 @@ object LambdaLift {
     // that merge disappear from the compiled program instead of raising any error.
     liftedBySym.keys.find(defs.contains) match {
       case Some(sym) =>
-        throw InternalCompilerException(s"Lifted name collision on '$sym': collides with an existing definition.", sym.loc)
+        throw InternalCompilerException(s"Lifted name collision on '$sym': collides with an existing definition." + NameFormat.collisionAdvice(flix.options.xstableNameLength), sym.loc)
       case None => ()
     }
 

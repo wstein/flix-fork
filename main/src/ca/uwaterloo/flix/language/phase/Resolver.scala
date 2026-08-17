@@ -499,7 +499,8 @@ object Resolver {
     // them render to the same JVM name. Two declarations of *one* member claim the same key for
     // the same value, which is not a collision -- see the ADR referenced above.
     sctx.claimedMemberIds.claim(sym, Symbol.memberKey(instance, sym.text), defn.sym.loc)(
-      (existing, incoming) => s"Instance-member id collision on '$sym': '$existing' and '$incoming'."
+      (existing, incoming) => s"Instance-member id collision on '$sym': '$existing' and '$incoming'." +
+        NameFormat.collisionAdvice(flix.options.xstableNameLength)
     )
     defn.copy(sym = sym)
   }

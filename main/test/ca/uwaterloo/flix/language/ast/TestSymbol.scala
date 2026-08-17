@@ -16,7 +16,7 @@
 package ca.uwaterloo.flix.language.ast
 
 import ca.uwaterloo.flix.api.Flix
-import ca.uwaterloo.flix.util.{CollisionRegistry, InternalCompilerException, Options, StableName}
+import ca.uwaterloo.flix.util.{CollisionRegistry, InternalCompilerException, NameFormat, Options, StableName}
 import org.scalatest.funsuite.AnyFunSuite
 
 class TestSymbol extends AnyFunSuite {
@@ -33,7 +33,7 @@ class TestSymbol extends AnyFunSuite {
     for (width <- List(1, 4, 8, 12, StableName.MaxWidth)) {
       implicit val flix: Flix = flixWithWidth(width)
       val sym = Symbol.specializedDefnSym(enclosing, "List.map|Int32")
-      assert(hashOf(sym.id) == StableName.suffix("List.map|Int32", width))
+      assert(hashOf(sym.id) == StableName.suffix(NameFormat.preimage("List.map|Int32"), width))
     }
   }
 
@@ -97,7 +97,7 @@ class TestSymbol extends AnyFunSuite {
     for (width <- List(1, 4, 8, 12, StableName.MaxWidth)) {
       implicit val flix: Flix = flixWithWidth(width)
       val sym = Symbol.memberDefnSym(Name.RootNS, ident, "Eq[Color]")
-      assert(hashOf(sym.id) == StableName.suffix(Symbol.memberKey("Eq[Color]", "eq"), width))
+      assert(hashOf(sym.id) == StableName.suffix(NameFormat.preimage(Symbol.memberKey("Eq[Color]", "eq")), width))
     }
   }
 
@@ -135,28 +135,28 @@ class TestSymbol extends AnyFunSuite {
     val enclosing = Symbol.mkDefnSym("f")
     implicit val flix: Flix = flixWithWidth(6)
     val sym = Symbol.liftedDefnSym(enclosing, 2)
-    assert(hashOf(sym.id) == StableName.suffix(s"$enclosing#lift2", 6))
+    assert(hashOf(sym.id) == StableName.suffix(NameFormat.preimage(s"$enclosing#lift2"), 6))
   }
 
   test("specializedEnumSym.RespectsWidth.01") {
     val enclosing = Symbol.mkEnumSym("List")
     implicit val flix: Flix = flixWithWidth(6)
     val sym = Symbol.specializedEnumSym(enclosing, "List[Int32]")
-    assert(hashOf(sym.id) == StableName.suffix("List[Int32]", 6))
+    assert(hashOf(sym.id) == StableName.suffix(NameFormat.preimage("List[Int32]"), 6))
   }
 
   test("specializedStructSym.RespectsWidth.01") {
     val enclosing = new Symbol.StructSym(None, Nil, "S", SourceLocation.Unknown)
     implicit val flix: Flix = flixWithWidth(6)
     val sym = Symbol.specializedStructSym(enclosing, "S[Int32]")
-    assert(hashOf(sym.id) == StableName.suffix("S[Int32]", 6))
+    assert(hashOf(sym.id) == StableName.suffix(NameFormat.preimage("S[Int32]"), 6))
   }
 
   test("specializedAnonClassSym.RespectsWidth.01") {
     val enclosing = Symbol.mkDefnSym("f")
     implicit val flix: Flix = flixWithWidth(6)
     val sym = Symbol.specializedAnonClassSym(enclosing, 0, SourceLocation.Unknown)
-    assert(hashOf(sym.id) == StableName.suffix(s"$enclosing#anon0", 6))
+    assert(hashOf(sym.id) == StableName.suffix(NameFormat.preimage(s"$enclosing#anon0"), 6))
   }
 
   // The opt-out below is exercised only through specializedDefnSym above; these confirm
@@ -230,16 +230,17 @@ class TestSymbol extends AnyFunSuite {
 
   test("specializedDefnSym.NoCollisionAtWidth1WithFewKeys.01") {
     // The flip side, so the guarantee above isn't taken on faith: claiming distinct keys
-    // must not throw merely because the registry is exercised at all. "specialization-key-0"
-    // through "-9" are hardcoded, not arbitrary or random: verified by direct computation
-    // to render to 10 pairwise-distinct base-36 digits at width 1 (x, v, e, h, s, u, f, r,
-    // 5, c), so this is a deterministic non-collision, on the same footing as a golden
-    // vector -- not a probabilistic claim that happens to pass today.
+    // must not throw merely because the registry is exercised at all. These ten indices are
+    // hardcoded, not arbitrary or random: verified by direct computation to render to ten
+    // pairwise-distinct base-36 digits at width 1 (r, d, 1, m, p, 9, u, q, g, 5), so this is
+    // a deterministic non-collision, on the same footing as a golden vector -- not a
+    // probabilistic claim that happens to pass today. Re-derive them if [[NameFormat.Version]]
+    // changes: the preimage, and so every digit here, moves with it.
     implicit val flix: Flix = flixWithWidth(1)
     val enclosing = Symbol.mkDefnSym("f")
     val registry = new CollisionRegistry[Symbol.DefnSym, String]()
 
-    for (i <- 0 until 10) {
+    for (i <- List(0, 1, 2, 4, 5, 6, 8, 9, 10, 11)) {
       val key = s"specialization-key-$i"
       val sym = Symbol.specializedDefnSym(enclosing, key)
       registry.claim(sym, key, SourceLocation.Unknown)((existing, incoming) =>

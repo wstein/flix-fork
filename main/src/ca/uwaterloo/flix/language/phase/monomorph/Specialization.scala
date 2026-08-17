@@ -25,7 +25,7 @@ import ca.uwaterloo.flix.language.dbg.AstPrinter.*
 import ca.uwaterloo.flix.language.phase.typer.{ConstraintSolver2, Progress, TypeReduction2}
 import ca.uwaterloo.flix.language.phase.unification.Substitution
 import ca.uwaterloo.flix.util.collection.{CofiniteSet, ListMap, ListOps, MapOps, Nel}
-import ca.uwaterloo.flix.util.{CollisionRegistry, InternalCompilerException, ParOps}
+import ca.uwaterloo.flix.util.{CollisionRegistry, InternalCompilerException, NameFormat, ParOps}
 
 
 import scala.collection.immutable.SortedSet
@@ -207,7 +207,7 @@ object Specialization {
     }
   }
 
-  protected[monomorph] class Context {
+  protected[monomorph] class Context(idWidth: Int) {
 
     /**
       * A queue of pending (fresh symbol, function definition, and substitution)-triples.
@@ -294,7 +294,8 @@ object Specialization {
     def claimSpecializedName(specializedSym: Symbol.DefnSym, key: String, sym: Symbol.DefnSym, tpe: Type): Unit =
       claimedNames.claim(specializedSym, (sym, tpe), sym.loc)((existing, _) =>
         s"Specialization name collision on '$specializedSym' from key '$key':" +
-          s" '${existing._1}' at '${existing._2}' and '$sym' at '$tpe'."
+          s" '${existing._1}' at '${existing._2}' and '$sym' at '$tpe'." +
+          NameFormat.collisionAdvice(idWidth)
       )
 
     /**
@@ -312,7 +313,8 @@ object Specialization {
     def claimAnonClassName(anonSym: Symbol.AnonClassSym, enclosing: Symbol.DefnSym, index: Int): Unit =
       claimedAnonNames.claim(anonSym, (enclosing, index), anonSym.loc)((existing, _) =>
         s"Anonymous-class name collision on '$anonSym':" +
-          s" '${existing._1}'#anon${existing._2} and '$enclosing'#anon$index."
+          s" '${existing._1}'#anon${existing._2} and '$enclosing'#anon$index." +
+          NameFormat.collisionAdvice(idWidth)
       )
 
     /** A map of specialized definitions. */
@@ -332,7 +334,8 @@ object Specialization {
     /** Add a new specialized definition, claimed under `origin` for the collision check above. */
     def addSpecializedDef(sym: Symbol.DefnSym, defn: MonoAst.Def, origin: String): Unit = {
       claimedDefSyms.claim(sym, origin, sym.loc)((existing, incoming) =>
-        s"Definition symbol collision on '$sym': '$existing' and '$incoming'."
+        s"Definition symbol collision on '$sym': '$existing' and '$incoming'." +
+          NameFormat.collisionAdvice(idWidth)
       )
       // specializedDefns is a plain mutable.Map, unlike the CollisionRegistry-backed
       // claims above, so its own mutation still needs an explicit lock.
@@ -396,7 +399,7 @@ object Specialization {
   def run(root: TypedAst.Root)(implicit flix: Flix): MonoAst.Root = flix.phase("Monomorpher") {
     implicit val r: TypedAst.Root = root
     implicit val is: Map[(Symbol.TraitSym, TypeConstructor), Instance] = mkInstanceMap(root.instances)
-    implicit val ctx: Context = new Context()
+    implicit val ctx: Context = new Context(flix.options.xstableNameLength)
 
     // Collect all non-parametric function definitions.
     val nonParametricDefns = root.defs.filter {

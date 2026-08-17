@@ -23,7 +23,7 @@ import ca.uwaterloo.flix.language.ast.{Kind, KindedAst, Name, Scheme, SemanticOp
 import ca.uwaterloo.flix.language.dbg.AstPrinter.DebugKindedAst
 import ca.uwaterloo.flix.language.errors.DerivationError
 import ca.uwaterloo.flix.language.phase.util.PredefinedTraits
-import ca.uwaterloo.flix.util.{CollisionRegistry, ParOps}
+import ca.uwaterloo.flix.util.{CollisionRegistry, NameFormat, ParOps}
 import ca.uwaterloo.flix.util.collection.{ListOps, Nel}
 
 import java.util.concurrent.ConcurrentLinkedQueue
@@ -1127,7 +1127,8 @@ object Deriver {
   private def derivedDefnSym(fqn: String, instance: String)(implicit sctx: SharedContext, flix: Flix): Symbol.DefnSym = {
     val sym = Symbol.memberDefnSym(fqn, instance)
     sctx.claimedIds.claim(sym, Symbol.memberKey(instance, sym.text), SourceLocation.Unknown)(
-      (existing, incoming) => s"Derived-def id collision on '$sym': '$existing' and '$incoming'."
+      (existing, incoming) => s"Derived-def id collision on '$sym': '$existing' and '$incoming'." +
+        NameFormat.collisionAdvice(flix.options.xstableNameLength)
     )
     sym
   }
