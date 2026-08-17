@@ -23,10 +23,10 @@ import ca.uwaterloo.flix.util.{Formatter, Result}
 import ca.uwaterloo.flix.util.Result.{Err, Ok, traverse}
 import ca.uwaterloo.flix.util.collection.ListMap
 
-import java.io.{IOException, PrintStream}
-import java.nio.file.{Files, Path, StandardCopyOption}
+import java.io.{IOException, InputStream, PrintStream}
+import java.nio.file.{AtomicMoveNotSupportedException, Files, Path, StandardCopyOption}
 import scala.collection.mutable
-import scala.util.Using
+import scala.util.{Failure, Success, Try, Using}
 
 object FlixPackageManager {
 
@@ -42,10 +42,14 @@ object FlixPackageManager {
     * Opens a stream over the first of `candidates` that the release actually publishes, falling
     * back to a rate-limited listing when none of them do.
     *
-    * Each candidate costs an unmetered request against the asset's computed address; the listing
-    * costs a rate-limited one, which is the whole reason for guessing at all.
+    * Each candidate is a request against the asset's computed address, which does not consume the
+    * REST API quota; the listing costs a rate-limited request, which is the whole reason for
+    * guessing at all.
+    *
+    * `transport` does not change across this search, so it is implicit; [[GitHub.Transport.live]]
+    * answers it in production, and a test brings a scripted one into scope instead.
     */
-  private def openAsset(project: GitHub.Project, version: SemVer, extension: String, candidates: List[String], apiKey: Option[String]): Result[java.io.InputStream, PackageError] =
+  private[pkg] def openAsset(project: GitHub.Project, version: SemVer, extension: String, candidates: List[String], apiKey: Option[String])(implicit transport: GitHub.Transport): Result[InputStream, PackageError] =
     tryCandidates(project, version, candidates) match {
       case Some(result) => result
       case None =>
@@ -59,7 +63,7 @@ object FlixPackageManager {
     * A candidate that is simply absent is not a failure -- that is what the next candidate, and
     * ultimately the listing, is for. Any other failure is, and stops the search.
     */
-  private def tryCandidates(project: GitHub.Project, version: SemVer, candidates: List[String]): Option[Result[java.io.InputStream, PackageError]] =
+  private def tryCandidates(project: GitHub.Project, version: SemVer, candidates: List[String])(implicit transport: GitHub.Transport): Option[Result[InputStream, PackageError]] =
     candidates match {
       case Nil => None
       case assetName :: rest =>
@@ -192,12 +196,17 @@ object FlixPackageManager {
     *
     * The package is installed at `lib/<owner>/<repo>`
     *
-    * `candidates` names are tried against the asset's computed address, each an unmetered request;
-    * a rate-limited listing is read only if none of them are what the release actually published.
+    * `candidates` names are tried against the asset's computed address, none of which consume the
+    * REST API quota; a rate-limited listing is read only if none of them are what the release
+    * actually published.
+    *
+    * The download is written to a uniquely named temporary file beside `assetPath` and moved into
+    * place only once it is known to be whole, so a copy that fails partway -- a dropped connection,
+    * a full disk -- cannot leave a truncated file where a cache hit is later trusted blindly.
     *
     * Returns the path to the downloaded file.
     */
-  private def install(project: String, version: SemVer, extension: String, candidates: List[String], p: Path, apiKey: Option[String])(implicit formatter: Formatter, out: PrintStream): Result[Path, PackageError] = {
+  private[pkg] def install(project: String, version: SemVer, extension: String, candidates: List[String], p: Path, apiKey: Option[String])(implicit formatter: Formatter, out: PrintStream, transport: GitHub.Transport): Result[Path, PackageError] = {
     GitHub.parseProject(project).flatMap { proj =>
       val lib = Bootstrap.getLibraryDirectory(p)
       val localName = s"${proj.repo}-$version.$extension"
@@ -217,23 +226,52 @@ object FlixPackageManager {
             out.println("ERROR.")
             Err(e)
           case Ok(stream) =>
-            try {
-              Using(stream) { s => Files.copy(s, assetPath, StandardCopyOption.REPLACE_EXISTING) }
-            } catch {
-              case e: IOException =>
+            writeAtomically(stream, dirPath, localName, assetPath) match {
+              case Failure(e) =>
                 out.println(s"ERROR: ${e.getMessage}.")
-                return Err(PackageError.DownloadIncomplete(proj, version, localName, Some(e.getMessage)))
-            }
-            if (Files.exists(assetPath)) {
-              out.println(s"OK.")
-              Ok(assetPath)
-            } else {
-              out.println(s"ERROR: File was not created.")
-              Err(PackageError.DownloadIncomplete(proj, version, localName, None))
+                Err(PackageError.DownloadIncomplete(proj, version, localName, Some(e.getMessage)))
+              case Success(()) =>
+                out.println("OK.")
+                Ok(assetPath)
             }
         }
       }
     }
+  }
+
+  /**
+    * Copies `stream` to a temporary file beside `assetPath` and moves it into place atomically,
+    * only once the copy is known to have succeeded.
+    *
+    * The temporary file's name is unique per call ([[Files.createTempFile]] guarantees this), so two
+    * builds racing to install the same dependency at once do not corrupt each other's download; the
+    * loser's temporary file is simply moved second, over the winner's already-correct result.
+    *
+    * `stream` is always closed. The temporary file is always removed on any failure, whether from
+    * the copy itself or from the move that follows it.
+    */
+  private def writeAtomically(stream: InputStream, dirPath: Path, localName: String, assetPath: Path): Try[Unit] =
+    Try(Files.createTempFile(dirPath, localName, ".part")) match {
+      case Failure(e) =>
+        stream.close()
+        Failure(e)
+      case Success(tmpPath) =>
+        val result = Using(stream)(s => Files.copy(s, tmpPath, StandardCopyOption.REPLACE_EXISTING)).flatMap(_ => moveIntoPlace(tmpPath, assetPath))
+        if (result.isFailure) Files.deleteIfExists(tmpPath)
+        result
+    }
+
+  /**
+    * Moves `tmpPath` to `assetPath`, atomically if the filesystem supports it.
+    */
+  private def moveIntoPlace(tmpPath: Path, assetPath: Path): Try[Unit] = Try {
+    try {
+      Files.move(tmpPath, assetPath, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+    } catch {
+      case _: AtomicMoveNotSupportedException =>
+        Files.move(tmpPath, assetPath, StandardCopyOption.REPLACE_EXISTING)
+    }
+    ()
   }
 
   /**
