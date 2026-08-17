@@ -68,6 +68,30 @@ class TestSymbol extends AnyFunSuite {
     assert(first.id != second.id)
   }
 
+  test("mintedIds.FixedWidth.01") {
+    // Every mint function renders exactly `width` digits. Padding is what makes that true:
+    // roughly one key in 36 reduces to a value with a base-36 leading zero digit, and an
+    // unpadded render of one is a digit short. Enough samples are drawn here that hitting
+    // such a key is a certainty rather than a coin flip.
+    implicit val flix: Flix = flixWithWidth(StableName.DefaultWidth)
+    val enclosing = Symbol.mkDefnSym("Test.f")
+    val enclosingEnum = new Symbol.EnumSym(None, Nil, "E", SourceLocation.Unknown)
+    val enclosingStruct = new Symbol.StructSym(None, Nil, "S", SourceLocation.Unknown)
+    val ident = Name.Ident("eq", SourceLocation.Unknown)
+    val ids = (0 until 200).flatMap { i =>
+      List(
+        Symbol.specializedDefnSym(enclosing, s"Test.f|$i").id,
+        Symbol.liftedDefnSym(enclosing, i).id,
+        Symbol.memberDefnSym(Name.RootNS, ident, s"Eq[T$i]").id,
+        Symbol.specializedEnumSym(enclosingEnum, s"E|$i").id,
+        Symbol.specializedStructSym(enclosingStruct, s"S|$i").id,
+        Symbol.specializedAnonClassSym(enclosing, i, SourceLocation.Unknown).id
+      )
+    }
+    val widths = ids.flatten.collect { case SymId.Hash(value) => value.length }.distinct
+    assert(widths == List(StableName.DefaultWidth), s"expected only ${StableName.DefaultWidth}-digit ids, got widths $widths")
+  }
+
   test("memberDefnSym.RespectsWidth.01") {
     val ident = Name.Ident("eq", SourceLocation.Unknown)
     for (width <- List(1, 4, 8, 12, StableName.MaxWidth)) {

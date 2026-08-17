@@ -15,12 +15,14 @@
  */
 package ca.uwaterloo.flix
 
-import ca.uwaterloo.flix.api.Flix
+import ca.uwaterloo.flix.api.{Flix, FlixEvent, FlixListener}
 import ca.uwaterloo.flix.language.ast.shared.SecurityContext
-import ca.uwaterloo.flix.util.{Options, Result}
+import ca.uwaterloo.flix.language.ast.{SymId, Symbol}
+import ca.uwaterloo.flix.util.{Options, Result, StableName}
 import org.scalatest.funsuite.AnyFunSuite
 
 import java.nio.file.Paths
+import scala.collection.mutable
 
 /**
   * Verifies the end-to-end guarantee content-addressed naming exists for: the set of
@@ -79,6 +81,49 @@ class TestArtifactStability extends AnyFunSuite {
       |}
       |""".stripMargin
 
+  /**
+    * Applies the same stdlib higher-order functions at many distinct element types, so the
+    * library defs they call are specialized repeatedly rather than once. One of the ids this
+    * produces reduces to a value with a base-36 leading zero digit, which is what makes it a
+    * fixture for [[StableName]]'s padding rather than only for specialization.
+    */
+  private val RepeatedSpecializations: String =
+    """
+      |def repeatedStdlibDemo(): Int32 = {
+      |    let a = List.map(x -> x + 1, 1 :: 2 :: 3 :: Nil) |> List.length;
+      |    let b = List.map(x -> x + 1i64, 1i64 :: 2i64 :: Nil) |> List.length;
+      |    let c = List.map(x -> "${x}!", "p" :: "q" :: Nil) |> List.length;
+      |    let d = List.map(x -> not x, true :: false :: Nil) |> List.length;
+      |    let e = List.map(x -> x * 2.0f64, 1.0f64 :: 2.0f64 :: Nil) |> List.length;
+      |    let f = List.filter(x -> x > 1, 1 :: 2 :: 3 :: Nil) |> List.length;
+      |    let g = List.filter(x -> String.length(x) > 1, "y" :: "zz" :: Nil) |> List.length;
+      |    let h = Vector.map(x -> x + 1, Vector#{1, 2, 3}) |> Vector.length;
+      |    let i = Vector.map(x -> "${x}", Vector#{'a', 'b'}) |> Vector.length;
+      |    a + b + c + d + e + f + g + h + i
+      |}
+      |
+      |def main(): Unit \ IO = println(repeatedStdlibDemo())
+      |""".stripMargin
+
+  /** Compiles `source` and returns the content-addressed id of every class the back end emitted. */
+  private def emittedIds(source: String): List[String] = {
+    val emitted = mutable.ArrayBuffer.empty[Symbol.DefnSym]
+    val flix = new Flix()
+    flix.setOptions(Options.DefaultTest.copy(incremental = false))
+    flix.addListener(new FlixListener {
+      // CodeGen emits classes in parallel, so the collection has to be guarded.
+      override def notify(e: FlixEvent): Unit = e match {
+        case FlixEvent.EmittedClass(sym, _) => emitted.synchronized(emitted += sym)
+        case _ => ()
+      }
+    })
+    flix.addVirtualPath(Paths.get("Test.flix"), source)
+    flix.compile().toResult match {
+      case Result.Ok(_) => emitted.synchronized(emitted.toList).flatMap(_.id).collect { case SymId.Hash(value) => value }
+      case Result.Err(errors) => fail(errors.map(_.summary).mkString("\n"))
+    }
+  }
+
   /** Compiles `source` and returns the binary names of every generated class. */
   private def classNames(source: String): Set[String] = {
     val flix = new Flix()
@@ -100,6 +145,23 @@ class TestArtifactStability extends AnyFunSuite {
     // small set means classNames broke, not that stability trivially held.
     assert(first.size > 50, s"expected dozens of classes at least, got ${first.size}")
     assert(first == second)
+  }
+
+  test("fixedWidthIds.01") {
+    // Every id in the emitted output renders at exactly the configured width. Unpadded, a
+    // value with a base-36 leading zero digit renders a digit short, which makes a generated
+    // name indistinguishable in shape from a narrower id or from a counter.
+    val ids = emittedIds(RepeatedSpecializations)
+    assert(ids.length > 20, s"expected the specializations to produce dozens of ids, got ${ids.length}")
+    val wrong = ids.filter(_.length != StableName.DefaultWidth).distinct
+    assert(wrong.isEmpty, s"ids not ${StableName.DefaultWidth} digits wide: $wrong")
+  }
+
+  test("fixedWidthIds.02") {
+    // Pins the specific id in the fixture above whose value has a leading zero digit, so the
+    // padding is asserted on a real case rather than merely on a likely one. Regenerate it if
+    // the fixture source or a naming key changes: unpadded, this one renders as z56ok3gyegs.
+    assert(emittedIds(RepeatedSpecializations).contains("0z56ok3gyegs"))
   }
 
   test("unrelatedEdit.01") {
