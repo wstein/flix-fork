@@ -18,7 +18,7 @@ package ca.uwaterloo.flix.language.phase
 import ca.uwaterloo.flix.api.Flix
 import ca.uwaterloo.flix.language.ast.shared.{AvailableClasses, Input, SecurityContext}
 import ca.uwaterloo.flix.language.ast.{ChangeSet, DesugaredAst, NamedAst, SymId, SyntaxTree, WeededAst}
-import ca.uwaterloo.flix.language.errors.ResolutionError
+import ca.uwaterloo.flix.language.errors.{InstanceError, NameError, ResolutionError}
 import ca.uwaterloo.flix.util.{Options, Validation}
 import ca.uwaterloo.flix.TestUtils
 import org.scalatest.funsuite.AnyFunSuite
@@ -140,6 +140,66 @@ class TestSourceIdentity extends AnyFunSuite with TestUtils {
     }.flatten.filter(_.tpe.toString.contains("Color")).toList
     assert(eqInstances.length == 2)
     val syms = eqInstances.flatMap(_.defs.map(_.sym))
+    assert(syms.length == 2)
+    assert(syms.head == syms(1))
+  }
+
+  test("GAP: two overlapping instances mint one member symbol") {
+    // The case an ordinal within one instance cannot reach: the two members are content-identical
+    // and live in *different* instance declarations, so `(instance, member name)` is the same key
+    // for both, and nothing local to either declaration distinguishes them. Shown here in one
+    // file for brevity; the two declarations may equally live in different files, where no
+    // per-declaration ordinal exists at all.
+    val source =
+      """
+        |trait Describable[a] {
+        |    pub def describe(x: a): String
+        |}
+        |
+        |instance Describable[Int32] {
+        |    pub def describe(_x: Int32): String = "first"
+        |}
+        |
+        |instance Describable[Int32] {
+        |    pub def describe(_x: Int32): String = "second"
+        |}
+        |""".stripMargin
+    val defs = instanceDefs(namedRootOf(source))
+    assert(defs.length == 2)
+    assert(defs.head.loc != defs(1).loc)
+    assert(defs.head.sym == defs(1).sym)
+  }
+
+  test("overlapping instances are gated only by Instances.run, after Typer") {
+    // Nothing before Instances.run rejects two instances of one trait at one type: Namer tables
+    // instances in a list, Resolver has no overlap check, and Kinder/Deriver/Typer all run with
+    // both present. So a recovered root -- the one every LSP provider sees -- holds two instances
+    // whose member symbols are equal, and the only error saying otherwise is raised after Typer.
+    val source =
+      """
+        |trait Describable[a] {
+        |    pub def describe(x: a): String
+        |}
+        |
+        |instance Describable[Int32] {
+        |    pub def describe(_x: Int32): String = "first"
+        |}
+        |
+        |instance Describable[Int32] {
+        |    pub def describe(_x: Int32): String = "second"
+        |}
+        |""".stripMargin
+    val (result, errors) = check(source, Options.TestWithLibMin)
+    assert(errors.exists(_.isInstanceOf[InstanceError.OverlappingInstances]))
+    // No earlier phase objected at all: overlap is the *only* complaint the compiler makes.
+    assert(errors.forall(_.isInstanceOf[InstanceError.OverlappingInstances]),
+      s"unexpected: ${errors.map(_.getClass.getName).distinct}")
+    val root = result.getOrElse(fail("Expected a typed root under error recovery."))
+    val instances = root.instances.m.collect {
+      case (sym, is) if sym.name == "Describable" => is
+    }.flatten.toList
+    assert(instances.length == 2)
+    val syms = instances.flatMap(_.defs.map(_.sym))
     assert(syms.length == 2)
     assert(syms.head == syms(1))
   }
