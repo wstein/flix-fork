@@ -40,7 +40,8 @@ object FlixPackageManager {
 
   /**
     * Opens a stream over the first of `candidates` that the release actually publishes, falling
-    * back to a rate-limited listing when none of them do.
+    * back to a rate-limited listing when none of them do. `candidates` is the caller's ordered list
+    * of guesses -- see [[installAll]] for the concrete strategies used to install a package.
     *
     * Each candidate is a request against the asset's computed address, which does not consume the
     * REST API quota; the listing costs a rate-limited request, which is the whole reason for
@@ -177,6 +178,14 @@ object FlixPackageManager {
 
     val flixPaths = allFlixDeps.map { case ((sctx, packageName), dep) =>
       val depName: String = s"${dep.username}/${dep.projectName}"
+      // Three strategies, tried in this order, each falling through to the next only on a 404:
+      //   1. Guess the repository name -- `release` publishes under it, so this is exact for
+      //      anything published from now on, and it is an unmetered request either way.
+      //   2. Guess the manifest's declared name -- covers releases published before (1) was true,
+      //      when the asset was named after the directory `release` ran in. Also unmetered.
+      //   3. Fall back to the listing (inside `install`, via `openAsset`/`findReleaseAsset`) --
+      //      reads whatever name the release actually used. The only one of the three that spends
+      //      REST quota, which is why it is last.
       val candidates = List(s"${dep.projectName}.fpkg", s"$packageName.fpkg")
       install(depName, dep.version, "fpkg", candidates, projectRoot, apiKey) match {
         case Ok(p) => (p, sctx)
@@ -307,6 +316,9 @@ object FlixPackageManager {
       // download toml files
       tomlPaths <- traverse(flixDeps) { dep =>
         val depName = s"${dep.username}/${dep.projectName}"
+        // Unlike the two-guess fpkg case in installAll, there is only one candidate here: the
+        // manifest's asset name is fixed (see ManifestAssetName), not guessed, so a miss goes
+        // straight to the listing fallback rather than trying a second name first.
         install(depName, dep.version, "toml", List(ManifestAssetName), path, apiKey).map(p => (p, dep))
       }
 
