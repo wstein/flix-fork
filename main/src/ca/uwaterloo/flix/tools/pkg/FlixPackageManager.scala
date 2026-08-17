@@ -247,19 +247,38 @@ object FlixPackageManager {
     * builds racing to install the same dependency at once do not corrupt each other's download; the
     * loser's temporary file is simply moved second, over the winner's already-correct result.
     *
-    * `stream` is always closed. The temporary file is always removed on any failure, whether from
-    * the copy itself or from the move that follows it.
+    * `stream` is always closed and the temporary file is always removed on failure -- attaching
+    * either as a suppressed exception on the failure being reported, never replacing it. This
+    * guarantees only that a copy which throws cannot produce a cache hit; it does not verify a copy
+    * that completes cleanly, since a release asset carries no checksum this code can check it against.
     */
   private def writeAtomically(stream: InputStream, dirPath: Path, localName: String, assetPath: Path): Try[Unit] =
     Try(Files.createTempFile(dirPath, localName, ".part")) match {
       case Failure(e) =>
-        stream.close()
+        closeSuppressing(stream, e)
         Failure(e)
       case Success(tmpPath) =>
-        val result = Using(stream)(s => Files.copy(s, tmpPath, StandardCopyOption.REPLACE_EXISTING)).flatMap(_ => moveIntoPlace(tmpPath, assetPath))
-        if (result.isFailure) Files.deleteIfExists(tmpPath)
-        result
+        Using(stream)(s => Files.copy(s, tmpPath, StandardCopyOption.REPLACE_EXISTING)).flatMap(_ => moveIntoPlace(tmpPath, assetPath)) match {
+          case failure@Failure(e) =>
+            deleteSuppressing(tmpPath, e)
+            failure
+          case success => success
+        }
     }
+
+  /**
+    * Closes `stream`, attaching a failure to close as suppressed on `primary` rather than letting it
+    * replace the failure already being reported.
+    */
+  private def closeSuppressing(stream: InputStream, primary: Throwable): Unit =
+    try stream.close() catch { case e: IOException => primary.addSuppressed(e) }
+
+  /**
+    * Deletes `path` if it exists, attaching a failure to delete as suppressed on `primary` rather
+    * than letting it replace the failure already being reported.
+    */
+  private def deleteSuppressing(path: Path, primary: Throwable): Unit =
+    try Files.deleteIfExists(path) catch { case e: IOException => primary.addSuppressed(e) }
 
   /**
     * Moves `tmpPath` to `assetPath`, atomically if the filesystem supports it.
