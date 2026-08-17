@@ -15,6 +15,8 @@
  */
 package ca.uwaterloo.flix.util
 
+import ca.uwaterloo.flix.language.ast.SourceLocation
+
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 
@@ -72,7 +74,38 @@ object StableName {
     if (digits.length >= width) digits else "0" * (width - digits.length) + digits
   }
 
+  /**
+    * Returns `suffix` if it is a well-formed id of exactly `width` lowercase base-36 digits,
+    * and throws an [[InternalCompilerException]] otherwise.
+    *
+    * Uniform length is a property the rest of the compiler is entitled to rely on: a generated
+    * name is read back by tooling that has only the string, so an id one digit short is
+    * indistinguishable from a narrower id or from a `GenSym` counter. Padding makes a short id
+    * unreachable; this makes it *rejected*, so a future change to the rendering fails here
+    * rather than in a build directory. Lowercase, because two ids differing only in case are
+    * one file on a case-insensitive filesystem.
+    */
+  def validated(suffix: String, width: Int): String = {
+    if (suffix.length != width) {
+      throw InternalCompilerException(
+        s"Generated id '$suffix' is ${suffix.length} digits wide, expected exactly $width.",
+        SourceLocation.Unknown
+      )
+    }
+    if (!suffix.forall(isBase36Digit)) {
+      throw InternalCompilerException(
+        s"Generated id '$suffix' is not lowercase base-36.",
+        SourceLocation.Unknown
+      )
+    }
+    suffix
+  }
+
+  private def isBase36Digit(c: Char): Boolean =
+    ('0' <= c && c <= '9') || ('a' <= c && c <= 'z')
+
   /** Returns the stable, content-addressed suffix for `key` at the given `width`. */
-  def suffix(key: String, width: Int = DefaultWidth): String = render(of(key, width), width)
+  def suffix(key: String, width: Int = DefaultWidth): String =
+    validated(render(of(key, width), width), width)
 
 }

@@ -47,6 +47,11 @@ when the code it names changes, so repeated builds do not fill `build/class`
 with renamed copies of the same classes. `--Xstable-name-length` sets the width;
 `0` opts out and restores `GenSym` counters.
 
+The width is uniform and enforced: `StableName.validated` rejects any id that is
+not exactly `width` lowercase base-36 digits, so a rendering that loses a leading
+zero fails the compile instead of reaching a class name where nothing can tell it
+from a narrower id or a counter.
+
 Mint through the named functions on `Symbol` — `specializedDefnSym`,
 `liftedDefnSym`, `memberDefnSym`, and the enum/struct/anon-class equivalents —
 never by calling `StableName.suffix` directly. Each of them routes through one

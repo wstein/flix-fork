@@ -80,6 +80,41 @@ class TestStableName extends AnyFunSuite {
     }
   }
 
+  test("validated.RejectsShort.01") {
+    // The failure this guard exists for: an unpadded render of a value whose leading base-36
+    // digit is zero. It is one digit short, and nothing downstream can tell it from a narrower
+    // id or from a counter.
+    assertThrows[InternalCompilerException] {
+      StableName.validated("z56ok3gyegs", StableName.DefaultWidth)
+    }
+  }
+
+  test("validated.RejectsLong.01") {
+    assertThrows[InternalCompilerException] {
+      StableName.validated("00z56ok3gyegs", StableName.DefaultWidth)
+    }
+  }
+
+  test("validated.RejectsNonBase36.01") {
+    // Base-36 here is lowercase: an uppercase digit would collide with its lowercase twin on a
+    // case-insensitive filesystem, where two class files of one name is not two class files.
+    assertThrows[InternalCompilerException] {
+      StableName.validated("0Z56OK3GYEGS", StableName.DefaultWidth)
+    }
+  }
+
+  test("validated.Accepts.01") {
+    assert(StableName.validated("0z56ok3gyegs", StableName.DefaultWidth) == "0z56ok3gyegs")
+  }
+
+  test("validated.AcceptsEverySuffix.01") {
+    // Whatever `suffix` produces must satisfy the guard, at every width.
+    for (width <- 1 to StableName.MaxWidth; i <- 0 until 40) {
+      val s = StableName.suffix(s"key-$i", width)
+      assert(StableName.validated(s, width) == s)
+    }
+  }
+
   test("suffix.Golden.Padded.01") {
     // A key whose reduced value has a base-36 leading zero digit at the default width.
     assert(StableName.suffix("key-13") == "0uastab1iwpp")
