@@ -119,7 +119,7 @@ class TestSourceIdentity extends AnyFunSuite with TestUtils {
     val root = result.getOrElse(fail("Expected a typed root."))
     val derived = root.instances.m.collect {
       case (sym, instances) if sym.name == "Eq" => instances
-    }.flatten.filter(_.tpe.toString.contains("Color")).flatMap(_.defs).toList
+    }.flatten.filter(_.tpe.toString == "Color").flatMap(_.defs).toList
     assert(derived.nonEmpty)
     assert(derived.forall(_.sym.id.exists(_.isInstanceOf[SymId.Counter])))
   }
@@ -147,7 +147,7 @@ class TestSourceIdentity extends AnyFunSuite with TestUtils {
     val root = result.getOrElse(fail("Expected a typed root under error recovery."))
     val eqInstances = root.instances.m.collect {
       case (sym, instances) if sym.name == "Eq" => instances
-    }.flatten.filter(_.tpe.toString.contains("Color")).toList
+    }.flatten.filter(_.tpe.toString == "Color").toList
     assert(eqInstances.length == 1)
     assert(eqInstances.flatMap(_.defs.map(_.sym)).distinct.length == 1)
   }
