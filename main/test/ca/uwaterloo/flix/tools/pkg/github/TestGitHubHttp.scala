@@ -131,9 +131,21 @@ class TestGitHubHttp extends AnyFunSuite with BeforeAndAfterAll {
       case other => fail(other.toString)
     }
 
-    implicit val refused: GitHub.Transport = FakeTransport(Map(tagUrl -> List(CannedResponse(403, headers = Map("Retry-After" -> "17")))))
+    // No X-RateLimit-Remaining: not confirmed as a rate limit, so GitHub's own message is kept
+    // instead of being folded into a generic "this is usually a rate limit".
+    implicit val refused: GitHub.Transport = FakeTransport(Map(tagUrl -> List(CannedResponse(403, body = """{"message":"Bad credentials"}"""))))
     GitHub.getReleaseByTag(project, version, apiKey = None)(refused) match {
-      case Err(PackageError.DownloadRefused(_, 403, Some("17"), _, _)) => succeed
+      case Err(PackageError.RequestRefused(_, 403, Some("Bad credentials"))) => succeed
+      case other => fail(other.toString)
+    }
+  }
+
+  test("getReleaseByTag reports a truncated response body distinctly") {
+    implicit val transport: GitHub.Transport = FakeTransport(Map(
+      tagUrl -> List(CannedResponse(200, body = museumFpkgJson, failAfterBytes = Some(4)))
+    ))
+    GitHub.getReleaseByTag(project, version, apiKey = None) match {
+      case Err(PackageError.ResponseBodyUnreadable(_, _)) => succeed
       case other => fail(other.toString)
     }
   }
@@ -142,6 +154,24 @@ class TestGitHubHttp extends AnyFunSuite with BeforeAndAfterAll {
     implicit val transport: GitHub.Transport = FakeTransport(Map(tagUrl -> List(CannedResponse(200, body = museumFpkgJson))))
     GitHub.findReleaseAsset(project, version, "fpkg", apiKey = None) match {
       case Ok(asset) => assertResult("museum.fpkg")(asset.name)
+      case other => fail(other.toString)
+    }
+  }
+
+  test("getReleases follows Link: rel=\"next\" pagination across pages") {
+    val page2 = "https://api.github.com/repos/flix/museum/releases?page=2"
+    def releaseListJson(tag: String, assetName: String): String =
+      s"""[{"tag_name":"$tag","assets":[{"name":"$assetName","browser_download_url":"https://example.invalid/$assetName"}]}]"""
+
+    implicit val transport: GitHub.Transport = FakeTransport(Map(
+      listingUrl -> List(CannedResponse(200,
+        headers = Map("Link" -> s"""<$page2>; rel="next", <$page2>; rel="last""""),
+        body = releaseListJson("v1.0.0", "museum-a.fpkg"))),
+      page2 -> List(CannedResponse(200, body = releaseListJson("v1.1.0", "museum-b.fpkg")))
+    ))
+
+    GitHub.getReleases(project, apiKey = None) match {
+      case Ok(releases) => assertResult(List(SemVer(1, 0, 0), SemVer(1, 1, 0)))(releases.map(_.version))
       case other => fail(other.toString)
     }
   }

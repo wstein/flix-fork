@@ -29,6 +29,7 @@ import java.net.http.{HttpClient, HttpRequest, HttpResponse}
 import java.net.{URI, URL}
 import java.nio.charset.StandardCharsets
 import java.nio.file.Path
+import java.time.Duration
 
 /**
   * An interface for the GitHub API.
@@ -67,25 +68,38 @@ object GitHub {
         // A release download address redirects to the storage the asset actually lives on, and the
         // default policy is to follow nothing at all, which would turn every download into a 302.
         .followRedirects(HttpClient.Redirect.NORMAL)
-        // Without a bound, a host that never answers -- dropped rather than refused -- hangs the
-        // installer indefinitely instead of failing as [[PackageError.DownloadUnreachable]].
-        .connectTimeout(java.time.Duration.ofSeconds(10))
+        // Bounds connecting; a peer that accepts the connection and then never responds is bounded
+        // separately, by RequestTimeout on each request.
+        .connectTimeout(Duration.ofSeconds(10))
         .build()
       Transport(request => client.send(request, HttpResponse.BodyHandlers.ofInputStream()))
     }
   }
 
   /**
-    * Lists the project's releases.
-    *
-    * This reads a single page: GitHub paginates the listing, and a project with more releases than
-    * fit on one page can have older ones fall off the end. [[getReleaseByTag]] does not have this
-    * problem -- it asks for one release directly -- and is what [[findReleaseAsset]] uses. This
-    * function remains for `outdated`, which genuinely needs to see every version to compare against.
+    * Bounds an entire request/response, not just connecting -- a peer that accepts the connection
+    * and then never answers would otherwise hang indefinitely even with `Transport.live`'s
+    * `connectTimeout`.
     */
-  def getReleases(project: Project, apiKey: Option[String])(implicit transport: Transport): Result[List[Release], PackageError] = {
-    val url = releasesUrl(project)
-    val reqBuilder = HttpRequest.newBuilder(url.toURI)
+  private val RequestTimeout = Duration.ofSeconds(30)
+
+  /**
+    * Lists every one of the project's releases, following GitHub's `Link: rel="next"` pagination.
+    * Used by `outdated`, which genuinely needs every version to compare against -- [[getReleaseByTag]]
+    * is what everything else uses, since it asks for one release directly and cannot page.
+    */
+  def getReleases(project: Project, apiKey: Option[String])(implicit transport: Transport): Result[List[Release], PackageError] =
+    getReleasesPage(project, releasesUrl(project), apiKey, MaxReleasePages)
+
+  /**
+    * The number of pages [[getReleasesPage]] follows before stopping, so a `Link` header cannot page
+    * forever. GitHub's default page size is 30; this comfortably covers any real project's release
+    * history while keeping the request budget fixed.
+    */
+  private val MaxReleasePages = 20
+
+  private def getReleasesPage(project: Project, url: URL, apiKey: Option[String], pagesRemaining: Int)(implicit transport: Transport): Result[List[Release], PackageError] = {
+    val reqBuilder = HttpRequest.newBuilder(url.toURI).timeout(RequestTimeout)
     // add the API key as bearer if needed
     apiKey.foreach(key => reqBuilder.header("Authorization", "Bearer " + key))
     val req = reqBuilder.GET().build()
@@ -97,20 +111,35 @@ object GitHub {
     }
     response.statusCode() match {
       case status if status >= 200 && status < 300 =>
-        val json = readBody(response)
-        try {
-          Ok(parse(json).asInstanceOf[JArray].arr.map(parseRelease))
-        } catch {
-          case _: ClassCastException => Err(PackageError.JsonError(json, project))
+        val next = if (pagesRemaining > 1) nextPageUrl(response) else None
+        readBody(url, response).flatMap { json =>
+          val page = try {
+            Ok(parse(json).asInstanceOf[JArray].arr.map(parseRelease))
+          } catch {
+            case _: ClassCastException => Err(PackageError.JsonError(json, project))
+          }
+          (page, next) match {
+            case (Ok(releases), Some(nextUrl)) => getReleasesPage(project, nextUrl, apiKey, pagesRemaining - 1).map(releases ::: _)
+            case _ => page
+          }
         }
-      case status @ (403 | 429) =>
-        response.body().close()
-        Err(rateLimitError(url, status, response))
+      case status @ (403 | 429) => Err(classifyRefusal(url, status, response))
       case status =>
-        response.body().close()
+        closeQuietly(response)
         Err(PackageError.DownloadFailed(url, status))
     }
   }
+
+  /**
+    * Returns the address `response`'s `Link` header names with `rel="next"`, if it has one.
+    */
+  private def nextPageUrl(response: HttpResponse[InputStream]): Option[URL] =
+    header(response, "Link").flatMap { link =>
+      link.split(",").iterator.map(_.trim).collectFirst {
+        case entry if entry.matches("""<[^>]+>;\s*rel="next"""") =>
+          new URI(entry.drop(1).takeWhile(_ != '>')).toURL
+      }
+    }
 
   /**
     * Publish a new release the given project.
@@ -297,7 +326,7 @@ object GitHub {
     * status including a redirect that could not be followed, and never reaching a server at all.
     */
   def download(url: URL)(implicit transport: Transport): Result[InputStream, PackageError] = {
-    val request = HttpRequest.newBuilder(url.toURI).GET().build()
+    val request = HttpRequest.newBuilder(url.toURI).timeout(RequestTimeout).GET().build()
 
     val response = try {
       transport.send(request)
@@ -309,31 +338,66 @@ object GitHub {
     response.statusCode() match {
       case status if status >= 200 && status < 300 =>
         Ok(response.body())
+      case status @ (403 | 429) =>
+        Err(classifyRefusal(url, status, response))
       case status =>
-        // Every non-success response still carries a body, and leaving it open holds the connection.
-        response.body().close()
-        status match {
-          case 403 | 429 => Err(rateLimitError(url, status, response))
-          case _ => Err(PackageError.DownloadFailed(url, status))
-        }
+        closeQuietly(response)
+        Err(PackageError.DownloadFailed(url, status))
     }
   }
 
   /**
-    * Reads and closes `response`'s body as UTF-8 text.
+    * Reads `response`'s body as UTF-8 text, closing it either way. A failure while reading -- the
+    * connection dropped partway -- is reported rather than left to propagate as an uncaught
+    * [[IOException]], which would otherwise crash dependency resolution instead of returning a
+    * [[PackageError]].
     */
-  private def readBody(response: HttpResponse[InputStream]): String = {
-    val bytes = response.body().readAllBytes()
-    response.body().close()
-    new String(bytes, StandardCharsets.UTF_8)
+  private def readBody(url: URL, response: HttpResponse[InputStream]): Result[String, PackageError] =
+    try {
+      Ok(new String(response.body().readAllBytes(), StandardCharsets.UTF_8))
+    } catch {
+      case ex: IOException => Err(PackageError.ResponseBodyUnreadable(url, ex.getMessage))
+    } finally {
+      closeQuietly(response)
+    }
+
+  /**
+    * Closes `response`'s body, swallowing a failure to close: this runs only when the body is being
+    * discarded in favor of reporting some other status, so a close error must not shadow it.
+    */
+  private def closeQuietly(response: HttpResponse[InputStream]): Unit =
+    try response.body().close() catch { case _: IOException => () }
+
+  /**
+    * Classifies a 403/429 `response` as a rate limit only when the evidence confirms it -- `429`
+    * always means one, and `403` does when `X-RateLimit-Remaining` reads `0`. A `403` is just as
+    * often an invalid token or a private repository, and treating every refusal as "wait for the
+    * reset" sends whoever reads the message chasing the wrong cause; those keep GitHub's own message.
+    */
+  private def classifyRefusal(url: URL, status: Int, response: HttpResponse[InputStream]): PackageError = {
+    val remaining = header(response, "X-RateLimit-Remaining")
+    if (status == 429 || remaining.contains("0")) {
+      val error = PackageError.DownloadRefused(url, status, header(response, "Retry-After"), header(response, "X-RateLimit-Reset"), remaining)
+      closeQuietly(response)
+      error
+    } else {
+      val message = readBody(url, response).toOption.flatMap(extractMessage)
+      PackageError.RequestRefused(url, status, message)
+    }
   }
 
   /**
-    * Builds a [[PackageError.DownloadRefused]] from a 403/429 `response`, preserving `Retry-After`
-    * and the `X-RateLimit-*` headers rather than reducing the refusal to a bare status code.
+    * Extracts GitHub's `message` field from an error body, if it parses as JSON and has one.
     */
-  private def rateLimitError(url: URL, status: Int, response: HttpResponse[InputStream]): PackageError =
-    PackageError.DownloadRefused(url, status, header(response, "Retry-After"), header(response, "X-RateLimit-Reset"), header(response, "X-RateLimit-Remaining"))
+  private def extractMessage(json: String): Option[String] =
+    try {
+      parse(json) \ "message" match {
+        case JString(s) => Some(s)
+        case _ => None
+      }
+    } catch {
+      case _: Exception => None
+    }
 
   /**
     * Returns the first value of header `name` on `response`, if it has one.
@@ -349,7 +413,7 @@ object GitHub {
     */
   def getReleaseByTag(project: Project, version: SemVer, apiKey: Option[String])(implicit transport: Transport): Result[Release, PackageError] = {
     val url = releaseVersionUrl(project, version)
-    val reqBuilder = HttpRequest.newBuilder(url.toURI)
+    val reqBuilder = HttpRequest.newBuilder(url.toURI).timeout(RequestTimeout)
     apiKey.foreach(key => reqBuilder.header("Authorization", "Bearer " + key))
     val req = reqBuilder.GET().build()
     val response = try {
@@ -360,20 +424,20 @@ object GitHub {
     }
     response.statusCode() match {
       case 200 =>
-        val json = readBody(response)
-        try {
-          Ok(parseRelease(parse(json)))
-        } catch {
-          case _: ClassCastException => Err(PackageError.JsonError(json, project))
+        readBody(url, response).flatMap { json =>
+          try {
+            Ok(parseRelease(parse(json)))
+          } catch {
+            case _: ClassCastException => Err(PackageError.JsonError(json, project))
+          }
         }
       case 404 =>
-        response.body().close()
+        closeQuietly(response)
         Err(PackageError.VersionDoesNotExist(version, project))
       case status @ (403 | 429) =>
-        response.body().close()
-        Err(rateLimitError(url, status, response))
+        Err(classifyRefusal(url, status, response))
       case status =>
-        response.body().close()
+        closeQuietly(response)
         Err(PackageError.DownloadFailed(url, status))
     }
   }

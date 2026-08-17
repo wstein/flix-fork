@@ -123,6 +123,30 @@ object PackageError {
   }
 
   /**
+    * An error raised when a response's body could not be fully read, e.g. because the connection
+    * dropped partway through.
+    */
+  case class ResponseBodyUnreadable(url: URL, message: String) extends PackageError {
+    override def message(f: Formatter): String =
+      s"""Could not read the response from ${f.cyan(url.toString)}.
+         |$message
+         |""".stripMargin
+  }
+
+  /**
+    * An error raised when a request is refused for a reason other than a confirmed rate limit --
+    * an invalid token, a private repository, or anything else GitHub answers with 403 or 429 without
+    * the headers that would identify it as quota exhaustion. `message` is GitHub's own explanation,
+    * when the body parses as JSON and has one.
+    */
+  case class RequestRefused(url: URL, status: Int, message: Option[String]) extends PackageError {
+    override def message(f: Formatter): String =
+      s"""Refused (HTTP ${f.red(status.toString)}) by ${f.cyan(url.toString)}.
+         |${message.getOrElse("No further detail was given.")}
+         |""".stripMargin
+  }
+
+  /**
     * An error raised when a download was served but could not be written to disk.
     */
   case class DownloadIncomplete(project: Project, version: SemVer, assetName: String, message: Option[String]) extends PackageError {
