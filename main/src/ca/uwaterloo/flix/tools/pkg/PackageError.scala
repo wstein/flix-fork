@@ -78,12 +78,22 @@ object PackageError {
   /**
     * An error raised when a download is refused, which for an anonymous request usually means a
     * rate limit.
+    *
+    * `retryAfter` is GitHub's secondary rate limit signal; `rateLimitReset` and `rateLimitRemaining`
+    * come from `X-RateLimit-Reset`/`X-RateLimit-Remaining` and describe the primary REST quota. Both
+    * are preserved rather than collapsed into one message, since they answer different questions --
+    * "when can I retry this exact request" versus "how much of the hourly budget is left".
     */
-  case class DownloadRefused(url: URL, status: Int, retryAfter: Option[String]) extends PackageError {
+  case class DownloadRefused(url: URL, status: Int, retryAfter: Option[String], rateLimitReset: Option[String], rateLimitRemaining: Option[String]) extends PackageError {
     override def message(f: Formatter): String = {
-      val when = retryAfter.map(s => s"Retry after $s seconds.").getOrElse("This is usually a rate limit.")
+      val when = (retryAfter, rateLimitReset) match {
+        case (Some(s), _) => s"Retry after $s seconds."
+        case (None, Some(reset)) => s"The rate limit resets at epoch second $reset."
+        case (None, None) => "This is usually a rate limit."
+      }
+      val remaining = rateLimitRemaining.map(r => s" $r requests remain in the current window.").getOrElse("")
       s"""Refused (HTTP ${f.red(status.toString)}) by ${f.cyan(url.toString)}.
-         |$when
+         |$when$remaining
          |""".stripMargin
     }
   }

@@ -27,6 +27,7 @@ import java.io.{IOException, InputStream}
 import java.net.http.HttpRequest.BodyPublishers
 import java.net.http.{HttpClient, HttpRequest, HttpResponse}
 import java.net.{URI, URL}
+import java.nio.charset.StandardCharsets
 import java.nio.file.Path
 
 /**
@@ -54,26 +55,61 @@ object GitHub {
   case class Asset(name: String, url: URL)
 
   /**
-    * Lists the project's releases.
+    * A source of GitHub HTTP responses. Implicit, since it never changes across a call chain,
+    * including recursion through transitive dependencies: [[Transport.live]] answers it by default,
+    * via this type's companion, and a test brings a scripted one into scope instead.
     */
-  def getReleases(project: Project, apiKey: Option[String]): Result[List[Release], PackageError] = {
+  final case class Transport(send: HttpRequest => HttpResponse[InputStream])
+
+  object Transport {
+    implicit val live: Transport = {
+      val client: HttpClient = HttpClient.newBuilder()
+        // A release download address redirects to the storage the asset actually lives on, and the
+        // default policy is to follow nothing at all, which would turn every download into a 302.
+        .followRedirects(HttpClient.Redirect.NORMAL)
+        // Without a bound, a host that never answers -- dropped rather than refused -- hangs the
+        // installer indefinitely instead of failing as [[PackageError.DownloadUnreachable]].
+        .connectTimeout(java.time.Duration.ofSeconds(10))
+        .build()
+      Transport(request => client.send(request, HttpResponse.BodyHandlers.ofInputStream()))
+    }
+  }
+
+  /**
+    * Lists the project's releases.
+    *
+    * This reads a single page: GitHub paginates the listing, and a project with more releases than
+    * fit on one page can have older ones fall off the end. [[getReleaseByTag]] does not have this
+    * problem -- it asks for one release directly -- and is what [[findReleaseAsset]] uses. This
+    * function remains for `outdated`, which genuinely needs to see every version to compare against.
+    */
+  def getReleases(project: Project, apiKey: Option[String])(implicit transport: Transport): Result[List[Release], PackageError] = {
     val url = releasesUrl(project)
     val reqBuilder = HttpRequest.newBuilder(url.toURI)
     // add the API key as bearer if needed
     apiKey.foreach(key => reqBuilder.header("Authorization", "Bearer " + key))
     val req = reqBuilder.GET().build()
-    val json = try {
-      Client.sendRequest(req).body()
+    val response = try {
+      transport.send(req)
     } catch {
       case ex: IOException => return Err(PackageError.ProjectNotFound(url, project, ex))
+      case ex: InterruptedException => return Err(PackageError.ProjectNotFound(url, project, new IOException(ex)))
     }
-    val releaseJsons = try {
-      parse(json).asInstanceOf[JArray]
-    } catch {
-
-      case _: ClassCastException => return Err(PackageError.JsonError(json, project))
+    response.statusCode() match {
+      case status if status >= 200 && status < 300 =>
+        val json = readBody(response)
+        try {
+          Ok(parse(json).asInstanceOf[JArray].arr.map(parseRelease))
+        } catch {
+          case _: ClassCastException => Err(PackageError.JsonError(json, project))
+        }
+      case status @ (403 | 429) =>
+        response.body().close()
+        Err(rateLimitError(url, status, response))
+      case status =>
+        response.body().close()
+        Err(PackageError.DownloadFailed(url, status))
     }
-    Ok(releaseJsons.arr.map(parseRelease))
   }
 
   /**
@@ -236,19 +272,14 @@ object GitHub {
 
   /**
     * Opens a stream over the asset `assetName` of the given project's release `version`, without
-    * consulting the REST API.
+    * consulting the REST API. The caller is responsible for closing the stream.
     *
-    * The caller is responsible for closing the stream.
-    *
-    * A release asset has a permanent address built from the owner, the repository, the tag and the
-    * asset's own name, so an asset whose name is known needs no lookup. Asking the REST API to hand
-    * back a URL that could be computed costs one rate-limited request per dependency, and anonymous
-    * REST traffic is capped at 60 requests an hour per address.
-    *
-    * The caller does not always know the true name in advance -- see [[findReleaseAsset]] for the
-    * fallback when a computed address 404s.
+    * A release asset has a permanent address built from the owner, repository, tag and asset name,
+    * so an asset whose name is known needs no lookup; this does not consume the REST quota, though
+    * it is still an ordinary download and can be throttled operationally. The caller does not always
+    * know the true name in advance -- see [[findReleaseAsset]] for the fallback when this 404s.
     */
-  def downloadReleaseAsset(project: Project, version: SemVer, assetName: String): Result[InputStream, PackageError] = {
+  def downloadReleaseAsset(project: Project, version: SemVer, assetName: String)(implicit transport: Transport): Result[InputStream, PackageError] = {
     val url = releaseAssetUrl(project, version, assetName)
     download(url) match {
       // At this address a 404 means the release or the asset is absent, which is worth saying in
@@ -265,11 +296,11 @@ object GitHub {
     * a refusal (which for an anonymous request usually means a rate limit), any other unexpected
     * status including a redirect that could not be followed, and never reaching a server at all.
     */
-  def download(url: URL): Result[InputStream, PackageError] = {
+  def download(url: URL)(implicit transport: Transport): Result[InputStream, PackageError] = {
     val request = HttpRequest.newBuilder(url.toURI).GET().build()
 
     val response = try {
-      Client.sendStreamingRequest(request)
+      transport.send(request)
     } catch {
       case ex: IOException => return Err(PackageError.DownloadUnreachable(url, ex.getMessage))
       case ex: InterruptedException => return Err(PackageError.DownloadUnreachable(url, ex.getMessage))
@@ -282,18 +313,69 @@ object GitHub {
         // Every non-success response still carries a body, and leaving it open holds the connection.
         response.body().close()
         status match {
-          case 403 | 429 => Err(PackageError.DownloadRefused(url, status, retryAfter(response)))
+          case 403 | 429 => Err(rateLimitError(url, status, response))
           case _ => Err(PackageError.DownloadFailed(url, status))
         }
     }
   }
 
   /**
-    * Returns the `Retry-After` header of `response`, if it has one.
+    * Reads and closes `response`'s body as UTF-8 text.
     */
-  private def retryAfter(response: HttpResponse[InputStream]): Option[String] = {
-    val header = response.headers().firstValue("Retry-After")
-    if (header.isPresent) Some(header.get()) else None
+  private def readBody(response: HttpResponse[InputStream]): String = {
+    val bytes = response.body().readAllBytes()
+    response.body().close()
+    new String(bytes, StandardCharsets.UTF_8)
+  }
+
+  /**
+    * Builds a [[PackageError.DownloadRefused]] from a 403/429 `response`, preserving `Retry-After`
+    * and the `X-RateLimit-*` headers rather than reducing the refusal to a bare status code.
+    */
+  private def rateLimitError(url: URL, status: Int, response: HttpResponse[InputStream]): PackageError =
+    PackageError.DownloadRefused(url, status, header(response, "Retry-After"), header(response, "X-RateLimit-Reset"), header(response, "X-RateLimit-Remaining"))
+
+  /**
+    * Returns the first value of header `name` on `response`, if it has one.
+    */
+  private def header(response: HttpResponse[InputStream], name: String): Option[String] = {
+    val h = response.headers().firstValue(name)
+    if (h.isPresent) Some(h.get()) else None
+  }
+
+  /**
+    * Gets the project release with the relevant semantic version, directly by tag. Unlike
+    * [[getReleases]] this does not page: a tag names exactly one release.
+    */
+  def getReleaseByTag(project: Project, version: SemVer, apiKey: Option[String])(implicit transport: Transport): Result[Release, PackageError] = {
+    val url = releaseVersionUrl(project, version)
+    val reqBuilder = HttpRequest.newBuilder(url.toURI)
+    apiKey.foreach(key => reqBuilder.header("Authorization", "Bearer " + key))
+    val req = reqBuilder.GET().build()
+    val response = try {
+      transport.send(req)
+    } catch {
+      case ex: IOException => return Err(PackageError.ProjectNotFound(url, project, ex))
+      case ex: InterruptedException => return Err(PackageError.ProjectNotFound(url, project, new IOException(ex)))
+    }
+    response.statusCode() match {
+      case 200 =>
+        val json = readBody(response)
+        try {
+          Ok(parseRelease(parse(json)))
+        } catch {
+          case _: ClassCastException => Err(PackageError.JsonError(json, project))
+        }
+      case 404 =>
+        response.body().close()
+        Err(PackageError.VersionDoesNotExist(version, project))
+      case status @ (403 | 429) =>
+        response.body().close()
+        Err(rateLimitError(url, status, response))
+      case status =>
+        response.body().close()
+        Err(PackageError.DownloadFailed(url, status))
+    }
   }
 
   /**
@@ -303,16 +385,12 @@ object GitHub {
     * a name the publisher chose, and nothing the consumer holds is guaranteed to predict it.
     * [[downloadReleaseAsset]] tries the likely names first; this is the fallback for when none hit.
     */
-  def findReleaseAsset(project: Project, version: SemVer, extension: String, apiKey: Option[String]): Result[Asset, PackageError] = {
-    getReleases(project, apiKey).flatMap { releases =>
-      releases.find(r => r.version == version) match {
-        case None => Err(PackageError.VersionDoesNotExist(version, project))
-        case Some(release) =>
-          release.assets.filter(_.name.endsWith(s".$extension")) match {
-            case Nil => Err(PackageError.NoSuchFile(project.toString, extension))
-            case asset :: Nil => Ok(asset)
-            case _ => Err(PackageError.TooManyFiles(project.toString, extension))
-          }
+  def findReleaseAsset(project: Project, version: SemVer, extension: String, apiKey: Option[String])(implicit transport: Transport): Result[Asset, PackageError] = {
+    getReleaseByTag(project, version, apiKey).flatMap { release =>
+      release.assets.filter(_.name.endsWith(s".$extension")) match {
+        case Nil => Err(PackageError.NoSuchFile(project.toString, extension))
+        case asset :: Nil => Ok(asset)
+        case _ => Err(PackageError.TooManyFiles(project.toString, extension))
       }
     }
   }
@@ -402,10 +480,7 @@ object GitHub {
       * This field should only be accessed in a thread-safe manner, e.g.,
       * such as using `this.synchronized` blocks or some other locking mechanism.
       */
-    private val HTTP_CLIENT: HttpClient =
-      // A release download address redirects to the storage the asset actually lives on, and the
-      // default policy is to follow nothing at all, which would turn every download into a 302.
-      HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NORMAL).build()
+    private val HTTP_CLIENT: HttpClient = HttpClient.newHttpClient()
 
     /**
       * Sends the HTTP request, `request`, and returns the response.
@@ -416,18 +491,6 @@ object GitHub {
       */
     def sendRequest(request: HttpRequest): HttpResponse[String] = this.synchronized {
       HTTP_CLIENT.send(request, HttpResponse.BodyHandlers.ofString())
-    }
-
-    /**
-      * Sends the HTTP request, `request`, and returns a response whose body is a stream.
-      *
-      * Returns once the response headers have arrived; the body is read afterwards, and the caller
-      * closes it. Blocking and thread-safe.
-      *
-      * May throw [[IOException]].
-      */
-    def sendStreamingRequest(request: HttpRequest): HttpResponse[InputStream] = this.synchronized {
-      HTTP_CLIENT.send(request, HttpResponse.BodyHandlers.ofInputStream())
     }
 
   }
