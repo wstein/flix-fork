@@ -17,7 +17,7 @@
 package ca.uwaterloo.flix.language.phase
 
 import ca.uwaterloo.flix.TestUtils
-import ca.uwaterloo.flix.language.errors.{NameError, ResolutionError, TypeError}
+import ca.uwaterloo.flix.language.errors.{InstanceError, NameError, ResolutionError, TypeError}
 import ca.uwaterloo.flix.util.Options
 import org.scalatest.funsuite.AnyFunSuite
 
@@ -1136,6 +1136,23 @@ class TestResolver extends AnyFunSuite with TestUtils {
         |""".stripMargin
     val result = check(input, Options.TestWithLibMin)
     expectError[ResolutionError.DuplicateDerivation](result)
+  }
+
+  test("DuplicateDerivation.03") {
+    // A repeated derivation is reported once and then dropped, so it does not go on to
+    // produce a second derived instance -- and hence no overlapping-instances cascade.
+    val input =
+      """
+        |enum E with Eq, Eq { case C }
+        |""".stripMargin
+    val (result, errors) = check(input, Options.TestWithLibMin)
+    assert(errors.exists(_.isInstanceOf[ResolutionError.DuplicateDerivation]))
+    assert(!errors.exists(_.isInstanceOf[InstanceError.OverlappingInstances]))
+    val root = result.getOrElse(fail("Expected a typed root under error recovery."))
+    val derived = root.instances.m.collect {
+      case (sym, instances) if sym.name == "Eq" => instances
+    }.flatten.filter(_.tpe.toString == "E").toList
+    assert(derived.length == 1)
   }
 
   test("UnderAppliedTypeAlias.01") {

@@ -2115,24 +2115,35 @@ object Resolver {
 
   /**
     * Performs name resolution on the given derivations `derives0`.
+    *
+    * Reports a [[DuplicateDerivation]] for each repeated derivation and returns the
+    * derivations with the repeats removed, keeping the first occurrence of each trait.
+    *
+    * Removing them is what keeps a repeat from becoming a second derived instance:
+    * [[Deriver]] mints one instance per surviving derivation and folds the results into a
+    * multimap, which appends rather than replaces, so two derivations of one trait would
+    * leave the program with two instances whose members carry the same symbol -- and an
+    * overlapping-instances error on top of the duplicate one the reader already has.
     */
   private def resolveDerivations(derives0: NamedAst.Derivations, scp0: LocalScope, ns0: Name.NName, root: NamedAst.Root)(implicit sctx: SharedContext): Derivations = {
     val qnames = derives0.traits
     val derives = qnames.flatMap(resolveDerivation(_, scp0, ns0, root))
-    // Check for [[DuplicateDerivation]].
+    // Check for [[DuplicateDerivation]], keeping the first occurrence of each trait.
     val seen = mutable.Map.empty[Symbol.TraitSym, SourceLocation]
+    val result = mutable.ArrayBuffer.empty[Derivation]
     val errors = mutable.ArrayBuffer.empty[DuplicateDerivation]
-    for (Derivation(sym, loc1) <- derives) {
+    for (derivation@Derivation(sym, loc1) <- derives) {
       seen.get(sym) match {
         case None =>
           seen.put(sym, loc1)
+          result += derivation
         case Some(loc2) =>
           errors += DuplicateDerivation(sym, loc1, loc2)
           errors += DuplicateDerivation(sym, loc2, loc1)
       }
     }
     errors.foreach(sctx.errors.add)
-    Derivations(derives, derives0.loc)
+    Derivations(result.toList, derives0.loc)
   }
 
   /**

@@ -137,21 +137,18 @@ class TestSourceIdentity extends AnyFunSuite with TestUtils {
     assert(defs.head.sym.id.isEmpty)
   }
 
-  test("GAP: two derivations of one trait mint one derived symbol, and both survive") {
-    // The Deriver half of the same gap, observable through the ordinary public API: Resolver
-    // reports DuplicateDerivation but does not filter the duplicate out of `derives.traits`, and
-    // `Deriver.run`'s fold appends to a multimap rather than replacing, so both derived instances
-    // reach TypedAst -- each carrying a def whose symbol is keyed on `Eq[Color]#eq` alone.
+  test("a repeated derivation yields one derived instance, not two") {
+    // `Deriver.run`'s fold appends into a multimap rather than replacing, so a duplicate
+    // derivation that reached it would produce two instances whose members share one symbol.
+    // Resolver drops the repeat instead, which is what keeps the derived population distinct.
     val (result, errors) = check("enum Color with Eq, Eq { case Red }", Options.TestWithLibMin)
     assert(errors.exists(_.isInstanceOf[ResolutionError.DuplicateDerivation]))
     val root = result.getOrElse(fail("Expected a typed root under error recovery."))
     val eqInstances = root.instances.m.collect {
       case (sym, instances) if sym.name == "Eq" => instances
     }.flatten.filter(_.tpe.toString.contains("Color")).toList
-    assert(eqInstances.length == 2)
-    val syms = eqInstances.flatMap(_.defs.map(_.sym))
-    assert(syms.length == 2)
-    assert(syms.head == syms(1))
+    assert(eqInstances.length == 1)
+    assert(eqInstances.flatMap(_.defs.map(_.sym)).distinct.length == 1)
   }
 
   test("GAP: two overlapping instances mint one member symbol") {
