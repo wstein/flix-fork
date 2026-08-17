@@ -23,7 +23,7 @@ import ca.uwaterloo.flix.language.ast.{NamedAst, *}
 import ca.uwaterloo.flix.language.dbg.AstPrinter.*
 import ca.uwaterloo.flix.language.errors.NameError
 import ca.uwaterloo.flix.util.collection.{ListMap, Nel}
-import ca.uwaterloo.flix.util.{ChaosMonkey, CollisionRegistry, InternalCompilerException, ParOps}
+import ca.uwaterloo.flix.util.{ChaosMonkey, InternalCompilerException, ParOps}
 
 import java.nio.file.{FileSystemNotFoundException, Path}
 import java.util.concurrent.ConcurrentLinkedQueue
@@ -188,7 +188,7 @@ object Namer {
     case decl: DesugaredAst.Declaration.Mod => visitMod(decl, ns0)
     case decl: DesugaredAst.Declaration.Trait => visitTrait(decl, ns0)
     case decl: DesugaredAst.Declaration.Instance => visitInstance(decl, ns0)
-    case decl: DesugaredAst.Declaration.Def => visitDef(decl, ns0, DefKind.NonMember)
+    case decl: DesugaredAst.Declaration.Def => visitDef(decl, ns0)
     case decl: DesugaredAst.Declaration.Enum => visitEnum(decl, ns0)
     case decl: DesugaredAst.Declaration.Struct => visitStruct(decl, ns0)
     case decl: DesugaredAst.Declaration.RestrictableEnum => visitRestrictableEnum(decl, ns0)
@@ -725,24 +725,8 @@ object Namer {
       val tcsts = tconstrs.map(visitTraitConstraint)
       val ecsts = econstrs.map(visitEqualityConstraint)
       val ascs = assocs.map(visitAssocTypeDef)
-      val ds = defs.map(visitDef(_, ns0, DefKind.Member(s"$clazz[${instanceHead(tpe)}]")))
+      val ds = defs.map(visitDef(_, ns0))
       NamedAst.Declaration.Instance(doc, ann, mod, clazz, tparams, t, tcsts, ecsts, ascs, ds, ns0.parts, loc)
-  }
-
-  /**
-    * Returns the name of the outermost type constructor of an instance head.
-    *
-    * Instances of one trait must be distinguishable by their head constructor — that is
-    * what makes them non-overlapping — so the head is enough to identify an instance
-    * without rendering the whole type.
-    */
-  private def instanceHead(tpe: DesugaredAst.Type): String = tpe match {
-    case DesugaredAst.Type.Apply(tpe1, _, _) => instanceHead(tpe1)
-    case DesugaredAst.Type.Ambiguous(qname, _) => qname.toString
-    case DesugaredAst.Type.Var(ident, _) => ident.name
-    case DesugaredAst.Type.Unit(_) => "Unit"
-    case DesugaredAst.Type.Tuple(tpes, _) => s"Tuple${tpes.length}"
-    case other => other.getClass.getSimpleName.stripSuffix("$")
   }
 
   /**
@@ -793,7 +777,7 @@ object Namer {
   /**
     * Performs naming on the given definition declaration `decl0`.
     */
-  private def visitDef(decl0: DesugaredAst.Declaration.Def, ns0: Name.NName, defKind: DefKind)(implicit sctx: SharedContext, flix: Flix): NamedAst.Declaration.Def = decl0 match {
+  private def visitDef(decl0: DesugaredAst.Declaration.Def, ns0: Name.NName)(implicit sctx: SharedContext, flix: Flix): NamedAst.Declaration.Def = decl0 match {
     case DesugaredAst.Declaration.Def(doc, ann, mod0, ident, tparams0, fparams, exp, tpe, eff, tconstrs, econstrs, loc) =>
       if (isReservedName(ident.name)) {
         sctx.errors.add(NameError.IllegalReservedName(ident))
@@ -811,20 +795,9 @@ object Namer {
       // Then visit the parts depending on the parameters
       val e = visitExp(exp)(RegionScope.Top, sctx, flix)
 
-      // The id is derived from the instance rather than taken from a counter, so that it
-      // is the same in every compilation; specialized names are built on top of it.
-      val sym = defKind match {
-        case DefKind.Member(instance) =>
-          val memberSym = Symbol.memberDefnSym(ns0, ident, instance)
-          // Claimed by the full symbol, not by its id alone: two members whose ids happen to
-          // collide are only a real problem if they also share a namespace and text, since
-          // that is what makes them render to the same JVM name.
-          sctx.claimedIds.claim(memberSym, Symbol.memberKey(instance, ident.name), SourceLocation.Unknown)(
-            (existing, incoming) => s"Instance-member id collision on '$memberSym': '$existing' and '$incoming'."
-          )
-          memberSym
-        case DefKind.NonMember => Symbol.mkDefnSym(ns0, ident, None)
-      }
+      // An instance member gets its id in [[Resolver]], where the trait it implements is
+      // resolved: keying on the name as written would let a `use` decide a class name.
+      val sym = Symbol.mkDefnSym(ns0, ident, None)
       val spec = NamedAst.Spec(doc, ann, mod, tparams, fps, t, ef, tcsts, ecsts)
       NamedAst.Declaration.Def(sym, spec, e, loc)
   }
@@ -1819,23 +1792,6 @@ object Namer {
   /**
     * An enumeration of the kinds of defs.
     */
-  private sealed trait DefKind
-
-  private object DefKind {
-    /**
-      * A def that is a member of an instance or trait.
-      *
-      * @param instance identifies the enclosing instance, so that its members can be given
-      *                 ids that do not depend on how many symbols preceded them.
-      */
-    case class Member(instance: String) extends DefKind
-
-    /**
-      * A def that is not a member of an instance or trait.
-      */
-    case object NonMember extends DefKind
-  }
-
   /**
     * Companion object for [[SharedContext]]
     */
@@ -1843,18 +1799,14 @@ object Namer {
     /**
       * Returns a fresh shared context.
       */
-    def mk(): SharedContext = new SharedContext(new ConcurrentLinkedQueue(), new CollisionRegistry())
+    def mk(): SharedContext = new SharedContext(new ConcurrentLinkedQueue())
   }
 
   /**
     * A global shared context. Must be thread-safe.
     *
-    * @param errors     the [[NameError]]s in the AST, if any.
-    * @param claimedIds what each content-addressed instance-member symbol was minted for.
-    *                   Two different keys happening to hash alike is harmless as long as
-    *                   the resulting symbols differ; this catches the case where they don't,
-    *                   rather than letting two unrelated members silently share one symbol.
+    * @param errors the [[NameError]]s in the AST, if any.
     */
-  private case class SharedContext(errors: ConcurrentLinkedQueue[NameError], claimedIds: CollisionRegistry[Symbol.DefnSym, String])
+  private case class SharedContext(errors: ConcurrentLinkedQueue[NameError])
 
 }

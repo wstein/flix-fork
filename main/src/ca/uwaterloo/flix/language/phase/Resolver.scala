@@ -443,7 +443,11 @@ object Resolver {
         case trt =>
           val assocsVal = resolveAssocTypeDefs(assocs0, trt, tpe, scp, taenv, ns0, root, trt0.loc)
           val tconstr = ResolvedAst.TraitConstraint(TraitSymUse(trt.sym, trt0.loc), tpe, trt0.loc)
-          val defs = checkDuplicateInstanceDefs(defs0.map(resolveDef(_, Some(tconstr), scp)(ns0, taenv, sctx, root, flix)), trt.sym)
+          val instance = instanceKey(trt.sym, tpe)
+          val defs = checkDuplicateInstanceDefs(
+            defs0.map(resolveDef(_, Some(tconstr), scp)(ns0, taenv, sctx, root, flix)).map(mintMemberSym(_, instance)),
+            trt.sym
+          )
           val tconstrs = optTconstrs.collect { case Some(t) => t }
           mapN(assocsVal) {
             case assocs =>
@@ -451,6 +455,53 @@ object Resolver {
               ResolvedAst.Declaration.Instance(doc, ann, mod, symUse, tparams, tpe, tconstrs, econstrs, assocs, defs, Name.mkUnlocatedNName(ns), loc)
           }
       }
+  }
+
+  /**
+    * Returns the key identifying the instance of `trt` at `tpe`, for naming its members.
+    *
+    * Built from the *resolved* trait symbol and the resolved head type, not from the names as
+    * written: `instance M.D[Int32]` and `instance D[Int32]` are one instance, and a generated
+    * name that disagreed would rename class files when an author added a `use`. Instances of
+    * one trait must be distinguishable by their head constructor -- that is what makes them
+    * non-overlapping -- so the head is enough to identify one without rendering the whole type.
+    */
+  private def instanceKey(trt: Symbol.TraitSym, tpe: UnkindedType): String =
+    s"$trt[${instanceHead(tpe)}]"
+
+  /** Returns the name of the outermost type constructor of the resolved instance head `tpe`. */
+  private def instanceHead(tpe: UnkindedType): String = tpe.baseType match {
+    case UnkindedType.Cst(tc, _) => tc.toString
+    case UnkindedType.Enum(sym, _) => sym.toString
+    case UnkindedType.Struct(sym, _) => sym.toString
+    case UnkindedType.RestrictableEnum(sym, _) => sym.toString
+    case UnkindedType.Alias(symUse, _, _, _) => symUse.sym.toString
+    case UnkindedType.AssocType(symUse, _, _) => symUse.sym.toString
+    case UnkindedType.Var(sym, _) => sym.text.toString
+    case UnkindedType.Arrow(_, arity, _) => s"Arrow$arity"
+    case UnkindedType.CaseSet(_, _) => "CaseSet"
+    case other => other.getClass.getSimpleName.stripSuffix("$")
+  }
+
+  /**
+    * Returns `defn` with the symbol its enclosing instance gives it.
+    *
+    * The [[Namer]] cannot mint this: an instance member is identified by the instance it
+    * belongs to, and which trait that is is not known until the name is resolved. Rewriting
+    * the symbol here is safe because a member is referred to by name within its own instance
+    * -- a call to it goes through the trait's signature symbol, never through this one.
+    */
+  private def mintMemberSym(defn: ResolvedAst.Declaration.Def, instance: String)(implicit sctx: SharedContext, flix: Flix): ResolvedAst.Declaration.Def = {
+    val ns = Name.mkUnlocatedNName(defn.sym.namespace)
+    val sym = Symbol.memberDefnSym(ns, Name.Ident(defn.sym.text, defn.sym.loc), instance)
+    // Claimed by the full symbol, not by its id alone: two members whose ids happen to collide
+    // are only a real problem if they also share a namespace and text, since that is what makes
+    // them render to the same JVM name. Two declarations of *one* member claim the same key for
+    // the same value, which is not a collision -- see the ADR referenced above.
+    sctx.claimedMemberIds.claim(sym, Symbol.memberKey(instance, sym.text), defn.sym.loc)(
+      (existing, incoming) => s"Instance-member id collision on '$sym': '$existing' and '$incoming'."
+    )
+    defn.copy(sym = sym)
   }
 
   /**
@@ -3725,15 +3776,19 @@ object Resolver {
     /**
       * Returns a fresh shared context.
       */
-    def mk(): SharedContext = new SharedContext(new ConcurrentLinkedQueue())
+    def mk(): SharedContext = new SharedContext(new ConcurrentLinkedQueue(), new CollisionRegistry())
   }
 
   /**
     * A global shared context. Must be thread-safe.
     *
+    * `claimedMemberIds` records what each instance-member symbol was minted for. Two different
+    * keys happening to hash alike is harmless as long as the resulting symbols differ; this
+    * catches the case where they do not, rather than letting two unrelated members share one.
+    *
     * @param errors the [[ResolutionError]]s in the AST, if any.
     */
-  private case class SharedContext(errors: ConcurrentLinkedQueue[ResolutionError])
+  private case class SharedContext(errors: ConcurrentLinkedQueue[ResolutionError], claimedMemberIds: CollisionRegistry[Symbol.DefnSym, String])
 
   /**
     * A type represented by a lowercase name.

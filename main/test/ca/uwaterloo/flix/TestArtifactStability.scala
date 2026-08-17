@@ -170,6 +170,42 @@ class TestArtifactStability extends AnyFunSuite {
     assert(!ids.contains("z56ok3gyegs"))
   }
 
+  /**
+    * The same instance, with the trait named two ways: qualified, and by the simple name that
+    * is in scope inside its own module. Same program, same meaning, so the same class names.
+    */
+  private val QualifiedTraitName: String =
+    """
+      |mod M {
+      |    pub trait D[a] {
+      |        pub def d(x: a): Bool
+      |    }
+      |
+      |    instance M.D[Int32] {
+      |        pub def d(x: Int32): Bool =
+      |            let l = List.range(0, x) |> List.map(y -> y + 1) |> List.filter(y -> y > 0);
+      |            List.length(l) > 0
+      |    }
+      |}
+      |
+      |def useIt(x: a): Bool with M.D[a] = M.D.d(x)
+      |
+      |def main(): Unit \ IO = println(useIt(1))
+      |""".stripMargin
+
+  private val SimpleTraitName: String = QualifiedTraitName.replace("instance M.D[Int32]", "instance D[Int32]")
+
+  test("spellingIndependence.01") {
+    // A generated name must describe what a declaration *is*, not how its author spelled it.
+    // Qualifying the trait of an instance changes no behaviour, so it must rename nothing.
+    val qualified = classNames(QualifiedTraitName)
+    val simple = classNames(SimpleTraitName)
+    assert(qualified.exists(_.contains("Def$d$")), "expected the instance member to reach a class")
+    // Asserting on the difference, not on set equality: the full sets are the whole runtime.
+    val renamed = (qualified -- simple) ++ (simple -- qualified)
+    assert(renamed.isEmpty, s"renamed by spelling alone: ${renamed.toList.sorted}")
+  }
+
   test("unrelatedEdit.01") {
     // An unrelated addition after the tested code must not rename any of its classes --
     // this is the specific failure mode (renumbering under an unrelated edit) content-

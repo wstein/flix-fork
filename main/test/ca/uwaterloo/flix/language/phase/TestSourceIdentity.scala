@@ -96,21 +96,63 @@ class TestSourceIdentity extends AnyFunSuite with TestUtils {
     assert(defs.head.loc != defs(1).loc)
   }
 
-  test("two duplicate instance members carry one symbol in NamedAst") {
+  test("instance members carry no id in NamedAst, so duplicates share a symbol there") {
+    // The id is minted in `Resolver`, where the trait an instance implements is resolved --
+    // keying on the name as written would let a `use` decide a class name. Until then a member
+    // is just its namespace and name, so two declarations of one member are one symbol.
     val defs = instanceDefs(namedRootOf(DuplicateInstanceMember))
+    assert(defs.forall(_.sym.id.isEmpty))
     assert(defs.head.sym == defs(1).sym)
     // A consumer that keys pre-validation declarations by symbol therefore sees one, not two.
     assert(defs.groupBy(_.sym).size == 1)
-    assert(defs.map(_.sym).distinct.length == 1)
   }
 
   test("--Xstable-name-length=0 opts instance-member ids out of content-addressing") {
-    // The flag documents 0 as "falls back to classic incrementing ids". Opted out, the ids come
-    // from the GenSym counter, so two declarations of one member are distinct symbols again.
-    val opts = Options.TestWithLibNix.copy(xstableNameLength = 0)
-    val defs = instanceDefs(namedRootOf(DuplicateInstanceMember, opts))
-    assert(defs.forall(_.sym.id.exists(_.isInstanceOf[SymId.Counter])))
-    assert(defs.head.sym != defs(1).sym)
+    // The flag documents 0 as "falls back to classic incrementing ids". Asserted on the typed
+    // root, since that is where an instance member first carries an id at all.
+    val opts = Options.TestWithLibMin.copy(xstableNameLength = 0)
+    val source =
+      """
+        |trait Describable[a] {
+        |    pub def describe(x: a): String
+        |}
+        |
+        |instance Describable[Int32] {
+        |    pub def describe(_x: Int32): String = "int"
+        |}
+        |""".stripMargin
+    val (result, _) = check(source, opts)
+    val root = result.getOrElse(fail("Expected a typed root."))
+    val members = root.instances.m.collect {
+      case (sym, instances) if sym.name == "Describable" => instances
+    }.flatten.flatMap(_.defs).toList
+    assert(members.nonEmpty)
+    assert(members.forall(_.sym.id.exists(_.isInstanceOf[SymId.Counter])))
+  }
+
+  test("an instance member's id does not depend on how its trait was spelled") {
+    // The identity half of TestArtifactStability's `spellingIndependence.01`: the id itself,
+    // not just the class names built on it. `Resolver` keys on the resolved trait symbol.
+    def memberIds(source: String): List[String] = {
+      val (result, errors) = check(source, Options.TestWithLibMin)
+      assert(errors.isEmpty, s"expected a clean program, got: ${errors.map(_.getClass.getName)}")
+      val root = result.getOrElse(fail("Expected a typed root."))
+      root.instances.m.collect { case (sym, is) if sym.name == "D" => is }
+        .flatten.flatMap(_.defs).map(_.sym.toString).toList.sorted
+    }
+    val qualified =
+      """
+        |mod M {
+        |    pub trait D[a] {
+        |        pub def d(x: a): Bool
+        |    }
+        |
+        |    instance M.D[Int32] {
+        |        pub def d(_x: Int32): Bool = true
+        |    }
+        |}
+        |""".stripMargin
+    assert(memberIds(qualified) == memberIds(qualified.replace("instance M.D[Int32]", "instance D[Int32]")))
   }
 
   test("--Xstable-name-length=0 opts derived-def ids out of content-addressing") {

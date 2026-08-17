@@ -123,7 +123,7 @@ object Deriver {
       val tpe = getEnumType(sym, tparams)
 
       val eqTraitSym = PredefinedTraits.lookupTraitSym("Eq", root)
-      val eqDefSym = derivedDefnSym("Eq.eq", s"Eq[$sym]")
+      val eqDefSym = derivedDefnSym("Eq.eq", s"$eqTraitSym[$sym]")
 
       val param1 = Symbol.freshVarSym("x", BoundBy.FormalParam, loc)
       val param2 = Symbol.freshVarSym("y", BoundBy.FormalParam, loc)
@@ -304,7 +304,7 @@ object Deriver {
       val tpe = getEnumType(sym, tparams)
 
       val orderTraitSym = PredefinedTraits.lookupTraitSym("Order", root)
-      val compareDefSym = derivedDefnSym("Order.compare", s"Order[$sym]")
+      val compareDefSym = derivedDefnSym("Order.compare", s"$orderTraitSym[$sym]")
 
       val param1 = Symbol.freshVarSym("x", BoundBy.FormalParam, loc)
       val param2 = Symbol.freshVarSym("y", BoundBy.FormalParam, loc)
@@ -502,7 +502,7 @@ object Deriver {
       val tpe = getEnumType(sym, tparams)
 
       val toStringTraitSym = PredefinedTraits.lookupTraitSym("ToString", root)
-      val toStringDefSym = derivedDefnSym("ToString.toString", s"ToString[$sym]")
+      val toStringDefSym = derivedDefnSym("ToString.toString", s"$toStringTraitSym[$sym]")
 
       val param = Symbol.freshVarSym("x", BoundBy.FormalParam, loc)
       val exp = mkToStringImpl(enum0, param, loc, root)
@@ -711,7 +711,7 @@ object Deriver {
       val tpe = getEnumType(sym, tparams)
 
       val hashTraitSym = PredefinedTraits.lookupTraitSym("Hash", root)
-      val hashDefSym = derivedDefnSym("Hash.hash", s"Hash[$sym]")
+      val hashDefSym = derivedDefnSym("Hash.hash", s"$hashTraitSym[$sym]")
 
       val param = Symbol.freshVarSym("x", BoundBy.FormalParam, loc)
       val exp = mkHashImpl(enum0, param, loc, root)
@@ -852,7 +852,7 @@ object Deriver {
 
       if (cases.size == 1) {
         val coerceTraitSym = PredefinedTraits.lookupTraitSym("Coerce", root)
-        val coerceDefSym = derivedDefnSym("Coerce.coerce", s"Coerce[$sym]")
+        val coerceDefSym = derivedDefnSym("Coerce.coerce", s"$coerceTraitSym[$sym]")
 
         val (_, caze) = cases.head
 
