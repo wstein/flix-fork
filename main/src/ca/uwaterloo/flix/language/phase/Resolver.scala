@@ -463,8 +463,9 @@ object Resolver {
     * `(instance, member name)`, so two duplicates of the same member mint the identical id
     * and become equal [[Symbol.DefnSym]]s rather than two distinct ones -- symbol equality
     * would silently merge them instead of catching the duplicate. That equality is accepted
-    * rather than repaired; see `docs/adr/0001-source-identity-vs-generated-name-identity.md`,
-    * for which this filter is half the reason the invariant recorded there holds.
+    * rather than repaired: this filter is half of why the invariant recorded in
+    * `docs/adr/0001-source-identity-vs-generated-name-identity.md` holds, the other half
+    * being the duplicate-derivation filter in [[resolveDerivations]].
     *
     * This check has to live here specifically because instance members never reach the
     * usual symbol-table machinery at all: the [[Namer]] tables ordinary declarations by

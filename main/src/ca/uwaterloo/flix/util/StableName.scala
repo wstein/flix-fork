@@ -20,7 +20,7 @@ import java.security.MessageDigest
 
 /**
   * Content-addressed suffixes for generated symbol names: a SHA-256 digest of a
-  * canonical key, truncated and rendered as lowercase base-36.
+  * canonical key, truncated and rendered as fixed-width lowercase base-36.
   *
   * `width` (in base-36 digits) is the only user-facing knob; see [[suffix]].
   */

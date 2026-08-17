@@ -1112,19 +1112,17 @@ object Deriver {
   private case class SharedContext(errors: ConcurrentLinkedQueue[DerivationError], claimedIds: CollisionRegistry[Symbol.DefnSym, String])
 
   /**
-    * Throws if `sym` is already claimed by a `key` other than this one.
-    *
-    * Keyed on the full symbol, not the raw hash: two different-family keys can hash
-    * alike without ever colliding as symbols, since `sym`'s namespace and text still
-    * tell them apart. Only a same-namespace, same-text sym minted from two different
-    * keys is a real collision.
-    */
-  /**
     * Returns the def symbol for the derived member `fqn` of `instance`, claiming its id.
     *
     * A derived member is named exactly as a written one would be -- both go through
     * [[Symbol.memberDefnSym]] -- so deriving `Eq` and writing `instance Eq` by hand cannot
     * produce two different names for the same member.
+    *
+    * The claim throws if `sym` is already claimed by a key other than this one. It is keyed
+    * on the full symbol rather than the raw hash: two different-family keys can hash alike
+    * without ever colliding as symbols, since `sym`'s namespace and text still tell them
+    * apart. Only a same-namespace, same-text sym minted from two different keys is a real
+    * collision.
     */
   private def derivedDefnSym(fqn: String, instance: String)(implicit sctx: SharedContext, flix: Flix): Symbol.DefnSym = {
     val sym = Symbol.memberDefnSym(fqn, instance)
