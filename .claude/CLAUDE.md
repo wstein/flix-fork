@@ -52,6 +52,13 @@ not exactly `width` lowercase base-36 digits, so a rendering that loses a leadin
 zero fails the compile instead of reaching a class name where nothing can tell it
 from a narrower id or a counter.
 
+`NameFormat.Version` is part of every preimage. Bump it whenever a key shape, the
+hash, or the rendering changes — that is, whenever the same program would compile
+to different class names — and expect `TestNameFormat`'s goldens to move with it.
+That is the point: neither a key change nor a version change can pass silently.
+The scheme as a whole, including why there is no minimum width, is
+`docs/adr/0002-content-addressed-generated-names.md`.
+
 Instance-member ids are minted in `Resolver`, not `Namer`: a member is
 identified by the instance it belongs to, and which trait that is is not known
 until the name is resolved. Keying on the name as written meant `instance M.D[a]`
