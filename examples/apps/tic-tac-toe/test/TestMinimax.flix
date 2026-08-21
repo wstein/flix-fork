@@ -92,20 +92,47 @@ mod TestMinimax {
         assertEq(expected = 0 :: 1 :: 2 :: 3 :: 4 :: 5 :: 6 :: 7 :: 8 :: Nil, moves)
     }
 
-    @Test
-    def testBestMoveWithSeedDeterministic(): Unit \ Assert = {
-        let b = Board.newBoard();
-        let move1 = Minimax.bestMoveWithSeed(Symbol.X, b, 12345i64);
-        let move2 = Minimax.bestMoveWithSeed(Symbol.X, b, 12345i64);
-        assertEq(expected = move1, move2)
+    ///
+    /// Plays a whole game and records every move, so that a run is identified by its move list.
+    ///
+    def recordSelfGame(board: Board, turn: Symbol, acc: List[Int32]): List[Int32] \ Random = {
+        match Board.outcome(board) {
+            case Outcome.Ongoing =>
+                match Minimax.bestMove(turn, board) {
+                    case Some(m) =>
+                        let nextBoard = Option.getWithDefault(board, Board.makeMove(board, turn, m));
+                        recordSelfGame(nextBoard, Symbol.complement(turn), m :: acc)
+                    case None => List.reverse(acc)
+                }
+            case _ => List.reverse(acc)
+        }
     }
 
     @Test
-    def testBestMoveWithOptionalSeed(): Unit \ Assert = {
-        let b = Board.newBoard();
-        let moveWithSeed = Minimax.bestMoveWithSeed(Symbol.X, b, 999i64);
-        let moveWithOpt = Random.runWithSeed(1i64, () -> Minimax.bestMoveWithOptionalSeed(Symbol.X, b, Some(999i64)));
-        assertEq(expected = moveWithSeed, moveWithOpt)
+    def testSameSeedReplaysTheSameGame(): Unit \ Assert = {
+        let game1 = Random.runWithSeed(12345i64, () -> recordSelfGame(Board.newBoard(), Symbol.X, Nil));
+        let game2 = Random.runWithSeed(12345i64, () -> recordSelfGame(Board.newBoard(), Symbol.X, Nil));
+        assertEq(expected = game1, game2)
+    }
+
+    @Test
+    def testTieBreakDrawsSuccessiveValues(): Unit \ Assert = {
+        // On an empty board all nine moves are equally good, so the opening is a pure
+        // coin flip. Re-seeding per move would pin every game to the same opening;
+        // seeding once must not.
+        let openings = List.map(
+            seed -> Random.runWithSeed(seed, () -> Minimax.bestMove(Symbol.X, Board.newBoard())),
+            1i64 :: 2i64 :: 3i64 :: 4i64 :: 5i64 :: 6i64 :: 7i64 :: 8i64 :: 9i64 :: 10i64 :: Nil
+        );
+        Assert.assertTrue(List.length(List.distinct(openings)) > 1)
+    }
+
+    @Test
+    def testDifferentSeedsDivergeWithinAGame(): Unit \ Assert = {
+        // A single seed must drive a *sequence* of draws, not one repeated draw.
+        let game1 = Random.runWithSeed(2i64, () -> recordSelfGame(Board.newBoard(), Symbol.X, Nil));
+        let game2 = Random.runWithSeed(7i64, () -> recordSelfGame(Board.newBoard(), Symbol.X, Nil));
+        Assert.assertTrue(game1 != game2)
     }
 
     @Test

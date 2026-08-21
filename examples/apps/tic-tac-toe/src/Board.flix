@@ -10,7 +10,6 @@ pub enum Outcome with Eq, ToString {
 ///
 /// Enum representing the board, backed by an immutable vector.
 ///
-
 enum Board(Vector[Symbol])
 
 mod Board {
@@ -25,7 +24,7 @@ mod Board {
     ///
     /// Makes a move on the board at the specified index with the given symbol.
     ///
-    /// Returns the updated board if the move is valid, otherwise returns the original board.
+    /// Returns `Some` of the updated board if the cell was free, and `None` otherwise.
     ///
     pub def makeMove(board: Board, symbol: Symbol, index: Int32): Option[Board]  = match board {
         case Board(vec) => {
@@ -40,90 +39,77 @@ mod Board {
     }
 
     ///
-    /// Returns the Datalog facts representing the 8 winning lines.
+    /// Returns the rules that describe how a tic-tac-toe position is won.
     ///
-    pub def lines(): #{ Line(Int32, Int32, Int32) | r } = #{
-        Line(0, 1, 2). Line(3, 4, 5). Line(6, 7, 8).
-        Line(0, 3, 6). Line(1, 4, 7). Line(2, 5, 8).
-        Line(0, 4, 8). Line(2, 4, 6).
+    /// `Line` enumerates the eight lines that win the game, `Cell` holds the board
+    /// itself, and the two rules read the state of the game off them: a player wins
+    /// by owning all three cells of some line, and a cell is free while it is empty.
+    ///
+    def rules(): #{
+        Cell(Int32, Symbol),
+        Line(Int32, Int32, Int32),
+        Win(Symbol),
+        FreeCell(Int32) | r
+    } = #{
+        Line(0, 1, 2). Line(3, 4, 5). Line(6, 7, 8).    // rows
+        Line(0, 3, 6). Line(1, 4, 7). Line(2, 5, 8).    // columns
+        Line(0, 4, 8). Line(2, 4, 6).                   // diagonals
+
+        Win(sym) :- Line(a, b, c), Cell(a, sym), Cell(b, sym), Cell(c, sym), if (sym != Symbol.Empty).
+
+        FreeCell(i) :- Cell(i, sym), if (sym == Symbol.Empty).
     }
 
     ///
-    /// Converts a board into Datalog facts representing cell occupants.
+    /// Returns the board as `Cell` facts, one per position.
     ///
-    pub def boardFacts(board: Board): #{ Cell(Int32, Symbol) | r } = match board {
-        case Board(vec) =>
-            Vector.mapWithIndex((i, sym) -> (i, sym), vec)
-                |> Vector.toList
-                |> (l -> inject l into Cell/2)
+    def facts(board: Board): #{ Cell(Int32, Symbol) | r } = match board {
+        case Board(vec) => inject Vector.mapWithIndex((i, sym) -> (i, sym), vec) into Cell/2
     }
 
     ///
-    /// Evaluates the outcome of the game on the given board using Datalog facts and rules.
+    /// Returns the solved Datalog database for the given board.
     ///
-    pub def datalogOutcome(board: Board): Outcome = {
-        let db = boardFacts(board) <+> lines();
-        let pr = #{
-            Win(sym) :- Line(a, b, c), Cell(a, sym), Cell(b, sym), Cell(c, sym), if (sym != Symbol.Empty).
-            FreeCell(i) :- Cell(i, sym), if (sym == Symbol.Empty).
-            HasFree() :- FreeCell(_).
-        };
-        let wins = query db, pr select sym from Win(sym);
-        let hasFree = query db, pr select () from HasFree() |> Vector.nonEmpty;
-        if (Vector.memberOf(Symbol.X, wins))
-            Outcome.Win(Symbol.X)
-        else if (Vector.memberOf(Symbol.O, wins))
-            Outcome.Win(Symbol.O)
-        else if (not hasFree)
-            Outcome.Draw
-        else
-            Outcome.Ongoing
-    }
+    /// Every query below reads from this one database, so the board is interpreted in
+    /// exactly one place.
+    ///
+    def solved(board: Board): #{
+        Cell(Int32, Symbol),
+        Line(Int32, Int32, Int32),
+        Win(Symbol),
+        FreeCell(Int32) | r
+    } = solve facts(board) <+> rules()
 
     ///
     /// Returns a list of indices (0 to 8) of all empty cells on the board.
     ///
-    pub def freeCells(board: Board): List[Int32] = match board {
-        case Board(vec) =>
-            Vector.range(0, 9)
-                |> Vector.filter(i -> Vector.get(i, vec) == Symbol.Empty)
-                |> Vector.toList
-    }
+    pub def freeCells(board: Board): List[Int32] =
+        query solved(board) select i from FreeCell(i) |> Vector.toList
 
     ///
     /// Checks if the player with the specified symbol has won the game on the given board.
     ///
-    pub def checkWin(board: Board, symbol: Symbol): Bool = match board {
-        case Board(vec) => {
-            let patterns = (0, 1, 2) :: (3, 4, 5) :: (6, 7, 8) :: (0, 3, 6) :: (1, 4, 7) :: (2, 5, 8) :: (0, 4, 8) :: (2, 4, 6) :: Nil;
-            List.exists((pattern: (Int32, Int32, Int32)) -> {
-                match pattern {
-                    case (a, b, c) =>
-                        (Vector.get(a, vec) == symbol)
-                        and (Vector.get(b, vec) == symbol)
-                        and (Vector.get(c, vec) == symbol)
-                }
-            }, patterns)
-        }
-    }
+    pub def checkWin(board: Board, symbol: Symbol): Bool =
+        query solved(board) select sym from Win(sym) |> Vector.memberOf(symbol)
 
     ///
     /// Checks if all cells are already filled on the board.
     ///
-    pub def boardFilled(board: Board): Bool = match board {
-        case Board(vec) =>
-            Vector.forAll(sym -> sym != Symbol.Empty, vec)
-    }
+    pub def boardFilled(board: Board): Bool =
+        query solved(board) select i from FreeCell(i) |> Vector.isEmpty
 
     ///
     /// Returns the outcome of the game on the given board.
     ///
     pub def outcome(board: Board): Outcome = {
-        if (checkWin(board, Symbol.X))
+        let db = solved(board);
+        let wins = query db select sym from Win(sym);
+        let free = query db select i from FreeCell(i);
+        if (Vector.memberOf(Symbol.X, wins))
             Outcome.Win(Symbol.X)
-        else if (checkWin(board, Symbol.O))
+        else if (Vector.memberOf(Symbol.O, wins))
             Outcome.Win(Symbol.O)
-        else if (boardFilled(board))
+        else if (Vector.isEmpty(free))
             Outcome.Draw
         else
             Outcome.Ongoing

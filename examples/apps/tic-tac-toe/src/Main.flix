@@ -72,12 +72,22 @@ def gameLoop(board: Board, currentTurn: Symbol, opponent: Opponent, humanSymbol:
 }
 
 ///
+/// Returns the seed given on the command line, if any.
+///
+/// A seed makes a game reproducible: the computer's choice between equally good
+/// moves is drawn from the `Random` effect, so fixing the seed fixes the game.
+///
+def seedFromArgs(): Option[Int64] \ Sys.Env =
+    Sys.Env.getArgs() |> List.head |> Option.flatMap(Int64.fromString)
+
+///
 /// The main entry point of the application.
 ///
 /// Creates a new game board and starts the game loop.
 ///
 def main(): Unit \ IO = {
     run {
+        let seed = seedFromArgs();
         println("");
         println("  _______ _          _______             _______           ");
         println(" |__   __(_)        |__   __|           |__   __|        ");
@@ -110,11 +120,22 @@ def main(): Unit \ IO = {
                         (first, Symbol.X)
                 };
                 let board = Board.newBoard();
-                gameLoop(board, firstPlayer, opponent, humanSymbol)
+
+                // Seed the generator once, here, rather than per move: the computer
+                // draws successive values from it as the game goes on.
+                match seed {
+                    case Some(s) =>
+                        println("Playing with random seed ${s}.");
+                        println("");
+                        Math.Random.runWithSeed(s, () -> gameLoop(board, firstPlayer, opponent, humanSymbol))
+                    case None =>
+                        gameLoop(board, firstPlayer, opponent, humanSymbol)
+                }
             }
         }
     } with Interface.interfaceWithConsole
     with Math.Random.runWithIO
+    with Sys.Env.runWithIO
     with Console.runWithIO
     with Sys.Exit.runWithIO
 }

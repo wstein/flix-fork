@@ -111,58 +111,35 @@ mod Minimax {
     }
 
     ///
-    /// Helper to pick a move pseudorandomly from a list of moves using the ambient Random effect.
+    /// Returns one move chosen pseudorandomly from `moves`.
     ///
-    def pickRandom(moves: List[Int32], len: Int32): Option[Int32] \ Random = {
+    /// `Random.randomInt64` spans the whole `Int64` range, including negative values.
+    /// Masking off the sign bit is safe where `Int64.abs` is not: `abs(Int64.minValue())`
+    /// overflows back to a negative number.
+    ///
+    def pickRandom(moves: List[Int32]): Option[Int32] \ Random = {
+        let len = List.length(moves);
         let raw = Random.randomInt64();
         let nonNeg = Int64.bitwiseAnd(raw, Int64.maxValue());
-        let rem = Int64.remainder(nonNeg, Int32.toInt64(len));
-        let idx = Int64.clampToInt32(min = 0, max = len - 1, rem);
+        let idx = Int64.clampToInt32(min = 0, max = len - 1, Int64.remainder(nonNeg, Int32.toInt64(len)));
         List.nth(idx, moves)
     }
 
     ///
-    /// Selects one move from the optimal candidate moves.
-    /// If there is more than one best move, an optional random seed can be used to pseudorandomly
-    /// choose deterministically; otherwise the ambient Random effect is used.
+    /// Returns the best move for `player` on `board`.
     ///
-    pub def chooseMove(moves: List[Int32], seed: Option[Int64]): Option[Int32] \ Random = {
-        let len = List.length(moves);
-        if (len == 0) {
-            None
-        } else if (len == 1) {
-            List.head(moves)
-        } else {
-            match seed {
-                case Some(s) => Random.runWithSeed(s, () -> pickRandom(moves, len))
-                case None    => pickRandom(moves, len)
-            }
-        }
-    }
-
-    ///
-    /// Returns the best move for the given player on the board using Datalog solving.
-    /// If multiple moves share the optimal evaluation, one is chosen pseudorandomly.
+    /// When several moves are equally good, one of them is drawn from the ambient
+    /// `Random` effect. Seed that effect once at the edge of the program --- with
+    /// `Math.Random.runWithSeed` for a reproducible game, or `Math.Random.runWithIO`
+    /// for a fresh one --- so that successive moves draw successive values. Seeding
+    /// per move instead would restart the generator every time and make the computer
+    /// pick the same candidate over and over.
     ///
     pub def bestMove(player: Symbol, board: Board): Option[Int32] \ Random = {
-        let moves = bestMoves(player, board);
-        chooseMove(moves, None)
-    }
-
-    ///
-    /// Returns the best move for the given player on the board using Datalog solving,
-    /// selecting pseudorandomly among multiple best moves with a deterministic seed.
-    ///
-    pub def bestMoveWithSeed(player: Symbol, board: Board, seed: Int64): Option[Int32] = {
-        let moves = bestMoves(player, board);
-        Random.runWithSeed(seed, () -> chooseMove(moves, Some(seed)))
-    }
-
-    ///
-    /// Returns the best move for the given player on the board with an optional random seed.
-    ///
-    pub def bestMoveWithOptionalSeed(player: Symbol, board: Board, seed: Option[Int64]): Option[Int32] \ Random = {
-        let moves = bestMoves(player, board);
-        chooseMove(moves, seed)
+        match bestMoves(player, board) {
+            case Nil      => None
+            case m :: Nil => Some(m)
+            case moves    => pickRandom(moves)
+        }
     }
 }

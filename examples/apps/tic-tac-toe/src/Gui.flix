@@ -50,6 +50,50 @@ mod Gui {
     }
 
     ///
+    /// Computes the AI's move using Math.Random effect handler.
+    ///
+    def computeAiMove(turn: Symbol, board: Board): Option[Int32] \ IO =
+        Math.Random.runWithIO(() -> Minimax.bestMove(turn, board))
+
+    ///
+    /// Draws a single piece (X or O) on the board canvas.
+    ///
+    def drawPiece(app: PApplet, ox: Float32, oy: Float32, sz: Float32, idx: Int32, sym: Symbol): Unit \ IO = {
+        let col = Int32.toFloat32(Int32.remainder(idx, 3));
+        let row = Int32.toFloat32(idx / 3);
+        let cx = ox + col * sz + sz / 2.0f32;
+        let cy = oy + row * sz + sz / 2.0f32;
+        let r = sz * 0.32f32;
+
+        match sym {
+            case Symbol.X => {
+                app.stroke(255.0f32, 107.0f32, 107.0f32);
+                app.strokeWeight(7.0f32);
+                app.line(cx - r, cy - r, cx + r, cy + r);
+                app.line(cx + r, cy - r, cx - r, cy + r)
+            }
+            case Symbol.O => {
+                app.noFill();
+                app.stroke(78.0f32, 205.0f32, 196.0f32);
+                app.strokeWeight(7.0f32);
+                app.ellipse(cx, cy, r * 2.0f32, r * 2.0f32)
+            }
+            case Symbol.Empty => ()
+        }
+    }
+
+    ///
+    /// Blocks the main thread until the Processing sketch window is closed.
+    ///
+    def waitForExit(app: PApplet): Unit \ IO = {
+        Thread.sleep(100i64);
+        if (not app.exitCalled() and not app.finished)
+            waitForExit(app)
+        else
+            ()
+    }
+
+    ///
     /// Launches the Processing GUI for Tic-Tac-Toe.
     ///
     pub def runGui(): Unit \ IO = {
@@ -64,6 +108,7 @@ mod Gui {
             }
 
             def setup(app: PApplet): Unit \ IO = {
+                app.pixelDensity(1);
                 app.frameRate(30.0f32)
             }
 
@@ -77,7 +122,7 @@ mod Gui {
 
                 // Handle AI turn
                 if (opponent == Opponent.Computer and currentTurn == Symbol.complement(humanSymbol) and outcome == Outcome.Ongoing) {
-                    let aiMove = Math.Random.runWithIO(() -> Minimax.bestMove(currentTurn, board));
+                    let aiMove = computeAiMove(currentTurn, board);
                     match aiMove {
                         case Some(m) => {
                             match Board.makeMove(board, currentTurn, m) {
@@ -147,29 +192,15 @@ mod Gui {
                 // 4. Draw Pieces (X and O)
                 match updatedBoard {
                     case Board.Board(vec) => {
-                        Vector.forEachWithIndex((idx, sym) -> {
-                            let col = Int32.toFloat32(Int32.remainder(idx, 3));
-                            let row = Int32.toFloat32(idx / 3);
-                            let cx = ox + col * sz + sz / 2.0f32;
-                            let cy = oy + row * sz + sz / 2.0f32;
-                            let r = sz * 0.32f32;
-
-                            match sym {
-                                case Symbol.X => {
-                                    app.stroke(255.0f32, 107.0f32, 107.0f32);
-                                    app.strokeWeight(7.0f32);
-                                    app.line(cx - r, cy - r, cx + r, cy + r);
-                                    app.line(cx + r, cy - r, cx - r, cy + r)
-                                }
-                                case Symbol.O => {
-                                    app.noFill();
-                                    app.stroke(78.0f32, 205.0f32, 196.0f32);
-                                    app.strokeWeight(7.0f32);
-                                    app.ellipse(cx, cy, r * 2.0f32, r * 2.0f32)
-                                }
-                                case Symbol.Empty => ()
-                            }
-                        }, vec)
+                        drawPiece(app, ox, oy, sz, 0, Vector.get(0, vec));
+                        drawPiece(app, ox, oy, sz, 1, Vector.get(1, vec));
+                        drawPiece(app, ox, oy, sz, 2, Vector.get(2, vec));
+                        drawPiece(app, ox, oy, sz, 3, Vector.get(3, vec));
+                        drawPiece(app, ox, oy, sz, 4, Vector.get(4, vec));
+                        drawPiece(app, ox, oy, sz, 5, Vector.get(5, vec));
+                        drawPiece(app, ox, oy, sz, 6, Vector.get(6, vec));
+                        drawPiece(app, ox, oy, sz, 7, Vector.get(7, vec));
+                        drawPiece(app, ox, oy, sz, 8, Vector.get(8, vec))
                     }
                 };
 
@@ -230,7 +261,8 @@ mod Gui {
         region rc {
             Thread.currentThread().setContextClassLoader(sketch.getClass().getClassLoader());
             let args: Array[String, rc] = Array#{"TicTacToeGui"} @ rc;
-            PApplet.runSketch(args, sketch)
+            PApplet.runSketch(args, sketch);
+            waitForExit(sketch)
         }
     }
 }
