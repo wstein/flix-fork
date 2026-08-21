@@ -63,6 +63,45 @@ mod TestGui {
     }
 
     @Test
+    def testIsCloseClicked(): Unit \ Assert = {
+        let cx = Gui.closeButtonX();
+        let cy = Gui.closeButtonY();
+        let cw = Gui.closeButtonW();
+        let ch = Gui.closeButtonH();
+
+        // Inside button
+        assertEq(expected = true, Gui.isCloseClicked(cx + cw * 0.5f32, cy + ch * 0.5f32));
+        assertEq(expected = true, Gui.isCloseClicked(cx, cy));
+        assertEq(expected = true, Gui.isCloseClicked(cx + cw, cy + ch));
+
+        // Outside button
+        assertEq(expected = false, Gui.isCloseClicked(cx - 5.0f32, cy));
+        assertEq(expected = false, Gui.isCloseClicked(cx, cy - 5.0f32));
+        assertEq(expected = false, Gui.isCloseClicked(cx + cw + 5.0f32, cy));
+        assertEq(expected = false, Gui.isCloseClicked(cx, cy + ch + 5.0f32))
+    }
+
+    @Test
+    def testButtonsDoNotOverlap(): Unit \ Assert = {
+        // A click must never mean both "new game" and "quit".
+        Assert.assertTrue(Gui.restartButtonX() + Gui.restartButtonW() < Gui.closeButtonX());
+
+        // Neither button may hang off the 450px canvas.
+        Assert.assertTrue(Gui.closeButtonX() + Gui.closeButtonW() <= 450.0f32);
+        Assert.assertTrue(Gui.restartButtonX() >= 0.0f32)
+    }
+
+    @Test
+    def testButtonsAreClearOfTheBoard(): Unit \ Assert = {
+        // Clicking a button must not also drop a piece on the board.
+        let boardBottom = Gui.boardOffsetY() + Gui.cellSize() * 3.0f32;
+        Assert.assertTrue(Gui.restartButtonY() > boardBottom);
+        Assert.assertTrue(Gui.closeButtonY() > boardBottom);
+        assertEq(expected = None, Gui.cellAt(Gui.closeButtonX(), Gui.closeButtonY()));
+        assertEq(expected = None, Gui.cellAt(Gui.restartButtonX(), Gui.restartButtonY()))
+    }
+
+    @Test
     def testAiMoveDelayMs(): Unit \ Assert = {
         assertEq(expected = 240i64, Gui.aiMoveDelayMs())
     }

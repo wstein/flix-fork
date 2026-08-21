@@ -13,10 +13,14 @@ mod Gui {
     pub def boardOffsetX(): Float32 = 45.0f32
     pub def boardOffsetY(): Float32 = 100.0f32
     pub def cellSize(): Float32 = 120.0f32
-    pub def restartButtonX(): Float32 = 145.0f32
+    pub def restartButtonX(): Float32 = 55.0f32
     pub def restartButtonY(): Float32 = 480.0f32
     pub def restartButtonW(): Float32 = 160.0f32
     pub def restartButtonH(): Float32 = 40.0f32
+    pub def closeButtonX(): Float32 = 235.0f32
+    pub def closeButtonY(): Float32 = 480.0f32
+    pub def closeButtonW(): Float32 = 160.0f32
+    pub def closeButtonH(): Float32 = 40.0f32
     pub def aiMoveDelayMs(): Int64 = 240i64
 
     ///
@@ -51,6 +55,12 @@ mod Gui {
     ///
     pub def isRestartClicked(x: Float32, y: Float32): Bool =
         isInside(x, y, restartButtonX(), restartButtonY(), restartButtonW(), restartButtonH())
+
+    ///
+    /// Checks if coordinates (x, y) are within the "Close" button.
+    ///
+    pub def isCloseClicked(x: Float32, y: Float32): Bool =
+        isInside(x, y, closeButtonX(), closeButtonY(), closeButtonW(), closeButtonH())
 
     ///
     /// Computes the AI's move using Math.Random effect handler (with seed if provided).
@@ -255,14 +265,18 @@ mod Gui {
                 let mx = Int32.toFloat32(app.mouseX);
                 let my = Int32.toFloat32(app.mouseY);
                 drawButton(app, restartButtonX(), restartButtonY(), restartButtonW(),
-                           restartButtonH(), "New Game", isRestartClicked(mx, my))
+                           restartButtonH(), "New Game", isRestartClicked(mx, my));
+                drawButton(app, closeButtonX(), closeButtonY(), closeButtonW(),
+                           closeButtonH(), "Close", isCloseClicked(mx, my))
             }
 
             def mousePressed(app: PApplet): Unit \ IO = {
                 let mx = Int32.toFloat32(app.mouseX);
                 let my = Int32.toFloat32(app.mouseY);
 
-                if (isRestartClicked(mx, my)) {
+                if (isCloseClicked(mx, my)) {
+                    app.exit()
+                } else if (isRestartClicked(mx, my)) {
                     boardRef.set(Board.newBoard());
                     turnRef.set(Symbol.X);
                     aiMoveTimeRef.set(0i64);
