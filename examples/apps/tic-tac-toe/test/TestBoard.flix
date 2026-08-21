@@ -82,12 +82,66 @@ mod TestBoard {
     def testOutcomeAgreesWithDatalogSpec(): Unit \ Assert = {
         // `Board.outcome` answers directly so that the search stays fast, while
         // `Board.datalogOutcome` states the same rules as Datalog. They must agree on
-        // every position a real game can reach.
+        // every position sampled below.
         let positions = samplePositions(Board.newBoard(), Symbol.X, 0, Nil);
         // Guard against the check passing because nothing was enumerated.
         Assert.assertTrue(List.length(positions) > 500);
         let disagreements = List.count(b -> Board.outcome(b) != Board.datalogOutcome(b), positions);
         Assert.assertEq(expected = 0, disagreements)
+    }
+
+    ///
+    /// Enumerates every position in which a game ends drawn.
+    ///
+    def finalDraws(board: Board, turn: Symbol, acc: List[Board]): List[Board] =
+        match Board.outcome(board) {
+            case Outcome.Ongoing =>
+                List.foldLeft((a, m) ->
+                    finalDraws(
+                        Option.getWithDefault(board, Board.makeMove(board, turn, m)),
+                        Symbol.complement(turn),
+                        a),
+                    acc, Board.freeCells(board))
+            case Outcome.Draw => board :: acc
+            case _ => acc
+        }
+
+    @Test
+    def testCanonicalIgnoresRotation(): Unit \ Assert = {
+        // The same opening, turned a quarter turn: X in a corner, O beside it.
+        let a = applyMoves((Symbol.X, 0) :: (Symbol.O, 1) :: Nil);
+        let b = applyMoves((Symbol.X, 2) :: (Symbol.O, 5) :: Nil);
+        Assert.assertTrue(a != b);
+        Assert.assertTrue(Board.canonical(a) == Board.canonical(b))
+    }
+
+    @Test
+    def testCanonicalIgnoresMirroring(): Unit \ Assert = {
+        // The same opening, mirrored left to right.
+        let a = applyMoves((Symbol.X, 0) :: (Symbol.O, 3) :: Nil);
+        let b = applyMoves((Symbol.X, 2) :: (Symbol.O, 5) :: Nil);
+        Assert.assertTrue(a != b);
+        Assert.assertTrue(Board.canonical(a) == Board.canonical(b))
+    }
+
+    @Test
+    def testCanonicalIsStable(): Unit \ Assert = {
+        // Canonicalising an already canonical board must change nothing, or the
+        // statistics would keep reclassifying the same game.
+        let b = applyMoves((Symbol.X, 4) :: (Symbol.O, 0) :: (Symbol.X, 8) :: Nil);
+        Assert.assertTrue(Board.canonical(b) == Board.canonical(Board.canonical(b)))
+    }
+
+    @Test
+    def testDrawnGamesTakeThreeShapes(): Unit \ Assert = {
+        // The background claim the game makes on screen, checked against the rules:
+        // tic-tac-toe has exactly 16 drawn final positions, and they are the same
+        // three shapes turned and mirrored.
+        let draws = finalDraws(Board.newBoard(), Symbol.X, Nil) |> List.toSet |> Set.toList;
+        Assert.assertEq(expected = 16, List.length(draws));
+
+        let shapes = List.map(Board.canonical, draws) |> List.toSet |> Set.toList;
+        Assert.assertEq(expected = 3, List.length(shapes))
     }
 
     @Test

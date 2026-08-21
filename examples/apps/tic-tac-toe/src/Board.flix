@@ -50,6 +50,44 @@ mod Board {
         (0, 4, 8) :: (2, 4, 6) :: Nil               // diagonals
 
     ///
+    /// The eight symmetries of the square, as permutations of the nine cell indices.
+    ///
+    /// Rotating or mirroring a board does not change how the game was played, only how
+    /// it is oriented on screen. Grouping boards by these turns the many final positions
+    /// into the few genuinely different ones.
+    ///
+    def symmetries(): List[Vector[Int32]] =
+        Vector#{0, 1, 2, 3, 4, 5, 6, 7, 8} ::    // identity
+        Vector#{6, 3, 0, 7, 4, 1, 8, 5, 2} ::    // quarter turn
+        Vector#{8, 7, 6, 5, 4, 3, 2, 1, 0} ::    // half turn
+        Vector#{2, 5, 8, 1, 4, 7, 0, 3, 6} ::    // three quarter turn
+        Vector#{2, 1, 0, 5, 4, 3, 8, 7, 6} ::    // mirror left to right
+        Vector#{6, 7, 8, 3, 4, 5, 0, 1, 2} ::    // mirror top to bottom
+        Vector#{0, 3, 6, 1, 4, 7, 2, 5, 8} ::    // mirror on the main diagonal
+        Vector#{8, 5, 2, 7, 4, 1, 6, 3, 0} ::    // mirror on the anti-diagonal
+        Nil
+
+    ///
+    /// Returns the board with its cells rearranged by the given permutation.
+    ///
+    def permute(perm: Vector[Int32], board: Board): Board = match board {
+        case Board(vec) => Board(Vector.map(i -> Vector.get(i, vec), perm))
+    }
+
+    ///
+    /// Returns the one board that stands for every rotation and mirroring of this one.
+    ///
+    /// Two boards are the same position, turned or mirrored, exactly when they have the
+    /// same canonical form. Which of the eight images is chosen does not matter, only
+    /// that the choice is the same for every board in the class, so this takes the
+    /// smallest under the derived ordering.
+    ///
+    pub def canonical(board: Board): Board =
+        List.map(perm -> permute(perm, board), symmetries())
+            |> List.minimum
+            |> Option.getWithDefault(board)
+
+    ///
     /// Returns the rules of tic-tac-toe, as Datalog.
     ///
     /// `Cell(i, sym)` holds the board and `Line(a, b, c)` the winning lines, and two
