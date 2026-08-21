@@ -221,6 +221,26 @@ flix run          # play
 flix test         # run the tests
 ```
 
+### If you have no `flix` command
+
+This example lives inside the Flix repository, where there is usually no installed Flix
+to call. Build the compiler once, from the repository root:
+
+```bash
+./mill flix.assembly
+```
+
+That writes `out/flix/assembly.dest/out.jar`. Read every `flix` below as that jar:
+
+```bash
+cd examples/apps/tic-tac-toe
+java -jar ../../../out/flix/assembly.dest/out.jar run
+java -jar ../../../out/flix/assembly.dest/out.jar test
+```
+
+The commands must be run from this directory, since `flix.toml` is what tells the
+compiler it is looking at a package.
+
 ### Replaying the same game
 
 When several moves are equally good — most obviously the opening, where all nine are —
