@@ -104,11 +104,11 @@ mod Gui {
 
         let sketch = new PApplet {
             def settings(app: PApplet): Unit \ IO = {
-                app.size(450, 550)
+                app.size(450, 550);
+                app.pixelDensity(1)
             }
 
             def setup(app: PApplet): Unit \ IO = {
-                app.pixelDensity(1);
                 app.frameRate(30.0f32)
             }
 

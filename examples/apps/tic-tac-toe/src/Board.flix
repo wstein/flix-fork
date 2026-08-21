@@ -10,7 +10,7 @@ pub enum Outcome with Eq, ToString {
 ///
 /// Enum representing the board, backed by an immutable vector.
 ///
-enum Board(Vector[Symbol])
+enum Board(Vector[Symbol]) with Eq, Order
 
 mod Board {
 
