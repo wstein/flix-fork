@@ -7,21 +7,35 @@ mod TestGui {
         let ox = Gui.boardOffsetX();
         let oy = Gui.boardOffsetY();
         let sz = Gui.cellSize();
+        let mid = sz / 2;
 
-        // Top-left cell (0) center
-        assertEq(expected = Some(0), Gui.cellAt(ox + sz * 0.5f32, oy + sz * 0.5f32));
+        // Top-left cell (0) centre
+        assertEq(expected = Some(0), Gui.cellAt(ox + mid, oy + mid));
 
-        // Center cell (4) center
-        assertEq(expected = Some(4), Gui.cellAt(ox + sz * 1.5f32, oy + sz * 1.5f32));
+        // Centre cell (4)
+        assertEq(expected = Some(4), Gui.cellAt(ox + sz + mid, oy + sz + mid));
 
-        // Bottom-right cell (8) center
-        assertEq(expected = Some(8), Gui.cellAt(ox + sz * 2.5f32, oy + sz * 2.5f32));
+        // Bottom-right cell (8)
+        assertEq(expected = Some(8), Gui.cellAt(ox + sz * 2 + mid, oy + sz * 2 + mid));
 
-        // Top-right cell (2) center
-        assertEq(expected = Some(2), Gui.cellAt(ox + sz * 2.5f32, oy + sz * 0.5f32));
+        // Top-right cell (2)
+        assertEq(expected = Some(2), Gui.cellAt(ox + sz * 2 + mid, oy + mid));
 
-        // Bottom-left cell (6) center
-        assertEq(expected = Some(6), Gui.cellAt(ox + sz * 0.5f32, oy + sz * 2.5f32))
+        // Bottom-left cell (6)
+        assertEq(expected = Some(6), Gui.cellAt(ox + mid, oy + sz * 2 + mid))
+    }
+
+    @Test
+    def testCellAtEdges(): Unit \ Assert = {
+        let ox = Gui.boardOffsetX();
+        let oy = Gui.boardOffsetY();
+        let sz = Gui.cellSize();
+
+        // The top-left pixel of the board belongs to cell 0; the pixel just past the
+        // bottom-right corner belongs to no cell. Integer pixels make these exact.
+        assertEq(expected = Some(0), Gui.cellAt(ox, oy));
+        assertEq(expected = Some(8), Gui.cellAt(ox + sz * 3 - 1, oy + sz * 3 - 1));
+        assertEq(expected = None, Gui.cellAt(ox + sz * 3, oy + sz * 3))
     }
 
     @Test
@@ -30,17 +44,10 @@ mod TestGui {
         let oy = Gui.boardOffsetY();
         let sz = Gui.cellSize();
 
-        // Above board
-        assertEq(expected = None, Gui.cellAt(ox + sz, oy - 10.0f32));
-
-        // Below board
-        assertEq(expected = None, Gui.cellAt(ox + sz, oy + sz * 3.0f32 + 10.0f32));
-
-        // Left of board
-        assertEq(expected = None, Gui.cellAt(ox - 10.0f32, oy + sz));
-
-        // Right of board
-        assertEq(expected = None, Gui.cellAt(ox + sz * 3.0f32 + 10.0f32, oy + sz))
+        assertEq(expected = None, Gui.cellAt(ox + sz, oy - 10));          // above
+        assertEq(expected = None, Gui.cellAt(ox + sz, oy + sz * 3 + 10)); // below
+        assertEq(expected = None, Gui.cellAt(ox - 10, oy + sz));          // left
+        assertEq(expected = None, Gui.cellAt(ox + sz * 3 + 10, oy + sz))  // right
     }
 
     @Test
@@ -50,31 +57,35 @@ mod TestGui {
         let cw = Gui.closeButtonW();
         let ch = Gui.closeButtonH();
 
-        // Inside button
-        assertEq(expected = true, Gui.isCloseClicked(cx + cw * 0.5f32, cy + ch * 0.5f32));
+        // Inside
+        assertEq(expected = true, Gui.isCloseClicked(cx + cw / 2, cy + ch / 2));
         assertEq(expected = true, Gui.isCloseClicked(cx, cy));
         assertEq(expected = true, Gui.isCloseClicked(cx + cw, cy + ch));
 
-        // Outside button
-        assertEq(expected = false, Gui.isCloseClicked(cx - 5.0f32, cy));
-        assertEq(expected = false, Gui.isCloseClicked(cx, cy - 5.0f32));
-        assertEq(expected = false, Gui.isCloseClicked(cx + cw + 5.0f32, cy));
-        assertEq(expected = false, Gui.isCloseClicked(cx, cy + ch + 5.0f32))
+        // Outside
+        assertEq(expected = false, Gui.isCloseClicked(cx - 5, cy));
+        assertEq(expected = false, Gui.isCloseClicked(cx, cy - 5));
+        assertEq(expected = false, Gui.isCloseClicked(cx + cw + 5, cy));
+        assertEq(expected = false, Gui.isCloseClicked(cx, cy + ch + 5))
     }
 
     @Test
     def testCloseButtonIsCentredAndClearOfTheBoard(): Unit \ Assert = {
-        // The only button left, so it sits in the middle.
-        let centre = Gui.closeButtonX() + Gui.closeButtonW() / 2.0f32;
-        assertEq(expected = Int32.toFloat32(Gui.canvasWidth()) / 2.0f32, centre);
+        // The only button, so it sits in the middle.
+        assertEq(expected = Gui.canvasWidth() / 2, Gui.closeButtonX() + Gui.closeButtonW() / 2);
 
-        // Below the board, and inside the canvas, so a click on it cannot also place a
+        // Below the board and inside the canvas, so a click on it cannot also place a
         // piece or fall off the window.
-        Assert.assertTrue(Gui.closeButtonY() > Gui.boardOffsetY() + Gui.cellSize() * 3.0f32);
-        Assert.assertTrue(Gui.closeButtonX() >= 0.0f32);
-        Assert.assertTrue(Gui.closeButtonX() + Gui.closeButtonW()
-                          <= Int32.toFloat32(Gui.canvasWidth()));
+        Assert.assertTrue(Gui.closeButtonY() > Gui.boardOffsetY() + Gui.cellSize() * 3);
+        Assert.assertTrue(Gui.closeButtonX() >= 0);
+        Assert.assertTrue(Gui.closeButtonX() + Gui.closeButtonW() <= Gui.canvasWidth());
         assertEq(expected = None, Gui.cellAt(Gui.closeButtonX(), Gui.closeButtonY()))
+    }
+
+    @Test
+    def testBoardAndControlsFitTheCanvas(): Unit \ Assert = {
+        Assert.assertTrue(Gui.boardOffsetX() + Gui.cellSize() * 3 <= Gui.canvasWidth());
+        Assert.assertTrue(Gui.closeButtonY() + Gui.closeButtonH() < Gui.canvasHeight())
     }
 
     @Test
@@ -87,51 +98,30 @@ mod TestGui {
 
         // And it must survive the trip through Sound without silencing anything.
         let quiet = Sound.atVolume(Gui.demoVolumePercent(), Sound.winFanfare());
-        Assert.assertTrue(Sound.duration(quiet) == Sound.duration(Sound.winFanfare()))
+        assertEq(expected = Sound.duration(Sound.winFanfare()), Sound.duration(quiet))
     }
 
     @Test
     def testDemoOverlayIsTranslucent(): Unit \ Assert = {
         // Opaque would hide the board it is watermarking; zero would be invisible.
-        Assert.assertTrue(Gui.demoOverlayAlpha() > 0.0f32);
-        Assert.assertTrue(Gui.demoOverlayAlpha() < 255.0f32)
-    }
-
-    @Test
-    def testDemoOverlayIsCentredOnTheCanvas(): Unit \ Assert = {
-        // The watermark runs corner to corner, so it pivots about the middle of the
-        // window rather than the middle of the board.
-        assertEq(expected = Int32.toFloat32(Gui.canvasWidth()) / 2.0f32, Gui.canvasCenterX());
-        assertEq(expected = Int32.toFloat32(Gui.canvasHeight()) / 2.0f32, Gui.canvasCenterY())
+        Assert.assertTrue(Gui.demoOverlayAlpha() > 0);
+        Assert.assertTrue(Gui.demoOverlayAlpha() < 255)
     }
 
     @Test
     def testDemoOverlaySpanStaysInsideTheWindow(): Unit \ Assert = {
         // The word is scaled to this fraction of the diagonal. At 1.0 it would touch the
         // corners and the outer letters would be clipped; at 0.0 it would vanish.
-        Assert.assertTrue(Gui.demoOverlaySpan() > 0.0f32);
-        Assert.assertTrue(Gui.demoOverlaySpan() < 1.0f32)
-    }
-
-    @Test
-    def testBoardAndControlsFitTheCanvas(): Unit \ Assert = {
-        // Everything must fit, with the controls clear of the board.
-        let boardBottom = Gui.boardOffsetY() + Gui.cellSize() * 3.0f32;
-        Assert.assertTrue(boardBottom < Gui.closeButtonY());
-        Assert.assertTrue(Gui.closeButtonY() + Gui.closeButtonH()
-                          < Int32.toFloat32(Gui.canvasHeight()));
-        Assert.assertTrue(Gui.boardOffsetX() + Gui.cellSize() * 3.0f32
-                          <= Int32.toFloat32(Gui.canvasWidth()))
+        Assert.assertTrue(Gui.demoOverlaySpan() > 0.0f64);
+        Assert.assertTrue(Gui.demoOverlaySpan() < 1.0f64)
     }
 
     @Test
     def testClickOnBoardTakesOverFromTheDemo(): Unit \ Assert = {
-        let idle = Gui.autoModeIdleMs();
-        let centre = (Gui.boardOffsetX() + Gui.cellSize() * 1.5f32,
-                      Gui.boardOffsetY() + Gui.cellSize() * 1.5f32);
-        match centre {
-            case (bx, by) => Assert.assertTrue(Gui.clickTakesOverDemo(idle, bx, by))
-        }
+        let sz = Gui.cellSize();
+        let bx = Gui.boardOffsetX() + sz + sz / 2;
+        let by = Gui.boardOffsetY() + sz + sz / 2;
+        Assert.assertTrue(Gui.clickTakesOverDemo(Gui.autoModeIdleMs(), bx, by))
     }
 
     @Test
@@ -141,19 +131,21 @@ mod TestGui {
         // Close already means something, and the margin means nothing; neither should
         // throw away a game somebody is watching.
         assertEq(expected = false, Gui.clickTakesOverDemo(idle, Gui.closeButtonX(), Gui.closeButtonY()));
-        assertEq(expected = false, Gui.clickTakesOverDemo(idle, 5.0f32, 5.0f32))
+        assertEq(expected = false, Gui.clickTakesOverDemo(idle, 5, 5))
     }
 
     @Test
     def testClickDuringANormalGameIsNotATakeover(): Unit \ Assert = {
+        let sz = Gui.cellSize();
+        let bx = Gui.boardOffsetX() + sz + sz / 2;
+        let by = Gui.boardOffsetY() + sz + sz / 2;
+
         // Below the idle threshold the demo is not running, so a click on the board is
         // an ordinary move and must not clear it.
-        let bx = Gui.boardOffsetX() + Gui.cellSize() * 1.5f32;
-        let by = Gui.boardOffsetY() + Gui.cellSize() * 1.5f32;
         assertEq(expected = false, Gui.clickTakesOverDemo(0i64, bx, by));
         assertEq(expected = false, Gui.clickTakesOverDemo(Gui.autoModeIdleMs() - 1i64, bx, by));
 
-        // And exactly at the threshold it is a takeover, matching the draw loop's test.
+        // And exactly at the threshold it is a takeover, matching the loop's own test.
         Assert.assertTrue(Gui.clickTakesOverDemo(Gui.autoModeIdleMs(), bx, by))
     }
 
@@ -181,9 +173,17 @@ mod TestGui {
 
         // The idle threshold must exceed a move delay, or a game against a human would
         // slip into auto mode while they were simply watching the computer reply.
-        Assert.assertTrue(Gui.autoModeIdleMs() > Gui.aiMoveDelayMs());
+        Assert.assertTrue(Gui.autoModeIdleMs() > Gui.aiMoveDelayMs())
+    }
 
-        // A finished game must stay on screen long enough to read before it clears.
-        Assert.assertTrue(Gui.newGameDelayMs() >= Gui.aiMoveDelayMs())
+    @Test
+    def testFrameRateIsSmoothButNotBusy(): Unit \ Assert = {
+        // Between about 20 and 60 frames a second: fast enough not to look stepped,
+        // slow enough that the loop is not spinning.
+        Assert.assertTrue(Gui.frameDelayMs() >= 16i64);
+        Assert.assertTrue(Gui.frameDelayMs() <= 50i64);
+
+        // A move must not land in the same frame as the click that prompted it.
+        Assert.assertTrue(Gui.aiMoveDelayMs() > Gui.frameDelayMs())
     }
 }

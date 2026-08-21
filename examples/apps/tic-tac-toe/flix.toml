@@ -1,9 +1,6 @@
 [package]
 name        = "tic-tac-toe"
-description = "A command line and GUI Tic Tac Toe game implemented in Flix."
-version     = "0.3.0"
+description = "A graphical Tic Tac Toe game implemented in Flix."
+version     = "0.4.0"
 flix        = "0.75.0"
 authors     = ["Gagan Chandan <gagan@gaganchandan.com>", "Werner Stein <werner.stein@gmail.com>"]
-
-[mvn-dependencies]
-"org.processing:core" = "4.5.6"
