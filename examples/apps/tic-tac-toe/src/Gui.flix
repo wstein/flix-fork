@@ -1,5 +1,7 @@
 mod Gui {
 
+    import java.lang.Thread
+    import java.lang.Object
     import java.util.concurrent.atomic.AtomicReference
     import processing.core.PApplet
     import processing.core.PConstants
@@ -226,6 +228,7 @@ mod Gui {
         };
 
         region rc {
+            Thread.currentThread().setContextClassLoader(sketch.getClass().getClassLoader());
             let args: Array[String, rc] = Array#{"TicTacToeGui"} @ rc;
             PApplet.runSketch(args, sketch)
         }
