@@ -6,4 +6,4 @@ flix        = "0.75.0"
 authors     = ["Gagan Chandan <gagan@gaganchandan.com>", "Werner Stein <werner.stein@gmail.com>"]
 
 [mvn-dependencies]
-"org.processing:core" = "3.3.7"
+"org.processing:core" = "4.5.6"
