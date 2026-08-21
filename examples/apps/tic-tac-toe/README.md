@@ -165,6 +165,8 @@ sequenceDiagram
     alt game over
         Gui->>Snd: fanfare, or the other one
     end
+    Note over Gui: 3s after the game ends
+    Gui->>Gui: clear the board
     Note over You,Gui: no click for 10s
     Gui->>Gui: draw DEMO watermark
     Gui->>AI: bestMove for both sides, at 20% volume, until you click again
@@ -189,9 +191,10 @@ let autoMode = now - lastInputTimeRef.get() >= autoModeIdleMs();
 That one boolean then drives everything the demo does — who moves, how loud it is, and
 whether the watermark is drawn — which is why none of those can disagree with each other.
 
-**Buttons.** "New Game" clears the board; "Close" quits. Both are hit-tested with the
-same `isInside` helper, and `TestGui` checks that they cannot overlap each other or the
-board.
+**Finishing.** A finished game clears itself after three seconds — long enough to see how
+it ended and hear the fanfare out. There is no New Game button because there is nothing
+for one to do. "Close" quits, and `TestGui` checks it cannot sit over the board where a
+click would also place a piece.
 
 ## A trap worth knowing about: MIDI percussion
 
