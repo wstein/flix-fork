@@ -16,14 +16,10 @@ mod Gui {
     pub def boardOffsetX(): Float32 = 45.0f32
     pub def boardOffsetY(): Float32 = 100.0f32
     pub def cellSize(): Float32 = 120.0f32
-    pub def restartButtonX(): Float32 = 55.0f32
-    pub def restartButtonY(): Float32 = 480.0f32
-    pub def restartButtonW(): Float32 = 160.0f32
-    pub def restartButtonH(): Float32 = 40.0f32
-    pub def closeButtonX(): Float32 = 235.0f32
-    pub def closeButtonY(): Float32 = 480.0f32
     pub def closeButtonW(): Float32 = 160.0f32
     pub def closeButtonH(): Float32 = 40.0f32
+    pub def closeButtonX(): Float32 = (Int32.toFloat32(canvasWidth()) - closeButtonW()) / 2.0f32
+    pub def closeButtonY(): Float32 = 480.0f32
 
     ///
     /// How long the game waits before making a move, so that the computer does not
@@ -86,12 +82,6 @@ mod Gui {
     ///
     def isInside(x: Float32, y: Float32, bx: Float32, by: Float32, bw: Float32, bh: Float32): Bool =
         x >= bx and x <= bx + bw and y >= by and y <= by + bh
-
-    ///
-    /// Checks if coordinates (x, y) are within the "New Game" button.
-    ///
-    pub def isRestartClicked(x: Float32, y: Float32): Bool =
-        isInside(x, y, restartButtonX(), restartButtonY(), restartButtonW(), restartButtonH())
 
     ///
     /// Checks if coordinates (x, y) are within the "Close" button.
@@ -166,7 +156,7 @@ mod Gui {
     /// Returns true when a click at (x, y), after `idleMillis` without input, should
     /// take the game back from the demo.
     ///
-    /// Only clicks on the board count. Clicking a button already means something, and
+    /// Only clicks on the board count. Clicking Close already means something, and
     /// clicking the margin should not throw away a game that is being watched.
     ///
     pub def clickTakesOverDemo(idleMillis: Int64, x: Float32, y: Float32): Bool =
@@ -241,8 +231,8 @@ mod Gui {
         // Opened once: building and opening a synthesizer per click is audible as lag.
         let sound = Sound.open();
 
-        // Reached from three places: the button, the demo dealing another game, and a
-        // player taking the board back from the demo.
+        // Reached from two places: a finished game clearing itself, and a player taking
+        // the board back from the demo.
         let startNewGame = () -> {
             boardRef.set(Board.newBoard());
             turnRef.set(Symbol.X);
@@ -399,8 +389,6 @@ mod Gui {
                 // 5. Draw the buttons
                 let mx = Int32.toFloat32(app.mouseX);
                 let my = Int32.toFloat32(app.mouseY);
-                drawButton(app, restartButtonX(), restartButtonY(), restartButtonW(),
-                           restartButtonH(), "New Game", isRestartClicked(mx, my));
                 drawButton(app, closeButtonX(), closeButtonY(), closeButtonW(),
                            closeButtonH(), "Close", isCloseClicked(mx, my));
 
@@ -422,8 +410,6 @@ mod Gui {
 
                 if (isCloseClicked(mx, my)) {
                     app.exit()
-                } else if (isRestartClicked(mx, my)) {
-                    startNewGame()
                 } else if (clickTakesOverDemo(idleMillis, mx, my)) {
                     // Taking the board back from the demo clears it and stops there. The
                     // click is not also played as a move: it landed on a position the

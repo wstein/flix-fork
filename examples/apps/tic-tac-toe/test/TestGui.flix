@@ -44,25 +44,6 @@ mod TestGui {
     }
 
     @Test
-    def testIsRestartClicked(): Unit \ Assert = {
-        let rx = Gui.restartButtonX();
-        let ry = Gui.restartButtonY();
-        let rw = Gui.restartButtonW();
-        let rh = Gui.restartButtonH();
-
-        // Inside button
-        assertEq(expected = true, Gui.isRestartClicked(rx + rw * 0.5f32, ry + rh * 0.5f32));
-        assertEq(expected = true, Gui.isRestartClicked(rx, ry));
-        assertEq(expected = true, Gui.isRestartClicked(rx + rw, ry + rh));
-
-        // Outside button
-        assertEq(expected = false, Gui.isRestartClicked(rx - 5.0f32, ry));
-        assertEq(expected = false, Gui.isRestartClicked(rx, ry - 5.0f32));
-        assertEq(expected = false, Gui.isRestartClicked(rx + rw + 5.0f32, ry));
-        assertEq(expected = false, Gui.isRestartClicked(rx, ry + rh + 5.0f32))
-    }
-
-    @Test
     def testIsCloseClicked(): Unit \ Assert = {
         let cx = Gui.closeButtonX();
         let cy = Gui.closeButtonY();
@@ -82,23 +63,18 @@ mod TestGui {
     }
 
     @Test
-    def testButtonsDoNotOverlap(): Unit \ Assert = {
-        // A click must never mean both "new game" and "quit".
-        Assert.assertTrue(Gui.restartButtonX() + Gui.restartButtonW() < Gui.closeButtonX());
+    def testCloseButtonIsCentredAndClearOfTheBoard(): Unit \ Assert = {
+        // The only button left, so it sits in the middle.
+        let centre = Gui.closeButtonX() + Gui.closeButtonW() / 2.0f32;
+        assertEq(expected = Int32.toFloat32(Gui.canvasWidth()) / 2.0f32, centre);
 
-        // Neither button may hang off the 450px canvas.
-        Assert.assertTrue(Gui.closeButtonX() + Gui.closeButtonW() <= 450.0f32);
-        Assert.assertTrue(Gui.restartButtonX() >= 0.0f32)
-    }
-
-    @Test
-    def testButtonsAreClearOfTheBoard(): Unit \ Assert = {
-        // Clicking a button must not also drop a piece on the board.
-        let boardBottom = Gui.boardOffsetY() + Gui.cellSize() * 3.0f32;
-        Assert.assertTrue(Gui.restartButtonY() > boardBottom);
-        Assert.assertTrue(Gui.closeButtonY() > boardBottom);
-        assertEq(expected = None, Gui.cellAt(Gui.closeButtonX(), Gui.closeButtonY()));
-        assertEq(expected = None, Gui.cellAt(Gui.restartButtonX(), Gui.restartButtonY()))
+        // Below the board, and inside the canvas, so a click on it cannot also place a
+        // piece or fall off the window.
+        Assert.assertTrue(Gui.closeButtonY() > Gui.boardOffsetY() + Gui.cellSize() * 3.0f32);
+        Assert.assertTrue(Gui.closeButtonX() >= 0.0f32);
+        Assert.assertTrue(Gui.closeButtonX() + Gui.closeButtonW()
+                          <= Int32.toFloat32(Gui.canvasWidth()));
+        assertEq(expected = None, Gui.cellAt(Gui.closeButtonX(), Gui.closeButtonY()))
     }
 
     @Test
@@ -141,8 +117,8 @@ mod TestGui {
     def testBoardAndControlsFitTheCanvas(): Unit \ Assert = {
         // Everything must fit, with the controls clear of the board.
         let boardBottom = Gui.boardOffsetY() + Gui.cellSize() * 3.0f32;
-        Assert.assertTrue(boardBottom < Gui.restartButtonY());
-        Assert.assertTrue(Gui.restartButtonY() + Gui.restartButtonH()
+        Assert.assertTrue(boardBottom < Gui.closeButtonY());
+        Assert.assertTrue(Gui.closeButtonY() + Gui.closeButtonH()
                           < Int32.toFloat32(Gui.canvasHeight()));
         Assert.assertTrue(Gui.boardOffsetX() + Gui.cellSize() * 3.0f32
                           <= Int32.toFloat32(Gui.canvasWidth()))
@@ -162,9 +138,8 @@ mod TestGui {
     def testClickOffTheBoardLeavesTheDemoRunning(): Unit \ Assert = {
         let idle = Gui.autoModeIdleMs();
 
-        // The buttons already mean something, and the margin means nothing; neither
-        // should throw away a game somebody is watching.
-        assertEq(expected = false, Gui.clickTakesOverDemo(idle, Gui.restartButtonX(), Gui.restartButtonY()));
+        // Close already means something, and the margin means nothing; neither should
+        // throw away a game somebody is watching.
         assertEq(expected = false, Gui.clickTakesOverDemo(idle, Gui.closeButtonX(), Gui.closeButtonY()));
         assertEq(expected = false, Gui.clickTakesOverDemo(idle, 5.0f32, 5.0f32))
     }
