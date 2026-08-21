@@ -32,6 +32,34 @@ mod TestSound {
             and Sound.duration(score) > 0i64
 
     @Test
+    def testAtVolumeQuietensWithoutSilencing(): Unit \ Assert = {
+        let quiet = Sound.atVolume(20, Sound.winFanfare());
+
+        // Quieter than written, but still audible, and still playable MIDI.
+        Assert.assertTrue(List.sum(velocitiesOf(quiet)) < List.sum(velocitiesOf(Sound.winFanfare())));
+        Assert.assertTrue(isPlayable(quiet))
+    }
+
+    @Test
+    def testAtVolumeNeverReachesZero(): Unit \ Assert = {
+        // Velocity 0 is a note *off* in MIDI, so rounding down to it would silence the
+        // score rather than quieten it.
+        let scores = Sound.humanClick() :: Sound.computerClick() :: Sound.winFanfare()
+                  :: Sound.loseSound() :: Sound.drawSound() :: Nil;
+        let atOnePercent = List.flatMap(sc -> velocitiesOf(Sound.atVolume(1, sc)), scores);
+        Assert.assertTrue(List.forAll(v -> v >= 1, atOnePercent))
+    }
+
+    @Test
+    def testAtVolumeKeepsPitchesAndTiming(): Unit \ Assert = {
+        // Only loudness changes: the tune and its rhythm must survive.
+        let original = Sound.winFanfare();
+        let quiet = Sound.atVolume(20, original);
+        assertEq(expected = pitchesOf(original), pitchesOf(quiet));
+        assertEq(expected = Sound.duration(original), Sound.duration(quiet))
+    }
+
+    @Test
     def testEveryScoreIsPlayable(): Unit \ Assert = {
         Assert.assertTrue(isPlayable(Sound.humanClick()));
         Assert.assertTrue(isPlayable(Sound.computerClick()));

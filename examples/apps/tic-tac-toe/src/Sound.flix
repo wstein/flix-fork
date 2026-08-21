@@ -117,6 +117,20 @@ mod Sound {
         Nil
 
     ///
+    /// Returns the given score played at `percent` of its written loudness.
+    ///
+    /// MIDI velocity is not a decibel scale, so this is a rough gesture rather than a
+    /// calibrated attenuation --- enough to push a sound into the background. Velocity
+    /// is floored at 1, because velocity 0 is a note *off* in MIDI and would silence
+    /// the score entirely rather than merely quieten it.
+    ///
+    pub def atVolume(percent: Int32, score: List[Step]): List[Step] =
+        List.map(s -> match s {
+            case Step.Step(pitches, velocity, millis) =>
+                Step.Step(pitches, Order.max(1, velocity * percent / 100), millis)
+        }, score)
+
+    ///
     /// Returns how long the given score takes to play, in milliseconds.
     ///
     pub def duration(score: List[Step]): Int64 =
