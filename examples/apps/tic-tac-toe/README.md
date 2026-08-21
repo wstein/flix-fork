@@ -37,7 +37,7 @@ flowchart TD
 | `src/Minimax.flix` | Recursion, alpha-beta search, and a **Datalog lattice** to pick the best moves. |
 | `src/CliOpt.flix` | Records, `Option`, and collecting errors instead of crashing. |
 | `src/Sound.flix` | **Java interop** (`javax.sound.midi`), and separating pure data from `IO`. A score is data, so `atVolume` is a one-line `List.map` and can be tested without a speaker. |
-| `src/Gui.flix` | **Java interop** (`processing.core`), and an interactive event loop. |
+| `src/Gui.flix` | **Java interop** (Swing and AWT), and an interactive event loop. |
 | `src/Opponent.flix` | The smallest file here: one two-case enum. Start by reading it. |
 | `src/Main.flix` | **Effect handlers** — where `Sys.Env`, `Sys.Exit` and `Math.Random` are given meaning. |
 
@@ -141,13 +141,19 @@ allows — it is the game that is narrow.
 
 ## How a turn actually happens
 
-Processing calls `draw` about thirty times a second. Nothing blocks, so the window never
-freezes while the computer thinks.
+A loop at the bottom of `runGui` runs about thirty times a second. Nothing in it blocks,
+so the window never freezes while the computer thinks.
+
+Note how the work is divided, because Swing forces the issue. It may repaint whenever it
+likes — when the window is uncovered, resized, or dragged to another screen — so
+`paintComponent` only ever *draws the current position*. Advancing the game happens in
+`tick`, on the loop's clock. Mixing the two would mean the computer took a turn because
+somebody moved the window.
 
 ```mermaid
 sequenceDiagram
     participant You
-    participant Gui as Gui.flix (draw loop)
+    participant Gui as Gui.flix (game loop)
     participant AI as Minimax.flix
     participant Snd as Sound.flix
 
@@ -255,13 +261,12 @@ TICTACTOE_SEED=12345 flix run
 
 ```bash
 flix build-jar
-CP="artifact/tic-tac-toe.jar:$(find lib -name '*.jar' | tr '\n' ':')"
-java -cp "$CP" Main --seed 12345
-java -cp "$CP" Main --help
+java -jar artifact/tic-tac-toe.jar --seed 12345
+java -jar artifact/tic-tac-toe.jar --help
 ```
 
-Package with `build-jar` rather than `build-fatjar`. Keeping Processing as a separate
-jar on the classpath is not a style preference here — see the licence note at the end.
+The jar is self-contained. This package declares no dependencies, so there is nothing to
+put on a classpath and nothing to ship alongside it.
 
 The seed is applied once, at the start, so that successive moves draw successive values
 from it. Seeding per move instead would make the computer pick the same cell every time.
@@ -291,22 +296,12 @@ graphical interface, and the sound — by **Werner Stein** <werner.stein@gmail.c
 This example is part of the Flix repository and is distributed under the
 [Apache License 2.0](../../../LICENSE.md), like the rest of it.
 
-> **Dependency licence note.** The graphical interface uses
-> [`org.processing:core`](https://processing.org/), which is licensed under the
-> **LGPL-2.1**, not Apache-2.0. No Processing code is copied into this repository — it is
-> fetched by the build — so the repository itself remains Apache-2.0.
+> **On dependencies.** There are none. The interface uses Swing and AWT and the sound
+> uses `javax.sound.midi`, all of which are part of the JDK, so nothing is downloaded and
+> nothing extra is redistributed when you hand somebody the jar.
 >
-> How you package the game does matter, though. `flix build-fatjar` merges everything
-> into one archive: 223 Processing classes and 2041 JOGL classes beside your own, and no
-> copy of the LGPL anywhere in it. Distributing that is exactly the case LGPL-2.1
-> section 6 governs. It requires that the recipient be able to relink the work against a
-> modified Processing, and that a copy of the licence accompany the work; a merged jar
-> defeats the first and the build supplies neither.
->
-> `flix build-jar` keeps the boundary intact. The jar it writes contains none of
-> Processing, which stays a separate jar on the classpath where it can be replaced —
-> the arrangement the LGPL is written around. If you distribute the game, ship the
-> dependency jars alongside it and include the LGPL text.
->
-> `javax.sound.midi`, used by `Sound.flix`, is part of the JDK and adds no such
-> condition.
+> That was a deliberate choice rather than an accident. An earlier version drew the board
+> with [Processing](https://processing.org/), which cost a crash on modern JDKs, 13MB of
+> native libraries, and an LGPL-2.1 dependency inside an Apache-2.0 repository that made
+> the packaged game awkward to redistribute. None of it was buying anything a 3x3 grid
+> needed.
