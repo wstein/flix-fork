@@ -10,15 +10,18 @@ mod Gui {
     ///
     /// Cell dimensions and coordinates in the GUI window.
     ///
+    pub def canvasWidth(): Int32 = 450
+    pub def canvasHeight(): Int32 = 680
+
     pub def boardOffsetX(): Float32 = 45.0f32
-    pub def boardOffsetY(): Float32 = 100.0f32
+    pub def boardOffsetY(): Float32 = 235.0f32
     pub def cellSize(): Float32 = 120.0f32
     pub def restartButtonX(): Float32 = 55.0f32
-    pub def restartButtonY(): Float32 = 480.0f32
+    pub def restartButtonY(): Float32 = 615.0f32
     pub def restartButtonW(): Float32 = 160.0f32
     pub def restartButtonH(): Float32 = 40.0f32
     pub def closeButtonX(): Float32 = 235.0f32
-    pub def closeButtonY(): Float32 = 480.0f32
+    pub def closeButtonY(): Float32 = 615.0f32
     pub def closeButtonW(): Float32 = 160.0f32
     pub def closeButtonH(): Float32 = 40.0f32
 
@@ -54,7 +57,21 @@ mod Gui {
     /// The centre of the 450x550 canvas, where the watermark is drawn.
     ///
     pub def canvasCenterX(): Float32 = 225.0f32
-    pub def canvasCenterY(): Float32 = 275.0f32
+    pub def canvasCenterY(): Float32 = 340.0f32
+
+    ///
+    /// The strip along the top, where finished games are tallied by shape.
+    ///
+    pub def statsCellSize(): Float32 = 22.0f32
+    pub def statsBoardY(): Float32 = 40.0f32
+    pub def statsLabelY(): Float32 = 128.0f32
+    pub def statsColumns(): Int32 = 3
+
+    ///
+    /// The horizontal centre of the given statistics column.
+    ///
+    pub def statsColumnCenterX(col: Int32): Float32 =
+        75.0f32 + Int32.toFloat32(col) * 150.0f32
 
     ///
     /// Returns the cell index (0-8) corresponding to canvas coordinates (x, y), if within bounds.
@@ -113,7 +130,8 @@ mod Gui {
     ///
     /// Draws a single piece (X or O) on the board canvas.
     ///
-    def drawPiece(app: PApplet, ox: Float32, oy: Float32, sz: Float32, idx: Int32, sym: Symbol): Unit \ IO = {
+    def drawPiece(app: PApplet, ox: Float32, oy: Float32, sz: Float32, weight: Float32,
+                  idx: Int32, sym: Symbol): Unit \ IO = {
         let col = Int32.toFloat32(Int32.remainder(idx, 3));
         let row = Int32.toFloat32(idx / 3);
         let cx = ox + col * sz + sz / 2.0f32;
@@ -123,14 +141,14 @@ mod Gui {
         match sym {
             case Symbol.X => {
                 app.stroke(255.0f32, 107.0f32, 107.0f32);
-                app.strokeWeight(7.0f32);
+                app.strokeWeight(weight);
                 app.line(cx - r, cy - r, cx + r, cy + r);
                 app.line(cx + r, cy - r, cx - r, cy + r)
             }
             case Symbol.O => {
                 app.noFill();
                 app.stroke(78.0f32, 205.0f32, 196.0f32);
-                app.strokeWeight(7.0f32);
+                app.strokeWeight(weight);
                 app.ellipse(cx, cy, r * 2.0f32, r * 2.0f32)
             }
             case Symbol.Empty => ()
@@ -155,6 +173,64 @@ mod Gui {
         app.textSize(16.0f32);
         app.textAlign(PConstants.CENTER, PConstants.CENTER);
         app.text(label, bx + bw / 2.0f32, by + bh / 2.0f32)
+    }
+
+    ///
+    /// Draws one tallied shape: a small board, with how many games ended that way and
+    /// what share of the total that is.
+    ///
+    def drawStat(app: PApplet, col: Int32, shape: Board, count: Int32, total: Int32): Unit \ IO = {
+        let sz = statsCellSize();
+        let ox = statsColumnCenterX(col) - sz * 1.5f32;
+        let oy = statsBoardY();
+
+        // The grid the miniature sits on.
+        app.noFill();
+        app.stroke(62.0f32, 68.0f32, 81.0f32);
+        app.strokeWeight(1.0f32);
+        app.rect(ox, oy, sz * 3.0f32, sz * 3.0f32);
+        app.line(ox + sz, oy, ox + sz, oy + sz * 3.0f32);
+        app.line(ox + sz * 2.0f32, oy, ox + sz * 2.0f32, oy + sz * 3.0f32);
+        app.line(ox, oy + sz, ox + sz * 3.0f32, oy + sz);
+        app.line(ox, oy + sz * 2.0f32, ox + sz * 3.0f32, oy + sz * 2.0f32);
+
+        match shape {
+            case Board.Board(vec) =>
+                Vector.forEachWithIndex((idx, sym) -> drawPiece(app, ox, oy, sz, 2.5f32, idx, sym), vec)
+        };
+
+        app.textAlign(PConstants.CENTER, PConstants.CENTER);
+        app.textSize(13.0f32);
+        app.fill(148.0f32, 158.0f32, 178.0f32);
+        let percent = if (total == 0) 0 else count * 100 / total;
+        app.text("${count}  (${percent}%)", statsColumnCenterX(col), statsLabelY())
+    }
+
+    ///
+    /// Draws the tally of finished games along the top of the window.
+    ///
+    /// Boards are counted by shape rather than literally, so a position and its
+    /// rotations are one entry. Entries are laid out in the order `Board.canonical`
+    /// puts them in, which does not change as counts accumulate, so the columns stay
+    /// put while the numbers move.
+    ///
+    def drawStats(app: PApplet, tally: Map[Board, Int32]): Unit \ IO = {
+        app.textAlign(PConstants.CENTER, PConstants.CENTER);
+        app.textSize(13.0f32);
+        app.fill(108.0f32, 118.0f32, 136.0f32);
+
+        let entries = Map.toList(tally);
+        let total = List.sumWith(snd, entries);
+        if (List.isEmpty(entries)) {
+            app.text("Every drawn game ends in one of three shapes. Watch.",
+                     canvasCenterX(), statsBoardY() + statsCellSize())
+        } else {
+            app.text("${total} drawn games so far", canvasCenterX(), 18.0f32);
+            List.forEachWithIndex((col, entry) -> match entry {
+                case (shape, count) =>
+                    if (col < statsColumns()) drawStat(app, col, shape, count, total) else ()
+            }, entries)
+        }
     }
 
     ///
@@ -199,6 +275,8 @@ mod Gui {
         let gameOverSoundPlayedRef: AtomicReference[Bool] = new AtomicReference(false);
         let lastInputTimeRef: AtomicReference[Int64] = new AtomicReference(System.currentTimeMillis());
         let autoRestartTimeRef: AtomicReference[Int64] = new AtomicReference(0i64);
+        let emptyTally: Map[Board, Int32] = Map.empty();
+        let tallyRef: AtomicReference[Map[Board, Int32]] = new AtomicReference(emptyTally);
         let humanSymbol = Symbol.X;
         let opponent = Opponent.Computer;
 
@@ -207,7 +285,7 @@ mod Gui {
 
         let sketch = new PApplet {
             def settings(app: PApplet): Unit \ IO = {
-                app.size(450, 550);
+                app.size(canvasWidth(), canvasHeight());
                 app.pixelDensity(1)
             }
 
@@ -268,6 +346,16 @@ mod Gui {
                 // Trigger game over sounds once upon resolution
                 if (updatedOutcome != Outcome.Ongoing and not gameOverSoundPlayedRef.get()) {
                     gameOverSoundPlayedRef.set(true);
+
+                    // Tally the ending while we are here: this branch runs exactly once
+                    // per game. Only draws are counted, since a win is a mistake by one
+                    // side rather than one of the game's three natural endings.
+                    if (updatedOutcome == Outcome.Draw) {
+                        let shape = Board.canonical(updatedBoard);
+                        let tally = tallyRef.get();
+                        let seen = Map.getWithDefault(shape, 0, tally);
+                        tallyRef.set(Map.insert(shape, seen + 1, tally))
+                    } else ();
                     match updatedOutcome {
                         case Outcome.Win(sym) if sym == humanSymbol =>
                             Sound.playAsync(sound, atCurrentVolume(autoMode, Sound.winFanfare()))
@@ -296,7 +384,12 @@ mod Gui {
                 app.textAlign(PConstants.CENTER, PConstants.CENTER);
                 app.textSize(26.0f32);
                 app.fill(240.0f32, 246.0f32, 252.0f32);
-                app.text("Tic-Tac-Toe", 225.0f32, 35.0f32);
+                drawStats(app, tallyRef.get());
+
+                app.textAlign(PConstants.CENTER, PConstants.CENTER);
+                app.textSize(26.0f32);
+                app.fill(240.0f32, 246.0f32, 252.0f32);
+                app.text("Tic-Tac-Toe", canvasCenterX(), 178.0f32);
 
                 app.textSize(16.0f32);
                 match updatedOutcome {
@@ -307,20 +400,20 @@ mod Gui {
                             ()
                         } else if (updatedTurn == humanSymbol) {
                             app.fill(255.0f32, 107.0f32, 107.0f32);
-                            app.text("Your Turn (X)", 225.0f32, 70.0f32)
+                            app.text("Your Turn (X)", canvasCenterX(), 208.0f32)
                         } else {
                             app.fill(78.0f32, 205.0f32, 196.0f32);
-                            app.text("Computer is thinking... (O)", 225.0f32, 70.0f32)
+                            app.text("Computer is thinking... (O)", canvasCenterX(), 208.0f32)
                         }
                     case Outcome.Win(Symbol.X) =>
                         app.fill(152.0f32, 195.0f32, 121.0f32);
-                        app.text("You Win!", 225.0f32, 70.0f32)
+                        app.text("You Win!", canvasCenterX(), 208.0f32)
                     case Outcome.Win(Symbol.O) =>
                         app.fill(224.0f32, 108.0f32, 117.0f32);
-                        app.text("Computer Wins!", 225.0f32, 70.0f32)
+                        app.text("Computer Wins!", canvasCenterX(), 208.0f32)
                     case Outcome.Draw =>
                         app.fill(229.0f32, 192.0f32, 123.0f32);
-                        app.text("It's a Draw!", 225.0f32, 70.0f32)
+                        app.text("It's a Draw!", canvasCenterX(), 208.0f32)
                     case _ => ()
                 };
 
@@ -347,7 +440,7 @@ mod Gui {
                 // 4. Draw Pieces (X and O)
                 match updatedBoard {
                     case Board.Board(vec) =>
-                        Vector.forEachWithIndex((idx, sym) -> drawPiece(app, ox, oy, sz, idx, sym), vec)
+                        Vector.forEachWithIndex((idx, sym) -> drawPiece(app, ox, oy, sz, 7.0f32, idx, sym), vec)
                 };
 
                 // 5. Draw the buttons
