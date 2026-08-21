@@ -39,6 +39,24 @@ mod Gui {
     pub def autoRestartDelayMs(): Int64 = 1800i64
 
     ///
+    /// How loud auto mode plays, as a percentage of the written velocity. The demo runs
+    /// unattended, so it should be audible without demanding attention.
+    ///
+    pub def demoVolumePercent(): Int32 = 20
+
+    ///
+    /// The size of the "DEMO" watermark, and how opaque it is out of 255.
+    ///
+    pub def demoOverlayTextSize(): Float32 = 96.0f32
+    pub def demoOverlayAlpha(): Float32 = 48.0f32
+
+    ///
+    /// The centre of the 450x550 canvas, where the watermark is drawn.
+    ///
+    pub def canvasCenterX(): Float32 = 225.0f32
+    pub def canvasCenterY(): Float32 = 275.0f32
+
+    ///
     /// Returns the cell index (0-8) corresponding to canvas coordinates (x, y), if within bounds.
     ///
     pub def cellAt(x: Float32, y: Float32): Option[Int32] = {
@@ -140,6 +158,26 @@ mod Gui {
     }
 
     ///
+    /// Returns the given score at demo volume while auto mode is running, and as
+    /// written otherwise.
+    ///
+    def atCurrentVolume(autoMode: Bool, score: List[Sound.Step]): List[Sound.Step] =
+        if (autoMode) Sound.atVolume(demoVolumePercent(), score) else score
+
+    ///
+    /// Draws the "DEMO" watermark across the middle of the canvas.
+    ///
+    /// It is drawn last, over the board, and kept faint through the alpha channel so
+    /// that the game underneath stays readable.
+    ///
+    def drawDemoOverlay(app: PApplet): Unit \ IO = {
+        app.textAlign(PConstants.CENTER, PConstants.CENTER);
+        app.textSize(demoOverlayTextSize());
+        app.fill(240.0f32, 246.0f32, 252.0f32, demoOverlayAlpha());
+        app.text("DEMO", canvasCenterX(), canvasCenterY())
+    }
+
+    ///
     /// Blocks the main thread until the Processing sketch window is closed.
     ///
     def waitForExit(app: PApplet): Unit \ IO = {
@@ -208,11 +246,13 @@ mod Gui {
                                         turnRef.set(Symbol.complement(currentTurn));
                                         aiMoveTimeRef.set(0i64);
                                         // Keep the sides audibly apart even in auto mode,
-                                        // where the machine plays both of them.
-                                        if (currentTurn == humanSymbol)
-                                            Sound.click(sound, Sound.humanClick())
-                                        else
-                                            Sound.click(sound, Sound.computerClick())
+                                        // where the machine plays both of them, but drop
+                                        // the volume since nobody asked to hear it.
+                                        let base = if (currentTurn == humanSymbol)
+                                                Sound.humanClick()
+                                            else
+                                                Sound.computerClick();
+                                        Sound.click(sound, atCurrentVolume(autoMode, base))
                                     }
                                     case None => ()
                                 }
@@ -229,9 +269,11 @@ mod Gui {
                 if (updatedOutcome != Outcome.Ongoing and not gameOverSoundPlayedRef.get()) {
                     gameOverSoundPlayedRef.set(true);
                     match updatedOutcome {
-                        case Outcome.Win(sym) if sym == humanSymbol => Sound.playAsync(sound, Sound.winFanfare())
-                        case Outcome.Win(_)                         => Sound.playAsync(sound, Sound.loseSound())
-                        case _                                      => ()
+                        case Outcome.Win(sym) if sym == humanSymbol =>
+                            Sound.playAsync(sound, atCurrentVolume(autoMode, Sound.winFanfare()))
+                        case Outcome.Win(_) =>
+                            Sound.playAsync(sound, atCurrentVolume(autoMode, Sound.loseSound()))
+                        case _ => ()
                     }
                 };
 
@@ -259,9 +301,10 @@ mod Gui {
                 app.textSize(16.0f32);
                 match updatedOutcome {
                     case Outcome.Ongoing =>
+                        // In auto mode the watermark already says what is going on, and
+                        // nobody needs telling that a board is clicked to play on it.
                         if (autoMode) {
-                            app.fill(148.0f32, 158.0f32, 178.0f32);
-                            app.text("Demo - click the board to play", 225.0f32, 70.0f32)
+                            ()
                         } else if (updatedTurn == humanSymbol) {
                             app.fill(255.0f32, 107.0f32, 107.0f32);
                             app.text("Your Turn (X)", 225.0f32, 70.0f32)
@@ -313,7 +356,10 @@ mod Gui {
                 drawButton(app, restartButtonX(), restartButtonY(), restartButtonW(),
                            restartButtonH(), "New Game", isRestartClicked(mx, my));
                 drawButton(app, closeButtonX(), closeButtonY(), closeButtonW(),
-                           closeButtonH(), "Close", isCloseClicked(mx, my))
+                           closeButtonH(), "Close", isCloseClicked(mx, my));
+
+                // 6. Watermark the demo, over everything else.
+                if (autoMode) drawDemoOverlay(app) else ()
             }
 
             def mousePressed(app: PApplet): Unit \ IO = {

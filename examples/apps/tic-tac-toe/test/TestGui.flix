@@ -102,6 +102,38 @@ mod TestGui {
     }
 
     @Test
+    def testDemoVolumeIsQuietButAudible(): Unit \ Assert = {
+        assertEq(expected = 20, Gui.demoVolumePercent());
+
+        // Below full volume, but not muted: 0 would be silence, 100 no reduction.
+        Assert.assertTrue(Gui.demoVolumePercent() > 0);
+        Assert.assertTrue(Gui.demoVolumePercent() < 100);
+
+        // And it must survive the trip through Sound without silencing anything.
+        let quiet = Sound.atVolume(Gui.demoVolumePercent(), Sound.winFanfare());
+        Assert.assertTrue(Sound.duration(quiet) == Sound.duration(Sound.winFanfare()))
+    }
+
+    @Test
+    def testDemoOverlayIsTranslucent(): Unit \ Assert = {
+        // Opaque would hide the board it is watermarking; zero would be invisible.
+        Assert.assertTrue(Gui.demoOverlayAlpha() > 0.0f32);
+        Assert.assertTrue(Gui.demoOverlayAlpha() < 255.0f32)
+    }
+
+    @Test
+    def testDemoOverlayIsCentredOverTheBoard(): Unit \ Assert = {
+        // Horizontally and vertically centred on the canvas.
+        assertEq(expected = 450.0f32 / 2.0f32, Gui.canvasCenterX());
+        assertEq(expected = 550.0f32 / 2.0f32, Gui.canvasCenterY());
+
+        // Which puts it over the board, not over the controls.
+        assertEq(expected = Some(4), Gui.cellAt(Gui.canvasCenterX(), Gui.canvasCenterY()));
+        assertEq(expected = false, Gui.isRestartClicked(Gui.canvasCenterX(), Gui.canvasCenterY()));
+        assertEq(expected = false, Gui.isCloseClicked(Gui.canvasCenterX(), Gui.canvasCenterY()))
+    }
+
+    @Test
     def testAiMoveDelayMs(): Unit \ Assert = {
         assertEq(expected = 840i64, Gui.aiMoveDelayMs())
     }
