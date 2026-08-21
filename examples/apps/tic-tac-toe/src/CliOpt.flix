@@ -1,4 +1,4 @@
-mod CLIOpts {
+mod CliOpt {
 
     use Util.GetOpt
     use Util.GetOpt.OptionDescr

@@ -32,11 +32,11 @@ An interactive 2D graphical Tic-Tac-Toe game implemented in [Flix](https://flix.
 - `src/Minimax.flix`: Alpha-beta game search and a Datalog lattice solver for optimal candidate moves.
 - `src/Gui.flix`: Interactive Processing Core (`PApplet`) GUI mode with real-time canvas rendering, mouse handling, and 120ms AI move pacing.
 - `src/Opponent.flix`: `Opponent` enum (`Human`, `Computer`).
-- `src/CLIOpts.flix`: Command-line options parser (`Util.GetOpt`) supporting `-h`/`--help` and `-s`/`--seed`.
+- `src/CliOpt.flix`: Command-line options parser (`Util.GetOpt`) supporting `-h`/`--help` and `-s`/`--seed`.
 - `src/Main.flix`: Main application entry point that parses CLI options and launches the GUI.
 - `test/TestBoard.flix`: Unit tests for board mechanics, win/draw detection, and Datalog outcome queries.
 - `test/TestGui.flix`: Unit tests for GUI coordinate mapping and button click detection.
-- `test/TestCLIOpts.flix`: Unit tests for CLI options parsing and validation.
+- `test/TestCliOpt.flix`: Unit tests for CLI options parsing and validation.
 - `test/TestMinimax.flix`: Unit tests for heuristic scoring, forced win/block detection, Datalog best moves queries, deterministic seed tie-breaking, and AI self-play simulations.
 
 ## Building and Running

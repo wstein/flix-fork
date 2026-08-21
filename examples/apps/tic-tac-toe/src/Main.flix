@@ -6,15 +6,15 @@
 def main(): Unit \ IO = {
     run {
         let args = Sys.Env.getArgs();
-        let parsed = CLIOpts.parse(args);
+        let parsed = CliOpt.parse(args);
 
         if (not List.isEmpty(parsed#errors)) {
             List.forEach((e: String) -> println("Error: ${e}"), parsed#errors);
             println("");
-            println(CLIOpts.usage());
+            println(CliOpt.usage());
             Sys.Exit.exit(1)
         } else if (parsed#help) {
-            println(CLIOpts.usage())
+            println(CliOpt.usage())
         } else {
             let seed = match parsed#seed {
                 case Some(s) => Some(s)
