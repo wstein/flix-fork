@@ -254,10 +254,14 @@ TICTACTOE_SEED=12345 flix run
 `CliOpt.flix` only take effect once the game is packaged:
 
 ```bash
-flix build-fatjar
-java -jar artifact/tic-tac-toe.jar --seed 12345
-java -jar artifact/tic-tac-toe.jar --help
+flix build-jar
+CP="artifact/tic-tac-toe.jar:$(find lib -name '*.jar' | tr '\n' ':')"
+java -cp "$CP" Main --seed 12345
+java -cp "$CP" Main --help
 ```
+
+Package with `build-jar` rather than `build-fatjar`. Keeping Processing as a separate
+jar on the classpath is not a style preference here — see the licence note at the end.
 
 The seed is applied once, at the start, so that successive moves draw successive values
 from it. Seeding per move instead would make the computer pick the same cell every time.
@@ -290,9 +294,19 @@ This example is part of the Flix repository and is distributed under the
 > **Dependency licence note.** The graphical interface uses
 > [`org.processing:core`](https://processing.org/), which is licensed under the
 > **LGPL-2.1**, not Apache-2.0. No Processing code is copied into this repository — it is
-> fetched by the build — so the repository itself remains Apache-2.0. But anyone
-> redistributing a bundled build of this example (for instance a fat jar) is
-> redistributing LGPL code and takes on the LGPL's obligations, in particular the
-> requirement that the recipient be able to relink against a modified Processing.
+> fetched by the build — so the repository itself remains Apache-2.0.
+>
+> How you package the game does matter, though. `flix build-fatjar` merges everything
+> into one archive: 223 Processing classes and 2041 JOGL classes beside your own, and no
+> copy of the LGPL anywhere in it. Distributing that is exactly the case LGPL-2.1
+> section 6 governs. It requires that the recipient be able to relink the work against a
+> modified Processing, and that a copy of the licence accompany the work; a merged jar
+> defeats the first and the build supplies neither.
+>
+> `flix build-jar` keeps the boundary intact. The jar it writes contains none of
+> Processing, which stays a separate jar on the classpath where it can be replaced —
+> the arrangement the LGPL is written around. If you distribute the game, ship the
+> dependency jars alongside it and include the LGPL text.
+>
 > `javax.sound.midi`, used by `Sound.flix`, is part of the JDK and adds no such
 > condition.
