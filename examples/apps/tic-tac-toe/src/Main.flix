@@ -86,26 +86,33 @@ def main(): Unit \ IO = {
         println("    | |  | | (__       | | (_| | (__       | | (_) |  __/");
         println("    |_|  |_|\\___|      |_|\\__,_|\\___|      |_|\\___/ \\___|");
         println("");
-        println("Instructions:");
-        println("The cells are numbered as follows:\n");
-        println(" ┌───┬───┬───┐");
-        println(" │ 0 │ 1 │ 2 │");
-        println(" ├───┼───┼───┤");
-        println(" │ 3 │ 4 │ 5 │");
-        println(" ├───┼───┼───┤");
-        println(" │ 6 │ 7 │ 8 │");
-        println(" └───┴───┴───┘");
-        println("Enter your move as one of these numbers corresponding to a cell");
-        println("");
-        let opponent = Interface.chooseOpponent();
-        let (firstPlayer, humanSymbol) = match opponent {
-            case Opponent.Human => (Symbol.X, Symbol.X)
-            case Opponent.Computer =>
-                let first = Interface.chooseFirstPlayer();
-                (first, Symbol.X)
-        };
-        let board = Board.newBoard();
-        gameLoop(board, firstPlayer, opponent, humanSymbol)
+        let mode = Interface.chooseMode();
+        match mode {
+            case Mode.Gui => Gui.runGui()
+            case Mode.Console => {
+                println("");
+                println("Instructions:");
+                println("The cells are numbered as follows:\n");
+                println(" ┌───┬───┬───┐");
+                println(" │ 0 │ 1 │ 2 │");
+                println(" ├───┼───┼───┤");
+                println(" │ 3 │ 4 │ 5 │");
+                println(" ├───┼───┼───┤");
+                println(" │ 6 │ 7 │ 8 │");
+                println(" └───┴───┴───┘");
+                println("Enter your move as one of these numbers corresponding to a cell");
+                println("");
+                let opponent = Interface.chooseOpponent();
+                let (firstPlayer, humanSymbol) = match opponent {
+                    case Opponent.Human => (Symbol.X, Symbol.X)
+                    case Opponent.Computer =>
+                        let first = Interface.chooseFirstPlayer();
+                        (first, Symbol.X)
+                };
+                let board = Board.newBoard();
+                gameLoop(board, firstPlayer, opponent, humanSymbol)
+            }
+        }
     } with Interface.interfaceWithConsole
     with Math.Random.runWithIO
     with Console.runWithIO

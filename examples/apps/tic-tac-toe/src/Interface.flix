@@ -1,7 +1,20 @@
 ///
+/// Enum representing the user-selected game interface mode.
+///
+pub enum Mode with Eq, ToString {
+    case Console
+    case Gui
+}
+
+///
 /// Effect representing the user interface for the game.
 ///
 pub eff Interface {
+
+    ///
+    /// Prompts the user to choose the interface mode (Console or GUI).
+    ///
+    def chooseMode(): Mode
 
     ///
     /// Prints the current state of the board and a message.
@@ -42,6 +55,30 @@ mod Interface {
                 case _ => {
                     Console.println("Invalid move. Move must be an integer between 0 and 8 (inclusive)");
                     getMoveFromConsole()
+                }
+            }
+        }
+    }
+
+    ///
+    /// Recursive helper function to prompt for interface mode choice.
+    ///
+    def getModeFromConsole(): Mode \ Console + Sys.Exit = {
+        Console.println("Choose interface mode:");
+        Console.println("  1. Console (Terminal)");
+        Console.println("  2. GUI (Processing Core)");
+        Console.print("Enter choice (1 or 2): ");
+        match Console.readln() {
+            case None => {
+                Console.println("No input available. Exiting.");
+                Sys.Exit.exit(0)
+            }
+            case Some(line) => match String.trim(line) {
+                case "1" => Mode.Console
+                case "2" => Mode.Gui
+                case _   => {
+                    Console.println("Invalid choice. Please enter 1 or 2.");
+                    getModeFromConsole()
                 }
             }
         }
@@ -105,6 +142,10 @@ mod Interface {
             f()
         }
         with handler Interface {
+            def chooseMode(resume) = {
+                resume(getModeFromConsole())
+            }
+
             def display(board, msg, resume) = {
                 Console.println("");
                 Console.println(Board.toString(board));
