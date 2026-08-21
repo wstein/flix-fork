@@ -61,4 +61,9 @@ mod TestGui {
         assertEq(expected = false, Gui.isRestartClicked(rx + rw + 5.0f32, ry));
         assertEq(expected = false, Gui.isRestartClicked(rx, ry + rh + 5.0f32))
     }
+
+    @Test
+    def testAiMoveDelayMs(): Unit \ Assert = {
+        assertEq(expected = 120i64, Gui.aiMoveDelayMs())
+    }
 }

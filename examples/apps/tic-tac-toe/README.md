@@ -8,7 +8,7 @@ An interactive 2D graphical Tic-Tac-Toe game implemented in [Flix](https://flix.
   - Hardware-accelerated 2D canvas with mouse interactions.
   - Real-time status banner ("Your turn (X)", "Computer is thinking...", "You win!", "I win!", "Draw!").
   - Crisp vector piece rendering with smooth hover states and a one-click "New Game" restart button.
-  - Natural 500ms pacing for computer moves.
+  - Natural 120ms pacing for computer moves.
 - **The rules of the game, as Datalog**:
   - `Board.datalogOutcome` states what winning *is*, rather than how to look for it:
     `Line(a, b, c)` lists the eight winning lines, `Cell(i, sym)` holds the board, and
@@ -30,7 +30,7 @@ An interactive 2D graphical Tic-Tac-Toe game implemented in [Flix](https://flix.
 - `src/Symbol.flix`: `Symbol` enum (`X`, `O`, `Empty`) with `Eq` and `Order` derivations.
 - `src/Board.flix`: Immutable board representation, the Datalog rules of the game (`Line`, `Cell`, `Win`, `FreeCell`), and fast direct outcome queries.
 - `src/Minimax.flix`: Alpha-beta game search and a Datalog lattice solver for optimal candidate moves.
-- `src/Gui.flix`: Interactive Processing Core (`PApplet`) GUI mode with real-time canvas rendering, mouse handling, and 500ms AI move pacing.
+- `src/Gui.flix`: Interactive Processing Core (`PApplet`) GUI mode with real-time canvas rendering, mouse handling, and 120ms AI move pacing.
 - `src/Opponent.flix`: `Opponent` enum (`Human`, `Computer`).
 - `src/CLIOpts.flix`: Command-line options parser (`Util.GetOpt`) supporting `-h`/`--help` and `-s`/`--seed`.
 - `src/Main.flix`: Main application entry point that parses CLI options and launches the GUI.

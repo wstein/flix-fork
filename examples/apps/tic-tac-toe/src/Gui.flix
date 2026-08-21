@@ -17,6 +17,7 @@ mod Gui {
     pub def restartButtonY(): Float32 = 480.0f32
     pub def restartButtonW(): Float32 = 160.0f32
     pub def restartButtonH(): Float32 = 40.0f32
+    pub def aiMoveDelayMs(): Int64 = 120i64
 
     ///
     /// Returns the cell index (0-8) corresponding to canvas coordinates (x, y), if within bounds.
@@ -137,7 +138,7 @@ mod Gui {
                     let scheduledTime = aiMoveTimeRef.get();
                     let now = System.currentTimeMillis();
                     if (scheduledTime == 0i64) {
-                        aiMoveTimeRef.set(now + 500i64)
+                        aiMoveTimeRef.set(now + aiMoveDelayMs())
                     } else if (now >= scheduledTime) {
                         let aiMove = computeAiMove(currentTurn, board, seedRef);
                         match aiMove {
@@ -267,7 +268,7 @@ mod Gui {
                                     case Some(nb) => {
                                         boardRef.set(nb);
                                         turnRef.set(Symbol.complement(currentTurn));
-                                        aiMoveTimeRef.set(System.currentTimeMillis() + 500i64)
+                                        aiMoveTimeRef.set(System.currentTimeMillis() + aiMoveDelayMs())
                                     }
                                     case None => ()
                                 }
