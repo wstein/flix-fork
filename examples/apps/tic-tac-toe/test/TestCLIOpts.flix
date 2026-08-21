@@ -37,6 +37,13 @@ mod TestCLIOpts {
     }
 
     @Test
+    def testSeedLongSpaceSeparated(): Unit \ Assert = {
+        let parsed = CLIOpts.parse("--seed" :: "77777" :: Nil);
+        Assert.assertEq(expected = Some(77777i64), parsed#seed);
+        Assert.assertTrue(List.isEmpty(parsed#errors))
+    }
+
+    @Test
     def testPositionalSeed(): Unit \ Assert = {
         let parsed = CLIOpts.parse("54321" :: Nil);
         Assert.assertEq(expected = Some(54321i64), parsed#seed);

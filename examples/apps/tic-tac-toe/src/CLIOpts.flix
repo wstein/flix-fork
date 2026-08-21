@@ -35,7 +35,7 @@ mod CLIOpts {
         {
             optionIds = 's' :: Nil,
             optionNames = "seed" :: Nil,
-            argDescriptor = ArgDescr.ReqArg(s -> Int64.fromString(s) |> Option.map(CliOption.Seed), "SEED"),
+            argDescriptor = ArgDescr.ReqArg(s -> Int64.fromString(s) |> Option.map(CliOption.Seed), "N"),
             explanation = "Random seed for reproducible AI move selection"
         } :: Nil
 

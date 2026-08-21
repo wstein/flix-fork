@@ -58,6 +58,8 @@ the computer draws one from the `Random` effect. Seeding that effect makes a who
 reproducible:
 
 ```bash
+./flixw run --args "--seed 12345"
+# or with short flag:
 ./flixw run --args "-s 12345"
 # or via environment variable:
 TICTACTOE_SEED=12345 ./flixw run
