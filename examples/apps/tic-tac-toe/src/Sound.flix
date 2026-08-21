@@ -2,6 +2,7 @@ mod Sound {
 
     import java.lang.Exception
     import java.lang.Thread
+    import java.lang.Runnable
     import javax.sound.midi.MidiSystem
     import javax.sound.midi.Synthesizer
     import javax.sound.midi.MidiChannel
@@ -42,11 +43,11 @@ mod Sound {
     }
 
     ///
-    /// Plays a timed sequence of MIDI notes asynchronously in a background fiber.
+    /// Plays a timed sequence of MIDI notes asynchronously in a dedicated daemon thread.
     ///
     pub def playSequence(channelIdx: Int32, notes: List[(Int32, Int32, Int64)]): Unit \ IO = {
-        region rc {
-            spawn {
+        let task = new Runnable {
+            def $run(_this: Runnable): Unit \ IO = {
                 try {
                     let synth: Synthesizer = MidiSystem.getSynthesizer();
                     if (not synth.isOpen()) {
@@ -61,8 +62,11 @@ mod Sound {
                 } catch {
                     case _: Exception => ()
                 }
-            } @ rc
-        }
+            }
+        };
+        let t = new Thread(task);
+        t.setDaemon(true);
+        t.start()
     }
 
     ///
@@ -80,7 +84,7 @@ mod Sound {
     /// C5 -> E5 -> G5 -> C6
     ///
     pub def playWinFanfare(): Unit \ IO = {
-        let notes = (72, 110, 100i64) :: (76, 115, 100i64) :: (79, 120, 110i64) :: (84, 127, 400i64) :: Nil;
+        let notes = (72, 110, 100i64) :: (76, 115, 100i64) :: (79, 120, 110i64) :: (84, 127, 450i64) :: Nil;
         playSequence(0, notes)
     }
 
@@ -89,15 +93,16 @@ mod Sound {
     /// F4 -> Eb4 -> D4 -> C4
     ///
     pub def playLoseSound(): Unit \ IO = {
-        let notes = (65, 105, 130i64) :: (63, 100, 130i64) :: (62, 95, 130i64) :: (57, 110, 350i64) :: Nil;
+        let notes = (65, 105, 130i64) :: (63, 100, 130i64) :: (62, 95, 130i64) :: (57, 110, 400i64) :: Nil;
         playSequence(0, notes)
     }
 
     ///
-    /// Neutral chime on a draw outcome.
+    /// Clear two-tone resolution chime on a draw outcome.
+    /// E4 -> C4
     ///
     pub def playDrawSound(): Unit \ IO = {
-        let notes = (67, 95, 120i64) :: (65, 95, 220i64) :: Nil;
+        let notes = (64, 110, 150i64) :: (60, 110, 350i64) :: Nil;
         playSequence(0, notes)
     }
 }
