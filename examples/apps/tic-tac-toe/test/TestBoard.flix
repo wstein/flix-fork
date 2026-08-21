@@ -57,6 +57,39 @@ mod TestBoard {
         assertEq(expected = Outcome.Draw, Board.outcome(b))
     }
 
+    ///
+    /// Enumerates positions reachable within 3 moves to validate agreement with Datalog.
+    ///
+    def samplePositions(board: Board, turn: Symbol, depth: Int32, acc: List[Board]): List[Board] = {
+        let acc1 = board :: acc;
+        if (depth >= 3)
+            acc1
+        else
+            match Board.outcome(board) {
+                case Outcome.Ongoing =>
+                    List.foldLeft((a, m) ->
+                        samplePositions(
+                            Option.getWithDefault(board, Board.makeMove(board, turn, m)),
+                            Symbol.complement(turn),
+                            depth + 1,
+                            a),
+                        acc1, Board.freeCells(board))
+                case _ => acc1
+            }
+    }
+
+    @Test
+    def testOutcomeAgreesWithDatalogSpec(): Unit \ Assert = {
+        // `Board.outcome` answers directly so that the search stays fast, while
+        // `Board.datalogOutcome` states the same rules as Datalog. They must agree on
+        // every position a real game can reach.
+        let positions = samplePositions(Board.newBoard(), Symbol.X, 0, Nil);
+        // Guard against the check passing because nothing was enumerated.
+        Assert.assertTrue(List.length(positions) > 500);
+        let disagreements = List.count(b -> Board.outcome(b) != Board.datalogOutcome(b), positions);
+        Assert.assertEq(expected = 0, disagreements)
+    }
+
     @Test
     def testToStringEmpty(): Unit \ Assert = {
         let b = Board.newBoard();

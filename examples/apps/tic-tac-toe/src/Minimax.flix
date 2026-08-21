@@ -18,6 +18,18 @@ mod Minimax {
     }
 
     ///
+    /// Move preference order (center, corners, edges) to maximize alpha-beta pruning cutoffs.
+    ///
+    def preferredOrder(): List[Int32] =
+        4 :: 0 :: 2 :: 6 :: 8 :: 1 :: 3 :: 5 :: 7 :: Nil
+
+    ///
+    /// Orders available moves by heuristic priority to prune the search tree early.
+    ///
+    def orderMoves(moves: List[Int32]): List[Int32] =
+        List.filter(m -> List.memberOf(m, moves), preferredOrder())
+
+    ///
     /// Evaluates the board position recursively using minimax with alpha-beta pruning.
     /// O maximizes the score while X minimizes the score.
     ///
@@ -28,7 +40,7 @@ mod Minimax {
         match score(board, depth) {
             case Some(s) => s
             case None => {
-                let moves = Board.freeCells(board);
+                let moves = orderMoves(Board.freeCells(board));
                 match player {
                     case Symbol.O => {
                         def loop(ms, curAlpha, best) = match ms {
@@ -77,11 +89,14 @@ mod Minimax {
         if (List.isEmpty(moves)) {
             Nil
         } else {
-            let scoredMoves = List.map(m -> {
-                let nextBoard = Option.getWithDefault(board, Board.makeMove(board, player, m));
-                let v = search(Symbol.complement(player), 1, nextBoard);
-                (m, v)
-            }, moves);
+            let scoredMoves = if (List.length(moves) == 9)
+                List.map(m -> (m, 0), moves)
+            else
+                List.map(m -> {
+                    let nextBoard = Option.getWithDefault(board, Board.makeMove(board, player, m));
+                    let v = search(Symbol.complement(player), 1, nextBoard);
+                    (m, v)
+                }, moves);
 
             match player {
                 case Symbol.O => {
