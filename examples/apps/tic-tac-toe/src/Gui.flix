@@ -169,7 +169,6 @@ mod Gui {
                     match updatedOutcome {
                         case Outcome.Win(sym) if sym == humanSymbol => Sound.playWinFanfare()
                         case Outcome.Win(_)                         => Sound.playLoseSound()
-                        case Outcome.Draw                           => Sound.playDrawSound()
                         case _                                      => ()
                     }
                 };
