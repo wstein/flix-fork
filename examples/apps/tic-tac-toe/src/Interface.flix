@@ -12,6 +12,16 @@ pub eff Interface {
     /// Gets a move from the user.
     ///
     def getMove(): Int32
+
+    ///
+    /// Prompts the user to choose an opponent.
+    ///
+    def chooseOpponent(): Opponent
+
+    ///
+    /// Prompts the user to choose who plays first.
+    ///
+    def chooseFirstPlayer(): Symbol
 }
 
 mod Interface {
@@ -37,6 +47,53 @@ mod Interface {
         }
     }
 
+    ///
+    /// Recursive helper function to prompt for opponent choice.
+    ///
+    def getOpponentFromConsole(): Opponent \ Console + Sys.Exit = {
+        Console.println("Choose opponent:");
+        Console.println("  1. Human");
+        Console.println("  2. Computer");
+        Console.print("Enter choice (1 or 2): ");
+        match Console.readln() {
+            case None => {
+                Console.println("No input available. Exiting.");
+                Sys.Exit.exit(0)
+            }
+            case Some(line) => match String.trim(line) {
+                case "1" => Opponent.Human
+                case "2" => Opponent.Computer
+                case _   => {
+                    Console.println("Invalid choice. Please enter 1 or 2.");
+                    getOpponentFromConsole()
+                }
+            }
+        }
+    }
+
+    ///
+    /// Recursive helper function to prompt for who moves first when playing against the computer.
+    ///
+    def getFirstPlayerFromConsole(): Symbol \ Console + Sys.Exit = {
+        Console.println("Who plays first?");
+        Console.println("  1. You (X)");
+        Console.println("  2. Computer (O)");
+        Console.print("Enter choice (1 or 2): ");
+        match Console.readln() {
+            case None => {
+                Console.println("No input available. Exiting.");
+                Sys.Exit.exit(0)
+            }
+            case Some(line) => match String.trim(line) {
+                case "1" => Symbol.X
+                case "2" => Symbol.O
+                case _   => {
+                    Console.println("Invalid choice. Please enter 1 or 2.");
+                    getFirstPlayerFromConsole()
+                }
+            }
+        }
+    }
 
     ///
     /// Runs the Interface effect of the given function `f`.
@@ -58,6 +115,14 @@ mod Interface {
 
             def getMove(resume) = {
                 resume(getMoveFromConsole())
+            }
+
+            def chooseOpponent(resume) = {
+                resume(getOpponentFromConsole())
+            }
+
+            def chooseFirstPlayer(resume) = {
+                resume(getFirstPlayerFromConsole())
             }
         }
 }

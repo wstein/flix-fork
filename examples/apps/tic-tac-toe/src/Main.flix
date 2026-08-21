@@ -1,28 +1,72 @@
 use Sys.Console
+use Math.Random
+use Math.Random.Random
 
 ///
 /// The core gameplay loop called repeatedly until the game ends.
 ///
-def gameLoop(board: Board, symbol: Symbol): Unit \ Interface = {
-    Interface.display(board, "Enter a move (0 - 8): ");
-    let move = Interface.getMove();
-    match Board.makeMove(board, symbol, move) {
-        case Some(newBoard) => {
-            if (Board.checkWin(newBoard, symbol)) {
-                match symbol {
-                    case Symbol.X => Interface.display(newBoard, "Player One wins!!!")
-                    case Symbol.O => Interface.display(newBoard, "Player Two wins!!!")
-                    case _ => ()
+def gameLoop(board: Board, currentTurn: Symbol, opponent: Opponent, humanSymbol: Symbol): Unit \ {Interface, Random} = {
+    match opponent {
+        case Opponent.Human => {
+            Interface.display(board, "Enter a move (0 - 8): ");
+            let move = Interface.getMove();
+            match Board.makeMove(board, currentTurn, move) {
+                case Some(newBoard) => {
+                    if (Board.checkWin(newBoard, currentTurn)) {
+                        match currentTurn {
+                            case Symbol.X => Interface.display(newBoard, "Player One wins!!!")
+                            case Symbol.O => Interface.display(newBoard, "Player Two wins!!!")
+                            case _ => ()
+                        }
+                    } else if (Board.boardFilled(newBoard)) {
+                        Interface.display(board, "Draw")
+                    } else {
+                        gameLoop(newBoard, Symbol.complement(currentTurn), opponent, humanSymbol)
+                    }
                 }
-            } else if (Board.boardFilled(newBoard)) {
-                Interface.display(board, "Draw")
-            } else {
-                gameLoop(newBoard, Symbol.complement(symbol))
+                case None => {
+                    Interface.display(board, "Cell already filled");
+                    gameLoop(board, currentTurn, opponent, humanSymbol)
+                }
             }
         }
-        case None => {
-            Interface.display(board, "Cell already filled");
-            gameLoop(board, symbol)
+        case Opponent.Computer => {
+            if (currentTurn == humanSymbol) {
+                Interface.display(board, "Enter a move (0 - 8): ");
+                let move = Interface.getMove();
+                match Board.makeMove(board, currentTurn, move) {
+                    case Some(newBoard) => {
+                        if (Board.checkWin(newBoard, currentTurn)) {
+                            Interface.display(newBoard, "You win!!!")
+                        } else if (Board.boardFilled(newBoard)) {
+                            Interface.display(board, "Draw")
+                        } else {
+                            gameLoop(newBoard, Symbol.complement(currentTurn), opponent, humanSymbol)
+                        }
+                    }
+                    case None => {
+                        Interface.display(board, "Cell already filled");
+                        gameLoop(board, currentTurn, opponent, humanSymbol)
+                    }
+                }
+            } else {
+                match Minimax.bestMove(currentTurn, board) {
+                    case Some(move) => {
+                        let newBoard = Option.getWithDefault(board, Board.makeMove(board, currentTurn, move));
+                        Interface.display(newBoard, "Computer played cell ${move}.");
+                        if (Board.checkWin(newBoard, currentTurn)) {
+                            Interface.display(newBoard, "I win!!!")
+                        } else if (Board.boardFilled(newBoard)) {
+                            Interface.display(board, "Draw")
+                        } else {
+                            gameLoop(newBoard, Symbol.complement(currentTurn), opponent, humanSymbol)
+                        }
+                    }
+                    case None => {
+                        Interface.display(board, "Draw")
+                    }
+                }
+            }
         }
     }
 }
@@ -52,9 +96,17 @@ def main(): Unit \ IO = {
         println("       |       |       ");
         println("Enter your move as one these numbers corresponding to a cell");
         println("");
+        let opponent = Interface.chooseOpponent();
+        let (firstPlayer, humanSymbol) = match opponent {
+            case Opponent.Human => (Symbol.X, Symbol.X)
+            case Opponent.Computer =>
+                let first = Interface.chooseFirstPlayer();
+                (first, Symbol.X)
+        };
         let board = Board.newBoard();
-        gameLoop(board, Symbol.X)
+        gameLoop(board, firstPlayer, opponent, humanSymbol)
     } with Interface.interfaceWithConsole
+    with Math.Random.runWithIO
     with Console.runWithIO
     with Sys.Exit.runWithIO
 }
