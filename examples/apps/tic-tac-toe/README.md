@@ -177,8 +177,8 @@ rather than by sleeping — sleeping would stop the window redrawing.
 
 **Auto mode.** After ten seconds with no click the game starts playing itself, and
 keeps going — clearing and dealing a fresh board between games — until you click again.
-A faint "DEMO" is drawn across the board, and the sound drops to 20% so an unattended
-window is not noisy. It is worth watching once: two perfect players always draw.
+A faint "DEMO" is drawn corner to corner across the window, and the sound drops to 20%
+so an unattended window is not noisy. It is worth watching once: two perfect players always draw.
 
 Note how auto mode is decided. There is no flag to set and clear, just one timestamp and
 a comparison against the clock, so there is no mode to get stuck in:
@@ -191,7 +191,7 @@ That one boolean then drives everything the demo does — who moves, how loud it
 whether the watermark is drawn — which is why none of those can disagree with each other.
 
 **The strip along the top** counts finished games by shape, with a count and a
-percentage under each — see the background section above for what it is showing.
+percentage to one decimal place under each — see the background section above for what it is showing.
 
 **Buttons.** "New Game" clears the board; "Close" quits. Both are hit-tested with the
 same `isInside` helper, and `TestGui` checks that they cannot overlap each other or the
