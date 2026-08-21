@@ -36,7 +36,7 @@ flowchart TD
 | `src/Board.flix` | Immutable `Vector`, and **the rules of the game written as Datalog**. |
 | `src/Minimax.flix` | Recursion, alpha-beta search, and a **Datalog lattice** to pick the best moves. |
 | `src/CliOpt.flix` | Records, `Option`, and collecting errors instead of crashing. |
-| `src/Sound.flix` | **Java interop** (`javax.sound.midi`), and separating pure data from `IO`. |
+| `src/Sound.flix` | **Java interop** (`javax.sound.midi`), and separating pure data from `IO`. A score is data, so `atVolume` is a one-line `List.map` and can be tested without a speaker. |
 | `src/Gui.flix` | **Java interop** (`processing.core`), and an interactive event loop. |
 | `src/Opponent.flix` | The smallest file here: one two-case enum. Start by reading it. |
 | `src/Main.flix` | **Effect handlers** — where `Sys.Env`, `Sys.Exit` and `Math.Random` are given meaning. |
@@ -115,7 +115,8 @@ sequenceDiagram
         Gui->>Snd: fanfare, or the other one
     end
     Note over You,Gui: no click for 10s
-    Gui->>AI: bestMove for both sides, until you click again
+    Gui->>Gui: draw DEMO watermark
+    Gui->>AI: bestMove for both sides, at 20% volume, until you click again
 ```
 
 The 840 ms pause is deliberate. The computer answers instantly, which reads as the board
@@ -124,13 +125,18 @@ rather than by sleeping — sleeping would stop the window redrawing.
 
 **Auto mode.** After ten seconds with no click the game starts playing itself, and
 keeps going — clearing and dealing a fresh board between games — until you click again.
-It is worth watching once: two perfect players always draw. Note how auto mode is
-decided. There is no flag to set and clear, just one timestamp and a comparison against
-the clock, so there is no mode to get stuck in:
+A faint "DEMO" is drawn across the board, and the sound drops to 20% so an unattended
+window is not noisy. It is worth watching once: two perfect players always draw.
+
+Note how auto mode is decided. There is no flag to set and clear, just one timestamp and
+a comparison against the clock, so there is no mode to get stuck in:
 
 ```flix
 let autoMode = now - lastInputTimeRef.get() >= autoModeIdleMs();
 ```
+
+That one boolean then drives everything the demo does — who moves, how loud it is, and
+whether the watermark is drawn — which is why none of those can disagree with each other.
 
 **Buttons.** "New Game" clears the board; "Close" quits. Both are hit-tested with the
 same `isInside` helper, and `TestGui` checks that they cannot overlap each other or the
