@@ -24,6 +24,16 @@ mod Gui {
     pub def aiMoveDelayMs(): Int64 = 240i64
 
     ///
+    /// How long the window may sit untouched before the game starts playing itself.
+    ///
+    pub def autoModeIdleMs(): Int64 = 3000i64
+
+    ///
+    /// How long a finished game stays on screen before auto mode deals a new one.
+    ///
+    pub def autoRestartDelayMs(): Int64 = 1800i64
+
+    ///
     /// Returns the cell index (0-8) corresponding to canvas coordinates (x, y), if within bounds.
     ///
     pub def cellAt(x: Float32, y: Float32): Option[Int32] = {
@@ -144,6 +154,8 @@ mod Gui {
         let seedRef: AtomicReference[Option[Int64]] = new AtomicReference(seed);
         let aiMoveTimeRef: AtomicReference[Int64] = new AtomicReference(0i64);
         let gameOverSoundPlayedRef: AtomicReference[Bool] = new AtomicReference(false);
+        let lastInputTimeRef: AtomicReference[Int64] = new AtomicReference(System.currentTimeMillis());
+        let autoRestartTimeRef: AtomicReference[Int64] = new AtomicReference(0i64);
         let humanSymbol = Symbol.X;
         let opponent = Opponent.Computer;
 
@@ -168,26 +180,36 @@ mod Gui {
                 let currentTurn: Symbol = turnRef.get();
                 let outcome = Board.outcome(board);
 
-                // Handle AI turn timing asynchronously without freezing UI frame rendering
-                if (opponent == Opponent.Computer and currentTurn == Symbol.complement(humanSymbol) and outcome == Outcome.Ongoing) {
+                let now = System.currentTimeMillis();
+
+                // Left alone for a while, the game starts playing itself, and keeps
+                // playing until the next click. Both sides are then driven by the search.
+                let autoMode = now - lastInputTimeRef.get() >= autoModeIdleMs();
+                let machineToMove = currentTurn == Symbol.complement(humanSymbol) or autoMode;
+
+                // Machine turns run on a timer rather than a sleep, so that the window
+                // keeps redrawing while the search is thinking.
+                if (opponent == Opponent.Computer and outcome == Outcome.Ongoing and machineToMove) {
                     let scheduledTime = aiMoveTimeRef.get();
-                    let now = System.currentTimeMillis();
                     if (scheduledTime == 0i64) {
                         aiMoveTimeRef.set(now + aiMoveDelayMs())
                     } else if (now >= scheduledTime) {
-                        let aiMove = computeAiMove(currentTurn, board, seedRef);
-                        match aiMove {
-                            case Some(m) => {
+                        match computeAiMove(currentTurn, board, seedRef) {
+                            case Some(m) =>
                                 match Board.makeMove(board, currentTurn, m) {
                                     case Some(nb) => {
                                         boardRef.set(nb);
                                         turnRef.set(Symbol.complement(currentTurn));
                                         aiMoveTimeRef.set(0i64);
-                                        Sound.click(sound, Sound.computerClick())
+                                        // Keep the sides audibly apart even in auto mode,
+                                        // where the machine plays both of them.
+                                        if (currentTurn == humanSymbol)
+                                            Sound.click(sound, Sound.humanClick())
+                                        else
+                                            Sound.click(sound, Sound.computerClick())
                                     }
                                     case None => ()
                                 }
-                            }
                             case None => ()
                         }
                     }
@@ -207,6 +229,21 @@ mod Gui {
                     }
                 };
 
+                // While unattended, clear the finished board and deal another, so the
+                // demo keeps running.
+                if (autoMode and updatedOutcome != Outcome.Ongoing) {
+                    let restartAt = autoRestartTimeRef.get();
+                    if (restartAt == 0i64) {
+                        autoRestartTimeRef.set(now + autoRestartDelayMs())
+                    } else if (now >= restartAt) {
+                        boardRef.set(Board.newBoard());
+                        turnRef.set(Symbol.X);
+                        aiMoveTimeRef.set(0i64);
+                        gameOverSoundPlayedRef.set(false);
+                        autoRestartTimeRef.set(0i64)
+                    }
+                } else ();
+
                 // 1. Draw Title and Status Header
                 app.textAlign(PConstants.CENTER, PConstants.CENTER);
                 app.textSize(26.0f32);
@@ -216,7 +253,10 @@ mod Gui {
                 app.textSize(16.0f32);
                 match updatedOutcome {
                     case Outcome.Ongoing =>
-                        if (updatedTurn == humanSymbol) {
+                        if (autoMode) {
+                            app.fill(148.0f32, 158.0f32, 178.0f32);
+                            app.text("Demo - click the board to play", 225.0f32, 70.0f32)
+                        } else if (updatedTurn == humanSymbol) {
                             app.fill(255.0f32, 107.0f32, 107.0f32);
                             app.text("Your Turn (X)", 225.0f32, 70.0f32)
                         } else {
@@ -273,6 +313,10 @@ mod Gui {
             def mousePressed(app: PApplet): Unit \ IO = {
                 let mx = Int32.toFloat32(app.mouseX);
                 let my = Int32.toFloat32(app.mouseY);
+
+                // Any click counts as attention, which takes the game out of auto mode.
+                lastInputTimeRef.set(System.currentTimeMillis());
+                autoRestartTimeRef.set(0i64);
 
                 if (isCloseClicked(mx, my)) {
                     app.exit()
