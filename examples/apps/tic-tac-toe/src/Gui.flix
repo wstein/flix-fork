@@ -37,9 +37,9 @@ mod Gui {
     pub def autoModeIdleMs(): Int64 = 10000i64
 
     ///
-    /// How long a finished game stays on screen before auto mode deals a new one.
+    /// How long a finished game stays on screen before the board clears itself.
     ///
-    pub def autoRestartDelayMs(): Int64 = 1800i64
+    pub def newGameDelayMs(): Int64 = 3000i64
 
     ///
     /// How loud auto mode plays, as a percentage of the written velocity. The demo runs
@@ -323,12 +323,13 @@ mod Gui {
                     }
                 };
 
-                // While unattended, clear the finished board and deal another, so the
-                // demo keeps running.
-                if (autoMode and updatedOutcome != Outcome.Ongoing) {
+                // Every finished game clears itself after a pause: long enough to see
+                // how it ended and hear the fanfare out, short enough not to need a
+                // button. This is also what keeps the demo dealing new games.
+                if (updatedOutcome != Outcome.Ongoing) {
                     let restartAt = autoRestartTimeRef.get();
                     if (restartAt == 0i64) {
-                        autoRestartTimeRef.set(now + autoRestartDelayMs())
+                        autoRestartTimeRef.set(now + newGameDelayMs())
                     } else if (now >= restartAt) {
                         startNewGame()
                     }
@@ -415,8 +416,9 @@ mod Gui {
                 let idleMillis = now - lastInputTimeRef.get();
 
                 // Any click counts as attention, which takes the game out of auto mode.
+                // It deliberately does not touch the countdown on a finished game, or
+                // clicking about would keep postponing the clear.
                 lastInputTimeRef.set(now);
-                autoRestartTimeRef.set(0i64);
 
                 if (isCloseClicked(mx, my)) {
                     app.exit()

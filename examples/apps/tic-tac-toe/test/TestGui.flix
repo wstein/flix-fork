@@ -183,6 +183,19 @@ mod TestGui {
     }
 
     @Test
+    def testFinishedGameClearsItselfInTime(): Unit \ Assert = {
+        assertEq(expected = 3000i64, Gui.newGameDelayMs());
+
+        // Long enough for the win fanfare to finish, or games would cut each other off.
+        Assert.assertTrue(Gui.newGameDelayMs() > Sound.duration(Sound.winFanfare()));
+        Assert.assertTrue(Gui.newGameDelayMs() > Sound.duration(Sound.loseSound()));
+
+        // And no longer than the wait before the demo starts, so an abandoned game is
+        // always cleared before the demo picks the board up.
+        Assert.assertTrue(Gui.newGameDelayMs() <= Gui.autoModeIdleMs())
+    }
+
+    @Test
     def testAiMoveDelayMs(): Unit \ Assert = {
         assertEq(expected = 840i64, Gui.aiMoveDelayMs())
     }
@@ -195,7 +208,7 @@ mod TestGui {
         // slip into auto mode while they were simply watching the computer reply.
         Assert.assertTrue(Gui.autoModeIdleMs() > Gui.aiMoveDelayMs());
 
-        // A finished game must stay on screen long enough to read before it is dealt again.
-        Assert.assertTrue(Gui.autoRestartDelayMs() >= Gui.aiMoveDelayMs())
+        // A finished game must stay on screen long enough to read before it clears.
+        Assert.assertTrue(Gui.newGameDelayMs() >= Gui.aiMoveDelayMs())
     }
 }
