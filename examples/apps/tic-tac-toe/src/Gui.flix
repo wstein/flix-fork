@@ -1,5 +1,6 @@
 mod Gui {
 
+    import java.lang.System
     import java.lang.Thread
     import java.lang.Object
     import java.util.concurrent.atomic.AtomicReference
@@ -109,6 +110,7 @@ mod Gui {
         let boardRef: AtomicReference[Board] = new AtomicReference(Board.newBoard());
         let turnRef: AtomicReference[Symbol] = new AtomicReference(Symbol.X);
         let seedRef: AtomicReference[Option[Int64]] = new AtomicReference(seed);
+        let aiMoveTimeRef: AtomicReference[Int64] = new AtomicReference(0i64);
         let humanSymbol = Symbol.X;
         let opponent = Opponent.Computer;
 
@@ -130,21 +132,27 @@ mod Gui {
                 let currentTurn: Symbol = turnRef.get();
                 let outcome = Board.outcome(board);
 
-                // Handle AI turn
+                // Handle AI turn timing asynchronously without freezing UI frame rendering
                 if (opponent == Opponent.Computer and currentTurn == Symbol.complement(humanSymbol) and outcome == Outcome.Ongoing) {
-                    Thread.sleep(500i64);
-                    let aiMove = computeAiMove(currentTurn, board, seedRef);
-                    match aiMove {
-                        case Some(m) => {
-                            match Board.makeMove(board, currentTurn, m) {
-                                case Some(nb) => {
-                                    boardRef.set(nb);
-                                    turnRef.set(Symbol.complement(currentTurn))
+                    let scheduledTime = aiMoveTimeRef.get();
+                    let now = System.currentTimeMillis();
+                    if (scheduledTime == 0i64) {
+                        aiMoveTimeRef.set(now + 500i64)
+                    } else if (now >= scheduledTime) {
+                        let aiMove = computeAiMove(currentTurn, board, seedRef);
+                        match aiMove {
+                            case Some(m) => {
+                                match Board.makeMove(board, currentTurn, m) {
+                                    case Some(nb) => {
+                                        boardRef.set(nb);
+                                        turnRef.set(Symbol.complement(currentTurn));
+                                        aiMoveTimeRef.set(0i64)
+                                    }
+                                    case None => ()
                                 }
-                                case None => ()
                             }
+                            case None => ()
                         }
-                        case None => ()
                     }
                 };
 
@@ -245,7 +253,8 @@ mod Gui {
 
                 if (isRestartClicked(mx, my)) {
                     boardRef.set(Board.newBoard());
-                    turnRef.set(Symbol.X)
+                    turnRef.set(Symbol.X);
+                    aiMoveTimeRef.set(0i64)
                 } else {
                     let board: Board = boardRef.get();
                     let currentTurn: Symbol = turnRef.get();
@@ -257,7 +266,8 @@ mod Gui {
                                 match Board.makeMove(board, currentTurn, idx) {
                                     case Some(nb) => {
                                         boardRef.set(nb);
-                                        turnRef.set(Symbol.complement(currentTurn))
+                                        turnRef.set(Symbol.complement(currentTurn));
+                                        aiMoveTimeRef.set(System.currentTimeMillis() + 500i64)
                                     }
                                     case None => ()
                                 }
