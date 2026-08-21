@@ -1,24 +1,23 @@
 mod Sound {
 
     import java.lang.Exception
+    import java.lang.Thread
     import javax.sound.midi.MidiSystem
     import javax.sound.midi.Synthesizer
     import javax.sound.midi.MidiChannel
 
     ///
-    /// Plays a MIDI percussion/woodblock note for click feedback.
+    /// Plays a single MIDI note on the specified channel.
     ///
-    pub def playNote(note: Int32, velocity: Int32): Unit \ IO = {
+    pub def playSingleNote(channelIdx: Int32, note: Int32, velocity: Int32): Unit \ IO = {
         try {
             let synth: Synthesizer = MidiSystem.getSynthesizer();
             if (not synth.isOpen()) {
                 synth.open()
             };
             let channels = synth.getChannels();
-            // Channel 9 in 0-indexed MIDI is General MIDI Percussion
-            // Note 76 is High Woodblock, Note 77 is Low Woodblock
             let _ = OutOfBounds.runWithResult(() -> {
-                let ch: MidiChannel = channels[9];
+                let ch: MidiChannel = channels[channelIdx];
                 ch.noteOn(note, velocity)
             });
             ()
@@ -28,12 +27,77 @@ mod Sound {
     }
 
     ///
-    /// Click sound for human move (crisp high woodblock).
+    /// Helper to iterate and play a sequence of notes.
     ///
-    pub def playHumanClick(): Unit \ IO = playNote(76, 110)
+    def playNotesHelper(ch: MidiChannel, remaining: List[(Int32, Int32, Int64)]): Unit \ IO = {
+        match remaining {
+            case Nil => ()
+            case (note, vel, dur) :: tail => {
+                ch.noteOn(note, vel);
+                Thread.sleep(dur);
+                ch.noteOff(note);
+                playNotesHelper(ch, tail)
+            }
+        }
+    }
 
     ///
-    /// Click sound for AI move (crisp low woodblock).
+    /// Plays a timed sequence of MIDI notes asynchronously in a background fiber.
     ///
-    pub def playAiClick(): Unit \ IO = playNote(77, 95)
+    pub def playSequence(channelIdx: Int32, notes: List[(Int32, Int32, Int64)]): Unit \ IO = {
+        region rc {
+            spawn {
+                try {
+                    let synth: Synthesizer = MidiSystem.getSynthesizer();
+                    if (not synth.isOpen()) {
+                        synth.open()
+                    };
+                    let channels = synth.getChannels();
+                    let _ = OutOfBounds.runWithResult(() -> {
+                        let ch: MidiChannel = channels[channelIdx];
+                        playNotesHelper(ch, notes)
+                    });
+                    ()
+                } catch {
+                    case _: Exception => ()
+                }
+            } @ rc
+        }
+    }
+
+    ///
+    /// Crisp high wood click for human move (Claves - Percussion Key 75).
+    ///
+    pub def playHumanClick(): Unit \ IO = playSingleNote(9, 75, 127)
+
+    ///
+    /// Distinct low wood click for AI move (Low Woodblock - Percussion Key 77).
+    ///
+    pub def playAiClick(): Unit \ IO = playSingleNote(9, 77, 115)
+
+    ///
+    /// Ascending triumphant fanfare when the human player wins.
+    /// C5 -> E5 -> G5 -> C6
+    ///
+    pub def playWinFanfare(): Unit \ IO = {
+        let notes = (72, 110, 100i64) :: (76, 115, 100i64) :: (79, 120, 110i64) :: (84, 127, 400i64) :: Nil;
+        playSequence(0, notes)
+    }
+
+    ///
+    /// Descending sad sound when the AI wins.
+    /// F4 -> Eb4 -> D4 -> C4
+    ///
+    pub def playLoseSound(): Unit \ IO = {
+        let notes = (65, 105, 130i64) :: (63, 100, 130i64) :: (62, 95, 130i64) :: (57, 110, 350i64) :: Nil;
+        playSequence(0, notes)
+    }
+
+    ///
+    /// Neutral chime on a draw outcome.
+    ///
+    pub def playDrawSound(): Unit \ IO = {
+        let notes = (67, 95, 120i64) :: (65, 95, 220i64) :: Nil;
+        playSequence(0, notes)
+    }
 }

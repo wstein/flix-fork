@@ -112,6 +112,7 @@ mod Gui {
         let turnRef: AtomicReference[Symbol] = new AtomicReference(Symbol.X);
         let seedRef: AtomicReference[Option[Int64]] = new AtomicReference(seed);
         let aiMoveTimeRef: AtomicReference[Int64] = new AtomicReference(0i64);
+        let gameOverSoundPlayedRef: AtomicReference[Bool] = new AtomicReference(false);
         let humanSymbol = Symbol.X;
         let opponent = Opponent.Computer;
 
@@ -161,6 +162,17 @@ mod Gui {
                 let updatedBoard: Board = boardRef.get();
                 let updatedTurn: Symbol = turnRef.get();
                 let updatedOutcome = Board.outcome(updatedBoard);
+
+                // Trigger game over sounds once upon resolution
+                if (updatedOutcome != Outcome.Ongoing and not gameOverSoundPlayedRef.get()) {
+                    gameOverSoundPlayedRef.set(true);
+                    match updatedOutcome {
+                        case Outcome.Win(sym) if sym == humanSymbol => Sound.playWinFanfare()
+                        case Outcome.Win(_)                         => Sound.playLoseSound()
+                        case Outcome.Draw                           => Sound.playDrawSound()
+                        case _                                      => ()
+                    }
+                };
 
                 // 1. Draw Title and Status Header
                 app.textAlign(PConstants.CENTER, PConstants.CENTER);
@@ -256,7 +268,8 @@ mod Gui {
                 if (isRestartClicked(mx, my)) {
                     boardRef.set(Board.newBoard());
                     turnRef.set(Symbol.X);
-                    aiMoveTimeRef.set(0i64)
+                    aiMoveTimeRef.set(0i64);
+                    gameOverSoundPlayedRef.set(false)
                 } else {
                     let board: Board = boardRef.get();
                     let currentTurn: Symbol = turnRef.get();
