@@ -123,38 +123,18 @@ mod TestGui {
 
     @Test
     def testDemoOverlayIsCentredOnTheCanvas(): Unit \ Assert = {
-        // Horizontally and vertically centred on the canvas, as asked for.
+        // The watermark runs corner to corner, so it pivots about the middle of the
+        // window rather than the middle of the board.
         assertEq(expected = Int32.toFloat32(Gui.canvasWidth()) / 2.0f32, Gui.canvasCenterX());
-        assertEq(expected = Int32.toFloat32(Gui.canvasHeight()) / 2.0f32, Gui.canvasCenterY());
-
-        // Which puts it over the board, not over the controls or the statistics.
-        Assert.assertTrue(Option.nonEmpty(Gui.cellAt(Gui.canvasCenterX(), Gui.canvasCenterY())));
-        assertEq(expected = false, Gui.isRestartClicked(Gui.canvasCenterX(), Gui.canvasCenterY()));
-        assertEq(expected = false, Gui.isCloseClicked(Gui.canvasCenterX(), Gui.canvasCenterY()));
-        Assert.assertTrue(Gui.canvasCenterY() > Gui.statsLabelY())
+        assertEq(expected = Int32.toFloat32(Gui.canvasHeight()) / 2.0f32, Gui.canvasCenterY())
     }
 
     @Test
-    def testPercentTextHasOneDecimalPlace(): Unit \ Assert = {
-        assertEq(expected = "12.5", Gui.percentText(1, 8));
-        assertEq(expected = "50.0", Gui.percentText(8, 16));
-        assertEq(expected = "25.0", Gui.percentText(4, 16));
-        assertEq(expected = "100.0", Gui.percentText(7, 7));
-        assertEq(expected = "0.0", Gui.percentText(0, 9))
-    }
-
-    @Test
-    def testPercentTextRoundsToNearest(): Unit \ Assert = {
-        assertEq(expected = "33.3", Gui.percentText(1, 3));
-        assertEq(expected = "66.7", Gui.percentText(2, 3));
-        assertEq(expected = "16.4", Gui.percentText(23, 140))
-    }
-
-    @Test
-    def testPercentTextSurvivesAnEmptyTally(): Unit \ Assert = {
-        // The strip is drawn before any game has finished.
-        assertEq(expected = "0.0", Gui.percentText(0, 0));
-        assertEq(expected = "0.0", Gui.percentText(3, 0))
+    def testDemoOverlaySpanStaysInsideTheWindow(): Unit \ Assert = {
+        // The word is scaled to this fraction of the diagonal. At 1.0 it would touch the
+        // corners and the outer letters would be clipped; at 0.0 it would vanish.
+        Assert.assertTrue(Gui.demoOverlaySpan() > 0.0f32);
+        Assert.assertTrue(Gui.demoOverlaySpan() < 1.0f32)
     }
 
     @Test

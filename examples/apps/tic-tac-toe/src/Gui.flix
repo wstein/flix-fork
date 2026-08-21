@@ -48,16 +48,17 @@ mod Gui {
     pub def demoVolumePercent(): Int32 = 20
 
     ///
-    /// The size of the "DEMO" watermark, and how opaque it is out of 255.
+    /// How opaque the "DEMO" watermark is, out of 255, and how much of the window's
+    /// diagonal the word spans.
     ///
-    pub def demoOverlayTextSize(): Float32 = 96.0f32
-    pub def demoOverlayAlpha(): Float32 = 48.0f32
+    pub def demoOverlayAlpha(): Float32 = 40.0f32
+    pub def demoOverlaySpan(): Float32 = 0.72f32
 
     ///
-    /// The centre of the 450x550 canvas, where the watermark is drawn.
+    /// The horizontal centre of the canvas, where the headings are drawn.
     ///
-    pub def canvasCenterX(): Float32 = 225.0f32
-    pub def canvasCenterY(): Float32 = 340.0f32
+    pub def canvasCenterX(): Float32 = Int32.toFloat32(canvasWidth()) / 2.0f32
+    pub def canvasCenterY(): Float32 = Int32.toFloat32(canvasHeight()) / 2.0f32
 
     ///
     /// The strip along the top, where finished games are tallied by shape.
@@ -259,14 +260,35 @@ mod Gui {
     ///
     /// Draws the "DEMO" watermark across the middle of the canvas.
     ///
-    /// It is drawn last, over the board, and kept faint through the alpha channel so
-    /// that the game underneath stays readable.
+    /// It is drawn last, running corner to corner across the whole window the way a
+    /// watermark on paper does, and kept faint through the alpha channel so that
+    /// everything underneath stays readable.
+    ///
+    /// The angle is the window's own diagonal rather than a fixed number of degrees, and
+    /// the size is measured rather than guessed: the word is set at an arbitrary size,
+    /// `textWidth` says how wide that came out, and the result is scaled so it spans the
+    /// intended fraction of the diagonal. Both then survive a change of window size.
     ///
     def drawDemoOverlay(app: PApplet): Unit \ IO = {
+        let w = Int32.toFloat32(canvasWidth());
+        let h = Int32.toFloat32(canvasHeight());
+        let diagonal = PApplet.sqrt(w * w + h * h);
+
+        // Bottom left corner to top right: rightwards and, since y grows downwards, up.
+        let angle = PApplet.atan2(-h, w);
+
+        app.pushMatrix();
+        app.translate(canvasCenterX(), canvasCenterY());
+        app.rotate(angle);
+
         app.textAlign(PConstants.CENTER, PConstants.CENTER);
-        app.textSize(demoOverlayTextSize());
+        app.textSize(100.0f32);
+        let measured = app.textWidth("DEMO");
+        app.textSize(100.0f32 * diagonal * demoOverlaySpan() / measured);
+
         app.fill(240.0f32, 246.0f32, 252.0f32, demoOverlayAlpha());
-        app.text("DEMO", canvasCenterX(), canvasCenterY())
+        app.text("DEMO", 0.0f32, 0.0f32);
+        app.popMatrix()
     }
 
     ///
