@@ -103,12 +103,12 @@ mod TestGui {
 
     @Test
     def testAiMoveDelayMs(): Unit \ Assert = {
-        assertEq(expected = 540i64, Gui.aiMoveDelayMs())
+        assertEq(expected = 840i64, Gui.aiMoveDelayMs())
     }
 
     @Test
     def testAutoModeTiming(): Unit \ Assert = {
-        assertEq(expected = 3000i64, Gui.autoModeIdleMs());
+        assertEq(expected = 10000i64, Gui.autoModeIdleMs());
 
         // The idle threshold must exceed a move delay, or a game against a human would
         // slip into auto mode while they were simply watching the computer reply.

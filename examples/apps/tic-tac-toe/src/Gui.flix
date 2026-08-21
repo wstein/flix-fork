@@ -26,12 +26,12 @@ mod Gui {
     /// How long the game waits before making a move, so that the computer does not
     /// answer faster than the eye can follow.
     ///
-    pub def aiMoveDelayMs(): Int64 = 540i64
+    pub def aiMoveDelayMs(): Int64 = 840i64
 
     ///
     /// How long the window may sit untouched before the game starts playing itself.
     ///
-    pub def autoModeIdleMs(): Int64 = 3000i64
+    pub def autoModeIdleMs(): Int64 = 10000i64
 
     ///
     /// How long a finished game stays on screen before auto mode deals a new one.
@@ -189,6 +189,7 @@ mod Gui {
 
                 // Left alone for a while, the game starts playing itself, and keeps
                 // playing until the next click. Both sides are then driven by the search.
+                // See `autoModeIdleMs` for how long "a while" is.
                 let autoMode = now - lastInputTimeRef.get() >= autoModeIdleMs();
                 let machineToMove = currentTurn == Symbol.complement(humanSymbol) or autoMode;
 
