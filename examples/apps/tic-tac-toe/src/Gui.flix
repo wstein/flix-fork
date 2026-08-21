@@ -21,7 +21,12 @@ mod Gui {
     pub def closeButtonY(): Float32 = 480.0f32
     pub def closeButtonW(): Float32 = 160.0f32
     pub def closeButtonH(): Float32 = 40.0f32
-    pub def aiMoveDelayMs(): Int64 = 240i64
+
+    ///
+    /// How long the game waits before making a move, so that the computer does not
+    /// answer faster than the eye can follow.
+    ///
+    pub def aiMoveDelayMs(): Int64 = 540i64
 
     ///
     /// How long the window may sit untouched before the game starts playing itself.
