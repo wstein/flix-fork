@@ -147,7 +147,8 @@ mod Gui {
                                     case Some(nb) => {
                                         boardRef.set(nb);
                                         turnRef.set(Symbol.complement(currentTurn));
-                                        aiMoveTimeRef.set(0i64)
+                                        aiMoveTimeRef.set(0i64);
+                                        Sound.playAiClick()
                                     }
                                     case None => ()
                                 }
@@ -268,7 +269,8 @@ mod Gui {
                                     case Some(nb) => {
                                         boardRef.set(nb);
                                         turnRef.set(Symbol.complement(currentTurn));
-                                        aiMoveTimeRef.set(System.currentTimeMillis() + aiMoveDelayMs())
+                                        aiMoveTimeRef.set(System.currentTimeMillis() + aiMoveDelayMs());
+                                        Sound.playHumanClick()
                                     }
                                     case None => ()
                                 }
