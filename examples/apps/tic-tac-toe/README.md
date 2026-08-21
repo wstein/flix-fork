@@ -88,6 +88,58 @@ because the trade-off is worth seeing:
 The Datalog version is the specification; the loop is the optimisation; the test holds
 them together. That pattern is worth more than either half.
 
+## Background: why every demo game looks the same
+
+Leave the demo running and the endings start to repeat. That is not the search
+being lazy or the random tie-breaking failing. It is the game.
+
+**Tic-tac-toe is a draw.** With both sides playing perfectly, neither can force a win.
+So every demo game is a draw, and a draw fills all nine cells.
+
+**There are exactly 16 drawn final positions.** Of the 126 ways to place five X and four
+O on nine cells, only 16 leave neither player with a line.
+
+**Up to rotation and mirroring, there are only three.** A board and its turns are the
+same position wearing a different orientation. Collapse them and 16 becomes 3:
+
+```
+   O X X          O X O          O O X
+   X O O          X O X          X X O
+   X O X          X O X          O X X
+
+  8 of 16        4 of 16        4 of 16
+```
+
+So roughly half of all drawn games end in the first shape and a quarter in each of the
+others — which is why two of them seem to come up constantly. The strip along the top of
+the window counts them as the demo plays, and the proportions settle near 50/25/25.
+
+None of these three numbers is hardcoded. `Board.canonical` collapses a board onto one
+representative of its symmetry class, and `TestBoard.testDrawnGamesTakeThreeShapes`
+enumerates every drawn ending straight from the rules and checks both counts:
+
+```flix
+let draws = finalDraws(Board.newBoard(), Symbol.X, Nil) |> List.toSet |> Set.toList;
+Assert.assertEq(expected = 16, List.length(draws));
+
+let shapes = List.map(Board.canonical, draws) |> List.toSet |> Set.toList;
+Assert.assertEq(expected = 3, List.length(shapes))
+```
+
+### The randomness really is on every move
+
+It would be reasonable to suspect the computer only varies its opening. It does not.
+Measured over 200 games, the number of equally-good moves available at each ply:
+
+| Ply | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Average tied options | 9.0 | 2.6 | 6.2 | 2.1 | 1.9 | 1.8 | 1.9 | 1.3 | 1.0 |
+| Games with a real choice | 200 | 109 | 200 | 104 | 61 | 66 | 87 | 69 | 0 |
+
+There is a genuine choice right up to the eighth move; only the last is ever forced. And
+over those 200 games all 16 drawn positions appeared. The variety is as wide as the game
+allows — it is the game that is narrow.
+
 ## How a turn actually happens
 
 Processing calls `draw` about thirty times a second. Nothing blocks, so the window never
@@ -137,6 +189,9 @@ let autoMode = now - lastInputTimeRef.get() >= autoModeIdleMs();
 
 That one boolean then drives everything the demo does — who moves, how loud it is, and
 whether the watermark is drawn — which is why none of those can disagree with each other.
+
+**The strip along the top** counts finished games by shape, with a count and a
+percentage under each — see the background section above for what it is showing.
 
 **Buttons.** "New Game" clears the board; "Close" quits. Both are hit-tested with the
 same `isInside` helper, and `TestGui` checks that they cannot overlap each other or the
@@ -198,7 +253,9 @@ In rough order of difficulty:
 4. Add a draw sound — `Sound.drawSound()` already exists but nothing calls it.
 5. Make the winning line light up when the game ends. The Datalog rule already knows
    which line won; try returning it instead of just the symbol.
-6. Delete `Board.outcome` and make `datalogOutcome` the only implementation. Measure how
+6. Count wins and losses as well as draws in the top strip. You will need a fourth
+   column, and a decision about what to do when a human blunders.
+7. Delete `Board.outcome` and make `datalogOutcome` the only implementation. Measure how
    slow the game becomes, then make it fast again without giving up the Datalog.
 
 ## Credits and licence
