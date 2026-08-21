@@ -41,15 +41,16 @@ mod Gui {
     }
 
     ///
-    /// Checks if coordinates (x, y) are within the restart button.
+    /// Checks if coordinates (x, y) fall inside the rectangle at (bx, by) of size (bw, bh).
     ///
-    pub def isRestartClicked(x: Float32, y: Float32): Bool = {
-        let rx = restartButtonX();
-        let ry = restartButtonY();
-        let rw = restartButtonW();
-        let rh = restartButtonH();
-        x >= rx and x <= rx + rw and y >= ry and y <= ry + rh
-    }
+    def isInside(x: Float32, y: Float32, bx: Float32, by: Float32, bw: Float32, bh: Float32): Bool =
+        x >= bx and x <= bx + bw and y >= by and y <= by + bh
+
+    ///
+    /// Checks if coordinates (x, y) are within the "New Game" button.
+    ///
+    pub def isRestartClicked(x: Float32, y: Float32): Bool =
+        isInside(x, y, restartButtonX(), restartButtonY(), restartButtonW(), restartButtonH())
 
     ///
     /// Computes the AI's move using Math.Random effect handler (with seed if provided).
@@ -91,6 +92,26 @@ mod Gui {
             }
             case Symbol.Empty => ()
         }
+    }
+
+    ///
+    /// Draws a button, lit up while the pointer is over it.
+    ///
+    def drawButton(app: PApplet, bx: Float32, by: Float32, bw: Float32, bh: Float32,
+                   label: String, hovered: Bool): Unit \ IO = {
+        if (hovered) {
+            app.fill(68.0f32, 76.0f32, 90.0f32);
+            app.stroke(98.0f32, 106.0f32, 120.0f32)
+        } else {
+            app.fill(48.0f32, 54.0f32, 66.0f32);
+            app.stroke(68.0f32, 76.0f32, 90.0f32)
+        };
+        app.strokeWeight(2.0f32);
+        app.rect(bx, by, bw, bh);
+        app.fill(240.0f32, 246.0f32, 252.0f32);
+        app.textSize(16.0f32);
+        app.textAlign(PConstants.CENTER, PConstants.CENTER);
+        app.text(label, bx + bw / 2.0f32, by + bh / 2.0f32)
     }
 
     ///
@@ -226,41 +247,15 @@ mod Gui {
 
                 // 4. Draw Pieces (X and O)
                 match updatedBoard {
-                    case Board.Board(vec) => {
-                        drawPiece(app, ox, oy, sz, 0, Vector.get(0, vec));
-                        drawPiece(app, ox, oy, sz, 1, Vector.get(1, vec));
-                        drawPiece(app, ox, oy, sz, 2, Vector.get(2, vec));
-                        drawPiece(app, ox, oy, sz, 3, Vector.get(3, vec));
-                        drawPiece(app, ox, oy, sz, 4, Vector.get(4, vec));
-                        drawPiece(app, ox, oy, sz, 5, Vector.get(5, vec));
-                        drawPiece(app, ox, oy, sz, 6, Vector.get(6, vec));
-                        drawPiece(app, ox, oy, sz, 7, Vector.get(7, vec));
-                        drawPiece(app, ox, oy, sz, 8, Vector.get(8, vec))
-                    }
+                    case Board.Board(vec) =>
+                        Vector.forEachWithIndex((idx, sym) -> drawPiece(app, ox, oy, sz, idx, sym), vec)
                 };
 
-                // 5. Draw Restart Button
-                let rx = restartButtonX();
-                let ry = restartButtonY();
-                let rw = restartButtonW();
-                let rh = restartButtonH();
-
+                // 5. Draw the buttons
                 let mx = Int32.toFloat32(app.mouseX);
                 let my = Int32.toFloat32(app.mouseY);
-                if (isRestartClicked(mx, my)) {
-                    app.fill(68.0f32, 76.0f32, 90.0f32);
-                    app.stroke(98.0f32, 106.0f32, 120.0f32)
-                } else {
-                    app.fill(48.0f32, 54.0f32, 66.0f32);
-                    app.stroke(68.0f32, 76.0f32, 90.0f32)
-                };
-                app.strokeWeight(2.0f32);
-                app.rect(rx, ry, rw, rh);
-
-                app.fill(240.0f32, 246.0f32, 252.0f32);
-                app.textSize(16.0f32);
-                app.textAlign(PConstants.CENTER, PConstants.CENTER);
-                app.text("New Game", rx + rw / 2.0f32, ry + rh / 2.0f32)
+                drawButton(app, restartButtonX(), restartButtonY(), restartButtonW(),
+                           restartButtonH(), "New Game", isRestartClicked(mx, my))
             }
 
             def mousePressed(app: PApplet): Unit \ IO = {
