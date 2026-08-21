@@ -163,6 +163,16 @@ mod Gui {
     }
 
     ///
+    /// Returns true when a click at (x, y), after `idleMillis` without input, should
+    /// take the game back from the demo.
+    ///
+    /// Only clicks on the board count. Clicking a button already means something, and
+    /// clicking the margin should not throw away a game that is being watched.
+    ///
+    pub def clickTakesOverDemo(idleMillis: Int64, x: Float32, y: Float32): Bool =
+        idleMillis >= autoModeIdleMs() and Option.nonEmpty(cellAt(x, y))
+
+    ///
     /// Returns the given score at demo volume while auto mode is running, and as
     /// written otherwise.
     ///
@@ -230,6 +240,16 @@ mod Gui {
 
         // Opened once: building and opening a synthesizer per click is audible as lag.
         let sound = Sound.open();
+
+        // Reached from three places: the button, the demo dealing another game, and a
+        // player taking the board back from the demo.
+        let startNewGame = () -> {
+            boardRef.set(Board.newBoard());
+            turnRef.set(Symbol.X);
+            aiMoveTimeRef.set(0i64);
+            autoRestartTimeRef.set(0i64);
+            gameOverSoundPlayedRef.set(false)
+        };
 
         let sketch = new PApplet {
             def settings(app: PApplet): Unit \ IO = {
@@ -310,11 +330,7 @@ mod Gui {
                     if (restartAt == 0i64) {
                         autoRestartTimeRef.set(now + autoRestartDelayMs())
                     } else if (now >= restartAt) {
-                        boardRef.set(Board.newBoard());
-                        turnRef.set(Symbol.X);
-                        aiMoveTimeRef.set(0i64);
-                        gameOverSoundPlayedRef.set(false);
-                        autoRestartTimeRef.set(0i64)
+                        startNewGame()
                     }
                 } else ();
 
@@ -395,17 +411,23 @@ mod Gui {
                 let mx = Int32.toFloat32(app.mouseX);
                 let my = Int32.toFloat32(app.mouseY);
 
+                let now = System.currentTimeMillis();
+                let idleMillis = now - lastInputTimeRef.get();
+
                 // Any click counts as attention, which takes the game out of auto mode.
-                lastInputTimeRef.set(System.currentTimeMillis());
+                lastInputTimeRef.set(now);
                 autoRestartTimeRef.set(0i64);
 
                 if (isCloseClicked(mx, my)) {
                     app.exit()
                 } else if (isRestartClicked(mx, my)) {
-                    boardRef.set(Board.newBoard());
-                    turnRef.set(Symbol.X);
-                    aiMoveTimeRef.set(0i64);
-                    gameOverSoundPlayedRef.set(false)
+                    startNewGame()
+                } else if (clickTakesOverDemo(idleMillis, mx, my)) {
+                    // Taking the board back from the demo clears it and stops there. The
+                    // click is not also played as a move: it landed on a position the
+                    // player was watching rather than choosing, so treating it as a
+                    // considered opening would put a piece somewhere they did not mean.
+                    startNewGame()
                 } else {
                     let board: Board = boardRef.get();
                     let currentTurn: Symbol = turnRef.get();

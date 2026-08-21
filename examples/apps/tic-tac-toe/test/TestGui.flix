@@ -149,6 +149,40 @@ mod TestGui {
     }
 
     @Test
+    def testClickOnBoardTakesOverFromTheDemo(): Unit \ Assert = {
+        let idle = Gui.autoModeIdleMs();
+        let centre = (Gui.boardOffsetX() + Gui.cellSize() * 1.5f32,
+                      Gui.boardOffsetY() + Gui.cellSize() * 1.5f32);
+        match centre {
+            case (bx, by) => Assert.assertTrue(Gui.clickTakesOverDemo(idle, bx, by))
+        }
+    }
+
+    @Test
+    def testClickOffTheBoardLeavesTheDemoRunning(): Unit \ Assert = {
+        let idle = Gui.autoModeIdleMs();
+
+        // The buttons already mean something, and the margin means nothing; neither
+        // should throw away a game somebody is watching.
+        assertEq(expected = false, Gui.clickTakesOverDemo(idle, Gui.restartButtonX(), Gui.restartButtonY()));
+        assertEq(expected = false, Gui.clickTakesOverDemo(idle, Gui.closeButtonX(), Gui.closeButtonY()));
+        assertEq(expected = false, Gui.clickTakesOverDemo(idle, 5.0f32, 5.0f32))
+    }
+
+    @Test
+    def testClickDuringANormalGameIsNotATakeover(): Unit \ Assert = {
+        // Below the idle threshold the demo is not running, so a click on the board is
+        // an ordinary move and must not clear it.
+        let bx = Gui.boardOffsetX() + Gui.cellSize() * 1.5f32;
+        let by = Gui.boardOffsetY() + Gui.cellSize() * 1.5f32;
+        assertEq(expected = false, Gui.clickTakesOverDemo(0i64, bx, by));
+        assertEq(expected = false, Gui.clickTakesOverDemo(Gui.autoModeIdleMs() - 1i64, bx, by));
+
+        // And exactly at the threshold it is a takeover, matching the draw loop's test.
+        Assert.assertTrue(Gui.clickTakesOverDemo(Gui.autoModeIdleMs(), bx, by))
+    }
+
+    @Test
     def testAiMoveDelayMs(): Unit \ Assert = {
         assertEq(expected = 840i64, Gui.aiMoveDelayMs())
     }
