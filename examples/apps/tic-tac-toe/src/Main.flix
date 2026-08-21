@@ -1,7 +1,7 @@
 ///
 /// The main entry point of the application.
 ///
-/// Parses command line options and launches the Processing GUI.
+/// Parses command line options and opens the window.
 ///
 def main(): Unit \ IO = {
     run {

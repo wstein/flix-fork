@@ -299,9 +299,3 @@ This example is part of the Flix repository and is distributed under the
 > **On dependencies.** There are none. The interface uses Swing and AWT and the sound
 > uses `javax.sound.midi`, all of which are part of the JDK, so nothing is downloaded and
 > nothing extra is redistributed when you hand somebody the jar.
->
-> That was a deliberate choice rather than an accident. An earlier version drew the board
-> with [Processing](https://processing.org/), which cost a crash on modern JDKs, 13MB of
-> native libraries, and an LGPL-2.1 dependency inside an Apache-2.0 repository that made
-> the packaged game awkward to redistribute. None of it was buying anything a 3x3 grid
-> needed.
