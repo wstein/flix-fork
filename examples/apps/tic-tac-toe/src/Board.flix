@@ -1,4 +1,13 @@
 ///
+/// Represents the outcome of a game.
+///
+pub enum Outcome with Eq, ToString {
+    case Win(Symbol),
+    case Draw,
+    case Ongoing
+}
+
+///
 /// Enum representing the board, backed by an immutable vector.
 ///
 
@@ -31,6 +40,16 @@ mod Board {
     }
 
     ///
+    /// Returns a list of indices (0 to 8) of all empty cells on the board.
+    ///
+    pub def freeCells(board: Board): List[Int32] = match board {
+        case Board(vec) =>
+            Vector.range(0, 9)
+                |> Vector.filter(i -> Vector.get(i, vec) == Symbol.Empty)
+                |> Vector.toList
+    }
+
+    ///
     /// Checks if the player with the specified symbol has won the game on the given board.
     ///
     pub def checkWin(board: Board, symbol: Symbol): Bool = match board {
@@ -53,6 +72,20 @@ mod Board {
     pub def boardFilled(board: Board): Bool = match board {
         case Board(vec) =>
             Vector.forAll(sym -> sym != Symbol.Empty, vec)
+    }
+
+    ///
+    /// Returns the outcome of the game on the given board.
+    ///
+    pub def outcome(board: Board): Outcome = {
+        if (checkWin(board, Symbol.X))
+            Outcome.Win(Symbol.X)
+        else if (checkWin(board, Symbol.O))
+            Outcome.Win(Symbol.O)
+        else if (boardFilled(board))
+            Outcome.Draw
+        else
+            Outcome.Ongoing
     }
 
     ///
