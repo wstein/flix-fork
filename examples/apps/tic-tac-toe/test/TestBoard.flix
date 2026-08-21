@@ -77,4 +77,30 @@ mod TestBoard {
         let b = applyMoves(moves);
         assertEq(expected = Outcome.Draw, Board.datalogOutcome(b))
     }
+
+    @Test
+    def testToStringEmpty(): Unit \ Assert = {
+        let b = Board.newBoard();
+        let expected = " ┌───┬───┬───┐\n"
+                    ++ " │   │   │   │\n"
+                    ++ " ├───┼───┼───┤\n"
+                    ++ " │   │   │   │\n"
+                    ++ " ├───┼───┼───┤\n"
+                    ++ " │   │   │   │\n"
+                    ++ " └───┴───┴───┘";
+        assertEq(expected = expected, Board.toString(b))
+    }
+
+    @Test
+    def testToStringMoves(): Unit \ Assert = {
+        let b = applyMoves((Symbol.X, 0) :: (Symbol.O, 4) :: (Symbol.X, 8) :: Nil);
+        let expected = " ┌───┬───┬───┐\n"
+                    ++ " │ X │   │   │\n"
+                    ++ " ├───┼───┼───┤\n"
+                    ++ " │   │ O │   │\n"
+                    ++ " ├───┼───┼───┤\n"
+                    ++ " │   │   │ X │\n"
+                    ++ " └───┴───┴───┘";
+        assertEq(expected = expected, Board.toString(b))
+    }
 }

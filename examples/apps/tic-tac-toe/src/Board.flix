@@ -130,15 +130,16 @@ mod Board {
     }
 
     ///
-    /// Returns a string representation of the board.
+    /// Returns a string representation of the board using UTF-8 box drawing characters.
     ///
     pub def toString(board: Board): String = match board {
-        case Board(vec) =>  "       |       |       "
-                            ++ "\n   ${Symbol.toString(Vector.get(0, vec)) }   |   ${Symbol.toString(Vector.get(1, vec)) }   |   ${Symbol.toString(Vector.get(2, vec)) }   "
-                            ++ "\n - - - | - - - | - - - "
-                            ++ "\n   ${Symbol.toString(Vector.get(3, vec)) }   |   ${Symbol.toString(Vector.get(4, vec)) }   |   ${Symbol.toString(Vector.get(5, vec)) }   "
-                            ++ "\n - - - | - - - | - - - "
-                            ++ "\n   ${Symbol.toString(Vector.get(6, vec)) }   |   ${Symbol.toString(Vector.get(7, vec)) }   |   ${Symbol.toString(Vector.get(8, vec)) }   "
-                            ++ "\n       |       |       "
-        }
+        case Board(vec) =>
+            " ┌───┬───┬───┐\n"
+            ++ " │ ${Symbol.toString(Vector.get(0, vec))} │ ${Symbol.toString(Vector.get(1, vec))} │ ${Symbol.toString(Vector.get(2, vec))} │\n"
+            ++ " ├───┼───┼───┤\n"
+            ++ " │ ${Symbol.toString(Vector.get(3, vec))} │ ${Symbol.toString(Vector.get(4, vec))} │ ${Symbol.toString(Vector.get(5, vec))} │\n"
+            ++ " ├───┼───┼───┤\n"
+            ++ " │ ${Symbol.toString(Vector.get(6, vec))} │ ${Symbol.toString(Vector.get(7, vec))} │ ${Symbol.toString(Vector.get(8, vec))} │\n"
+            ++ " └───┴───┴───┘"
+    }
 }
