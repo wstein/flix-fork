@@ -176,6 +176,23 @@ mod Gui {
     }
 
     ///
+    /// Returns `count` out of `total` as a percentage with one decimal place, such as
+    /// "16.4". A whole-number percentage is too coarse here: three shares that differ
+    /// by a fraction of a point would all read the same while the tally is settling.
+    ///
+    /// The arithmetic stays in integers, working in tenths of a percent and rounding to
+    /// nearest, so the text does not depend on how floating point happens to print.
+    ///
+    pub def percentText(count: Int32, total: Int32): String =
+        if (total <= 0)
+            "0.0"
+        else {
+            let tenths = (count * 1000 + total / 2) / total;
+            let whole = tenths / 10;
+            "${whole}.${tenths - whole * 10}"
+        }
+
+    ///
     /// Draws one tallied shape: a small board, with how many games ended that way and
     /// what share of the total that is.
     ///
@@ -202,8 +219,7 @@ mod Gui {
         app.textAlign(PConstants.CENTER, PConstants.CENTER);
         app.textSize(13.0f32);
         app.fill(148.0f32, 158.0f32, 178.0f32);
-        let percent = if (total == 0) 0 else count * 100 / total;
-        app.text("${count}  (${percent}%)", statsColumnCenterX(col), statsLabelY())
+        app.text("${count}  (${percentText(count, total)}%)", statsColumnCenterX(col), statsLabelY())
     }
 
     ///

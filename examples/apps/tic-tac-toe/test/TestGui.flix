@@ -135,6 +135,29 @@ mod TestGui {
     }
 
     @Test
+    def testPercentTextHasOneDecimalPlace(): Unit \ Assert = {
+        assertEq(expected = "12.5", Gui.percentText(1, 8));
+        assertEq(expected = "50.0", Gui.percentText(8, 16));
+        assertEq(expected = "25.0", Gui.percentText(4, 16));
+        assertEq(expected = "100.0", Gui.percentText(7, 7));
+        assertEq(expected = "0.0", Gui.percentText(0, 9))
+    }
+
+    @Test
+    def testPercentTextRoundsToNearest(): Unit \ Assert = {
+        assertEq(expected = "33.3", Gui.percentText(1, 3));
+        assertEq(expected = "66.7", Gui.percentText(2, 3));
+        assertEq(expected = "16.4", Gui.percentText(23, 140))
+    }
+
+    @Test
+    def testPercentTextSurvivesAnEmptyTally(): Unit \ Assert = {
+        // The strip is drawn before any game has finished.
+        assertEq(expected = "0.0", Gui.percentText(0, 0));
+        assertEq(expected = "0.0", Gui.percentText(3, 0))
+    }
+
+    @Test
     def testStatsStripSitsAboveEverythingElse(): Unit \ Assert = {
         // The strip runs along the top: its miniatures and their labels must clear the
         // board, and clicking one must not place a piece.
