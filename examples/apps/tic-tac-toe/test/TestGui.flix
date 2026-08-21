@@ -138,34 +138,8 @@ mod TestGui {
     }
 
     @Test
-    def testStatsStripSitsAboveEverythingElse(): Unit \ Assert = {
-        // The strip runs along the top: its miniatures and their labels must clear the
-        // board, and clicking one must not place a piece.
-        Assert.assertTrue(Gui.statsBoardY() > 0.0f32);
-        Assert.assertTrue(Gui.statsLabelY() > Gui.statsBoardY() + Gui.statsCellSize() * 3.0f32);
-        Assert.assertTrue(Gui.statsLabelY() < Gui.boardOffsetY());
-        assertEq(expected = None, Gui.cellAt(Gui.statsColumnCenterX(0), Gui.statsBoardY()))
-    }
-
-    @Test
-    def testStatsColumnsAreEvenlySpacedAndFit(): Unit \ Assert = {
-        let half = Gui.statsCellSize() * 1.5f32;
-        let leftEdge = c -> Gui.statsColumnCenterX(c) - half;
-        let rightEdge = c -> Gui.statsColumnCenterX(c) + half;
-
-        // Three columns, in order, none overlapping its neighbour.
-        assertEq(expected = 3, Gui.statsColumns());
-        Assert.assertTrue(rightEdge(0) < leftEdge(1));
-        Assert.assertTrue(rightEdge(1) < leftEdge(2));
-
-        // And all of them inside the canvas.
-        Assert.assertTrue(leftEdge(0) > 0.0f32);
-        Assert.assertTrue(rightEdge(2) < Int32.toFloat32(Gui.canvasWidth()))
-    }
-
-    @Test
     def testBoardAndControlsFitTheCanvas(): Unit \ Assert = {
-        // The taller window must still hold everything below the statistics.
+        // Everything must fit, with the controls clear of the board.
         let boardBottom = Gui.boardOffsetY() + Gui.cellSize() * 3.0f32;
         Assert.assertTrue(boardBottom < Gui.restartButtonY());
         Assert.assertTrue(Gui.restartButtonY() + Gui.restartButtonH()
