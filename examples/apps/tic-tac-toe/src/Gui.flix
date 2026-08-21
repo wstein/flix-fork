@@ -116,6 +116,9 @@ mod Gui {
         let humanSymbol = Symbol.X;
         let opponent = Opponent.Computer;
 
+        // Opened once: building and opening a synthesizer per click is audible as lag.
+        let sound = Sound.open();
+
         let sketch = new PApplet {
             def settings(app: PApplet): Unit \ IO = {
                 app.size(450, 550);
@@ -149,7 +152,7 @@ mod Gui {
                                         boardRef.set(nb);
                                         turnRef.set(Symbol.complement(currentTurn));
                                         aiMoveTimeRef.set(0i64);
-                                        Sound.playAiClick()
+                                        Sound.click(sound, Sound.computerClick())
                                     }
                                     case None => ()
                                 }
@@ -167,8 +170,8 @@ mod Gui {
                 if (updatedOutcome != Outcome.Ongoing and not gameOverSoundPlayedRef.get()) {
                     gameOverSoundPlayedRef.set(true);
                     match updatedOutcome {
-                        case Outcome.Win(sym) if sym == humanSymbol => Sound.playWinFanfare()
-                        case Outcome.Win(_)                         => Sound.playLoseSound()
+                        case Outcome.Win(sym) if sym == humanSymbol => Sound.playAsync(sound, Sound.winFanfare())
+                        case Outcome.Win(_)                         => Sound.playAsync(sound, Sound.loseSound())
                         case _                                      => ()
                     }
                 };
@@ -282,7 +285,7 @@ mod Gui {
                                         boardRef.set(nb);
                                         turnRef.set(Symbol.complement(currentTurn));
                                         aiMoveTimeRef.set(System.currentTimeMillis() + aiMoveDelayMs());
-                                        Sound.playHumanClick()
+                                        Sound.click(sound, Sound.humanClick())
                                     }
                                     case None => ()
                                 }
