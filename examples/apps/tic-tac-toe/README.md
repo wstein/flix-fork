@@ -111,8 +111,7 @@ same position wearing a different orientation. Collapse them and 16 becomes 3:
 ```
 
 So roughly half of all drawn games end in the first shape and a quarter in each of the
-others — which is why two of them seem to come up constantly. The strip along the top of
-the window counts them as the demo plays, and the proportions settle near 50/25/25.
+others — which is why two of them seem to come up constantly.
 
 None of these three numbers is hardcoded. `Board.canonical` collapses a board onto one
 representative of its symmetry class, and `TestBoard.testDrawnGamesTakeThreeShapes`
@@ -190,9 +189,6 @@ let autoMode = now - lastInputTimeRef.get() >= autoModeIdleMs();
 That one boolean then drives everything the demo does — who moves, how loud it is, and
 whether the watermark is drawn — which is why none of those can disagree with each other.
 
-**The strip along the top** counts finished games by shape, with a count and a
-percentage to one decimal place under each — see the background section above for what it is showing.
-
 **Buttons.** "New Game" clears the board; "Close" quits. Both are hit-tested with the
 same `isInside` helper, and `TestGui` checks that they cannot overlap each other or the
 board.
@@ -253,8 +249,8 @@ In rough order of difficulty:
 4. Add a draw sound — `Sound.drawSound()` already exists but nothing calls it.
 5. Make the winning line light up when the game ends. The Datalog rule already knows
    which line won; try returning it instead of just the symbol.
-6. Count wins and losses as well as draws in the top strip. You will need a fourth
-   column, and a decision about what to do when a human blunders.
+6. Put the tally back on screen: count finished games by shape with `Board.canonical`
+   and draw the three miniatures, and watch the proportions settle near 50/25/25.
 7. Delete `Board.outcome` and make `datalogOutcome` the only implementation. Measure how
    slow the game becomes, then make it fast again without giving up the Datalog.
 
