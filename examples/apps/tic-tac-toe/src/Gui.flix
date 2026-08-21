@@ -17,7 +17,7 @@ mod Gui {
     pub def restartButtonY(): Float32 = 480.0f32
     pub def restartButtonW(): Float32 = 160.0f32
     pub def restartButtonH(): Float32 = 40.0f32
-    pub def aiMoveDelayMs(): Int64 = 120i64
+    pub def aiMoveDelayMs(): Int64 = 240i64
 
     ///
     /// Returns the cell index (0-8) corresponding to canvas coordinates (x, y), if within bounds.

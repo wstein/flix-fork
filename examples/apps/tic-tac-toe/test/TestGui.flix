@@ -64,6 +64,6 @@ mod TestGui {
 
     @Test
     def testAiMoveDelayMs(): Unit \ Assert = {
-        assertEq(expected = 120i64, Gui.aiMoveDelayMs())
+        assertEq(expected = 240i64, Gui.aiMoveDelayMs())
     }
 }
