@@ -72,6 +72,43 @@ mod TestMinimax {
     }
 
     @Test
+    def testDatalogBestMovesWinInOne(): Unit \ Assert = {
+        let b = applyMoves((Symbol.O, 0) :: (Symbol.X, 3) :: (Symbol.O, 1) :: (Symbol.X, 4) :: Nil);
+        let moves = Minimax.bestMoves(Symbol.O, b);
+        assertEq(expected = 2 :: Nil, moves)
+    }
+
+    @Test
+    def testDatalogBestMovesBlockX(): Unit \ Assert = {
+        let b = applyMoves((Symbol.X, 0) :: (Symbol.O, 3) :: (Symbol.X, 1) :: Nil);
+        let moves = Minimax.bestMoves(Symbol.O, b);
+        assertEq(expected = 2 :: Nil, moves)
+    }
+
+    @Test
+    def testDatalogBestMovesEmptyBoard(): Unit \ Assert = {
+        let b = Board.newBoard();
+        let moves = Minimax.bestMoves(Symbol.X, b);
+        assertEq(expected = 0 :: 1 :: 2 :: 3 :: 4 :: 5 :: 6 :: 7 :: 8 :: Nil, moves)
+    }
+
+    @Test
+    def testBestMoveWithSeedDeterministic(): Unit \ Assert = {
+        let b = Board.newBoard();
+        let move1 = Minimax.bestMoveWithSeed(Symbol.X, b, 12345i64);
+        let move2 = Minimax.bestMoveWithSeed(Symbol.X, b, 12345i64);
+        assertEq(expected = move1, move2)
+    }
+
+    @Test
+    def testBestMoveWithOptionalSeed(): Unit \ Assert = {
+        let b = Board.newBoard();
+        let moveWithSeed = Minimax.bestMoveWithSeed(Symbol.X, b, 999i64);
+        let moveWithOpt = Random.runWithSeed(1i64, () -> Minimax.bestMoveWithOptionalSeed(Symbol.X, b, Some(999i64)));
+        assertEq(expected = moveWithSeed, moveWithOpt)
+    }
+
+    @Test
     def testSelfPlayDrawSeed1(): Unit \ Assert = {
         let outcome = Random.runWithSeed(12345i64, () -> playSelfGame(Board.newBoard(), Symbol.X));
         assertEq(expected = Outcome.Draw, outcome)
