@@ -217,8 +217,8 @@ System.out.println(s.getDefaultSoundbank().getName());   // "Emergency GM sound 
 ## Running it
 
 ```bash
-./flixw run          # play
-./flixw test         # run the tests
+flix run          # play
+flix test         # run the tests
 ```
 
 ### Replaying the same game
@@ -227,14 +227,14 @@ When several moves are equally good — most obviously the opening, where all ni
 the computer picks one at random. Fix the seed and the whole game repeats:
 
 ```bash
-TICTACTOE_SEED=12345 ./flixw run
+TICTACTOE_SEED=12345 flix run
 ```
 
 `flix run` does not forward arguments to the program, so the command-line options in
 `CliOpt.flix` only take effect once the game is packaged:
 
 ```bash
-./flixw build-fatjar
+flix build-fatjar
 java -jar artifact/tic-tac-toe.jar --seed 12345
 java -jar artifact/tic-tac-toe.jar --help
 ```
