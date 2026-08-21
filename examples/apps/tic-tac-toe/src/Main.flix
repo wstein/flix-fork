@@ -75,75 +75,68 @@ def gameLoop(board: Board, currentTurn: Symbol, opponent: Opponent, humanSymbol:
 }
 
 ///
-/// Returns the seed the game was started with, if any.
-///
-/// A seed makes a game reproducible: the computer's choice between equally good
-/// moves is drawn from the `Random` effect, so fixing the seed fixes the game.
-///
-/// It is read from the first command line argument, or from `TICTACTOE_SEED` --- the
-/// `flix run` command does not forward arguments to the program, so the environment
-/// variable is the one that works without packaging a jar first.
-///
-def seedFromEnvironment(): Option[Int64] \ Sys.Env = {
-    let fromArgs = Sys.Env.getArgs() |> List.head |> Option.flatMap(Int64.fromString);
-    match fromArgs {
-        case Some(s) => Some(s)
-        case None    => Sys.Env.getVar("TICTACTOE_SEED") |> Option.flatMap(Int64.fromString)
-    }
-}
-
-///
 /// The main entry point of the application.
 ///
-/// Creates a new game board and starts the game loop.
+/// Parses command line options (defaults to GUI mode, with --console for CLI).
 ///
 def main(): Unit \ IO = {
     run {
-        let seed = seedFromEnvironment();
-        println("");
-        println("  _______ _          _______             _______           ");
-        println(" |__   __(_)        |__   __|           |__   __|        ");
-        println("    | |   _  ___       | | __ _  ___       | | ___   ___ ");
-        println("    | |  | |/ __|      | |/ _` |/ __|      | |/ _ \\ / _ \\");
-        println("    | |  | | (__       | | (_| | (__       | | (_) |  __/");
-        println("    |_|  |_|\\___|      |_|\\__,_|\\___|      |_|\\___/ \\___|");
-        println("");
-        let mode = Interface.chooseMode();
-        match mode {
-            case Mode.Gui => Gui.runGui()
-            case Mode.Console => {
-                println("");
-                println("Instructions:");
-                println("The cells are numbered as follows:\n");
-                println(" ┌───┬───┬───┐");
-                println(" │ 0 │ 1 │ 2 │");
-                println(" ├───┼───┼───┤");
-                println(" │ 3 │ 4 │ 5 │");
-                println(" ├───┼───┼───┤");
-                println(" │ 6 │ 7 │ 8 │");
-                println(" └───┴───┴───┘");
-                println("Enter your move as one of these numbers corresponding to a cell");
-                println("");
-                let opponent = Interface.chooseOpponent();
-                let (firstPlayer, humanSymbol) = match opponent {
-                    case Opponent.Human => (Symbol.X, Symbol.X)
-                    case Opponent.Computer =>
-                        let first = Interface.chooseFirstPlayer();
-                        (first, Symbol.X)
-                };
-                let board = Board.newBoard();
+        let args = Sys.Env.getArgs();
+        let parsed = CLIOpts.parse(args);
 
-                // Seed the generator once, here, rather than per move: the computer
-                // draws successive values from it as the game goes on.
-                match seed {
-                    case Some(s) =>
-                        println("Playing with random seed ${s}.");
-                        println("");
-                        Math.Random.runWithSeed(s, () -> gameLoop(board, firstPlayer, opponent, humanSymbol))
-                    case None =>
-                        gameLoop(board, firstPlayer, opponent, humanSymbol)
-                }
+        if (not List.isEmpty(parsed#errors)) {
+            List.forEach((e: String) -> println("Error: ${e}"), parsed#errors);
+            println("");
+            println(CLIOpts.usage());
+            Sys.Exit.exit(1)
+        } else if (parsed#help) {
+            println(CLIOpts.usage())
+        } else if (parsed#console) {
+            let seed = match parsed#seed {
+                case Some(s) => Some(s)
+                case None => Sys.Env.getVar("TICTACTOE_SEED") |> Option.flatMap(Int64.fromString)
+            };
+            println("");
+            println("  _______ _          _______             _______           ");
+            println(" |__   __(_)        |__   __|           |__   __|        ");
+            println("    | |   _  ___       | | __ _  ___       | | ___   ___ ");
+            println("    | |  | |/ __|      | |/ _` |/ __|      | |/ _ \\ / _ \\");
+            println("    | |  | | (__       | | (_| | (__       | | (_) |  __/");
+            println("    |_|  |_|\\___|      |_|\\__,_|\\___|      |_|\\___/ \\___|");
+            println("");
+            println("Instructions:");
+            println("The cells are numbered as follows:\n");
+            println(" ┌───┬───┬───┐");
+            println(" │ 0 │ 1 │ 2 │");
+            println(" ├───┼───┼───┤");
+            println(" │ 3 │ 4 │ 5 │");
+            println(" ├───┼───┼───┤");
+            println(" │ 6 │ 7 │ 8 │");
+            println(" └───┴───┴───┘");
+            println("Enter your move as one of these numbers corresponding to a cell");
+            println("");
+            let opponent = Interface.chooseOpponent();
+            let (firstPlayer, humanSymbol) = match opponent {
+                case Opponent.Human => (Symbol.X, Symbol.X)
+                case Opponent.Computer =>
+                    let first = Interface.chooseFirstPlayer();
+                    (first, Symbol.X)
+            };
+            let board = Board.newBoard();
+
+            // Seed the generator once, here, rather than per move: the computer
+            // draws successive values from it as the game goes on.
+            match seed {
+                case Some(s) =>
+                    println("Playing with random seed ${s}.");
+                    println("");
+                    Math.Random.runWithSeed(s, () -> gameLoop(board, firstPlayer, opponent, humanSymbol))
+                case None =>
+                    gameLoop(board, firstPlayer, opponent, humanSymbol)
             }
+        } else {
+            // Default mode: GUI
+            Gui.runGui()
         }
     } with Interface.interfaceWithConsole
     with Math.Random.runWithIO
