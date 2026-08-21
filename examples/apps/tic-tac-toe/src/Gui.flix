@@ -122,6 +122,7 @@ mod Gui {
 
                 // Handle AI turn
                 if (opponent == Opponent.Computer and currentTurn == Symbol.complement(humanSymbol) and outcome == Outcome.Ongoing) {
+                    Thread.sleep(500i64);
                     let aiMove = computeAiMove(currentTurn, board);
                     match aiMove {
                         case Some(m) => {

@@ -1,3 +1,5 @@
+import java.lang.Thread
+
 use Sys.Console
 use Math.Random
 use Math.Random.Random
@@ -5,7 +7,7 @@ use Math.Random.Random
 ///
 /// The core gameplay loop called repeatedly until the game ends.
 ///
-def gameLoop(board: Board, currentTurn: Symbol, opponent: Opponent, humanSymbol: Symbol): Unit \ {Interface, Random} = {
+def gameLoop(board: Board, currentTurn: Symbol, opponent: Opponent, humanSymbol: Symbol): Unit \ {Interface, Random, IO} = {
     match opponent {
         case Opponent.Human => {
             Interface.display(board, "Enter a move (0 - 8): ");
@@ -50,6 +52,7 @@ def gameLoop(board: Board, currentTurn: Symbol, opponent: Opponent, humanSymbol:
                     }
                 }
             } else {
+                Thread.sleep(500i64);
                 match Minimax.bestMove(currentTurn, board) {
                     case Some(move) => {
                         let newBoard = Option.getWithDefault(board, Board.makeMove(board, currentTurn, move));
@@ -72,13 +75,22 @@ def gameLoop(board: Board, currentTurn: Symbol, opponent: Opponent, humanSymbol:
 }
 
 ///
-/// Returns the seed given on the command line, if any.
+/// Returns the seed the game was started with, if any.
 ///
 /// A seed makes a game reproducible: the computer's choice between equally good
 /// moves is drawn from the `Random` effect, so fixing the seed fixes the game.
 ///
-def seedFromArgs(): Option[Int64] \ Sys.Env =
-    Sys.Env.getArgs() |> List.head |> Option.flatMap(Int64.fromString)
+/// It is read from the first command line argument, or from `TICTACTOE_SEED` --- the
+/// `flix run` command does not forward arguments to the program, so the environment
+/// variable is the one that works without packaging a jar first.
+///
+def seedFromEnvironment(): Option[Int64] \ Sys.Env = {
+    let fromArgs = Sys.Env.getArgs() |> List.head |> Option.flatMap(Int64.fromString);
+    match fromArgs {
+        case Some(s) => Some(s)
+        case None    => Sys.Env.getVar("TICTACTOE_SEED") |> Option.flatMap(Int64.fromString)
+    }
+}
 
 ///
 /// The main entry point of the application.
@@ -87,7 +99,7 @@ def seedFromArgs(): Option[Int64] \ Sys.Env =
 ///
 def main(): Unit \ IO = {
     run {
-        let seed = seedFromArgs();
+        let seed = seedFromEnvironment();
         println("");
         println("  _______ _          _______             _______           ");
         println(" |__   __(_)        |__   __|           |__   __|        ");
