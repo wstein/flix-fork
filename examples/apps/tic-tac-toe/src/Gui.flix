@@ -50,10 +50,19 @@ mod Gui {
     }
 
     ///
-    /// Computes the AI's move using Math.Random effect handler.
+    /// Computes the AI's move using Math.Random effect handler (with seed if provided).
     ///
-    def computeAiMove(turn: Symbol, board: Board): Option[Int32] \ IO =
-        Math.Random.runWithIO(() -> Minimax.bestMove(turn, board))
+    def computeAiMove(turn: Symbol, board: Board, seedRef: AtomicReference[Option[Int64]]): Option[Int32] \ IO = {
+        let currentSeed = seedRef.get();
+        match currentSeed {
+            case Some(s) =>
+                let nextSeed = Int64.remainder(s * 6364136223846793005i64 + 1442695040888963407i64, 9223372036854775807i64);
+                seedRef.set(Some(nextSeed));
+                Math.Random.runWithSeed(s, () -> Minimax.bestMove(turn, board))
+            case None =>
+                Math.Random.runWithIO(() -> Minimax.bestMove(turn, board))
+        }
+    }
 
     ///
     /// Draws a single piece (X or O) on the board canvas.
@@ -96,9 +105,10 @@ mod Gui {
     ///
     /// Launches the Processing GUI for Tic-Tac-Toe.
     ///
-    pub def runGui(): Unit \ IO = {
+    pub def runGui(seed: Option[Int64]): Unit \ IO = {
         let boardRef: AtomicReference[Board] = new AtomicReference(Board.newBoard());
         let turnRef: AtomicReference[Symbol] = new AtomicReference(Symbol.X);
+        let seedRef: AtomicReference[Option[Int64]] = new AtomicReference(seed);
         let humanSymbol = Symbol.X;
         let opponent = Opponent.Computer;
 
@@ -123,7 +133,7 @@ mod Gui {
                 // Handle AI turn
                 if (opponent == Opponent.Computer and currentTurn == Symbol.complement(humanSymbol) and outcome == Outcome.Ongoing) {
                     Thread.sleep(500i64);
-                    let aiMove = computeAiMove(currentTurn, board);
+                    let aiMove = computeAiMove(currentTurn, board, seedRef);
                     match aiMove {
                         case Some(m) => {
                             match Board.makeMove(board, currentTurn, m) {

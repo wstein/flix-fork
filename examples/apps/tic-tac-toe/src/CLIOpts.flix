@@ -10,7 +10,6 @@ mod CLIOpts {
     ///
     pub enum CliOption with Eq {
         case Help,
-        case Console,
         case Seed(Int64)
     }
 
@@ -19,7 +18,6 @@ mod CLIOpts {
     ///
     pub type alias ParsedOpts = {
         help = Bool,
-        console = Bool,
         seed = Option[Int64],
         errors = List[String]
     }
@@ -33,12 +31,6 @@ mod CLIOpts {
             optionNames = "help" :: Nil,
             argDescriptor = ArgDescr.NoArg(CliOption.Help),
             explanation = "Display this help message and exit"
-        } ::
-        {
-            optionIds = 'c' :: Nil,
-            optionNames = "console" :: Nil,
-            argDescriptor = ArgDescr.NoArg(CliOption.Console),
-            explanation = "Launch in Console (Terminal) mode instead of default GUI"
         } ::
         {
             optionIds = 's' :: Nil,
@@ -55,13 +47,11 @@ mod CLIOpts {
 
     ///
     /// Parses the given list of command-line arguments.
-    /// Default interface mode is GUI unless --console / -c is passed.
     ///
     pub def parse(args: List[String]): ParsedOpts = {
         match GetOpt.getOpt(ArgOrder.Permute, options(), args) {
             case Validation.Success(res) => {
                 let isHelp = List.exists(opt -> match opt { case CliOption.Help => true case _ => false }, res#options);
-                let isConsole = List.exists(opt -> match opt { case CliOption.Console => true case _ => false }, res#options);
                 let optSeed = List.findMap(opt -> match opt { case CliOption.Seed(s) => Some(s) case _ => None }, res#options);
                 let posSeed = List.head(res#nonOptions) |> Option.flatMap(Int64.fromString);
                 let finalSeed = match optSeed {
@@ -69,10 +59,10 @@ mod CLIOpts {
                     case None => posSeed
                 };
                 let emptyErrors: List[String] = Nil;
-                { help = isHelp, console = isConsole, seed = finalSeed, errors = emptyErrors }
+                { help = isHelp, seed = finalSeed, errors = emptyErrors }
             }
             case Validation.Failure(errs) => {
-                { help = false, console = false, seed = None, errors = Nec.toList(errs) }
+                { help = false, seed = None, errors = Nec.toList(errs) }
             }
         }
     }
