@@ -40,6 +40,47 @@ mod Board {
     }
 
     ///
+    /// Returns the Datalog facts representing the 8 winning lines.
+    ///
+    pub def lines(): #{ Line(Int32, Int32, Int32) | r } = #{
+        Line(0, 1, 2). Line(3, 4, 5). Line(6, 7, 8).
+        Line(0, 3, 6). Line(1, 4, 7). Line(2, 5, 8).
+        Line(0, 4, 8). Line(2, 4, 6).
+    }
+
+    ///
+    /// Converts a board into Datalog facts representing cell occupants.
+    ///
+    pub def boardFacts(board: Board): #{ Cell(Int32, Symbol) | r } = match board {
+        case Board(vec) =>
+            Vector.mapWithIndex((i, sym) -> (i, sym), vec)
+                |> Vector.toList
+                |> (l -> inject l into Cell/2)
+    }
+
+    ///
+    /// Evaluates the outcome of the game on the given board using Datalog facts and rules.
+    ///
+    pub def datalogOutcome(board: Board): Outcome = {
+        let db = boardFacts(board) <+> lines();
+        let pr = #{
+            Win(sym) :- Line(a, b, c), Cell(a, sym), Cell(b, sym), Cell(c, sym), if (sym != Symbol.Empty).
+            FreeCell(i) :- Cell(i, sym), if (sym == Symbol.Empty).
+            HasFree() :- FreeCell(_).
+        };
+        let wins = query db, pr select sym from Win(sym);
+        let hasFree = query db, pr select () from HasFree() |> Vector.nonEmpty;
+        if (Vector.memberOf(Symbol.X, wins))
+            Outcome.Win(Symbol.X)
+        else if (Vector.memberOf(Symbol.O, wins))
+            Outcome.Win(Symbol.O)
+        else if (not hasFree)
+            Outcome.Draw
+        else
+            Outcome.Ongoing
+    }
+
+    ///
     /// Returns a list of indices (0 to 8) of all empty cells on the board.
     ///
     pub def freeCells(board: Board): List[Int32] = match board {
@@ -56,12 +97,12 @@ mod Board {
         case Board(vec) => {
             let patterns = (0, 1, 2) :: (3, 4, 5) :: (6, 7, 8) :: (0, 3, 6) :: (1, 4, 7) :: (2, 5, 8) :: (0, 4, 8) :: (2, 4, 6) :: Nil;
             List.exists((pattern: (Int32, Int32, Int32)) -> {
-                    match pattern {
-                        case (a, b, c) =>
-                            (Vector.get(a, vec) == symbol)
-                            and (Vector.get(b, vec) == symbol)
-                            and (Vector.get(c, vec) == symbol)
-                    }
+                match pattern {
+                    case (a, b, c) =>
+                        (Vector.get(a, vec) == symbol)
+                        and (Vector.get(b, vec) == symbol)
+                        and (Vector.get(c, vec) == symbol)
+                }
             }, patterns)
         }
     }

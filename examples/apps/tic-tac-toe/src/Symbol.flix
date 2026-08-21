@@ -1,7 +1,7 @@
 ///
 /// Represents the different symbols used in the game.
 ///
-pub enum Symbol with Eq, ToString {
+pub enum Symbol with Eq, Order, ToString {
     case X,
     case O,
     case Empty

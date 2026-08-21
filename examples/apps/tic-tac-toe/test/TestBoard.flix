@@ -56,4 +56,25 @@ mod TestBoard {
         let b = applyMoves(moves);
         assertEq(expected = Outcome.Draw, Board.outcome(b))
     }
+
+    @Test
+    def testDatalogOutcomeInitial(): Unit \ Assert = {
+        let b = Board.newBoard();
+        assertEq(expected = Outcome.Ongoing, Board.datalogOutcome(b))
+    }
+
+    @Test
+    def testDatalogOutcomeWin(): Unit \ Assert = {
+        let b = applyMoves((Symbol.X, 0) :: (Symbol.X, 1) :: (Symbol.X, 2) :: Nil);
+        assertEq(expected = Outcome.Win(Symbol.X), Board.datalogOutcome(b))
+    }
+
+    @Test
+    def testDatalogOutcomeDraw(): Unit \ Assert = {
+        let moves = (Symbol.X, 0) :: (Symbol.O, 1) :: (Symbol.X, 2)
+                 :: (Symbol.X, 3) :: (Symbol.X, 4) :: (Symbol.O, 5)
+                 :: (Symbol.O, 6) :: (Symbol.X, 7) :: (Symbol.O, 8) :: Nil;
+        let b = applyMoves(moves);
+        assertEq(expected = Outcome.Draw, Board.datalogOutcome(b))
+    }
 }
