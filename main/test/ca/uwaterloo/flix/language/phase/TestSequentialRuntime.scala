@@ -135,7 +135,7 @@ class TestSequentialRuntime extends AnyFunSuite with TestUtils {
   test("Runtime.ParYield.YieldsTheSameValue") {
     // `par (...) yield` is lowered to one channel and one thread per fragment, or, under the
     // option, to a binding per fragment on the current thread. Both must yield the same value.
-    assertParity(
+    val src =
       """
         |use Assert.assertEq;
         |
@@ -146,7 +146,10 @@ class TestSequentialRuntime extends AnyFunSuite with TestUtils {
         |    let nested = par (x <- par (y <- 1; z <- 2) yield y + z; w <- 4) yield x * w;
         |    assertEq(expected = 12, nested)
         |}
-      """.stripMargin)
+      """.stripMargin
+
+    assertParity(src)
+    run(src, Sequential.copy(xnewmono = true))
   }
 
   test("Runtime.Region.SpawnIsRejected") {
