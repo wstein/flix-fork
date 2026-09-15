@@ -268,9 +268,7 @@ object GitHub {
     * Kept apart: a refusal (403/429, usually a rate limit), any other unexpected status, and never
     * reaching a server at all.
     */
-  def download(url: URL): Result[InputStream, PackageError] = {
-    val request = HttpRequest.newBuilder(url.toURI).GET().build()
-
+  private def download(url: URL, request: HttpRequest): Result[InputStream, PackageError] = {
     val response = try {
       Client.sendStreamingRequest(request)
     } catch {
@@ -283,12 +281,19 @@ object GitHub {
       case status =>
         // A close failure must not shadow the status being reported.
         try response.body().close() catch { case _: IOException => () }
-        status match {
-          case 403 => Err(PackageError.DownloadRefused(url, status, retryAfter(response)))
-          case 429 => Err(PackageError.DownloadRefused(url, status, retryAfter(response)))
-          case _ => Err(PackageError.DownloadFailed(url, status))
-        }
+        Err(downloadFailure(url, status, retryAfter(response)))
     }
+  }
+
+  /** Opens a public URL without authentication. */
+  def download(url: URL): Result[InputStream, PackageError] =
+    download(url, HttpRequest.newBuilder(url.toURI).GET().build())
+
+  /** Classifies an unsuccessful download response. */
+  private[github] def downloadFailure(url: URL, status: Int, retryAfter: Option[String]): PackageError = status match {
+    case 403 => PackageError.DownloadRefused(url, status, retryAfter)
+    case 429 => PackageError.DownloadRefused(url, status, retryAfter)
+    case _ => PackageError.DownloadFailed(url, status)
   }
 
   /**
@@ -304,7 +309,7 @@ object GitHub {
     * the REST API -- a release asset's address is fully predictable from owner/repo/tag/name.
     * The caller closes the stream.
     */
-  def downloadReleaseAsset(project: Project, version: SemVer, assetName: String): Result[InputStream, PackageError] = {
+  def downloadPublicReleaseAsset(project: Project, version: SemVer, assetName: String): Result[InputStream, PackageError] = {
     val url = releaseAssetUrl(project, version, assetName)
     download(url) match {
       case Err(PackageError.DownloadFailed(_, 404)) =>
@@ -331,6 +336,13 @@ object GitHub {
   private[github] def findAsset(release: Release, assetName: String): Option[Asset] =
     release.assets.find(_.name == assetName)
 
+  /** Returns the exactly named asset or a release-asset-not-found error. */
+  def requireAsset(project: Project, version: SemVer, release: Release, assetName: String): Result[Asset, PackageError] =
+    findAsset(release, assetName) match {
+      case Some(asset) => Ok(asset)
+      case None => Err(PackageError.ReleaseAssetNotFound(project, version, assetName, releaseAssetUrl(project, version, assetName)))
+    }
+
   /** Classifies an unsuccessful targeted release lookup. */
   private[github] def releaseFailure(project: Project, version: SemVer, url: URL, status: Int, retryAfter: Option[String]): PackageError =
     if (status == 404) PackageError.VersionDoesNotExist(version, project)
@@ -340,8 +352,7 @@ object GitHub {
     * The permanent, non-REST address of a release asset.
     */
   private def releaseAssetUrl(project: Project, version: SemVer, assetName: String): URL = {
-    // The 4-arg constructor percent-encodes the path, so a name with a space or "#" (legal in a
-    // manifest's declared name, which this can be built from) can't produce a malformed URL.
+    // The 4-arg constructor percent-encodes the path components defensively.
     val path = s"/${project.owner}/${project.repo}/releases/download/v$version/$assetName"
     new URI("https", "github.com", path, null).toURL
   }

@@ -4,13 +4,15 @@ import ca.uwaterloo.flix.language.CompilationMessage
 import ca.uwaterloo.flix.language.ast.TypedAst
 import ca.uwaterloo.flix.language.ast.shared.SecurityContext
 import ca.uwaterloo.flix.language.errors.SafetyError
-import ca.uwaterloo.flix.tools.pkg.github.GitHub.Project
-import ca.uwaterloo.flix.util.Formatter
+import ca.uwaterloo.flix.tools.pkg.github.GitHub.{Asset, Project, Release}
+import ca.uwaterloo.flix.util.{Formatter, Result}
 import ca.uwaterloo.flix.util.Result.{Err, Ok}
+import ca.uwaterloo.flix.util.collection.ListMap
 import org.scalatest.{BeforeAndAfter, DoNotDiscover}
 import org.scalatest.funsuite.AnyFunSuite
 
 import java.io.{File, PrintStream}
+import java.net.URI
 import java.nio.file.{Files, Path}
 
 @DoNotDiscover
@@ -163,7 +165,7 @@ class TestFlixPackageManager extends AnyFunSuite with BeforeAndAfter {
         case Ok(res) => res
         case Err(e) => fail(e.message(formatter))
       }
-      val resolution = FlixPackageManager.SecureResolution(origin = manifest1, security = resolution1.security ++ resolution2.security, manifestToFlixDeps = resolution1.manifestToFlixDeps ++ resolution2.manifestToFlixDeps)
+      val resolution = FlixPackageManager.SecureResolution(origin = manifest1, security = resolution1.security ++ resolution2.security, manifestToFlixDeps = resolution1.manifestToFlixDeps ++ resolution2.manifestToFlixDeps, authenticatedReleases = resolution1.authenticatedReleases ++ resolution2.authenticatedReleases)
 
 
       FlixPackageManager.installAll(resolution, path, PkgTestUtils.gitHubToken) match {
@@ -707,6 +709,24 @@ class TestFlixPackageManager extends AnyFunSuite with BeforeAndAfter {
 
   /** A version used by package manager tests. */
   private val StubVersion: SemVer = SemVer(1, 1, 0)
+
+  test("resolveSecurityLevels.01: authenticated release metadata is retained for installation") {
+    val origin = Manifest("origin", "", StubVersion, None, PackageModules.All, StubVersion, None, Nil, Nil)
+    val dependency = Manifest("flix-json", "", StubVersion, None, PackageModules.All, StubVersion, None, Nil, Nil)
+    val flixDependency = Dependency.FlixDependency(Repository.GitHub, "mlutze", "flix-json", StubVersion, SecurityContext.Unrestricted)
+    val release = Release(StubVersion, List(Asset("flix-json.fpkg", new URI("https://api.github.com/assets/1").toURL)))
+    val resolution = FlixPackageManager.Resolution(
+      origin,
+      List(origin, dependency),
+      Map(origin -> Nil, dependency -> List(origin)),
+      ListMap(Map(dependency -> List(flixDependency))),
+      Map((Project("mlutze", "flix-json"), StubVersion) -> release)
+    )
+
+    val secureResolution = FlixPackageManager.resolveSecurityLevels(resolution)
+
+    assertResult(expected = Some(release))(actual = secureResolution.authenticatedReleases.get((Project("mlutze", "flix-json"), StubVersion)))
+  }
 
   test("parseManifest.01: dependency package names are validated") {
     val toml = PkgTestUtils.mkTomlWithDeps("").replace("name = \"test\"", "name = \"../outside\"")

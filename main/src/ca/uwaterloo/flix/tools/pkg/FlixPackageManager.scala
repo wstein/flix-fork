@@ -23,7 +23,7 @@ import ca.uwaterloo.flix.util.{Formatter, Result}
 import ca.uwaterloo.flix.util.Result.{Err, Ok, traverse}
 import ca.uwaterloo.flix.util.collection.ListMap
 
-import java.io.{IOException, PrintStream}
+import java.io.{IOException, InputStream, PrintStream}
 import java.nio.file.{Files, Path, StandardCopyOption}
 import scala.collection.mutable
 
@@ -42,7 +42,8 @@ object FlixPackageManager {
   case class Resolution(origin: Manifest,
                         manifests: List[Manifest],
                         immediateDependents: Map[Manifest, List[Manifest]],
-                        manifestToFlixDeps: ListMap[Manifest, FlixDependency])
+                        manifestToFlixDeps: ListMap[Manifest, FlixDependency],
+                        authenticatedReleases: Map[(GitHub.Project, SemVer), GitHub.Release] = Map.empty)
 
   /**
     * Represents the dependency resolution of [[origin]] where the maximum security level has been computed
@@ -55,7 +56,8 @@ object FlixPackageManager {
     */
   case class SecureResolution(origin: Manifest,
                               security: Map[Manifest, SecurityContext],
-                              manifestToFlixDeps: ListMap[Manifest, FlixDependency]) {
+                              manifestToFlixDeps: ListMap[Manifest, FlixDependency],
+                              authenticatedReleases: Map[(GitHub.Project, SemVer), GitHub.Release] = Map.empty) {
     /**
       * All manifests in the resolution.
       */
@@ -71,7 +73,8 @@ object FlixPackageManager {
     out.println("Resolving Flix dependencies...")
     implicit val immediateDependents: mutable.Map[Manifest, List[Manifest]] = mutable.Map(manifest -> List.empty)
     implicit val manifestToFlixDeps: mutable.Map[Manifest, List[FlixDependency]] = mutable.Map(manifest -> List.empty)
-    findTransitiveDependenciesRec(manifest, path, List(manifest), apiKey).map(manifests => Resolution(manifest, manifests, immediateDependents.toMap, ListMap.from(manifestToFlixDeps.flatMap { case (m, deps) => deps.map(d => (m, d)) })))
+    implicit val authenticatedReleases: mutable.Map[(GitHub.Project, SemVer), GitHub.Release] = mutable.Map.empty
+    findTransitiveDependenciesRec(manifest, path, List(manifest), apiKey).map(manifests => Resolution(manifest, manifests, immediateDependents.toMap, ListMap.from(manifestToFlixDeps.flatMap { case (m, deps) => deps.map(d => (m, d)) }), authenticatedReleases.toMap))
   }
 
   /**
@@ -81,7 +84,7 @@ object FlixPackageManager {
     implicit val securityContexts: mutable.Map[Manifest, SecurityContext] = mutable.Map(resolution.origin -> SecurityContext.Unrestricted)
     implicit val res: Resolution = resolution
     val manifests = resolution.manifests.map(m => (m, minSecurityLevel(m))).toMap
-    SecureResolution(resolution.origin, manifests, resolution.manifestToFlixDeps)
+    SecureResolution(resolution.origin, manifests, resolution.manifestToFlixDeps, resolution.authenticatedReleases)
   }
 
   /**
@@ -122,11 +125,12 @@ object FlixPackageManager {
     */
   def installAll(resolution: SecureResolution, projectRoot: Path, apiKey: Option[String])(implicit formatter: Formatter, out: PrintStream): Result[List[(Path, SecurityContext)], PackageError] = {
     out.println("Downloading Flix dependencies...")
+    val authenticatedReleases = mutable.Map.from(resolution.authenticatedReleases)
 
     val flixPaths = resolution.manifestToFlixDeps.map { case (manifest, dep) =>
       val sctx = resolution.security(manifest)
       val depName: String = s"${dep.username}/${dep.projectName}"
-      install(depName, dep.version, fpkgAssetName(manifest), Bootstrap.EXT_FPKG, projectRoot, apiKey) match {
+      install(depName, dep.version, fpkgAssetName(manifest), Bootstrap.EXT_FPKG, projectRoot, apiKey, authenticatedReleases) match {
         case Ok(p) => (p, sctx)
         case Err(e) =>
           out.println(s"ERROR: Installation of `$depName' failed.")
@@ -152,12 +156,12 @@ object FlixPackageManager {
     *
     * The package is installed at `lib/<owner>/<repo>`
     *
-    * `assetName` is the asset name the release is expected to publish. It is downloaded directly
-    * without consulting the GitHub REST API.
+    * `assetName` is the exact asset name the release is expected to publish. Anonymous downloads
+    * use its public URL; authenticated downloads use cached metadata from one targeted API lookup.
     *
     * Returns the path to the downloaded file.
     */
-  private def install(project: String, version: SemVer, assetName: String, extension: String, p: Path, apiKey: Option[String])(implicit formatter: Formatter, out: PrintStream): Result[Path, PackageError] = {
+  private def install(project: String, version: SemVer, assetName: String, extension: String, p: Path, apiKey: Option[String], authenticatedReleases: mutable.Map[(GitHub.Project, SemVer), GitHub.Release])(implicit formatter: Formatter, out: PrintStream): Result[Path, PackageError] = {
     GitHub.parseProject(project).flatMap { proj =>
       val lib = Bootstrap.getLibraryDirectory(p)
       val cacheName = s"${proj.repo}-$version.$extension"
@@ -172,7 +176,7 @@ object FlixPackageManager {
       } else {
         out.print(s"  Downloading `${formatter.blue(s"${proj.owner}/${proj.repo}.$extension")}` (${formatter.cyan(s"v$version")})... ")
         out.flush()
-        GitHub.downloadReleaseAsset(proj, version, assetName) match {
+        downloadReleaseAsset(proj, version, assetName, apiKey, authenticatedReleases) match {
           case Err(e) =>
             // Terminate the line started above; the error carries its own message.
             out.println("ERROR.")
@@ -213,13 +217,30 @@ object FlixPackageManager {
     }
   }
 
+  /** Downloads directly when anonymous, or through one cached targeted release lookup when authenticated. */
+  private def downloadReleaseAsset(project: GitHub.Project, version: SemVer, assetName: String, apiKey: Option[String], authenticatedReleases: mutable.Map[(GitHub.Project, SemVer), GitHub.Release]): Result[InputStream, PackageError] =
+    apiKey match {
+      case None => GitHub.downloadPublicReleaseAsset(project, version, assetName)
+      case Some(key) =>
+        val releaseResult = authenticatedReleases.get((project, version)) match {
+          case Some(release) => Ok(release)
+          case None => GitHub.getRelease(project, version, Some(key)).map { release =>
+            authenticatedReleases.put((project, version), release)
+            release
+          }
+        }
+        releaseResult
+          .flatMap(release => GitHub.requireAsset(project, version, release, assetName))
+          .flatMap(asset => GitHub.downloadAsset(asset, key))
+    }
+
   /**
     * Recursively finds all transitive dependencies of `manifest`.
     * Downloads any missing toml files for found dependencies and
     * parses them to manifests. Returns the list of manifests.
     * `res` is the list of Manifests found so far to avoid duplicates.
     */
-  private def findTransitiveDependenciesRec(manifest: Manifest, path: Path, res: List[Manifest], apiKey: Option[String])(implicit immediateDependents: mutable.Map[Manifest, List[Manifest]], manifestToDep: mutable.Map[Manifest, List[Dependency.FlixDependency]], formatter: Formatter, out: PrintStream): Result[List[Manifest], PackageError] = {
+  private def findTransitiveDependenciesRec(manifest: Manifest, path: Path, res: List[Manifest], apiKey: Option[String])(implicit immediateDependents: mutable.Map[Manifest, List[Manifest]], manifestToDep: mutable.Map[Manifest, List[Dependency.FlixDependency]], authenticatedReleases: mutable.Map[(GitHub.Project, SemVer), GitHub.Release], formatter: Formatter, out: PrintStream): Result[List[Manifest], PackageError] = {
     // find Flix dependencies of the current manifest
     val flixDeps = findFlixDependencies(manifest)
 
@@ -228,7 +249,7 @@ object FlixPackageManager {
       tomlPaths <- traverse(flixDeps) { dep =>
         val depName = s"${dep.username}/${dep.projectName}"
         // `Bootstrap.release` uploads the manifest under its fixed name, unchanged.
-        install(depName, dep.version, Bootstrap.FLIX_TOML, Bootstrap.EXT_TOML, path, apiKey).map(p => (p, dep))
+        install(depName, dep.version, Bootstrap.FLIX_TOML, Bootstrap.EXT_TOML, path, apiKey, authenticatedReleases).map(p => (p, dep))
       }
 
       // parse manifests
