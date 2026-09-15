@@ -7,8 +7,10 @@ Unreleased:
   artifacts use the manifest name. Names containing separators, `:`, trailing
   dots, Windows device names, or more than 250 characters must be renamed before
   upgrading.
-- Package Manager: Private GitHub dependencies now authenticate release-asset
-  downloads with `--github-token`.
+- Package Manager: Public GitHub dependencies download release assets directly
+  without using the GitHub API. With `--github-token`, each dependency uses one
+  targeted release API lookup, reused to download both `flix.toml` and the
+  manifest-named fpkg through the authenticated asset API.
 
 Version 0.76.0:
 - Compiler: Added support for building the compiler as a Graal native image (thanks Magnus!)

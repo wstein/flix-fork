@@ -182,14 +182,16 @@ Did you know that:
   segment of at most 250 characters: it begins with a letter or digit and may
   then contain letters, digits, `.`, `-`, and `_`.
 
-- installing a GitHub dependency downloads `flix.toml` directly from the
-  requested release, then downloads the single `<package.name>.fpkg` asset named
-  by that manifest. Installation does not query the GitHub releases API or try
-  repository-name and release-listing fallbacks.
+- installing a public GitHub dependency downloads `flix.toml` directly from the
+  requested release, then directly downloads the exact `<package.name>.fpkg`
+  asset named by that manifest. Anonymous installation does not query the
+  GitHub API or try repository-name and release-listing fallbacks.
 
 - installing dependencies from public GitHub repositories does not require an
-  access token. For private repositories, pass one with `--github-token`; Flix
-  uses it to authenticate the direct release-asset requests.
+  access token. When `--github-token` is provided, Flix makes one targeted
+  release-by-tag API lookup per dependency and reuses its metadata to download
+  both `flix.toml` and `<package.name>.fpkg` through GitHub's asset API. It never
+  lists the repository's full release history during installation.
 
 ## Compiler
 
