@@ -95,4 +95,26 @@ class TestJvmNameTable extends AnyFunSuite {
     val sym = symbol(1)
     assert(JvmNameTable.buildWithDigest(List(sym -> key("first")), _ => BigInt(1)).suffix(sym) == "000000000001")
   }
+
+  test("version one encoding and suffix match the Unicode golden vector") {
+    val origin = key("Example.map", "λ -> Int32")
+    val encoded = java.util.HexFormat.of().formatHex(origin.bytes)
+    assert(encoded == "00000001000000040000000d666c69782d6a766d2d6e616d650000000e7370656369616c697a6174696f6e0000000b4578616d706c652e6d61700000000bcebb202d3e20496e743332")
+    val sym = symbol(1)
+    assert(JvmNameTable.build(List(sym -> origin)).suffix(sym) == "6ka8gyun2xzr")
+  }
+
+  test("modulo collisions are rejected across families") {
+    val first = GeneratedJvmKey("lambda", List("owner"))
+    val second = GeneratedJvmKey("anonymous-class", List("owner"))
+    intercept[InternalCompilerException] {
+      JvmNameTable.buildWithDigest(List(symbol(1) -> first, symbol(2) -> second),
+        origin => if (origin == first) BigInt(1) else BigInt(36).pow(12) + 1)
+    }
+  }
+
+  test("unpaired surrogates fail instead of being replaced") {
+    val malformed = new String(Array(0xd800.toChar))
+    intercept[InternalCompilerException] { JvmNameTable.build(List(symbol(1) -> key(malformed))) }
+  }
 }

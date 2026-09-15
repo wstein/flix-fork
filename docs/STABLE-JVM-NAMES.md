@@ -12,7 +12,10 @@ Internal symbol allocation, equality, and counters also remain unchanged.
 
 `GeneratedJvmKey` contains a generated-symbol family and ordered semantic fields.
 The binary encoding frames a format version, domain, field count, and UTF-8 byte
-lengths. Delimiters inside names cannot alias field boundaries. Callers must
+lengths. Delimiters inside names cannot alias field boundaries. Malformed Unicode
+is rejected instead of silently replaced. A Unicode golden vector pins the exact
+version-one bytes and suffix, so encoding changes require an explicit review.
+Callers must
 provide canonical semantic fields: rendered types, internal counters, source
 positions, unordered collections, and optimized body hashes are unsuitable.
 
