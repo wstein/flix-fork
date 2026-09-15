@@ -211,7 +211,7 @@ object FlixPackageManager {
             } else {
               out.println(s"ERROR: File was not created.")
               Err(PackageError.DownloadError(cacheName, None))
-          }
+            }
         }
       }
     }

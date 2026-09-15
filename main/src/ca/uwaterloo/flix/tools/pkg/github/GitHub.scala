@@ -289,7 +289,9 @@ object GitHub {
   def download(url: URL): Result[InputStream, PackageError] =
     download(url, HttpRequest.newBuilder(url.toURI).GET().build())
 
-  /** Classifies an unsuccessful download response. */
+  /**
+    * Classifies an unsuccessful download response.
+    */
   private[github] def downloadFailure(url: URL, status: Int, retryAfter: Option[String]): PackageError = status match {
     case 403 => PackageError.DownloadRefused(url, status, retryAfter)
     case 429 => PackageError.DownloadRefused(url, status, retryAfter)
