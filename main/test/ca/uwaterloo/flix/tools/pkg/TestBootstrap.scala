@@ -189,6 +189,36 @@ class TestBootstrap extends AnyFunSuite {
     assert(!Files.exists(artifactDirectory.resolve(s"$directoryName.fpkg")))
   }
 
+  test("artifacts retain their manifest name when the project directory is renamed") {
+    val original = Files.createTempDirectory(ProjectPrefix)
+    val packageName = "stable-package-name"
+    Bootstrap.init(original)(System.out).unsafeGet
+    val directoryName = original.getFileName.toString
+    FileOps.writeString(original.resolve("flix.toml"), Files.readString(original.resolve("flix.toml")).replace(directoryName, packageName))
+
+    val flix = PkgTestUtils.mkFlix
+    val beforeRename = Bootstrap.bootstrap(original, None)(Formatter.getDefault, System.out).unsafeGet
+    beforeRename.buildJar(flix).unsafeGet
+    beforeRename.buildPkg()(Formatter.getDefault).unsafeGet
+    val packageHash = calcHash(original.resolve("artifact").resolve(s"$packageName.fpkg"))
+
+    val renamed = original.resolveSibling(s"${ProjectPrefix}renamed-${System.nanoTime()}")
+    Files.move(original, renamed)
+
+    val afterRename = Bootstrap.bootstrap(renamed, None)(Formatter.getDefault, System.out).unsafeGet
+    afterRename.buildPkg()(Formatter.getDefault).unsafeGet
+    Files.createDirectories(renamed.resolve("lib"))
+    afterRename.buildFatJar(flix).unsafeGet
+
+    val artifactDirectory = renamed.resolve("artifact")
+    val packageFile = artifactDirectory.resolve(s"$packageName.fpkg")
+    assert(calcHash(packageFile) == packageHash)
+    assert(Files.exists(artifactDirectory.resolve(s"$packageName.jar")))
+    assert(!Files.exists(artifactDirectory.resolve(s"${renamed.getFileName}.fpkg")))
+    assert(!Files.exists(artifactDirectory.resolve(s"${renamed.getFileName}.jar")))
+    assert(afterRename.releaseArtifacts == List(packageFile, renamed.resolve("flix.toml")))
+  }
+
   test("run") {
     val p = Files.createTempDirectory(ProjectPrefix)
     Bootstrap.init(p)(System.out)

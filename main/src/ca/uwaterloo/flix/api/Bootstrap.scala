@@ -411,6 +411,9 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
 
   private def getPkgFile: Path = Bootstrap.getPkgFile(projectPath, artifactName)
 
+  /** Returns the artifacts uploaded by [[release]]. */
+  private[flix] def releaseArtifacts: List[Path] = List(getPkgFile, Bootstrap.getManifestFile(projectPath))
+
   // Timestamps at the point the sources were loaded
   private var timestamps: Map[Path, Long] = Map.empty
 
@@ -991,8 +994,7 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
 
     // Publish to GitHub
     out.println("Publishing a new release...")
-    val artifacts = List(getPkgFile, Bootstrap.getManifestFile(projectPath))
-    val publishResult = GitHub.publishRelease(githubRepo, manifest.version, artifacts, githubToken)
+    val publishResult = GitHub.publishRelease(githubRepo, manifest.version, releaseArtifacts, githubToken)
     publishResult match {
       case Ok(()) => // Continue
       case Err(e) => return Result.Err(BootstrapError.ReleaseError(e))
