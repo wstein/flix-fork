@@ -30,6 +30,19 @@ The collision check is deliberately global across the table, including families.
 This is stricter than checking final JVM class names and avoids relying on
 generator-specific prefixes to conceal ambiguous provenance.
 
+## Semantic type keys
+
+`JvmTypeKey` encodes types structurally, retaining argument order and effects.
+Type variables use their declaration's parameter order, so renaming a parameter
+or changing its internal allocation id preserves its key. Row labels and
+commutative set operands use canonical order. Generated nominal types require
+their recorded origins. Simplified types have a separate encoding for erasure;
+that encoding cannot recover already-erased effects.
+
+The encoder is not a Boolean solver. Callers must normalize other algebraic
+equivalences and resolve associated types before comparing keys across those
+reductions. Unbound variables, erroneous types, and missing origins fail closed.
+
 ## Registry lifecycle
 
 Create one `JvmProvenance` per code-generation invocation, including recompiles
