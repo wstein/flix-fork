@@ -15,7 +15,7 @@
  */
 package ca.uwaterloo.flix.tools.pkg.github
 
-import ca.uwaterloo.flix.tools.pkg.PackageError
+import ca.uwaterloo.flix.tools.pkg.{PackageError, SemVer}
 import org.json4s.JsonDSL.*
 import org.json4s.JValue
 import org.scalatest.funsuite.AnyFunSuite
@@ -47,5 +47,43 @@ class TestGitHub extends AnyFunSuite {
 
     assertResult(expected = "flix.toml")(actual = asset.name)
     assertResult(expected = "https://api.github.com/repos/wstein/pr13165-package/releases/assets/1")(actual = asset.apiUrl.toString)
+  }
+
+  test("parseReleaseVersion.01: update checks do not require asset metadata") {
+    val json: JValue = "tag_name" -> "v1.2.3"
+
+    assertResult(expected = SemVer(1, 2, 3))(actual = GitHub.parseReleaseVersion(json))
+  }
+
+  test("findAsset.01: selects only the exact manifest-defined asset name") {
+    val expected = GitHub.Asset("flix-json.fpkg", new URI("https://api.github.com/assets/2").toURL)
+    val release = GitHub.Release(SemVer(0, 13, 3), List(
+      GitHub.Asset("other.fpkg", new URI("https://api.github.com/assets/1").toURL),
+      expected
+    ))
+
+    assertResult(expected = Some(expected))(actual = GitHub.findAsset(release, "flix-json.fpkg"))
+    assertResult(expected = None)(actual = GitHub.findAsset(release, "json.fpkg"))
+  }
+
+  test("apiAssetDownloadRequest.01: authenticates an API binary download") {
+    val url = new URI("https://api.github.com/repos/owner/repo/releases/assets/1").toURL
+    val request = GitHub.apiAssetDownloadRequest(url, "test-token")
+
+    assertResult(expected = "Bearer test-token")(actual = request.headers().firstValue("Authorization").get())
+    assertResult(expected = "application/octet-stream")(actual = request.headers().firstValue("Accept").get())
+  }
+
+  test("releaseFailure.01: classifies targeted release failures") {
+    val project = GitHub.Project("owner", "repo")
+    val version = SemVer(1, 2, 3)
+    val url = new URI("https://api.github.com/repos/owner/repo/releases/tags/v1.2.3").toURL
+
+    assertResult(expected = PackageError.VersionDoesNotExist(version, project))(
+      actual = GitHub.releaseFailure(project, version, url, 404, None)
+    )
+    assertResult(expected = PackageError.DownloadRefused(url, 429, Some("60")))(
+      actual = GitHub.releaseFailure(project, version, url, 429, Some("60"))
+    )
   }
 }

@@ -107,8 +107,7 @@ object FlixPackageManager {
   def findAvailableUpdates(dep: FlixDependency, apiKey: Option[String]): Result[AvailableUpdates, PackageError] = {
     for {
       githubProject <- GitHub.parseProject(s"${dep.username}/${dep.projectName}")
-      releases <- GitHub.getReleases(githubProject, apiKey)
-      availableVersions = releases.map(_.version)
+      availableVersions <- GitHub.getReleases(githubProject, apiKey)
 
       ver = dep.version
       major = ver.majorUpdate(availableVersions)
