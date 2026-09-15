@@ -40,7 +40,10 @@ object ManifestParser {
   private val ValidPackageName = "[a-zA-Z0-9][a-zA-Z0-9._-]*".r
 
   /** Windows device names remain reserved even when an extension is appended. */
-  private val WindowsDeviceName = "(?i)(con|prn|aux|nul|com[1-9]|lpt[1-9])(\\..*)?".r
+  private val WindowsDeviceName = "(?i)(con|prn|aux|nul|clock\\$|com[1-9]|lpt[1-9])(\\..*)?".r
+
+  /** The portable 255-character component limit less the `.fpkg` extension. */
+  private val MaxPackageNameLength = 250
 
   /**
     * Creates a Manifest from the .toml file
@@ -502,7 +505,7 @@ object ManifestParser {
     */
   private def validatePackageName(name: String, p: Path): Result[String, ManifestError] = {
     name match {
-      case ValidPackageName() if name != "." && name != ".." && !WindowsDeviceName.matches(name) => Ok(name)
+      case ValidPackageName() if name.length <= MaxPackageNameLength && !name.endsWith(".") && !WindowsDeviceName.matches(name) => Ok(name)
       case _ => Err(ManifestError.IllegalPackageName(p, name))
     }
   }

@@ -22,6 +22,12 @@ class TestBootstrap extends AnyFunSuite {
     Bootstrap.init(p)(System.out)
   }
 
+  test("init creates a valid manifest from a directory with spaces and quotes") {
+    val p = Files.createTempDirectory("flix project-\"quoted\"-")
+    Bootstrap.init(p)(System.out).unsafeGet
+    Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
+  }
+
   test("check") {
     val p = Files.createTempDirectory(ProjectPrefix)
     Bootstrap.init(p)(System.out)

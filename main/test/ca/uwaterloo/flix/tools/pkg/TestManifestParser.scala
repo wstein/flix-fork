@@ -74,6 +74,28 @@ class TestManifestParser extends AnyFunSuite {
     expectError[ManifestError.IllegalPackageName](ManifestParser.parse(toml, null))
   }
 
+  test("ManifestError.IllegalPackageName.03") {
+    val toml = tomlCorrect.replace("name = \"hello-world\"", "name = \"CLOCK$\"")
+    expectError[ManifestError.IllegalPackageName](ManifestParser.parse(toml, null))
+  }
+
+  test("ManifestError.IllegalPackageName.04") {
+    val toml = tomlCorrect.replace("name = \"hello-world\"", "name = \"hello.\"")
+    expectError[ManifestError.IllegalPackageName](ManifestParser.parse(toml, null))
+  }
+
+  test("ManifestError.IllegalPackageName.05") {
+    val longName = "a" * 251
+    val toml = tomlCorrect.replace("name = \"hello-world\"", s"name = \"$longName\"")
+    expectError[ManifestError.IllegalPackageName](ManifestParser.parse(toml, null))
+  }
+
+  test("Ok.packageNameAtMaximumLength") {
+    val maxName = "a" * 250
+    val toml = tomlCorrect.replace("name = \"hello-world\"", s"name = \"$maxName\"")
+    assert(ManifestParser.parse(toml, null).unsafeGet.name == maxName)
+  }
+
   test("Ok.packageNameWithPortablePunctuation") {
     val toml = tomlCorrect.replace("name = \"hello-world\"", "name = \"hello.world_2\"")
     assert(ManifestParser.parse(toml, null).unsafeGet.name == "hello.world_2")

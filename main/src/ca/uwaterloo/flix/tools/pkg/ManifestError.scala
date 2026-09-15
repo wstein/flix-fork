@@ -209,6 +209,7 @@ object ManifestError {
       s"""The package name ${f.red(name)} cannot be used as an artifact file name.
          |Package names must be a single portable file-name segment beginning with a letter or digit.
          |Allowed characters after the first character are: a-z, A-Z, 0-9, ., -, _.
+         |Package names can be at most 250 characters long.
          |The toml file was found at ${f.cyan(if (path == null) "null" else path.toString)}.
          |""".stripMargin
   }

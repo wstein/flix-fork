@@ -62,7 +62,7 @@ object Bootstrap {
     //
     // Compute the name of the package based on the directory name.
     //
-    val packageName = getPackageName(p)
+    val packageName = getInitialPackageName(p)
 
     //
     // Compute all the directories and files we intend to create.
@@ -88,7 +88,7 @@ object Bootstrap {
 
     FileOps.newFileIfAbsent(manifestFile) {
       s"""[package]
-         |name        = "$packageName" # Stable package and artifact name.
+         |name        = "$packageName" # Stable package and artifact names.
          |description = "test"
          |version     = "0.1.0"
          |flix        = "${Version.CurrentVersion}"
@@ -332,6 +332,30 @@ object Bootstrap {
     * Returns the package name based on the given path `p`.
     */
   private def getPackageName(p: Path): String = p.toAbsolutePath.normalize().getFileName.toString
+
+  /**
+    * Returns a portable package-name default for a new project.
+    *
+    * A checkout directory is not necessarily a valid artifact basename: it can contain
+    * spaces, quotes, or platform-specific characters. `init` therefore derives a safe
+    * default which users may subsequently change in `flix.toml`.
+    */
+  private def getInitialPackageName(p: Path): String = {
+    val rawName = getPackageName(p)
+    val portable = rawName.map {
+      case c if c <= 0x7f && (c.isLetterOrDigit || c == '.' || c == '-' || c == '_') => c
+      case _ => '-'
+    }.dropWhile(c => !c.isLetterOrDigit).take(250).reverse.dropWhile(_ == '.').reverse
+    val name = if (portable.isEmpty) "package" else portable
+    if (isWindowsDeviceName(name)) s"$name-package" else name
+  }
+
+  /** Returns `true` if `name` is a Windows reserved device name, with an optional extension. */
+  private def isWindowsDeviceName(name: String): Boolean = {
+    val baseName = name.takeWhile(_ != '.').toLowerCase(java.util.Locale.ROOT)
+    baseName == "con" || baseName == "prn" || baseName == "aux" || baseName == "nul" || baseName == "clock$" ||
+      baseName.matches("com[1-9]") || baseName.matches("lpt[1-9]")
+  }
 
   /** Returns the path to the package file based on its artifact name. */
   private def getPkgFile(p: Path, name: String): Path = getArtifactFile(p, name, EXT_FPKG)
