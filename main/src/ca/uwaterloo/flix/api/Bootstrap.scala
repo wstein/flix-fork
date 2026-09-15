@@ -317,20 +317,24 @@ object Bootstrap {
     */
   private def getGitIgnoreFile(p: Path): Path = p.resolve("./.gitignore").normalize()
 
-  /**
-    * Returns the path to the jar file based on the given path `p`.
-    */
-  private def getJarFile(p: Path): Path = getArtifactDirectory(p).resolve(getPackageName(p) + s".$EXT_JAR").normalize()
+  /** Returns the path to a project artifact with the given extension. */
+  private def getArtifactFile(p: Path, name: String, extension: String): Path = {
+    val artifactDirectory = getArtifactDirectory(p).toAbsolutePath.normalize()
+    val artifactFile = artifactDirectory.resolve(s"$name.$extension").normalize()
+    require(artifactFile.startsWith(artifactDirectory), s"Artifact path escapes its directory: $artifactFile")
+    artifactFile
+  }
+
+  /** Returns the path to the jar file based on its artifact name. */
+  private def getJarFile(p: Path, name: String): Path = getArtifactFile(p, name, EXT_JAR)
 
   /**
     * Returns the package name based on the given path `p`.
     */
   private def getPackageName(p: Path): String = p.toAbsolutePath.normalize().getFileName.toString
 
-  /**
-    * Returns the path to the pkg file based on the given path `p`.
-    */
-  private def getPkgFile(p: Path): Path = getArtifactDirectory(p).resolve(getPackageName(p) + s".$EXT_FPKG").normalize()
+  /** Returns the path to the package file based on its artifact name. */
+  private def getPkgFile(p: Path, name: String): Path = getArtifactFile(p, name, EXT_FPKG)
 
   /**
     * Returns `true` if the given path `p` is a jar-file.
@@ -370,6 +374,18 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
 
   // The `flix.toml` manifest if in project mode, otherwise `None`
   private var optManifest: Option[Manifest] = None
+
+  /**
+    * The basename for artifacts produced by this project.
+    *
+    * Project mode uses the manifest's validated package name. Directory mode has no
+    * manifest and therefore retains the directory-name fallback.
+    */
+  private def artifactName: String = optManifest.map(_.name).getOrElse(Bootstrap.getPackageName(projectPath))
+
+  private def getJarFile: Path = Bootstrap.getJarFile(projectPath, artifactName)
+
+  private def getPkgFile: Path = Bootstrap.getPkgFile(projectPath, artifactName)
 
   // Timestamps at the point the sources were loaded
   private var timestamps: Map[Path, Long] = Map.empty
@@ -489,7 +505,7 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
     * Builds a jar package for the project.
     */
   def buildJar(flix: Flix): Result[Unit, BootstrapError] = {
-    val jarFile = Bootstrap.getJarFile(projectPath)
+    val jarFile = getJarFile
     Steps.updateStaleSources(flix)
     for {
       _ <- Steps.configureJarOutput(flix)
@@ -509,7 +525,7 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
     * Builds a fatjar package for the project.
     */
   def buildFatJar(flix: Flix): Result[Unit, BootstrapError] = {
-    val jarFile = Bootstrap.getJarFile(projectPath)
+    val jarFile = getJarFile
     val libDir = Bootstrap.getLibraryDirectory(projectPath)
     Steps.updateStaleSources(flix)
     for {
@@ -543,7 +559,7 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
     Files.createDirectories(Bootstrap.getArtifactDirectory(projectPath))
 
     // The path to the fpkg file.
-    val pkgFile = Bootstrap.getPkgFile(projectPath)
+    val pkgFile = getPkgFile
 
     // Check whether it is safe to write to the file.
     if (Files.exists(pkgFile) && !Bootstrap.isPkgFile(pkgFile)) {
@@ -951,7 +967,7 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
 
     // Publish to GitHub
     out.println("Publishing a new release...")
-    val artifacts = List(Bootstrap.getPkgFile(projectPath), Bootstrap.getManifestFile(projectPath))
+    val artifacts = List(getPkgFile, Bootstrap.getManifestFile(projectPath))
     val publishResult = GitHub.publishRelease(githubRepo, manifest.version, artifacts, githubToken)
     publishResult match {
       case Ok(()) => // Continue

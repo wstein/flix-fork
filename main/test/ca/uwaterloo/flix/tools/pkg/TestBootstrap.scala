@@ -164,6 +164,25 @@ class TestBootstrap extends AnyFunSuite {
       s"Two file hashes are not same: $hash1 and $hash2")
   }
 
+  test("artifacts use the manifest package name instead of the project directory name") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out)
+    val directoryName = p.getFileName.toString
+    val packageName = "stable-package-name"
+    FileOps.writeString(p.resolve("flix.toml"), Files.readString(p.resolve("flix.toml")).replace(directoryName, packageName))
+
+    val b = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
+    val flix = PkgTestUtils.mkFlix
+    b.buildJar(flix).unsafeGet
+    b.buildPkg()(Formatter.getDefault).unsafeGet
+
+    val artifactDirectory = p.resolve("artifact")
+    assert(Files.exists(artifactDirectory.resolve(s"$packageName.jar")))
+    assert(Files.exists(artifactDirectory.resolve(s"$packageName.fpkg")))
+    assert(!Files.exists(artifactDirectory.resolve(s"$directoryName.jar")))
+    assert(!Files.exists(artifactDirectory.resolve(s"$directoryName.fpkg")))
+  }
+
   test("run") {
     val p = Files.createTempDirectory(ProjectPrefix)
     Bootstrap.init(p)(System.out)
