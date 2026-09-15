@@ -1,5 +1,11 @@
 # Changelog
 
+Unreleased:
+- Package Manager: Package and JAR artifact names now come from `[package].name`
+  rather than the checkout directory. Package names containing separators, `:`,
+  trailing dots, Windows device names, or more than 250 characters must be
+  renamed before upgrading.
+
 Version 0.76.0:
 - Compiler: Added support for building the compiler as a Graal native image (thanks Magnus!)
 - Compiler: Reimplemented bytecode generation to use nominal class descriptors (thanks Magnus!)

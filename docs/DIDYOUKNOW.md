@@ -174,6 +174,13 @@ Did you know that:
   Today it is possible to build, package, and install Flix packages. Dependency
   management is in the works.
 
+- a project's `[package].name` in `flix.toml` is its stable artifact basename:
+  `build-pkg` writes `<name>.fpkg`, while `build-jar` and `build-fatjar` write
+  `<name>.jar`. Renaming a checkout or GitHub repository does not rename these
+  artifacts. Package names must be portable file-name segments of at most 250
+  characters: they begin with a letter or digit and may then contain letters,
+  digits, `.`, `-`, and `_`.
+
 ## Compiler
 
 Did you know that:
