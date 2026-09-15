@@ -109,7 +109,10 @@ pub mod BPlusTree {
         let root = t->root;
         let arity = BPlusTree.arity(t);
         let nodeWorks = Node.assertNodeInvariant(root, arity, true, None, t->search);
-        let rootIsUnlocked = not BPlusTree.Lock.isLocked(t->rootLock);
+        // There is no lock to inspect when locking is compiled out, so this part of the
+        // invariant does not apply. Asking `isLocked` there aborts rather than answering.
+        let rootIsUnlocked =
+            if (Concurrent.Options.enableLocking()) not BPlusTree.Lock.isLocked(t->rootLock) else true;
         let rootHasNoParent = Option.isEmpty(Node.parent(root));
         nodeWorks and rootHasNoParent and rootIsUnlocked
     }
@@ -576,7 +579,17 @@ pub mod BPlusTree {
     /// Not thread-safe: Traverses the live leaf chain of `t` in parallel.
     ///
     @Parallel
-    pub def parForEach(f: k -> v -> Unit \ r, t: BPlusTree[k, v, r]): Unit \ r = region rc {
+    pub def parForEach(f: k -> v -> Unit \ r, t: BPlusTree[k, v, r]): Unit \ r =
+        // `BPlusTree` is the Datalog solver's index structure, so its parallel traversal belongs to
+        // the solver's switch rather than the one governing `Map` and `Set`. Either switch being off
+        // is enough for safety, since the locks are only elided when both are.
+        if (Fixpoint3.Options.enableParallelExecution())
+            parForEachInternal(f, t)
+        else
+            forEach(f, t)
+
+    @Parallel
+    def parForEachInternal(f: k -> v -> Unit \ r, t: BPlusTree[k, v, r]): Unit \ r = region rc {
         // `threadNum` is the number of spawned threads.
         let threadNum = if (Node.computeHeight(t->root) >= 2) {
             threads()

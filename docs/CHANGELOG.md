@@ -23,6 +23,8 @@ Version 0.75.3:
 - Compiler: Fixed a few bugs (thanks Matt!)
 
 Version 0.75.2:
+- Compiler: Added experimental `--Xsequential` to compile out all standard library threading and locking (thanks Werner!)
+- Compiler: Extended `--Xsequential` to the generated runtime, leaving no reference to `java.util.concurrent` in any program (thanks Werner!)
 - Compiler: Improved tree shaking of lowering-related library functions (thanks Simon!)
 - Compiler: Reduced the size of generated HTML documentation (thanks Magnus!)
 - Compiler: Fixed a few bugs (thanks Matt!)

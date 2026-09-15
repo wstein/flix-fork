@@ -50,7 +50,34 @@ pub mod BPlusTree.Lock {
     ///
     /// For Java's memory model see: https://docs.oracle.com/javase/specs/jls/se8/html/jls-17.html#jls-17.4
     ///
-    pub enum Lock[_: Region](JStampedLock)
+    /// Note: `Unsynchronized` is only ever constructed when `enableLocking` is `false`, which only
+    /// `--Xsequential` asks for. That option compiles out the standard library's own threading; it
+    /// does not stop a program from calling `spawn` itself, so this is an asserted precondition
+    /// rather than a compiler guarantee. Every operation below tests `enableLocking` rather than
+    /// matching on the lock, so that the branch holding the `JStampedLock` folds away and the
+    /// class becomes unreachable.
+    pub enum Lock[_: Region] {
+        case Synchronized(JStampedLock)
+        case Unsynchronized
+    }
+
+    ///
+    /// The stamp handed out when locking is compiled out.
+    ///
+    /// `StampedLock` reserves zero for "could not acquire", so any non-zero value will do: without
+    /// locking there is no writer that could invalidate it.
+    ///
+    def elidedStamp(): Int64 = 1i64
+
+    ///
+    /// Returns the underlying lock of `lock`.
+    ///
+    /// Only call this under `enableLocking`, which is what makes the second case impossible.
+    ///
+    def getJavaLock(lock: Lock[r]): JStampedLock = match lock {
+        case Lock.Synchronized(l) => l
+        case Lock.Unsynchronized  => unreachable!()
+    }
 
     // Unchecked casts are here used to remove the IO effect. It is replaced with an
     // effect to a region to ensure that the code is not optimized away.
@@ -72,17 +99,28 @@ pub mod BPlusTree.Lock {
     /// https://netflixtechblog.com/java-21-virtual-threads-dude-wheres-my-lock-3052540e231d?gi=128dba0ad426
     ///
     pub def yieldBasedOn(lock: Lock[r]): Unit \ r =
-        let Lock(l) = lock;
-        unsafe IO as r { l.unlockRead(l.readLock()) }
+        if (Concurrent.Options.enableLocking()) {
+            let l = getJavaLock(lock);
+            unsafe IO as r { l.unlockRead(l.readLock()) }
+        } else
+            // Without locking there is no lock-holder to wait for.
+            ()
 
     ///
     /// Returns `true` if `lock` is currently held by a thread.
     ///
     /// Only supposed to be used for testing.
     ///
+    /// Aborts when locking is compiled out. There is then no lock to observe, and answering
+    /// `false` would let an invariant check of the form `not isLocked(..)` pass without having
+    /// checked anything. Callers that are useful in both builds must ask `enableLocking` first.
+    ///
     pub def isLocked(lock: Lock[r]): Bool \ r =
-        let Lock(l) = lock;
-        unsafe IO as r { l.isWriteLocked() or l.isReadLocked() }
+        if (Concurrent.Options.enableLocking()) {
+            let l = getJavaLock(lock);
+            unsafe IO as r { l.isWriteLocked() or l.isReadLocked() }
+        } else
+            bug!("BPlusTree.Lock.isLocked is unavailable when locking is compiled out.")
 
     ///
     /// Executes `onValid` if `stamp` is still valid on `lock`.
@@ -133,7 +171,10 @@ pub mod BPlusTree.Lock {
     /// Returns a fresh lock.
     ///
     pub def mkLock(_: Region[r]): Lock[r] \ r =
-        Lock(unsafe IO as r { new JStampedLock() })
+        if (Concurrent.Options.enableLocking())
+            Lock.Synchronized(unsafe IO as r { new JStampedLock() })
+        else
+            Lock.Unsynchronized
 
     /// Attempt to upgrade `stamp` on `lock` to a write-lock on `lock`.
     /// The returned stamp cannot be invalidated if it was valid when issued.
@@ -141,8 +182,11 @@ pub mod BPlusTree.Lock {
     /// This operation is non-blocking.
     ///
     pub def tryConvertToWrite(stamp: Int64, lock: Lock[r]): Int64 \ r =
-        let Lock(l) = lock;
-        unsafe IO as r { l.tryConvertToWriteLock(stamp) }
+        if (Concurrent.Options.enableLocking()) {
+            let l = getJavaLock(lock);
+            unsafe IO as r { l.tryConvertToWriteLock(stamp) }
+        } else
+            elidedStamp()
 
     ///
     /// Attempts to upgrade `stamp` to a write lock and executes `onWrite`
@@ -170,8 +214,11 @@ pub mod BPlusTree.Lock {
     /// This operation is non-blocking.
     ///
     pub def tryReadLock(lock: Lock[r]): Int64 \ r =
-        let Lock(l) = lock;
-        unsafe IO as r { l.tryOptimisticRead() }
+        if (Concurrent.Options.enableLocking()) {
+            let l = getJavaLock(lock);
+            unsafe IO as r { l.tryOptimisticRead() }
+        } else
+            elidedStamp()
 
     ///
     /// Unlock `lock` with the issued write-stamp, `stamp`.
@@ -179,8 +226,11 @@ pub mod BPlusTree.Lock {
     /// This operation is non-blocking.
     ///
     pub def unlockWrite(stamp: Int64, lock: Lock[r]): Unit \ r =
-        let Lock(l) = lock;
-        unsafe IO as r { l.unlockWrite(stamp) }
+        if (Concurrent.Options.enableLocking()) {
+            let l = getJavaLock(lock);
+            unsafe IO as r { l.unlockWrite(stamp) }
+        } else
+            ()
 
     ///
     /// Returns true if `stamp` is still valid on `lock`, meaning no thread
@@ -189,8 +239,12 @@ pub mod BPlusTree.Lock {
     /// This operation is non-blocking.
     ///
     pub def valid(stamp: Int64, lock: Lock[r]): Bool \ r =
-        let Lock(l) = lock;
-        unsafe IO as r { l.validate(stamp) }
+        if (Concurrent.Options.enableLocking()) {
+            let l = getJavaLock(lock);
+            unsafe IO as r { l.validate(stamp) }
+        } else
+            // Without locking no writer can have intervened, so every stamp stays valid.
+            true
 
     ///
     /// Lock `lock` and returns the stamp.
@@ -198,6 +252,9 @@ pub mod BPlusTree.Lock {
     /// This operation is blocking.
     ///
     pub def writeLock(lock: Lock[r]): Int64 \ r =
-        let Lock(l) = lock;
-        unsafe IO as r { l.writeLock() }
+        if (Concurrent.Options.enableLocking()) {
+            let l = getJavaLock(lock);
+            unsafe IO as r { l.writeLock() }
+        } else
+            elidedStamp()
 }

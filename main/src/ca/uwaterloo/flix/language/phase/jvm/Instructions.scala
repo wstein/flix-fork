@@ -266,6 +266,10 @@ object Instructions {
   def LRETURN()(implicit mv: MethodVisitor): Unit =
     mv.visitInstruction(Opcodes.LRETURN)
 
+  /** Emits the JVM `LADD` instruction. */
+  def LADD()(implicit mv: MethodVisitor): Unit =
+    mv.visitInstruction(Opcodes.LADD)
+
   /** Emits the JVM `NEW` instruction for `className`. */
   def NEW(className: ClassDesc)(implicit mv: MethodVisitor): Unit =
     mv.visitTypeInstruction(Opcodes.NEW, className)

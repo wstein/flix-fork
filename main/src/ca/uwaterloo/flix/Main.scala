@@ -72,6 +72,12 @@ object Main {
       case Some(s) => Some(Symbol.mkDefnSym(s))
     }
 
+    // `--Xsequential` is all-or-nothing: it is the only way to elide the standard library's locks,
+    // and eliding them is only sound if nothing is left that could run in parallel. Deriving both
+    // execution modes from it here, rather than letting a separate flag set them, is what keeps the
+    // unsound combination out of reach.
+    val sequentialMode = if (cmdOpts.xsequential) ExecutionMode.Sequential else ExecutionMode.Parallel
+
     // construct flix options.
     var options = Options(
       lib = cmdOpts.xlib,
@@ -93,7 +99,10 @@ object Main {
       XPerfPar = cmdOpts.XPerfPar,
       XPerfN = cmdOpts.XPerfN,
       xchaosMonkey = Options.Default.xchaosMonkey,
-      xverify = cmdOpts.xverify
+      xverify = cmdOpts.xverify,
+      xdatalogExecution = sequentialMode,
+      xcollectionExecution = sequentialMode,
+      xassumeSingleThreaded = cmdOpts.xsequential
     )
 
     // Don't use progress bar if benchmarking.
@@ -539,6 +548,7 @@ object Main {
     XPerfN: Option[Int] = None,
     XPerfFrontend: Boolean = false,
     XPerfPar: Boolean = false,
+    xsequential: Boolean = false,
     files: Seq[File] = Seq()
   )
 
@@ -779,6 +789,13 @@ object Main {
       // Xsubeffecting
       opt[Seq[Subeffecting]]("Xsubeffecting").action((subeffectings, c) => c.copy(xsubeffecting = subeffectings.toSet)).
         text("[experimental] enables sub-effecting in select places")
+
+      // Xsequential
+      opt[Unit]("Xsequential").action((_, c) => c.copy(xsequential = true)).
+        text("[experimental] compiles out every use of a thread or a lock: the Datalog solver and " +
+          "the pure operations on Map and Set are evaluated sequentially, the concurrent data " +
+          "structures drop their locks, a par yield binds its fragments in order, and a spawn is " +
+          "rejected. Asserts that the program is single-threaded.")
 
       // Xnewmono
       opt[Unit]("Xnewmono").action((_, c) => c.copy(xnewmono = true)).

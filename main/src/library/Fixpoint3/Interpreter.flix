@@ -25,7 +25,7 @@ pub mod Fixpoint3.Interpreter {
     use Fixpoint3.Boxing.{boxWith, unboxWith}
     use Fixpoint3.BoxingType.Boxing
     use Fixpoint3.Counter
-    use Fixpoint3.Options.{usedArity, parLevel}
+    use Fixpoint3.Options.{enableParallelExecution, usedArity, parLevel}
     use Fixpoint3.Predicate.{allFullRelSyms, getRelSymAsType}
     use Fixpoint3.Predicate.PredType.Full
     use Fixpoint3.TypeInfo.{TypeInformation, getTypeOf}
@@ -191,7 +191,10 @@ pub mod Fixpoint3.Interpreter {
             let latEnv = arities |> Vector.length |> Array.empty(rc);
             let env = (minEnv, maxEnv, tupleEnv, latEnv);
             let ctx = (db, env, boxing);
-            evalStmt(rc, ctx, parLevel(), stmt);
+            if (enableParallelExecution())
+                evalStmtParallel(rc, ctx, parLevel(), stmt)
+            else
+                evalStmtSequential(rc, ctx, stmt);
             // Remove the `IO` effect from dealing with static.
             let boxedFacts = unsafe IO { marshallDb(rc, db, boxing, indexPos, predState, typeInfo) };
             (boxedFacts, predState)
@@ -239,14 +242,14 @@ pub mod Fixpoint3.Interpreter {
     ///     4. We can bind a tuple to a new value changing `env`.
     ///     5. We can purge or swap indexes in `db`.
     ///
-    def evalStmt(
+    def evalStmtParallel(
         rc: Region[r],
         ctx: Context[r],
         parLevel: Int32,
         stmt: RamStmt
     ): Unit \ r = match stmt {
         case RamStmt.Insert(relOp) =>
-            evalOp(rc, ctx, parLevel, relOp)
+            evalOpParallel(rc, ctx, parLevel, relOp)
         case RamStmt.MergeInto(srcIndex, dstIndex, Relational) =>
             let (db, _, _) = ctx;
             let src = lookupIndex(srcIndex, db);
@@ -268,13 +271,13 @@ pub mod Fixpoint3.Interpreter {
             let newIndex = BPlusTree.emptyWithArityAndSearch(rc, usedArity(), BPlusTree.search(oldIndex));
             storeIndex(newIndex, index, db)
         case RamStmt.Seq(stmts) =>
-            Vector.forEach(evalStmt(rc, ctx, parLevel), stmts)
+            Vector.forEach(evalStmtParallel(rc, ctx, parLevel), stmts)
         case RamStmt.Until(test, body) =>
             if (evalBoolExps(ctx, test)) {
                 ()
             } else {
-                evalStmt(rc, ctx, parLevel, body);
-                evalStmt(rc, ctx, parLevel, stmt)
+                evalStmtParallel(rc, ctx, parLevel, body);
+                evalStmtParallel(rc, ctx, parLevel, stmt)
             }
         case RamStmt.Comment(_) => ()
         // Note: The region construct ensures that all threads spawned in rc2 will have completed before we leave its lexical scope.
@@ -283,7 +286,7 @@ pub mod Fixpoint3.Interpreter {
                 unchecked_cast({
                     let _: Unit = spawn unchecked_cast({
                         let threadCtx = copyCtx(rc, ctx);
-                        evalStmt(rc, threadCtx, parLevel, innerStmt)
+                        evalStmtParallel(rc, threadCtx, parLevel, innerStmt)
                     } as _ \ IO) @ rc2; // spawn may not take an `r` effect, so we cast it to `IO`
                     ()
                 } as _ \ rc2)
@@ -304,14 +307,14 @@ pub mod Fixpoint3.Interpreter {
     ///
     /// Purges and swaps of indexes in `db` cannot happen.
     ///
-    def evalOp(rc: Region[r], ctx: Context[r], parLevel: Int32, op: RelOp): Unit \ r =
+    def evalOpParallel(rc: Region[r], ctx: Context[r], parLevel: Int32, op: RelOp): Unit \ r =
         let (db, env, boxing) = ctx;
         match op {
             case RelOp.Search(tuplePos, searchIndex, _, Relational, writes, body) =>
                 if (parLevel == 0) {
                     // We have exhausted all allowed attempts to spawn threads. Recurse sequentially.
                     lookupIndex(searchIndex, db)
-                        |> BPlusTree.forEach(evalSearchOrQueryOp(rc, tuplePos, writes, body, ctx, parLevel))
+                        |> BPlusTree.forEach(evalSearchOrQueryOpParallel(rc, tuplePos, writes, body, ctx, parLevel))
                 } else {
                     // We are allowed to spawn threads. Try to do so.
                     lookupIndex(searchIndex, db)
@@ -321,7 +324,7 @@ pub mod Fixpoint3.Interpreter {
                 let (minEnv, maxEnv, _, _) = env;
                 lookupIndex(searchIndex, db)
                     |> BPlusTree.rangeQueryWith(
-                        evalSearchOrQueryOp(rc, tuplePos, writes, body, ctx, parLevel),
+                        evalSearchOrQueryOpParallel(rc, tuplePos, writes, body, ctx, parLevel),
                         // We could here use Vector.toArray, but it would create a copy. To avoid memory
                         // allocation we simply cast.
                         unchecked_cast((Vector.get(tuplePos, minEnv): Array[Int64, r]) as Tuple),
@@ -329,7 +332,7 @@ pub mod Fixpoint3.Interpreter {
                     )
             case RelOp.If(test, then) =>
                 if (evalBoolExps(ctx, test))
-                    evalOp(rc, ctx, parLevel, then)
+                    evalOpParallel(rc, ctx, parLevel, then)
                 else
                     ()
             case RelOp.Project(terms, rel, den) => match den {
@@ -357,7 +360,7 @@ pub mod Fixpoint3.Interpreter {
                 if (parLevel == 0) {
                     // We have exhausted all allowed attempts to spawn threads. Recurse sequentially.
                     lookupIndex(searchIndex, db)
-                        |> BPlusTree.forEach(evalSearchOrQueryOpLattice(rc, tuplePos, meetWith, bot, leq, glb, writes, body, ctx, parLevel))
+                        |> BPlusTree.forEach(evalSearchOrQueryOpLatticeParallel(rc, tuplePos, meetWith, bot, leq, glb, writes, body, ctx, parLevel))
                 } else {
                     // We are allowed to spawn threads. Try to do so.
                     lookupIndex(searchIndex, db)
@@ -367,7 +370,7 @@ pub mod Fixpoint3.Interpreter {
                 let (minEnv, maxEnv, _, _) = env;
                 lookupIndex(searchIndex, db)
                     |> BPlusTree.rangeQueryWith(
-                        evalSearchOrQueryOpLattice(rc, tuplePos, meetWith, bot, leq, glb, writes, body, ctx, parLevel),
+                        evalSearchOrQueryOpLatticeParallel(rc, tuplePos, meetWith, bot, leq, glb, writes, body, ctx, parLevel),
                         // We could here use Vector.toArray, but it would create a copy. To avoid memory
                         // allocation we simply cast.
                         unchecked_cast((Vector.get(tuplePos, minEnv): Array[Int64, r]) as Tuple),
@@ -396,8 +399,182 @@ pub mod Fixpoint3.Interpreter {
                 let (minEnv, maxEnv, tupleEnv, _) = env;
                 foreach (t <- result) {
                     bindTuple(t, writes, minEnv, maxEnv, tupleIndex, tupleEnv);
-                    evalOp(rc, ctx, parLevel, body)
+                    evalOpParallel(rc, ctx, parLevel, body)
                 }
+        }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // Sequential Execution Strategy
+    // ──────────────────────────────────────────────────────────────────────────
+
+    ///
+    /// Evaluates `stmt` under `ctx` deterministically in sequence without thread spawning.
+    ///
+    def evalStmtSequential(
+        rc: Region[r],
+        ctx: Context[r],
+        stmt: RamStmt
+    ): Unit \ r = match stmt {
+        case RamStmt.Insert(relOp) =>
+            evalOpSequential(rc, ctx, relOp)
+        case RamStmt.MergeInto(srcIndex, dstIndex, Relational) =>
+            let (db, _, _) = ctx;
+            let src = lookupIndex(srcIndex, db);
+            let dst = lookupIndex(dstIndex, db);
+            BPlusTree.merge(src, dst)
+        case RamStmt.MergeInto(srcIndex, dstIndex, Latticenal(_, _, lub, _)) =>
+            let (db, _, _) = ctx;
+            let src = lookupIndex(srcIndex, db);
+            let dst = lookupIndex(dstIndex, db);
+            BPlusTree.mergeWith(lub, src, dst)
+        case RamStmt.Swap(lhs, rhs) =>
+            let (db, _, _) = ctx;
+            let temp = lookupIndex(lhs, db);
+            storeIndex(lookupIndex(rhs, db), lhs, db);
+            storeIndex(temp, rhs, db)
+        case RamStmt.Purge(index) =>
+            let (db, _, _) = ctx;
+            let oldIndex = lookupIndex(index, db);
+            let newIndex = BPlusTree.emptyWithArityAndSearch(rc, usedArity(), BPlusTree.search(oldIndex));
+            storeIndex(newIndex, index, db)
+        case RamStmt.Seq(stmts) =>
+            Vector.forEach(evalStmtSequential(rc, ctx), stmts)
+        case RamStmt.Until(test, body) =>
+            if (evalBoolExps(ctx, test)) {
+                ()
+            } else {
+                evalStmtSequential(rc, ctx, body);
+                evalStmtSequential(rc, ctx, stmt)
+            }
+        case RamStmt.Comment(_) => ()
+        case RamStmt.Par(stmts) =>
+            Vector.forEach(evalStmtSequential(rc, ctx), stmts)
+    }
+
+    ///
+    /// Evaluates `op` under `ctx` sequentially without thread spawning.
+    ///
+    def evalOpSequential(rc: Region[r], ctx: Context[r], op: RelOp): Unit \ r =
+        let (db, env, boxing) = ctx;
+        match op {
+            case RelOp.Search(tuplePos, searchIndex, _, Relational, writes, body) =>
+                lookupIndex(searchIndex, db)
+                    |> BPlusTree.forEach(evalSearchOrQueryOpSequential(rc, tuplePos, writes, body, ctx))
+            case RelOp.Query(tuplePos, searchIndex, _, Relational, writes, body) =>
+                let (minEnv, maxEnv, _, _) = env;
+                lookupIndex(searchIndex, db)
+                    |> BPlusTree.rangeQueryWith(
+                        evalSearchOrQueryOpSequential(rc, tuplePos, writes, body, ctx),
+                        unchecked_cast((Vector.get(tuplePos, minEnv): Array[Int64, r]) as Tuple),
+                        unchecked_cast((Vector.get(tuplePos, maxEnv): Array[Int64, r]) as Tuple)
+                    )
+            case RelOp.If(test, then) =>
+                if (evalBoolExps(ctx, test))
+                    evalOpSequential(rc, ctx, then)
+                else
+                    ()
+            case RelOp.Project(terms, rel, den) => match den {
+                case Relational =>
+                    let relIndex = lookupIndex(rel, db);
+                    let tuple = Vector.map(evalTerm(env, boxing), terms);
+                    BPlusTree.put(tuple, Boxed.NoValue, relIndex)
+                case Latticenal(bot, leq, lub, _) =>
+                    let relIndex = lookupIndex(rel, db);
+                    let len = Vector.length(terms);
+                    let tuple = evalTermsWithLat(ctx, terms);
+                    let latVal = evalBoxedTerm(env, boxing, Vector.get(len - 1, terms));
+                    if (latVal `leq` bot)
+                        ()
+                    else
+                        BPlusTree.putWith(lub, tuple, latVal, relIndex)
+            }
+            case RelOp.Search(tuplePos, searchIndex, meetWith, Latticenal(bot, leq, _, glb), writes, body) =>
+                lookupIndex(searchIndex, db)
+                    |> BPlusTree.forEach(evalSearchOrQueryOpLatticeSequential(rc, tuplePos, meetWith, bot, leq, glb, writes, body, ctx))
+            case RelOp.Query(tuplePos, searchIndex, meetWith, Latticenal(bot, leq, _, glb), writes, body) =>
+                let (minEnv, maxEnv, _, _) = env;
+                lookupIndex(searchIndex, db)
+                    |> BPlusTree.rangeQueryWith(
+                        evalSearchOrQueryOpLatticeSequential(rc, tuplePos, meetWith, bot, leq, glb, writes, body, ctx),
+                        unchecked_cast((Vector.get(tuplePos, minEnv): Array[Int64, r]) as Tuple),
+                        unchecked_cast((Vector.get(tuplePos, maxEnv): Array[Int64, r]) as Tuple)
+                    )
+            case RelOp.ProvProject(terms, rel, fullRel) =>
+                let relIndex = lookupIndex(rel, db);
+                let fullIndex = lookupIndex(fullRel, db);
+                let tuple = Vector.map(evalTerm(env, boxing), terms);
+                let depthPos = Vector.length(terms) - 2;
+                let chooseSmallest = k1 -> _v1 -> k2 -> _v2 -> Vector.get(depthPos, k1) < Vector.get(depthPos, k2);
+                match BPlusTree.getKeyAndValue(tuple, fullIndex) {
+                    case None =>
+                        BPlusTree.putIf(chooseSmallest, tuple, Boxed.NoValue, relIndex)
+                    case Some((k, v)) if (chooseSmallest(tuple, Boxed.NoValue, k, v)) =>
+                        BPlusTree.putIf(chooseSmallest, tuple, Boxed.NoValue, relIndex)
+                    case _ => ()
+                }
+            case RelOp.Functional(tupleIndex, f, terms, writes, body, i2) =>
+                let args = Vector.map(evalBoxedTerm(env, boxing), terms);
+                let result = f(args)
+                    |> Vector.map(
+                        vec ->
+                            Vector.mapWithIndex(i -> x -> unboxWith(x, Vector.get(i, i2), boxing), vec)
+                    );
+                let (minEnv, maxEnv, tupleEnv, _) = env;
+                foreach (t <- result) {
+                    bindTuple(t, writes, minEnv, maxEnv, tupleIndex, tupleEnv);
+                    evalOpSequential(rc, ctx, body)
+                }
+        }
+
+    ///
+    /// Binds the `RowVar`, which has been assigned to the index `tuplePos`, to the value
+    /// `t` and executes `body` sequentially.
+    ///
+    def evalSearchOrQueryOpSequential(
+        rc: Region[r],
+        tuplePos: Int32,
+        writes: Vector[WriteTuple],
+        body: RelOp,
+        ctx: Context[r],
+        t: Tuple,
+        _: Boxed
+    ): Unit \ r =
+        let (_, env, _) = ctx;
+        let (minEnv, maxEnv, tupleEnv, _) = env;
+        bindTuple(t, writes, minEnv, maxEnv, tuplePos, tupleEnv);
+        evalOpSequential(rc, ctx, body)
+
+    ///
+    /// Binds the `RowVar` assigned to index `tuplePos` to the tuple value `t` and lattice value
+    /// `l` and executes `body` sequentially.
+    ///
+    def evalSearchOrQueryOpLatticeSequential(
+        rc: Region[r],
+        tuplePos: Int32,
+        meetWith: Int32,
+        bot: Boxed,
+        leq: Boxed -> Boxed -> Bool,
+        glb: Boxed -> Boxed -> Boxed,
+        writes: Vector[WriteTuple],
+        body: RelOp,
+        ctx: Context[r],
+        t: Tuple,
+        l: Boxed
+    ): Unit \ r =
+        let (_, env, _) = ctx;
+        let (minEnv, maxEnv, tupleEnv, latEnv) = env;
+        bindTuple(t, writes, minEnv, maxEnv, tuplePos, tupleEnv);
+        if (meetWith == tuplePos) {
+            Array.put(l, tuplePos, latEnv);
+            evalOpSequential(rc, ctx, body)
+        } else {
+            let meet = l `glb` Array.get(meetWith, latEnv);
+            if (meet `leq` bot)
+                ()
+            else {
+                Array.put(meet, tuplePos, latEnv);
+                evalOpSequential(rc, ctx, body)
+            }
         }
 
     ///
@@ -446,7 +623,7 @@ pub mod Fixpoint3.Interpreter {
     /// `body` is the body of the `Search` or `Query`. `writes` is a vector of writes to
     /// `SearchTuple`s to be performed. See `bindTuple`.
     ///
-    def evalSearchOrQueryOp(
+    def evalSearchOrQueryOpParallel(
         rc: Region[r],
         tuplePos: Int32,
         writes: Vector[WriteTuple],
@@ -459,7 +636,7 @@ pub mod Fixpoint3.Interpreter {
         let (_, env, _) = ctx;
         let (minEnv, maxEnv, tupleEnv, _) = env;
         bindTuple(t, writes, minEnv, maxEnv, tuplePos, tupleEnv);
-        evalOp(rc, ctx, parLevel, body)
+        evalOpParallel(rc, ctx, parLevel, body)
 
     ///
     /// Copies `ctx`, binds the `RowVar` assigned to index `tuplePos` to the value `t`,
@@ -483,7 +660,7 @@ pub mod Fixpoint3.Interpreter {
         t: Tuple,
         ignored: Boxed
     ): Unit \ r =
-        evalSearchOrQueryOp(rc, tuplePos, writes, body, copyCtx(rc, ctx), parLevel, t, ignored)
+        evalSearchOrQueryOpParallel(rc, tuplePos, writes, body, copyCtx(rc, ctx), parLevel, t, ignored)
 
     ///
     /// Binds the `RowVar` assigned to index `tuplePos` to the tuple value `t` and lattice value
@@ -494,7 +671,7 @@ pub mod Fixpoint3.Interpreter {
     /// `body` is the body of the `Search` or `Query`. `writes` is a vector of writes to
     /// `SearchTuple`s to be performed. See `bindTuple`.
     ///
-    def evalSearchOrQueryOpLattice(
+    def evalSearchOrQueryOpLatticeParallel(
         rc: Region[r],
         tuplePos: Int32,
         meetWith: Int32,
@@ -515,14 +692,14 @@ pub mod Fixpoint3.Interpreter {
         if (meetWith == tuplePos) {
             // `l` cannot be `bot`, so just recurse.
             Array.put(l, tuplePos, latEnv);
-            evalOp(rc, ctx, parLevel, body)
+            evalOpParallel(rc, ctx, parLevel, body)
         } else {
             let meet = l `glb` Array.get(meetWith, latEnv);
             if (meet `leq` bot)
                 ()
             else {
                 Array.put(meet, tuplePos, latEnv);
-                evalOp(rc, ctx, parLevel, body)
+                evalOpParallel(rc, ctx, parLevel, body)
             }
         }
 
@@ -549,7 +726,7 @@ pub mod Fixpoint3.Interpreter {
         t: Tuple,
         l: Boxed
     ): Unit \ r =
-        evalSearchOrQueryOpLattice(rc, tuplePos, meetWith, bot, leq, glb, writes, body, copyCtx(rc, ctx), parLevel, t, l)
+        evalSearchOrQueryOpLatticeParallel(rc, tuplePos, meetWith, bot, leq, glb, writes, body, copyCtx(rc, ctx), parLevel, t, l)
 
     ///
     /// Evaluates `terms` except the last term.

@@ -101,7 +101,14 @@ pub mod Fixpoint3 {
     ///
     /// A wrapper around a Java read-write-lock.
     ///
-    enum ReadWriteLock[_: Region](JReadWriteLock)
+    /// Note: `Unsynchronized` is only ever constructed when
+    /// `Concurrent.Options.enableLocking` is `false`, which only `--Xsequential` asks for. That is
+    /// an asserted precondition rather than a compiler guarantee. See `Fixpoint3.ReadWriteLock`.
+    ///
+    enum ReadWriteLock[_: Region] {
+        case Synchronized(JReadWriteLock)
+        case Unsynchronized
+    }
 
     ///
     /// A trait for types with predicate symbols that can be substituted.
