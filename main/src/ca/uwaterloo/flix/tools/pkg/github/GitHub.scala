@@ -275,7 +275,7 @@ object GitHub {
   /**
     * Opens a stream over the `assetName` asset of `project`'s `version` release, without consulting
     * the REST API -- a release asset's address is fully predictable from owner/repo/tag/name.
-    * The caller closes the stream. See [[findReleaseAsset]] for the fallback when this 404s.
+    * The caller closes the stream.
     */
   def downloadReleaseAsset(project: Project, version: SemVer, assetName: String): Result[InputStream, PackageError] = {
     val url = releaseAssetUrl(project, version, assetName)
@@ -287,8 +287,7 @@ object GitHub {
   }
 
   /**
-    * Finds the single `extension` asset in `project`'s `version` release by reading the REST API --
-    * the fallback for when [[downloadReleaseAsset]]'s guessed name 404s.
+    * Finds the single `extension` asset in `project`'s `version` release by reading the REST API.
     */
   def findReleaseAsset(project: Project, version: SemVer, extension: String, apiKey: Option[String]): Result[Asset, PackageError] = {
     getReleases(project, apiKey).flatMap { releases =>

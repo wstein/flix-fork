@@ -277,36 +277,36 @@ class TestFlixPackageManager extends AnyFunSuite with BeforeAndAfter {
     }
   }
 
-  test("Give error for missing version") {
-    assertResult(expected = PackageError.VersionDoesNotExist(SemVer(0, 0, 1), Project("flix", "museum")).message(formatter))(actual = {
-      val toml = {
-        """
-          |[package]
-          |name = "test"
-          |description = "test"
-          |version = "0.0.0"
-          |flix = "0.0.0"
-          |authors = ["Anna Blume"]
-          |
-          |[dependencies]
-          |"github:flix/museum" = "0.0.1"
-          |
-          |[mvn-dependencies]
-          |
-          |""".stripMargin
-      }
+  test("Give error for missing release asset") {
+    val toml = {
+      """
+        |[package]
+        |name = "test"
+        |description = "test"
+        |version = "0.0.0"
+        |flix = "0.0.0"
+        |authors = ["Anna Blume"]
+        |
+        |[dependencies]
+        |"github:flix/museum" = "0.0.1"
+        |
+        |[mvn-dependencies]
+        |
+        |""".stripMargin
+    }
 
-      val manifest = ManifestParser.parse(toml, null) match {
-        case Ok(m) => m
-        case Err(e) => fail(e.message(formatter))
-      }
+    val manifest = ManifestParser.parse(toml, null) match {
+      case Ok(m) => m
+      case Err(e) => fail(e.message(formatter))
+    }
 
-      val path = Files.createTempDirectory("")
-      FlixPackageManager.findTransitiveDependencies(manifest, path, PkgTestUtils.gitHubToken).map(FlixPackageManager.resolveSecurityLevels) match {
-        case Ok(res) => res
-        case Err(e) => e.message(formatter)
-      }
-    })
+    val path = Files.createTempDirectory("")
+    FlixPackageManager.findTransitiveDependencies(manifest, path, PkgTestUtils.gitHubToken).map(FlixPackageManager.resolveSecurityLevels) match {
+      case Err(e: PackageError.ReleaseAssetNotFound) =>
+        assertResult(expected = "flix.toml")(actual = e.assetName)
+        assertResult(expected = SemVer(0, 0, 1))(actual = e.version)
+      case other => fail(s"expected a missing release asset, got $other")
+    }
   }
 
   test("Install transitive dependency") {
@@ -703,6 +703,14 @@ class TestFlixPackageManager extends AnyFunSuite with BeforeAndAfter {
       case _ => false
     }
     (forbidden, CompilationMessage.formatAll(errors)(flix.getFormatter, optRoot))
+  }
+
+  /** A version used by package manager tests. */
+  private val StubVersion: SemVer = SemVer(1, 1, 0)
+
+  test("fpkgAssetName.01: the package uses the name declared by its manifest") {
+    val manifest = Manifest("museum-renamed", "", StubVersion, None, PackageModules.All, StubVersion, None, Nil, Nil)
+    assertResult(expected = "museum-renamed.fpkg")(actual = FlixPackageManager.fpkgAssetName(manifest))
   }
 
 }
