@@ -31,6 +31,11 @@ sealed trait PackageError {
 }
 
 object PackageError {
+  case class VersionDoesNotExist(version: SemVer, project: Project) extends PackageError {
+    override def message(f: Formatter): String =
+      s"Version ${f.bold(version.toString)} does not exist for project ${f.bold(project.toString)}"
+  }
+
   case class InvalidProjectName(projectString: String) extends PackageError {
     override def message(f: Formatter): String =
       s"""A GitHub project should be formatted like so: 'owner/repository'.

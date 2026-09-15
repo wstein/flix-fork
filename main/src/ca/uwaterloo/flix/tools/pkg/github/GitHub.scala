@@ -43,9 +43,25 @@ object GitHub {
   }
 
   /**
-    * Lists the project's release versions.
+    * A release of a GitHub project.
     */
-  def getReleases(project: Project, apiKey: Option[String]): Result[List[SemVer], PackageError] = {
+  case class Release(version: SemVer, assets: List[Asset])
+
+  /**
+    * An asset from a GitHub project release.
+    *
+    * `apiUrl` is its REST API asset URL -- the only address that downloads it uniformly for a
+    * public or a private repo alike (see [[downloadAsset]]).
+    */
+  case class Asset(name: String, apiUrl: URL)
+
+  /**
+    * Lists the project's releases.
+    *
+    * For a single known version, prefer [[getRelease]]: it costs one targeted request instead of
+    * the whole release history.
+    */
+  def getReleases(project: Project, apiKey: Option[String]): Result[List[Release], PackageError] = {
     val url = releasesUrl(project)
     val reqBuilder = HttpRequest.newBuilder(url.toURI)
     // add the API key as bearer if needed
@@ -62,7 +78,35 @@ object GitHub {
 
       case _: ClassCastException => return Err(PackageError.JsonError(json, project))
     }
-    Ok(releaseJsons.arr.map(parseReleaseVersion))
+    Ok(releaseJsons.arr.map(parseRelease))
+  }
+
+  /**
+    * Gets `project`'s `version` release directly, by tag -- one targeted request instead of
+    * [[getReleases]]'s whole release history filtered client-side.
+    */
+  def getRelease(project: Project, version: SemVer, apiKey: Option[String]): Result[Release, PackageError] = {
+    val url = releaseVersionUrl(project, version)
+    val reqBuilder = HttpRequest.newBuilder(url.toURI)
+    apiKey.foreach(key => reqBuilder.header("Authorization", "Bearer " + key))
+    val req = reqBuilder.GET().build()
+    val resp = try {
+      Client.sendRequest(req)
+    } catch {
+      case ex: IOException => return Err(PackageError.ProjectNotFound(url, project, ex))
+    }
+    if (resp.statusCode() == 404) {
+      return Err(PackageError.VersionDoesNotExist(version, project))
+    }
+    val json = resp.body()
+    try {
+      Ok(parseRelease(parse(json)))
+    } catch {
+      // A non-2xx response that isn't a 404 (e.g. a rate-limit refusal) is a JSON object shaped
+      // like `{"message": ...}`, not a release -- parseRelease's field lookups fail on it rather
+      // than throwing a clean cast exception, since none of its extraction is `.asInstanceOf`.
+      case _: ClassCastException | _: RuntimeException => Err(PackageError.JsonError(json, project))
+    }
   }
 
   /**
@@ -318,10 +362,25 @@ object GitHub {
   }
 
   /**
-    * Parses a release version from JSON.
+    * Parses a Release JSON.
     */
-  private[github] def parseReleaseVersion(json: JValue): SemVer =
-    parseSemVer((json \ "tag_name").values.toString)
+  private def parseRelease(json: JValue): Release = {
+    val version = parseSemVer((json \ "tag_name").values.toString)
+    val assetJsons = (json \ "assets").asInstanceOf[JArray]
+    val assets = assetJsons.arr.map(parseAsset)
+    Release(version, assets)
+  }
+
+  /**
+    * Parses an Asset JSON.
+    *
+    * Package-private so parsing can be tested without a network.
+    */
+  private[github] def parseAsset(asset: JValue): Asset = {
+    val apiUrl = asset \ "url"
+    val name = asset \ "name"
+    Asset(name.values.toString, new URI(apiUrl.values.toString).toURL)
+  }
 
   /**
     * Parses a semantic version, starting with v, e.g.

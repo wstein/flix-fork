@@ -15,16 +15,37 @@
  */
 package ca.uwaterloo.flix.tools.pkg.github
 
-import ca.uwaterloo.flix.tools.pkg.SemVer
+import ca.uwaterloo.flix.tools.pkg.PackageError
 import org.json4s.JsonDSL.*
 import org.json4s.JValue
 import org.scalatest.funsuite.AnyFunSuite
 
+import java.net.URI
+
 class TestGitHub extends AnyFunSuite {
 
-  test("parseReleaseVersion.01: parses a release without asset metadata") {
-    val json: JValue = "tag_name" -> "v1.2.3"
+  test("downloadFailure.01: classifies authentication and rate-limit refusals") {
+    val url = new URI("https://api.github.com/repos/owner/repo/releases/assets/1").toURL
 
-    assertResult(expected = SemVer(1, 2, 3))(actual = GitHub.parseReleaseVersion(json))
+    assertResult(PackageError.DownloadRefused(url, 403, Some("60")))(GitHub.downloadFailure(url, 403, Some("60")))
+    assertResult(PackageError.DownloadRefused(url, 429, None))(GitHub.downloadFailure(url, 429, None))
+  }
+
+  test("downloadFailure.02: preserves unexpected response statuses") {
+    val url = new URI("https://api.github.com/repos/owner/repo/releases/assets/1").toURL
+
+    assertResult(PackageError.DownloadFailed(url, 401))(GitHub.downloadFailure(url, 401, None))
+  }
+
+  test("parseAsset.01: apiUrl is read from the REST API asset field") {
+    val json: JValue =
+      ("name" -> "flix.toml") ~
+        ("browser_download_url" -> "https://github.com/wstein/pr13165-package/releases/download/v0.1.1/flix.toml") ~
+        ("url" -> "https://api.github.com/repos/wstein/pr13165-package/releases/assets/1")
+
+    val asset = GitHub.parseAsset(json)
+
+    assertResult(expected = "flix.toml")(actual = asset.name)
+    assertResult(expected = "https://api.github.com/repos/wstein/pr13165-package/releases/assets/1")(actual = asset.apiUrl.toString)
   }
 }
