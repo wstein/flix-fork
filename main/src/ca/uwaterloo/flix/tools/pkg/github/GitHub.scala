@@ -43,21 +43,9 @@ object GitHub {
   }
 
   /**
-    * A release of a GitHub project.
+    * Lists the project's release versions.
     */
-  case class Release(version: SemVer, assets: List[Asset])
-
-  /**
-    * An asset from a GitHub project release.
-    *
-    * `url` is the link to download the asset.
-    */
-  case class Asset(name: String, url: URL)
-
-  /**
-    * Lists the project's releases.
-    */
-  def getReleases(project: Project, apiKey: Option[String]): Result[List[Release], PackageError] = {
+  def getReleases(project: Project, apiKey: Option[String]): Result[List[SemVer], PackageError] = {
     val url = releasesUrl(project)
     val reqBuilder = HttpRequest.newBuilder(url.toURI)
     // add the API key as bearer if needed
@@ -74,7 +62,7 @@ object GitHub {
 
       case _: ClassCastException => return Err(PackageError.JsonError(json, project))
     }
-    Ok(releaseJsons.arr.map(parseRelease))
+    Ok(releaseJsons.arr.map(parseReleaseVersion))
   }
 
   /**
@@ -287,23 +275,6 @@ object GitHub {
   }
 
   /**
-    * Finds the single `extension` asset in `project`'s `version` release by reading the REST API.
-    */
-  def findReleaseAsset(project: Project, version: SemVer, extension: String, apiKey: Option[String]): Result[Asset, PackageError] = {
-    getReleases(project, apiKey).flatMap { releases =>
-      releases.find(r => r.version == version) match {
-        case None => Err(PackageError.VersionDoesNotExist(version, project))
-        case Some(release) =>
-          release.assets.filter(_.name.endsWith(s".$extension")) match {
-            case Nil => Err(PackageError.NoSuchFile(project.toString, extension))
-            case asset :: Nil => Ok(asset)
-            case _ => Err(PackageError.TooManyFiles(project.toString, extension))
-          }
-      }
-    }
-  }
-
-  /**
     * The permanent, non-REST address of a release asset.
     */
   private def releaseAssetUrl(project: Project, version: SemVer, assetName: String): URL = {
@@ -312,25 +283,6 @@ object GitHub {
     val path = s"/${project.owner}/${project.repo}/releases/download/v$version/$assetName"
     new URI("https", "github.com", path, null).toURL
   }
-
-  /**
-    * Gets the project release with the relevant semantic version.
-    */
-  def getSpecificRelease(project: Project, version: SemVer, apiKey: Option[String]): Result[Release, PackageError] = {
-    getReleases(project, apiKey).flatMap {
-      releases =>
-        releases.find(r => r.version == version) match {
-          case None => Err(PackageError.VersionDoesNotExist(version, project))
-          case Some(release) => Ok(release)
-        }
-    }
-  }
-
-  /**
-    * Downloads the given asset.
-    */
-  def downloadAsset(asset: Asset): InputStream =
-    asset.url.openStream()
 
   /**
     * Returns the URL that returns data related to the project's releases.
@@ -366,23 +318,10 @@ object GitHub {
   }
 
   /**
-    * Parses a Release JSON.
+    * Parses a release version from JSON.
     */
-  private def parseRelease(json: JValue): Release = {
-    val version = parseSemVer((json \ "tag_name").values.toString)
-    val assetJsons = (json \ "assets").asInstanceOf[JArray]
-    val assets = assetJsons.arr.map(parseAsset)
-    Release(version, assets)
-  }
-
-  /**
-    * Parses an Asset JSON.
-    */
-  private def parseAsset(asset: JValue): Asset = {
-    val url = asset \ "browser_download_url"
-    val name = asset \ "name"
-    Asset(name.values.toString, new URI(url.values.toString).toURL)
-  }
+  private[github] def parseReleaseVersion(json: JValue): SemVer =
+    parseSemVer((json \ "tag_name").values.toString)
 
   /**
     * Parses a semantic version, starting with v, e.g.

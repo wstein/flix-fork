@@ -17,7 +17,7 @@ package ca.uwaterloo.flix.tools.pkg
 
 import ca.uwaterloo.flix.language.ast.shared.SecurityContext
 import ca.uwaterloo.flix.tools.pkg.Dependency.FlixDependency
-import ca.uwaterloo.flix.tools.pkg.github.GitHub.{Asset, Project}
+import ca.uwaterloo.flix.tools.pkg.github.GitHub.Project
 import ca.uwaterloo.flix.util.Formatter
 
 import java.io.IOException
@@ -31,11 +31,6 @@ sealed trait PackageError {
 }
 
 object PackageError {
-  case class VersionDoesNotExist(version: SemVer, project: Project) extends PackageError {
-    override def message(f: Formatter): String =
-      s"Version ${f.bold(version.toString)} does not exist for project ${f.bold(project.toString)}"
-  }
-
   case class InvalidProjectName(projectString: String) extends PackageError {
     override def message(f: Formatter): String =
       s"""A GitHub project should be formatted like so: 'owner/repository'.
@@ -117,9 +112,12 @@ object PackageError {
          |""".stripMargin
   }
 
-  case class DownloadError(asset: Asset, message: Option[String]) extends PackageError {
+  /**
+    * A downloaded asset could not be written to disk under `fileName`.
+    */
+  case class DownloadError(fileName: String, message: Option[String]) extends PackageError {
     override def message(f: Formatter): String =
-      s"""A download error occurred while downloading ${f.bold(asset.name)}
+      s"""An error occurred while saving ${f.bold(fileName)}
          |${
         message match {
           case Some(e) => e
@@ -145,19 +143,6 @@ object PackageError {
     override def message(f: Formatter): String =
       s"""An error occurred with Coursier:
          |$errorMsg
-         |""".stripMargin
-  }
-
-  case class NoSuchFile(project: String, extension: String) extends PackageError {
-    override def message(f: Formatter): String =
-      s"""There are no files in project '${f.bold(project)}' with extension '${f.bold(s".$extension")}'.
-         |""".stripMargin
-  }
-
-  case class TooManyFiles(project: String, extension: String) extends PackageError {
-    override def message(f: Formatter): String =
-      s"""There are too many files in project '${f.bold(project)}' with extension '${f.bold(s".$extension")}'.
-         |There should only be one $extension file in each project.
          |""".stripMargin
   }
 
