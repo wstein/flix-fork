@@ -34,7 +34,12 @@ jobs:
       - name: Build
         run: ./mill flix.compile
       - name: Test Package Manager suite with timeout
-        env: # Only add token in this step to prevent other steps from abusing the token
+        env: # Only add tokens in this step to prevent other steps from abusing them
           GITHUB_CI_RUNNER_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # secrets.GITHUB_TOKEN above is GitHub Actions' built-in, repo-scoped token -- it can't
+          # see any other repository. GH_TOKEN is a real PAT with read access to the private
+          # wstein/pr13165-package-renamed repo, so the private-install tests can actually run.
+          # Withheld by GitHub on fork-originated pull_request runs, where those tests skip.
+          GITHUB_PRIVATE_TEST_TOKEN: ${{ secrets.GH_TOKEN }}
         timeout-minutes: 15
         run: ./mill flix.testPackageManager

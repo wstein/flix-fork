@@ -316,6 +316,74 @@ class TestFlixPackageManager extends AnyFunSuite with BeforeAndAfter {
     }
   }
 
+  test("Give a clear error for a private repository without a token") {
+    val toml = {
+      """
+        |[package]
+        |name = "test"
+        |description = "test"
+        |version = "0.0.0"
+        |flix = "0.0.0"
+        |authors = ["Anna Blume"]
+        |
+        |[dependencies]
+        |"github:wstein/pr13165-package-renamed" = "0.1.1"
+        |
+        |[mvn-dependencies]
+        |
+        |""".stripMargin
+    }
+
+    val manifest = ManifestParser.parse(toml, null) match {
+      case Ok(m) => m
+      case Err(e) => fail(e.message(formatter))
+    }
+
+    val path = Files.createTempDirectory("")
+    FlixPackageManager.findTransitiveDependencies(manifest, path, apiKey = None) match {
+      case Err(e: PackageError.ReleaseAssetNotFound) =>
+        assertResult(expected = "flix.toml")(actual = e.assetName)
+      case other => fail(s"expected a release-asset-not-found error naming the private-repo possibility, got $other")
+    }
+  }
+
+  test("Install a dependency from a private repository") {
+    assume(PkgTestUtils.privateRepoTestToken.isDefined, "requires a token with access to wstein/pr13165-package-renamed")
+
+    val toml = {
+      """
+        |[package]
+        |name = "test"
+        |description = "test"
+        |version = "0.0.0"
+        |flix = "0.0.0"
+        |authors = ["Anna Blume"]
+        |
+        |[dependencies]
+        |"github:wstein/pr13165-package-renamed" = "0.1.1"
+        |
+        |[mvn-dependencies]
+        |
+        |""".stripMargin
+    }
+
+    val manifest = ManifestParser.parse(toml, null) match {
+      case Ok(m) => m
+      case Err(e) => fail(e.message(formatter))
+    }
+
+    val path = Files.createTempDirectory("")
+    val resolution = FlixPackageManager.findTransitiveDependencies(manifest, path, PkgTestUtils.privateRepoTestToken).map(FlixPackageManager.resolveSecurityLevels) match {
+      case Ok(res) => res
+      case Err(e) => fail(e.message(formatter))
+    }
+
+    FlixPackageManager.installAll(resolution, path, PkgTestUtils.privateRepoTestToken) match {
+      case Ok(l) => assert(l.exists { case (p, _) => p.endsWith(s"wstein${s}pr13165-package-renamed${s}0.1.1${s}pr13165-package-renamed-0.1.1.fpkg") })
+      case Err(e) => fail(e.message(formatter))
+    }
+  }
+
   test("Install transitive dependency") {
     assertResult(expected = true)(actual = {
       val toml = {

@@ -25,8 +25,19 @@ object PkgTestUtils {
   /**
     * GitHub token of the CI runner if available.
     */
-  val gitHubToken: Option[String] = {
-    val propValue = System.getenv("GITHUB_CI_RUNNER_TOKEN")
+  val gitHubToken: Option[String] = envToken("GITHUB_CI_RUNNER_TOKEN")
+
+  /**
+    * A token with read access to a private repository set up for testing private-repo installs
+    * (`wstein/pr13165-package-renamed`), distinct from [[gitHubToken]]: the CI-runner token above
+    * is GitHub Actions' built-in, repo-scoped `secrets.GITHUB_TOKEN` -- it cannot see any other
+    * repository, private or not. This one is a real PAT (`secrets.GH_TOKEN` in CI), only present
+    * when a private-repo test is meant to actually run.
+    */
+  val privateRepoTestToken: Option[String] = envToken("GITHUB_PRIVATE_TEST_TOKEN")
+
+  private def envToken(name: String): Option[String] = {
+    val propValue = System.getenv(name)
     if (propValue == null || propValue.isBlank || propValue.isEmpty)
       None
     else
