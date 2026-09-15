@@ -103,7 +103,7 @@ object Symbol {
     */
   def freshHoleSym(loc: SourceLocation)(implicit flix: Flix): HoleSym = {
     val id = flix.genSym.freshId()
-    new HoleSym(Nil, "h" + id, loc)
+    new HoleSym(Nil, "h" + id, loc, isAnonymous = true)
   }
 
   /**
@@ -266,15 +266,15 @@ object Symbol {
     * Returns the hole symbol for the given name `ident` in the given namespace `ns`.
     */
   def mkHoleSym(ns: NName, ident: Ident): HoleSym = {
-    new HoleSym(ns.parts, ident.name, ident.loc)
+    new HoleSym(ns.parts, ident.name, ident.loc, isAnonymous = false)
   }
 
   /**
     * Returns the hole symbol for the given fully qualified name.
     */
   def mkHoleSym(fqn: String): HoleSym = split(fqn) match {
-    case None => new HoleSym(Nil, fqn, SourceLocation.Unknown)
-    case Some((ns, name)) => new HoleSym(ns, name, SourceLocation.Unknown)
+    case None => new HoleSym(Nil, fqn, SourceLocation.Unknown, isAnonymous = false)
+    case Some((ns, name)) => new HoleSym(ns, name, SourceLocation.Unknown, isAnonymous = false)
   }
 
   /**
@@ -767,8 +767,10 @@ object Symbol {
 
   /**
     * Hole Symbol.
+    *
+    * `isAnonymous` preserves source origin; it does not change symbol equality or hashing.
     */
-  final class HoleSym(val namespace: List[String], val name: String, val loc: SourceLocation) extends Symbol with QualifiedSym {
+  final class HoleSym(val namespace: List[String], val name: String, val loc: SourceLocation, val isAnonymous: Boolean) extends Symbol with QualifiedSym {
     /**
       * Returns `true` if this symbol is equal to `that` symbol.
       */

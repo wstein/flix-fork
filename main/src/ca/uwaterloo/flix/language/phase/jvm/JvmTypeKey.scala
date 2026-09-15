@@ -38,6 +38,17 @@ object JvmTypeKey {
     Base64.getEncoder.encodeToString(GeneratedJvmKey("semantic-simple-type-v1", List(encoder.simple(tpe))).bytes)
   }
 
+  /**
+    * Encodes a source-level type shape, discarding residual inference-variable identity.
+    * This is not specialization identity: generated symbols must use the strict encoder.
+    */
+  private[jvm] def encodeLexical(tpe: Type, parameters: List[Symbol.KindedTypeVarSym],
+                                 symbolOrigin: Symbol => GeneratedJvmKey): String = {
+    if (parameters.distinct.length != parameters.length) fail("Duplicate type parameter binding.")
+    val encoder = new Encoder(parameters.zipWithIndex.toMap, symbolOrigin, lexical = true)
+    Base64.getEncoder.encodeToString(GeneratedJvmKey("lexical-type-v1", List(encoder.tpe(Type.eraseAliases(tpe)))).bytes)
+  }
+
   private def fail(message: String): Nothing =
     throw InternalCompilerException(message, SourceLocation.Unknown)
 
@@ -48,7 +59,8 @@ object JvmTypeKey {
 
   private def sequence(fields: Iterable[String]): String = node("list", fields.toSeq: _*)
 
-  private class Encoder(bindings: Map[Symbol.KindedTypeVarSym, Int], origin: Symbol => GeneratedJvmKey) {
+  private class Encoder(bindings: Map[Symbol.KindedTypeVarSym, Int], origin: Symbol => GeneratedJvmKey,
+                        lexical: Boolean = false) {
     def simple(value: SimpleType): String = value match {
       case SimpleType.Void => node("void")
       case SimpleType.AnyType => node("any")
@@ -160,7 +172,11 @@ object JvmTypeKey {
     }
 
     def tpe(value: Type): String = value match {
-      case Type.Var(sym, _) => node("var", number(bindings.getOrElse(sym, fail("Unbound type variable."))), kind(sym.kind))
+      case Type.Var(sym, _) => bindings.get(sym) match {
+        case Some(index) => node("var", number(index), kind(sym.kind))
+        case None if lexical => node("inferred", kind(sym.kind))
+        case None => fail("Unbound type variable.")
+      }
       case Type.Cst(tc, _) => node("constant", constructor(tc))
       case Type.Alias(_, _, expanded, _) => tpe(expanded)
       case Type.Apply(Type.Apply(Type.Cst(TypeConstructor.RecordRowExtend(_), _), _, _), _, _) => row(value, isRecord = true)

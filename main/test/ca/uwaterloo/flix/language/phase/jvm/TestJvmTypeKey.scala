@@ -47,6 +47,21 @@ class TestJvmTypeKey extends AnyFunSuite {
     intercept[InternalCompilerException] { JvmTypeKey.encode(Type.Var(sym, loc), List(sym, sym)) }
   }
 
+  test("lexical type shapes exclude residual inference variable identity") {
+    val first = variable(1, "inferred", Kind.Eff)
+    val second = variable(99, "other", Kind.Eff)
+    def lexical(tpe: Type, parameters: List[Symbol.KindedTypeVarSym] = Nil): String =
+      JvmTypeKey.encodeLexical(tpe, parameters, _ => throw InternalCompilerException("Unexpected symbol.", loc))
+    val left = Type.Var(first, loc)
+    val right = Type.Var(second, loc)
+    assert(lexical(left) == lexical(right))
+    assert(lexical(left) != lexical(left, List(first)))
+    assert(lexical(Type.mkTuple(List(Type.mkUnion(left, right, loc), left), loc)) ==
+      lexical(Type.mkTuple(List(Type.mkUnion(right, left, loc), left), loc)))
+    assert(lexical(Type.Int32) != lexical(Type.Str))
+    intercept[InternalCompilerException] { encode(left) }
+  }
+
   test("effects distinguish arrows and their union order is canonical") {
     val first = Type.Cst(TypeConstructor.Effect(Symbol.mkEffSym("Example.First"), Kind.Eff), loc)
     val second = Type.Cst(TypeConstructor.Effect(Symbol.mkEffSym("Example.Second"), Kind.Eff), loc)
