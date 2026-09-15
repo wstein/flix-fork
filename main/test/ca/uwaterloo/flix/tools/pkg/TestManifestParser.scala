@@ -96,6 +96,13 @@ class TestManifestParser extends AnyFunSuite {
     assert(ManifestParser.parse(toml, null).unsafeGet.name == maxName)
   }
 
+  test("PackageName.normalize reserves space for a Windows device suffix") {
+    val name = PackageName.normalize("con." + ("a" * 246))
+    assert(PackageName.isValid(name))
+    assert(name.length == PackageName.MaxLength)
+    assert(name.startsWith("con-package."))
+  }
+
   test("Ok.packageNameWithPortablePunctuation") {
     val toml = tomlCorrect.replace("name = \"hello-world\"", "name = \"hello.world_2\"")
     assert(ManifestParser.parse(toml, null).unsafeGet.name == "hello.world_2")

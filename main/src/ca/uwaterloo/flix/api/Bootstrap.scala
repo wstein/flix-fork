@@ -30,7 +30,7 @@ import ca.uwaterloo.flix.runtime.{CompilationResult, JvmLoader}
 import ca.uwaterloo.flix.runtime.shell.FileWatcher
 import ca.uwaterloo.flix.tools.{Stat, Tester}
 import ca.uwaterloo.flix.tools.pkg.github.GitHub
-import ca.uwaterloo.flix.tools.pkg.{FlixPackageManager, JarPackageManager, Manifest, ManifestParser, MavenPackageManager, PackageModules, ReleaseError, SemVer}
+import ca.uwaterloo.flix.tools.pkg.{FlixPackageManager, JarPackageManager, Manifest, ManifestParser, MavenPackageManager, PackageModules, PackageName, ReleaseError, SemVer}
 import ca.uwaterloo.flix.util.Result.{Err, Ok}
 import ca.uwaterloo.flix.util.collection.ListMap
 import ca.uwaterloo.flix.util.{Build, FileOps, Formatter, Result}
@@ -341,20 +341,7 @@ object Bootstrap {
     * default which users may subsequently change in `flix.toml`.
     */
   private def getInitialPackageName(p: Path): String = {
-    val rawName = getPackageName(p)
-    val portable = rawName.map {
-      case c if c <= 0x7f && (c.isLetterOrDigit || c == '.' || c == '-' || c == '_') => c
-      case _ => '-'
-    }.dropWhile(c => !c.isLetterOrDigit).take(250).reverse.dropWhile(_ == '.').reverse
-    val name = if (portable.isEmpty) "package" else portable
-    if (isWindowsDeviceName(name)) s"$name-package" else name
-  }
-
-  /** Returns `true` if `name` is a Windows reserved device name, with an optional extension. */
-  private def isWindowsDeviceName(name: String): Boolean = {
-    val baseName = name.takeWhile(_ != '.').toLowerCase(java.util.Locale.ROOT)
-    baseName == "con" || baseName == "prn" || baseName == "aux" || baseName == "nul" || baseName == "clock$" ||
-      baseName.matches("com[1-9]") || baseName.matches("lpt[1-9]")
+    PackageName.normalize(getPackageName(p))
   }
 
   /** Returns the path to the package file based on its artifact name. */
@@ -405,7 +392,7 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
     * Project mode uses the manifest's validated package name. Directory mode has no
     * manifest and therefore retains the directory-name fallback.
     */
-  private def artifactName: String = optManifest.map(_.name).getOrElse(Bootstrap.getPackageName(projectPath))
+  private def artifactName: String = optManifest.map(_.name).getOrElse(PackageName.normalize(Bootstrap.getPackageName(projectPath)))
 
   private def getJarFile: Path = Bootstrap.getJarFile(projectPath, artifactName)
 

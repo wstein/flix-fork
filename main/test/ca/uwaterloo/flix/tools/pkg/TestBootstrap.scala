@@ -28,6 +28,17 @@ class TestBootstrap extends AnyFunSuite {
     Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
   }
 
+  test("directory mode uses a portable artifact basename") {
+    val p = Files.createTempDirectory("flix project-")
+    FileOps.writeString(p.resolve("Main.flix"), "def main(): Unit = ()")
+
+    val bootstrap = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
+    bootstrap.buildJar(PkgTestUtils.mkFlix).unsafeGet
+
+    val name = PackageName.normalize(p.getFileName.toString)
+    assert(Files.exists(p.resolve("artifact").resolve(s"$name.jar")))
+  }
+
   test("check") {
     val p = Files.createTempDirectory(ProjectPrefix)
     Bootstrap.init(p)(System.out)
