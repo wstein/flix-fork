@@ -37,11 +37,23 @@ on the same compiler object. Its synchronized registration and origin lookup
 support parallel compiler phases. Conflicting registration fails immediately;
 identical registration is idempotent.
 
+After a phase discards symbols, call `retainLive(live)` with the symbols whose
+origins later phases still need. This removes dead entries and replaces the map's
+backing storage, so neither dropped symbols nor peak table capacity are retained.
+Call it after parallel workers have joined and after copying any parent origin
+needed by a surviving specialization or lifted construct into its own key. Keys
+contain semantic strings, not references to discarded ASTs or parent symbols.
+Pruning can run repeatedly; registration remains open for later phases.
+
 After tree shaking, `freeze(required)` checks every surviving generated symbol
 and builds the immutable table using only those symbols. Dead generated symbols
 do not affect collision claims. Freezing is a one-way transition: subsequent
-writes and repeated freezes fail, including after an unsuccessful freeze. No
-partially validated table is published. Registry instances share no mutable state.
+writes, pruning, and repeated freezes fail, including after an unsuccessful freeze.
+Every freeze attempt releases all registry entries and backing storage, whether it
+succeeds or throws. The returned immutable table owns only the required symbols
+and their suffixes; it retains no provenance keys. Release that table after bytecode
+generation as well. No partially validated table is published. Registry instances
+share no mutable state.
 
 ## Integration sequence
 
@@ -60,6 +72,10 @@ partially validated table is published. Registry instances share no mutable stat
    references, nullary tags, anonymous classes, and non-export namespace shims
    through the same table. Preserve exported method names.
 
+During these steps, prune the registry at phase boundaries whenever the set of
+symbols needed by later phases shrinks. The registry API implements this lifecycle;
+the phase calls remain part of the pending compiler integration.
+
 Two indistinguishable unnamed sibling expressions need an explicit identity
 policy. A duplicate-only ordinal permits renumbering identical siblings on an
 insertion; stronger persistence needs stored identities or previous-tree matching.
@@ -76,7 +92,8 @@ Tests cover counter independence, framing, family separation, ordering, width,
 leading zeros, duplicate identity, conflicting provenance, collisions, and missing
 lookups. Digest injection is package-private and used only to force collisions.
 Registry tests cover parallel registration, required-symbol completeness,
-tree-shaken symbols, freeze lifecycle, and isolation between compilations.
+phase pruning, release after successful and failed freezes, tree-shaken symbols,
+freeze lifecycle, and isolation between compilations.
 
 This revision has no configured Scala formatter or source-linter command.
 Validation uses the existing warnings-as-errors Scala compilation and

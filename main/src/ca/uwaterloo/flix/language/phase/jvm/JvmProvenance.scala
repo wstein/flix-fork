@@ -7,7 +7,7 @@ import scala.collection.mutable
 
 final class JvmProvenance {
 
-  private val origins = mutable.Map.empty[Symbol, GeneratedJvmKey]
+  private var origins = mutable.Map.empty[Symbol, GeneratedJvmKey]
   private var frozen = false
 
   def register(sym: Symbol, key: GeneratedJvmKey): Unit = synchronized {
@@ -25,10 +25,19 @@ final class JvmProvenance {
       throw InternalCompilerException(s"Missing JVM naming provenance for '$sym'.", SourceLocation.Unknown))
   }
 
+  def retainLive(live: Set[Symbol]): Unit = synchronized {
+    requireOpen()
+    origins = mutable.Map.from(origins.iterator.filter { case (sym, _) => live.contains(sym) })
+  }
+
   def freeze(required: Iterable[Symbol]): JvmNameTable = synchronized {
     requireOpen()
     frozen = true
-    JvmNameTable.build(required.iterator.map(sym => sym -> origin(sym)).toList)
+    try {
+      JvmNameTable.build(required.iterator.map(sym => sym -> origin(sym)).toList)
+    } finally {
+      origins = mutable.Map.empty
+    }
   }
 
   private def requireOpen(): Unit = {

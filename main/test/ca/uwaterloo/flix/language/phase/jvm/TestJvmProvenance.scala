@@ -114,4 +114,53 @@ class TestJvmProvenance extends AnyFunSuite {
     registry.register(second, key("same"))
     intercept[InternalCompilerException] { registry.freeze(List(first, second)) }
   }
+
+  test("phase pruning removes dead origins while preserving live origins") {
+    val registry = new JvmProvenance()
+    val live = symbol(1)
+    val dead = symbol(2)
+    registry.register(live, key("live"))
+    registry.register(dead, key("dead"))
+    registry.retainLive(Set(live))
+    assert(registry.origin(live) == key("live"))
+    intercept[InternalCompilerException] { registry.origin(dead) }
+    registry.register(symbol(3), key("new"))
+    assert(registry.freeze(List(live)).suffix(live).nonEmpty)
+  }
+
+  test("pruning all origins does not close registration") {
+    val registry = new JvmProvenance()
+    val sym = symbol(1)
+    registry.register(sym, key("old"))
+    registry.retainLive(Set.empty)
+    intercept[InternalCompilerException] { registry.origin(sym) }
+    registry.register(sym, key("new"))
+    assert(registry.origin(sym) == key("new"))
+  }
+
+  test("successful freeze releases both live and dead registry entries") {
+    val registry = new JvmProvenance()
+    val live = symbol(1)
+    val dead = symbol(2)
+    registry.register(live, key("live"))
+    registry.register(dead, key("dead"))
+    val table = registry.freeze(List(live))
+    intercept[InternalCompilerException] { registry.origin(live) }
+    intercept[InternalCompilerException] { registry.origin(dead) }
+    assert(table.suffix(live) == JvmNameTable.build(List(live -> key("live"))).suffix(live))
+  }
+
+  test("failed freeze releases registry entries") {
+    val registry = new JvmProvenance()
+    val sym = symbol(1)
+    registry.register(sym, key("registered"))
+    intercept[InternalCompilerException] { registry.freeze(List(sym, symbol(2))) }
+    intercept[InternalCompilerException] { registry.origin(sym) }
+  }
+
+  test("pruning after freeze fails") {
+    val registry = new JvmProvenance()
+    registry.freeze(Nil)
+    intercept[InternalCompilerException] { registry.retainLive(Set.empty) }
+  }
 }
