@@ -216,7 +216,7 @@ Gating the dispatch is not sufficient on its own, because the parallel operation
 
 The runtime classes cannot be gated by a library switch, because they are not written in Flix. `BackendObjType` emits a second variant of each one when `Options.isSingleThreaded` holds:
 
-- **`Region`** keeps only its exit handlers. The queue of children, the region's own thread, the field carrying a child's exception, and the `spawn` method are all about child threads, and there are none. The two methods that moved an exception between threads remain, because a region exit still calls one of them, and do nothing.
+- **`Region`** keeps only the minimal class shape used by generated region entry and exit code. The queue of children, exit-handler list, region thread, child-exception field, and `spawn` method are all removed. The two methods that moved an exception between threads remain because generated region exit code still calls one of them, and do nothing.
 - **`Lazy`** drops the `ReentrantLock` and the `tryCatch` that existed only to release it. The lock kept two threads from forcing at once; with one thread the expression is read, run, and cleared without interruption. A thunk that throws now propagates directly.
 - **`Global`** replaces the `AtomicLong` behind `newId` with a plain `long`. The atomic made the read and the increment one step, which they already are on one thread.
 
@@ -228,7 +228,7 @@ Two things outside `BackendObjType` follow from the same predicate. `GenExpressi
 
 ## 5. Verification
 
-1. **Option plumbing** (`TestLibraryOptions.scala`): CLI parsing for both options including invalid values, the rewritten body of both switches under all four combinations, the no-op without the standard library, and mode switching on an existing compiler instance with warm caches.
+1. **Option plumbing** (`TestLibraryOptions.scala`): CLI parsing for the umbrella option, rejection of the retired individual options, the rewritten bodies of all three switches under the supported combinations, the no-op without the standard library, and mode switching on an existing compiler instance with warm caches.
 
 2. **Datalog parity** (`TestDatalogExecutionParity.scala`, `CompilerSequentialSuite.scala`): recursive transitive closures, multi-stage derivations, merge groups, lattices, stratified negation, provenance via `psolve`/`pquery`, functional predicates, `inject ... into`, `solve ... project`, and join-with-existing-model solving — plus the full `main/test/flix/` suite re-executed under sequential mode.
 
