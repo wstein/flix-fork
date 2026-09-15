@@ -204,6 +204,15 @@ object ManifestError {
          |""".stripMargin
   }
 
+  case class IllegalPackageName(path: Path, name: String) extends ManifestError {
+    override def message(f: Formatter): String =
+      s"""The package name ${f.red(name)} cannot be used as an artifact file name.
+         |Package names must be a single portable file-name segment beginning with a letter or digit.
+         |Allowed characters after the first character are: a-z, A-Z, 0-9, ., -, _.
+         |The toml file was found at ${f.cyan(if (path == null) "null" else path.toString)}.
+         |""".stripMargin
+  }
+
   case class IOError(path: Path, message: String) extends ManifestError {
     override def message(f: Formatter): String =
       s"""An I/O error occured while parsing the toml file:

@@ -36,6 +36,12 @@ object ManifestParser {
     */
   private val ValidName = "[a-zA-Z0-9.:/_-]+".r
 
+  /** A package name that can be used safely and portably as an artifact file name. */
+  private val ValidPackageName = "[a-zA-Z0-9][a-zA-Z0-9._-]*".r
+
+  /** Windows device names remain reserved even when an extension is appended. */
+  private val WindowsDeviceName = "(?i)(con|prn|aux|nul|com[1-9]|lpt[1-9])(\\..*)?".r
+
   /**
     * Creates a Manifest from the .toml file
     * at path `p` and returns an error if
@@ -83,7 +89,8 @@ object ManifestParser {
     for (
       _ <- checkKeys(parser, p);
 
-      name <- getRequiredStringProperty("package.name", parser, p);
+      name0 <- getRequiredStringProperty("package.name", parser, p);
+      name <- validatePackageName(name0, p);
 
       description <- getRequiredStringProperty("package.description", parser, p);
 
@@ -485,6 +492,19 @@ object ManifestParser {
       Ok(name)
     else
       Err(ManifestError.IllegalName(p, name))
+  }
+
+  /**
+    * Validates a package name before it is used as an artifact basename.
+    *
+    * Package names are deliberately limited to one portable path segment: build-pkg
+    * and build-jar resolve them below the project's artifact directory.
+    */
+  private def validatePackageName(name: String, p: Path): Result[String, ManifestError] = {
+    name match {
+      case ValidPackageName() if name != "." && name != ".." && !WindowsDeviceName.matches(name) => Ok(name)
+      case _ => Err(ManifestError.IllegalPackageName(p, name))
+    }
   }
 
   /**

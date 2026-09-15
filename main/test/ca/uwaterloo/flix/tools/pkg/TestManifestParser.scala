@@ -64,6 +64,21 @@ class TestManifestParser extends AnyFunSuite {
     })
   }
 
+  test("ManifestError.IllegalPackageName.01") {
+    val toml = tomlCorrect.replace("name = \"hello-world\"", "name = \"../outside\"")
+    expectError[ManifestError.IllegalPackageName](ManifestParser.parse(toml, null))
+  }
+
+  test("ManifestError.IllegalPackageName.02") {
+    val toml = tomlCorrect.replace("name = \"hello-world\"", "name = \"CON\"")
+    expectError[ManifestError.IllegalPackageName](ManifestParser.parse(toml, null))
+  }
+
+  test("Ok.packageNameWithPortablePunctuation") {
+    val toml = tomlCorrect.replace("name = \"hello-world\"", "name = \"hello.world_2\"")
+    assert(ManifestParser.parse(toml, null).unsafeGet.name == "hello.world_2")
+  }
+
   test("Ok.description") {
     assertResult(expected = "A simple program")(actual = {
       ManifestParser.parse(tomlCorrect, null) match {
