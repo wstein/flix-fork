@@ -16,6 +16,7 @@
 package ca.uwaterloo.flix.tools.pkg.github
 
 import ca.uwaterloo.flix.tools.pkg.{PackageError, SemVer}
+import ca.uwaterloo.flix.util.Result.Err
 import org.json4s.JsonDSL.*
 import org.json4s.JValue
 import org.scalatest.funsuite.AnyFunSuite
@@ -64,6 +65,16 @@ class TestGitHub extends AnyFunSuite {
 
     assertResult(expected = Some(expected))(actual = GitHub.findAsset(release, "flix-json.fpkg"))
     assertResult(expected = None)(actual = GitHub.findAsset(release, "json.fpkg"))
+  }
+
+  test("requireAsset.01: reports a confirmed release missing the named asset, not an ambiguous one") {
+    val project = GitHub.Project("owner", "repo")
+    val version = SemVer(0, 13, 3)
+    val release = GitHub.Release(version, List(GitHub.Asset("other.fpkg", new URI("https://api.github.com/assets/1").toURL)))
+
+    assertResult(expected = Err(PackageError.AssetNotFound(project, version, "flix-json.fpkg")))(
+      actual = GitHub.requireAsset(project, version, release, "flix-json.fpkg")
+    )
   }
 
   test("apiAssetDownloadRequest.01: authenticates an API binary download") {

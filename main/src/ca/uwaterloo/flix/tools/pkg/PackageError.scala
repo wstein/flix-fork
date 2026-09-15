@@ -61,16 +61,30 @@ object PackageError {
   }
 
   /**
-    * A release asset isn't where its address says: either the release doesn't exist, or it exists
-    * without that asset -- a 404 can't say which, so the message names both possibilities.
+    * A release asset isn't where its guessed public address says: either the release doesn't
+    * exist, or it exists without that asset, or it's a private repository -- a 404 on that address
+    * can't distinguish any of these, so the message names all three.
     */
   case class ReleaseAssetNotFound(project: Project, version: SemVer, assetName: String, url: URL)
     extends PackageError {
     override def message(f: Formatter): String =
       s"""Could not find ${f.bold(assetName)} in release ${f.bold(s"v$version")}
          |of ${f.bold(project.toString)}.
-         |Either the release does not exist, or it does not publish that file.
+         |Either the release does not exist, it does not publish that file, or the repository is
+         |private -- private repositories need ${f.bold("--github-token")}.
          |Looked at ${f.cyan(url.toString)}.
+         |""".stripMargin
+  }
+
+  /**
+    * `assetName` is not among the assets of `project`'s `version` release -- unlike
+    * [[ReleaseAssetNotFound]], the release itself was already confirmed to exist via the
+    * authenticated REST API, so there is no ambiguity left to name.
+    */
+  case class AssetNotFound(project: Project, version: SemVer, assetName: String) extends PackageError {
+    override def message(f: Formatter): String =
+      s"""Release ${f.bold(s"v$version")} of ${f.bold(project.toString)} does not publish
+         |${f.bold(assetName)}.
          |""".stripMargin
   }
 

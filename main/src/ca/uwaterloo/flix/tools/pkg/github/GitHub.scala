@@ -336,11 +336,11 @@ object GitHub {
   private[github] def findAsset(release: Release, assetName: String): Option[Asset] =
     release.assets.find(_.name == assetName)
 
-  /** Returns the exactly named asset or a release-asset-not-found error. */
+  /** Returns the exactly named asset, or an error if this already-fetched release lacks it. */
   def requireAsset(project: Project, version: SemVer, release: Release, assetName: String): Result[Asset, PackageError] =
     findAsset(release, assetName) match {
       case Some(asset) => Ok(asset)
-      case None => Err(PackageError.ReleaseAssetNotFound(project, version, assetName, releaseAssetUrl(project, version, assetName)))
+      case None => Err(PackageError.AssetNotFound(project, version, assetName))
     }
 
   /** Classifies an unsuccessful targeted release lookup. */
