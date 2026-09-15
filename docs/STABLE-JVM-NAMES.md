@@ -76,10 +76,24 @@ During these steps, prune the registry at phase boundaries whenever the set of
 symbols needed by later phases shrinks. The registry API implements this lifecycle;
 the phase calls remain part of the pending compiler integration.
 
-Two indistinguishable unnamed sibling expressions need an explicit identity
-policy. A duplicate-only ordinal permits renumbering identical siblings on an
-insertion; stronger persistence needs stored identities or previous-tree matching.
-Do not claim invariance under those edits without resolving this distinction.
+## Identical unnamed siblings
+
+Inserting, deleting, or reordering identical unnamed lambdas may renumber that
+identical sibling group. Distinguishable constructs must retain their identities.
+Persistent identities across edits are not required for identical siblings.
+
+The lexical identity must include the enclosing semantic scope, a canonical
+source-level identity for the construct, and an occurrence ordinal within only
+that identical group. Assign ordinals in deterministic source traversal order,
+before parallel transformations. Do not use a counter shared by all lambdas in
+the scope: inserting a distinguishable lambda must not renumber existing groups.
+The ordinal distinguishes identical sites; absolute source positions are not
+part of the key.
+
+Integration tests must cover both allowed renumbering within an identical group
+and preserved identities for other groups when identical or distinguishable
+siblings are inserted. This policy settles the identity requirement; capture and
+propagation of lexical provenance remain part of compiler integration.
 
 ## Verification
 
