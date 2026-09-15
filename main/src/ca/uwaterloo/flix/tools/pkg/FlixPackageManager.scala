@@ -43,7 +43,7 @@ object FlixPackageManager {
                         manifests: List[Manifest],
                         immediateDependents: Map[Manifest, List[Manifest]],
                         manifestToFlixDeps: ListMap[Manifest, FlixDependency],
-                        authenticatedReleases: Map[(GitHub.Project, SemVer), GitHub.Release] = Map.empty)
+                        authenticatedReleases: Map[(GitHub.Project, SemVer), GitHub.Release])
 
   /**
     * Represents the dependency resolution of [[origin]] where the maximum security level has been computed
@@ -57,7 +57,7 @@ object FlixPackageManager {
   case class SecureResolution(origin: Manifest,
                               security: Map[Manifest, SecurityContext],
                               manifestToFlixDeps: ListMap[Manifest, FlixDependency],
-                              authenticatedReleases: Map[(GitHub.Project, SemVer), GitHub.Release] = Map.empty) {
+                              authenticatedReleases: Map[(GitHub.Project, SemVer), GitHub.Release]) {
     /**
       * All manifests in the resolution.
       */

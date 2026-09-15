@@ -303,11 +303,16 @@ class TestFlixPackageManager extends AnyFunSuite with BeforeAndAfter {
     }
 
     val path = Files.createTempDirectory("")
+    // Version 0.0.1 does not exist for flix/museum. Anonymously, this 404s on the guessed public
+    // address, which can't distinguish a missing release from a missing asset. With a token, the
+    // targeted release lookup checks the version directly and reports which one it is.
     FlixPackageManager.findTransitiveDependencies(manifest, path, PkgTestUtils.gitHubToken).map(FlixPackageManager.resolveSecurityLevels) match {
-      case Err(e: PackageError.ReleaseAssetNotFound) =>
+      case Err(e: PackageError.ReleaseAssetNotFound) if PkgTestUtils.gitHubToken.isEmpty =>
         assertResult(expected = "flix.toml")(actual = e.assetName)
         assertResult(expected = SemVer(0, 0, 1))(actual = e.version)
-      case other => fail(s"expected a missing release asset, got $other")
+      case Err(e: PackageError.VersionDoesNotExist) if PkgTestUtils.gitHubToken.isDefined =>
+        assertResult(expected = SemVer(0, 0, 1))(actual = e.version)
+      case other => fail(s"expected a missing release version or asset, got $other")
     }
   }
 
