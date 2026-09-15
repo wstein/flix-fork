@@ -192,24 +192,6 @@ object GenRegion {
 
   private def noOpIns(implicit mv: MethodVisitor): Unit = RETURN()
 
-  private def runOnExitHandlersIns(index: Int)(implicit mv: MethodVisitor): Unit = {
-    withName(index, JavaClasses.Iterator) { i =>
-      thisLoad()
-      GETFIELD(OnExitField)
-      INVOKEVIRTUAL(ClassConstants.LinkedList.IteratorMethod)
-      i.store()
-      whileLoop(Condition.NE) {
-        i.load()
-        INVOKEINTERFACE(ClassConstants.Iterator.HasNextMethod)
-      } {
-        i.load()
-        INVOKEINTERFACE(ClassConstants.Iterator.NextMethod)
-        CHECKCAST(JavaClasses.Runnable)
-        INVOKEINTERFACE(ClassConstants.Runnable.RunMethod)
-      }
-    }
-  }
-
   // final public void reportChildException(Throwable e) {
   //   childException = e;
   //   regionThread.interrupt();
