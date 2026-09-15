@@ -1,11 +1,14 @@
-For Flix, the best answer is two-tiered:
+# WebAssembly and Java 17 Support for Flix
 
-| Goal | Best solution | Rating |
-|---|---|---:|
-| Browser playground / REPL soon | Run the existing JVM compiler under **CheerpJ** | 4/5 |
-| Small, fast production Flix applications in browsers | Build a **native Flix → WasmGC backend** | 5/5 |
-| Compile Flix JVM bytecode with TeaVM/JWebAssembly | Avoid | 1/5 |
-| Run Wasm inside a JVM | Irrelevant to browser execution | 0/5 |
+Can Flix run in a web browser, and what would it take to get there? For Flix,
+the best answer is two-tiered:
+
+| Goal | Best solution | Rating | Basis |
+|---|---|---:|---|
+| Browser playground / REPL soon | Run the existing JVM compiler under **CheerpJ** | 4/5 | CheerpJ's own documentation (cited below) |
+| Small, fast production Flix applications in browsers | Build a **native Flix → WasmGC backend** | 5/5 | Architectural judgment, not an external citation -- see the case made below |
+| Compile Flix JVM bytecode with TeaVM/JWebAssembly | Avoid | 1/5 | JWebAssembly's own stated limitations (cited below) |
+| Run Wasm inside a JVM | Irrelevant to browser execution | 0/5 | Doesn't address the stated goal |
 
 CheerpJ is the only credible short-term bridge because Flix generates JVM bytecode at runtime and loads it with a custom `ClassLoader`; CheerpJ explicitly supports reflection and dynamic class loading. It can run existing JARs in-browser without source transformation. [CheerpJ overview](https://cheerpj.com/docs/overview.html), [architecture](https://cheerpj.com/docs/explanation/architecture)
 
@@ -16,7 +19,7 @@ compiler option. Nor does setting `--release 17` in the compiler build solve
 that problem: it controls compilation of the compiler's own Java sources, not
 the class files generated for Flix programs.
 
-### Java 17 compatibility implementation
+## Java 17 compatibility implementation
 
 A Java 17 generated-program target is feasible as an experimental feature. It
 is useful for an ahead-of-time pipeline that runs Flix on Java 21 in CI or on a
