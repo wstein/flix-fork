@@ -208,7 +208,7 @@ class TestBootstrap extends AnyFunSuite {
     val afterRename = Bootstrap.bootstrap(renamed, None)(Formatter.getDefault, System.out).unsafeGet
     afterRename.buildPkg()(Formatter.getDefault).unsafeGet
     Files.createDirectories(renamed.resolve("lib"))
-    afterRename.buildFatJar(flix).unsafeGet
+    afterRename.buildFatJar(PkgTestUtils.mkFlix).unsafeGet
 
     val artifactDirectory = renamed.resolve("artifact")
     val packageFile = artifactDirectory.resolve(s"$packageName.fpkg")

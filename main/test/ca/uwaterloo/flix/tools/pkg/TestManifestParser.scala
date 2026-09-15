@@ -721,7 +721,7 @@ class TestManifestParser extends AnyFunSuite {
     val toml = {
       """
         |[package]
-        |name = "hello-world\""
+        |name = "hello-world"
         |description = "A simple program\\\"\""
         |version = "0.1.0"
         |flix = "0.33.0"
