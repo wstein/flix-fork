@@ -174,12 +174,13 @@ Did you know that:
   Today it is possible to build, package, and install Flix packages. Dependency
   management is in the works.
 
-- a project's `[package].name` in `flix.toml` is its stable artifact basename:
+- in project mode, `[package].name` in `flix.toml` is the sole canonical package
+  name. Checkout-directory and GitHub-repository names identify locations, not
+  the package, so renaming either does not rename the package or its artifacts.
   `build-pkg` writes `<name>.fpkg`, while `build-jar` and `build-fatjar` write
-  `<name>.jar`. Renaming a checkout or GitHub repository does not rename these
-  artifacts. Package names must be portable file-name segments of at most 250
-  characters: they begin with a letter or digit and may then contain letters,
-  digits, `.`, `-`, and `_`.
+  `<name>.jar`. The manifest name is strictly validated as a portable file-name
+  segment of at most 250 characters: it begins with a letter or digit and may
+  then contain letters, digits, `.`, `-`, and `_`.
 
 ## Compiler
 
