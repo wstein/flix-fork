@@ -83,7 +83,8 @@ object ManifestParser {
     for (
       _ <- checkKeys(parser, p);
 
-      name <- getRequiredStringProperty("package.name", parser, p);
+      name0 <- getRequiredStringProperty("package.name", parser, p);
+      name <- validatePackageName(name0, p);
 
       description <- getRequiredStringProperty("package.description", parser, p);
 
@@ -485,6 +486,16 @@ object ManifestParser {
       Ok(name)
     else
       Err(ManifestError.IllegalName(p, name))
+  }
+
+  /**
+    * Validates a package name before it is used as an artifact basename.
+    *
+    * Package names are deliberately limited to one portable path segment: build-pkg
+    * and build-jar resolve them below the project's artifact directory.
+    */
+  private def validatePackageName(name: String, p: Path): Result[String, ManifestError] = {
+    if (PackageName.isValid(name)) Ok(name) else Err(ManifestError.IllegalPackageName(p, name))
   }
 
   /**

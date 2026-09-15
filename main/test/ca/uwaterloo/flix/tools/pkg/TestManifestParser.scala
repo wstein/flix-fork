@@ -64,6 +64,50 @@ class TestManifestParser extends AnyFunSuite {
     })
   }
 
+  test("ManifestError.IllegalPackageName.01") {
+    val toml = tomlCorrect.replace("name = \"hello-world\"", "name = \"../outside\"")
+    expectError[ManifestError.IllegalPackageName](ManifestParser.parse(toml, null))
+  }
+
+  test("ManifestError.IllegalPackageName.02") {
+    val toml = tomlCorrect.replace("name = \"hello-world\"", "name = \"CON\"")
+    expectError[ManifestError.IllegalPackageName](ManifestParser.parse(toml, null))
+  }
+
+  test("ManifestError.IllegalPackageName.03") {
+    val toml = tomlCorrect.replace("name = \"hello-world\"", "name = \"CLOCK$\"")
+    expectError[ManifestError.IllegalPackageName](ManifestParser.parse(toml, null))
+  }
+
+  test("ManifestError.IllegalPackageName.04") {
+    val toml = tomlCorrect.replace("name = \"hello-world\"", "name = \"hello.\"")
+    expectError[ManifestError.IllegalPackageName](ManifestParser.parse(toml, null))
+  }
+
+  test("ManifestError.IllegalPackageName.05") {
+    val longName = "a" * 251
+    val toml = tomlCorrect.replace("name = \"hello-world\"", s"name = \"$longName\"")
+    expectError[ManifestError.IllegalPackageName](ManifestParser.parse(toml, null))
+  }
+
+  test("Ok.packageNameAtMaximumLength") {
+    val maxName = "a" * 250
+    val toml = tomlCorrect.replace("name = \"hello-world\"", s"name = \"$maxName\"")
+    assert(ManifestParser.parse(toml, null).unsafeGet.name == maxName)
+  }
+
+  test("PackageName.normalize reserves space for a Windows device suffix") {
+    val name = PackageName.normalize("con." + ("a" * 246))
+    assert(PackageName.isValid(name))
+    assert(name.length == PackageName.MaxLength)
+    assert(name.startsWith("con-package."))
+  }
+
+  test("Ok.packageNameWithPortablePunctuation") {
+    val toml = tomlCorrect.replace("name = \"hello-world\"", "name = \"hello.world_2\"")
+    assert(ManifestParser.parse(toml, null).unsafeGet.name == "hello.world_2")
+  }
+
   test("Ok.description") {
     assertResult(expected = "A simple program")(actual = {
       ManifestParser.parse(tomlCorrect, null) match {
@@ -684,7 +728,7 @@ class TestManifestParser extends AnyFunSuite {
     val toml = {
       """
         |[package]
-        |name = "hello-world\""
+        |name = "hello-world"
         |description = "A simple program\\\"\""
         |version = "0.1.0"
         |flix = "0.33.0"

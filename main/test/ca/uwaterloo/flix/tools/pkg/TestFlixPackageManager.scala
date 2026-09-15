@@ -4,13 +4,15 @@ import ca.uwaterloo.flix.language.CompilationMessage
 import ca.uwaterloo.flix.language.ast.TypedAst
 import ca.uwaterloo.flix.language.ast.shared.SecurityContext
 import ca.uwaterloo.flix.language.errors.SafetyError
-import ca.uwaterloo.flix.tools.pkg.github.GitHub.Project
-import ca.uwaterloo.flix.util.Formatter
+import ca.uwaterloo.flix.tools.pkg.github.GitHub.{Asset, Project, Release}
+import ca.uwaterloo.flix.util.{Formatter, Result}
 import ca.uwaterloo.flix.util.Result.{Err, Ok}
+import ca.uwaterloo.flix.util.collection.ListMap
 import org.scalatest.{BeforeAndAfter, DoNotDiscover}
 import org.scalatest.funsuite.AnyFunSuite
 
 import java.io.{File, PrintStream}
+import java.net.URI
 import java.nio.file.{Files, Path}
 
 @DoNotDiscover
@@ -163,7 +165,7 @@ class TestFlixPackageManager extends AnyFunSuite with BeforeAndAfter {
         case Ok(res) => res
         case Err(e) => fail(e.message(formatter))
       }
-      val resolution = FlixPackageManager.SecureResolution(origin = manifest1, security = resolution1.security ++ resolution2.security, manifestToFlixDeps = resolution1.manifestToFlixDeps ++ resolution2.manifestToFlixDeps)
+      val resolution = FlixPackageManager.SecureResolution(origin = manifest1, security = resolution1.security ++ resolution2.security, manifestToFlixDeps = resolution1.manifestToFlixDeps ++ resolution2.manifestToFlixDeps, authenticatedReleases = resolution1.authenticatedReleases ++ resolution2.authenticatedReleases)
 
 
       FlixPackageManager.installAll(resolution, path, PkgTestUtils.gitHubToken) match {
@@ -277,36 +279,41 @@ class TestFlixPackageManager extends AnyFunSuite with BeforeAndAfter {
     }
   }
 
-  test("Give error for missing version") {
-    assertResult(expected = PackageError.VersionDoesNotExist(SemVer(0, 0, 1), Project("flix", "museum")).message(formatter))(actual = {
-      val toml = {
-        """
-          |[package]
-          |name = "test"
-          |description = "test"
-          |version = "0.0.0"
-          |flix = "0.0.0"
-          |authors = ["Anna Blume"]
-          |
-          |[dependencies]
-          |"github:flix/museum" = "0.0.1"
-          |
-          |[mvn-dependencies]
-          |
-          |""".stripMargin
-      }
+  test("Give error for missing release asset") {
+    val toml = {
+      """
+        |[package]
+        |name = "test"
+        |description = "test"
+        |version = "0.0.0"
+        |flix = "0.0.0"
+        |authors = ["Anna Blume"]
+        |
+        |[dependencies]
+        |"github:flix/museum" = "0.0.1"
+        |
+        |[mvn-dependencies]
+        |
+        |""".stripMargin
+    }
 
-      val manifest = ManifestParser.parse(toml, null) match {
-        case Ok(m) => m
-        case Err(e) => fail(e.message(formatter))
-      }
+    val manifest = ManifestParser.parse(toml, null) match {
+      case Ok(m) => m
+      case Err(e) => fail(e.message(formatter))
+    }
 
-      val path = Files.createTempDirectory("")
-      FlixPackageManager.findTransitiveDependencies(manifest, path, PkgTestUtils.gitHubToken).map(FlixPackageManager.resolveSecurityLevels) match {
-        case Ok(res) => res
-        case Err(e) => e.message(formatter)
-      }
-    })
+    val path = Files.createTempDirectory("")
+    // Version 0.0.1 does not exist for flix/museum. Anonymously, this 404s on the guessed public
+    // address, which can't distinguish a missing release from a missing asset. With a token, the
+    // targeted release lookup checks the version directly and reports which one it is.
+    FlixPackageManager.findTransitiveDependencies(manifest, path, PkgTestUtils.gitHubToken).map(FlixPackageManager.resolveSecurityLevels) match {
+      case Err(e: PackageError.ReleaseAssetNotFound) if PkgTestUtils.gitHubToken.isEmpty =>
+        assertResult(expected = "flix.toml")(actual = e.assetName)
+        assertResult(expected = SemVer(0, 0, 1))(actual = e.version)
+      case Err(e: PackageError.VersionDoesNotExist) if PkgTestUtils.gitHubToken.isDefined =>
+        assertResult(expected = SemVer(0, 0, 1))(actual = e.version)
+      case other => fail(s"expected a missing release version or asset, got $other")
+    }
   }
 
   test("Install transitive dependency") {
@@ -703,6 +710,43 @@ class TestFlixPackageManager extends AnyFunSuite with BeforeAndAfter {
       case _ => false
     }
     (forbidden, CompilationMessage.formatAll(errors)(flix.getFormatter, optRoot))
+  }
+
+  /** A version used by package manager tests. */
+  private val StubVersion: SemVer = SemVer(1, 1, 0)
+
+  test("resolveSecurityLevels.01: authenticated release metadata is retained for installation") {
+    val origin = Manifest("origin", "", StubVersion, None, PackageModules.All, StubVersion, None, Nil, Nil)
+    val dependency = Manifest("flix-json", "", StubVersion, None, PackageModules.All, StubVersion, None, Nil, Nil)
+    val flixDependency = Dependency.FlixDependency(Repository.GitHub, "mlutze", "flix-json", StubVersion, SecurityContext.Unrestricted)
+    val release = Release(StubVersion, List(Asset("flix-json.fpkg", new URI("https://api.github.com/assets/1").toURL)))
+    val resolution = FlixPackageManager.Resolution(
+      origin,
+      List(origin, dependency),
+      Map(origin -> Nil, dependency -> List(origin)),
+      ListMap(Map(dependency -> List(flixDependency))),
+      Map((Project("mlutze", "flix-json"), StubVersion) -> release)
+    )
+
+    val secureResolution = FlixPackageManager.resolveSecurityLevels(resolution)
+
+    assertResult(expected = Some(release))(actual = secureResolution.authenticatedReleases.get((Project("mlutze", "flix-json"), StubVersion)))
+  }
+
+  test("parseManifest.01: dependency package names are validated") {
+    val toml = PkgTestUtils.mkTomlWithDeps("").replace("name = \"test\"", "name = \"../outside\"")
+    val path = Files.writeString(Files.createTempFile("flix-manifest", ".toml"), toml)
+
+    FlixPackageManager.parseManifest(path) match {
+      case Err(PackageError.ManifestParseError(_: ManifestError.IllegalPackageName)) => succeed
+      case Err(error) => fail(s"expected IllegalPackageName, got: ${error.message(formatter)}")
+      case Ok(_) => fail("expected IllegalPackageName, got success")
+    }
+  }
+
+  test("fpkgAssetName.01: the package uses the name declared by its manifest") {
+    val manifest = Manifest("museum-renamed", "", StubVersion, None, PackageModules.All, StubVersion, None, Nil, Nil)
+    assertResult(expected = "museum-renamed.fpkg")(actual = FlixPackageManager.fpkgAssetName(manifest))
   }
 
 }

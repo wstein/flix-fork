@@ -174,6 +174,25 @@ Did you know that:
   Today it is possible to build, package, and install Flix packages. Dependency
   management is in the works.
 
+- in project mode, `[package].name` in `flix.toml` is the sole canonical package
+  name. Checkout-directory and GitHub-repository names identify locations, not
+  the package, so renaming either does not rename the package or its artifacts.
+  `build-pkg` writes `<name>.fpkg`, while `build-jar` and `build-fatjar` write
+  `<name>.jar`. The manifest name is strictly validated as a portable file-name
+  segment of at most 250 characters: it begins with a letter or digit and may
+  then contain letters, digits, `.`, `-`, and `_`.
+
+- installing a public GitHub dependency downloads `flix.toml` directly from the
+  requested release, then directly downloads the exact `<package.name>.fpkg`
+  asset named by that manifest. Anonymous installation does not query the
+  GitHub API or try repository-name and release-listing fallbacks.
+
+- installing dependencies from public GitHub repositories does not require an
+  access token. When `--github-token` is provided, Flix makes one targeted
+  release-by-tag API lookup per dependency and reuses its metadata to download
+  both `flix.toml` and `<package.name>.fpkg` through GitHub's asset API. It never
+  lists the repository's full release history during installation.
+
 ## Compiler
 
 Did you know that:

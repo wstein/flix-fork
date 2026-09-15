@@ -196,3 +196,52 @@ object Manifest {
   }
 
 }
+
+/**
+  * Utilities for the portable artifact basename represented by `package.name`.
+  */
+object PackageName {
+  /** The portable 255-character component limit less the `.fpkg` extension. */
+  val MaxLength: Int = 250
+
+  private val DeviceSuffix = "-package"
+
+  /** Returns `true` if `name` is valid as a portable package artifact basename. */
+  def isValid(name: String): Boolean =
+    name.matches("[a-zA-Z0-9][a-zA-Z0-9._-]*") &&
+      name.length <= MaxLength &&
+      !name.endsWith(".") &&
+      !isWindowsDeviceName(name)
+
+  /**
+    * Derives a valid package artifact basename from an arbitrary directory name.
+    *
+    * Invalid characters become hyphens. Windows device names receive a suffix before any extension,
+    * reserving room for that suffix before the result is truncated.
+    */
+  def normalize(rawName: String): String = {
+    val portable = rawName.map {
+      case c if c <= 0x7f && (c.isLetterOrDigit || c == '.' || c == '-' || c == '_') => c
+      case _ => '-'
+    }.dropWhile(c => !c.isLetterOrDigit)
+    val fallback = if (portable.isEmpty) "package" else portable
+    val limit = if (isWindowsDeviceName(fallback)) MaxLength - DeviceSuffix.length else MaxLength
+    val truncated = fallback.take(limit).reverse.dropWhile(_ == '.').reverse
+    val name = if (truncated.isEmpty) "package" else truncated
+    if (isWindowsDeviceName(name)) insertDeviceSuffix(name) else name
+  }
+
+  /** Returns `true` if `name` is a Windows reserved device name, with an optional extension. */
+  private def isWindowsDeviceName(name: String): Boolean = {
+    val baseName = name.takeWhile(_ != '.').toLowerCase(java.util.Locale.ROOT)
+    baseName == "con" || baseName == "prn" || baseName == "aux" || baseName == "nul" || baseName == "clock$" ||
+      baseName.matches("com[1-9]") || baseName.matches("lpt[1-9]")
+  }
+
+  /** Inserts the suffix before an optional extension so the device basename is no longer reserved. */
+  private def insertDeviceSuffix(name: String): String = {
+    val dot = name.indexOf('.')
+    if (dot < 0) s"$name$DeviceSuffix"
+    else s"${name.substring(0, dot)}$DeviceSuffix${name.substring(dot)}"
+  }
+}
