@@ -1532,22 +1532,29 @@ private[monomorph2] object SpecializeAndLower {
     * Returns a desugared [[TypedAst.Expr.ParYield]] expression as a nested match-expression.
     */
   private def mkParYield(frags: List[(MonoAst.Pattern, MonoAst.Expr, Type, SourceLocation)], exp: MonoAst.Expr, tpe: Type, eff: Type, loc: SourceLocation)(implicit tables: SpecializationTables, root: TypedAst.Root, flix: Flix): MonoAst.Expr = {
-    // Only generate channels for n-1 fragments. We use the current thread for the last fragment.
-    val fs = frags.init
-    val last = frags.last
+    val blockExp = if (flix.options.isSingleThreaded) {
+      // Evaluating the fragments one after another is one of the schedules the parallel form
+      // allows, so a program compiled as single-threaded takes it and needs no channel and no
+      // thread. The fragments are pure, which is what makes their order immaterial.
+      frags.foldRight(exp) { case ((p, e, _, _), acc) => mkLetMatch(p, e, acc) }
+    } else {
+      // Only generate channels for n-1 fragments. We use the current thread for the last fragment.
+      val fs = frags.init
+      val last = frags.last
 
-    // Generate symbols for each channel.
-    val chanSymsWithPatAndExp = fs.map { case (p, e, rawTpe, l) => (p, mkLetSym("channel", l.asSynthetic), e, rawTpe) }
+      // Generate symbols for each channel.
+      val chanSymsWithPatAndExp = fs.map { case (p, e, rawTpe, l) => (p, mkLetSym("channel", l.asSynthetic), e, rawTpe) }
 
-    // Make `GetChannel` exps for the spawnable exps.
-    val waitExps = mkBoundParWaits(chanSymsWithPatAndExp, exp)
+      // Make `GetChannel` exps for the spawnable exps.
+      val waitExps = mkBoundParWaits(chanSymsWithPatAndExp, exp)
 
-    // Evaluate the last expression in the current thread (so just make let-binding)
-    val desugaredYieldExp = mkLetMatch(last._1, last._2, waitExps)
+      // Evaluate the last expression in the current thread (so just make let-binding)
+      val desugaredYieldExp = mkLetMatch(last._1, last._2, waitExps)
 
-    // Generate channels and spawn exps.
-    val chanSymsWithExp = chanSymsWithPatAndExp.map { case (_, s, e, rawTpe) => (s, e, rawTpe) }
-    val blockExp = mkParChannels(desugaredYieldExp, chanSymsWithExp)
+      // Generate channels and spawn exps.
+      val chanSymsWithExp = chanSymsWithPatAndExp.map { case (_, s, e, rawTpe) => (s, e, rawTpe) }
+      mkParChannels(desugaredYieldExp, chanSymsWithExp)
+    }
 
     // Wrap everything in a purity cast.
     MonoAst.Expr.Cast(blockExp, lowerType(tpe), eff, loc.asSynthetic)
