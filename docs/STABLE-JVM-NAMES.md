@@ -43,6 +43,17 @@ The encoder is not a Boolean solver. Callers must normalize other algebraic
 equivalences and resolve associated types before comparing keys across those
 reductions. Unbound variables, erroneous types, and missing origins fail closed.
 
+## Declaration origins
+
+`JvmDeclarationOrigins.capture` records declarations from the typed AST, while
+instance ownership and generic parameters are still available. Instance and
+derived members use the trait, canonical instance head, and member name; defaults
+use a separate implementation family. Definition bodies do not participate in
+declaration identity. Capture does not change internal symbols or their counters.
+
+Tests check unrelated declarations, body edits, instance reordering, generic
+parameter renaming, default implementations, and derived standard-library members.
+
 ## Registry lifecycle
 
 Create one `JvmProvenance` per code-generation invocation, including recompiles
