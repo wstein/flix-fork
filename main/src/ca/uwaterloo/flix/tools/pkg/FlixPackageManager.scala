@@ -339,7 +339,7 @@ object FlixPackageManager {
     * Parses the toml file at `path` into a Manifest,
     * and converts any error to a PackageError.
     */
-  private def parseManifest(path: Path): Result[Manifest, PackageError] = {
+  private[pkg] def parseManifest(path: Path): Result[Manifest, PackageError] = {
     ManifestParser.parse(path) match {
       case Ok(t) => Ok(t)
       case Err(e) => Err(PackageError.ManifestParseError(e))

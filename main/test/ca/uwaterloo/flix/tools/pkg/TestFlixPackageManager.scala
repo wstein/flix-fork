@@ -708,6 +708,17 @@ class TestFlixPackageManager extends AnyFunSuite with BeforeAndAfter {
   /** A version used by package manager tests. */
   private val StubVersion: SemVer = SemVer(1, 1, 0)
 
+  test("parseManifest.01: dependency package names are validated") {
+    val toml = PkgTestUtils.mkTomlWithDeps("").replace("name = \"test\"", "name = \"../outside\"")
+    val path = Files.writeString(Files.createTempFile("flix-manifest", ".toml"), toml)
+
+    FlixPackageManager.parseManifest(path) match {
+      case Err(PackageError.ManifestParseError(_: ManifestError.IllegalPackageName)) => succeed
+      case Err(error) => fail(s"expected IllegalPackageName, got: ${error.message(formatter)}")
+      case Ok(_) => fail("expected IllegalPackageName, got success")
+    }
+  }
+
   test("fpkgAssetName.01: the package uses the name declared by its manifest") {
     val manifest = Manifest("museum-renamed", "", StubVersion, None, PackageModules.All, StubVersion, None, Nil, Nil)
     assertResult(expected = "museum-renamed.fpkg")(actual = FlixPackageManager.fpkgAssetName(manifest))
