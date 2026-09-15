@@ -710,7 +710,7 @@ object Main {
         text("specifies the main entry point.")
 
       opt[String]("github-token").action((s, c) => c.copy(githubToken = Some(s))).
-        text("API key to use for GitHub dependency resolution.")
+        text("token to use for authenticated GitHub requests.")
 
       help("help").text("prints this usage information.")
 
