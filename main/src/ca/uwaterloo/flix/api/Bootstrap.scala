@@ -88,7 +88,7 @@ object Bootstrap {
 
     FileOps.newFileIfAbsent(manifestFile) {
       s"""[package]
-         |name        = "$packageName"
+         |name        = "$packageName" # Stable package and artifact name.
          |description = "test"
          |version     = "0.1.0"
          |flix        = "${Version.CurrentVersion}"
