@@ -165,9 +165,10 @@ object Inliner {
               sctx.changed.putIfAbsent(sym0, ())
               visitExp(exp, ctx0.withSubst(subst).copy(cloneContext = defCloneContext))
 
-            case Some(SubstRange.DoneExpr(exp, defCloneContext)) =>
+            case Some(SubstRange.DoneExpr(exp, _)) =>
+              // Copy-propagation of visited expr.
               sctx.changed.putIfAbsent(sym0, ())
-              visitExp(exp, ctx0.withSubst(Map.empty).copy(cloneContext = defCloneContext))
+              visitExp(exp, ctx0.withSubst(Map.empty).atClone(exp0, exp, "copyPropagation"))
 
             case None =>
               // It was not unconditionally inlined, so consider inlining at this occurrence site

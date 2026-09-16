@@ -535,7 +535,8 @@ object OccurrenceAnalyzer {
 
     /** Returns a new [[ExprContext]] with the mapping `sym -> occur` added to [[vars]]. */
     def addVar(sym: VarSym, occur: Occur): ExprContext = {
-      this.copy(vars = this.vars + (sym -> occur))
+      val newOccur = combineSeq(this.vars.getOrElse(sym, Occur.Dead), occur)
+      this.copy(vars = this.vars + (sym -> newOccur))
     }
 
     /** Returns a new [[ExprContext]] with `sym` and the corresponding value removed from [[vars]]. */
