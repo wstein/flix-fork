@@ -163,6 +163,32 @@ class TestJvmProvenancePipeline extends AnyFunSuite {
       assert(first.descriptors.filter(_.startsWith("LStruct$")) == edited.descriptors.filter(_.startsWith("LStruct$")))
     }
 
+    test(s"monomorphizer $newMono preserves emitted definition names when trailing expressions change") {
+      val source =
+        """@DontInline
+          |def applyFn(f: Int32 -> Int32, x: Int32): Int32 = f(x)
+          |
+          |pub def demo(): Int32 = {
+          |  let a = applyFn(x -> x + 1, 10);
+          |  let b = applyFn(x -> x + 2, 20);
+          |  a + b
+          |}
+          |""".stripMargin
+      val edited =
+        """@DontInline
+          |def applyFn(f: Int32 -> Int32, x: Int32): Int32 = f(x)
+          |
+          |pub def demo(): Int32 = {
+          |  let a = applyFn(x -> x + 1, 10);
+          |  let b = applyFn(x -> x + 2, 20);
+          |  a + b + 100
+          |}
+          |""".stripMargin
+      val first = emitted(source, newMono, 1)
+      val second = emitted(edited, newMono, 4)
+      assertPreserved(first, second)
+    }
+
     test(s"monomorphizer $newMono preserves emitted nullary and anonymous classes across edits and parallel builds") {
       val imports = "import java.util.function.IntSupplier\nimport java.util.ArrayList\n"
       val source = """enum Box[a] { case Empty, case Box(a) }
