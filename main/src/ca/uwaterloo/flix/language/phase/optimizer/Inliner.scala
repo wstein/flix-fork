@@ -161,11 +161,15 @@ object Inliner {
         case Some(freshVarSym) =>
           // Check for unconditional inlining / copy-propagation
           ctx0.subst.get(freshVarSym) match {
-            case Some(SubstRange.SuspendedExpr(exp, subst, defCloneContext)) =>
+            case Some(SubstRange.SuspendedExpr(exp, definitionContext)) =>
               sctx.changed.putIfAbsent(sym0, ())
-              visitExp(exp, ctx0.withSubst(subst).copy(cloneContext = defCloneContext))
+              val materializationContext = definitionContext.cloneContext match {
+                case None => definitionContext
+                case Some(_) => definitionContext.copy(cloneContext = ctx0.atClone(exp0, exp, "suspended").cloneContext)
+              }
+              visitExp(exp, materializationContext)
 
-            case Some(SubstRange.DoneExpr(exp, _)) =>
+            case Some(SubstRange.DoneExpr(exp)) =>
               // Copy-propagation of visited expr.
               sctx.changed.putIfAbsent(sym0, ())
               visitExp(exp, ctx0.withSubst(Map.empty).atClone(exp0, exp, "copyPropagation"))
@@ -197,7 +201,7 @@ object Inliner {
       visitExp(exp1, ctx0) match {
         case Expr.Lambda(fparam, e1, _, _) =>
           sctx.changed.putIfAbsent(sym0, ())
-          inlineAndBindArgs(exp0, List(fparam), List(exp2), e1, ctx0, "beta", loc)
+          inlineAndBindArgs(exp0, List(fparam), List(exp2), e1, ctx0, ctx0, "beta", loc)
 
         case e1 =>
           val e2 = visitExp(exp2, ctx0)
@@ -209,7 +213,7 @@ object Inliner {
       if (shouldInlineDef(defn, exps, ctx0)) {
         sctx.changed.putIfAbsent(sym0, ())
         flix.emitEvent(FlixEvent.InlinedDef(sym))
-        inlineAndBindArgs(exp0, defn.spec.fparams.toList, exps, defn.exp, ctx0, "definition", loc)
+        inlineAndBindArgs(exp0, defn.spec.fparams.toList, exps, defn.exp, ctx0, ctx0.withSubst(Map.empty), "definition", loc)
       } else {
         sctx.live.putIfAbsent(sym, ())
         val es = exps.map(visitExp(_, ctx0))
@@ -221,8 +225,8 @@ object Inliner {
       val sym1 = ctx0.varSubst.getOrElse(sym, sym)
       // Check if it was unconditionally inlined
       ctx0.subst.get(sym1) match {
-        case Some(SubstRange.SuspendedExpr(Expr.LocalDef(_, fparams, exp, _, _, _, _, _), subst, defCloneContext)) =>
-          inlineAndBindArgs(exp0, fparams.toList, exps, exp, ctx0.withSubst(subst).copy(cloneContext = defCloneContext), "localDef", loc)
+        case Some(SubstRange.SuspendedExpr(Expr.LocalDef(_, fparams, exp, _, _, _, _, _), defnCtx)) =>
+          inlineAndBindArgs(exp0, fparams.toList, exps, exp, ctx0, defnCtx, "localDef", loc)
 
         case None | Some(_) =>
           // It was not unconditionally inlined, so return same expr with visited subexpressions
@@ -251,7 +255,7 @@ object Inliner {
         // Unconditionally inline
         sctx.changed.putIfAbsent(sym0, ())
         val freshVarSym = Symbol.freshVarSym(sym)
-        val ctx = ctx0.addVarSubst(sym, freshVarSym).addSubst(freshVarSym, SubstRange.SuspendedExpr(exp1, ctx0.subst, ctx0.cloneContext))
+        val ctx = ctx0.addVarSubst(sym, freshVarSym).addSubst(freshVarSym, SubstRange.SuspendedExpr(exp1, ctx0))
         visitExp(exp2, ctx)
 
       case _ =>
@@ -261,7 +265,7 @@ object Inliner {
           // Do copy propagation and drop let-binding
           sctx.changed.putIfAbsent(sym0, ())
           val freshVarSym = Symbol.freshVarSym(sym)
-          val ctx = ctx0.addVarSubst(sym, freshVarSym).addSubst(freshVarSym, SubstRange.DoneExpr(e1, ctx0.cloneContext))
+          val ctx = ctx0.addVarSubst(sym, freshVarSym).addSubst(freshVarSym, SubstRange.DoneExpr(e1))
           visitExp(exp2, ctx)
         } else {
           // Keep let-binding, add binding freshVarSym -> e1 to the set of in-scope
@@ -286,7 +290,7 @@ object Inliner {
         val freshVarSym = Symbol.freshVarSym(sym)
         val exp = flix.jvmOrigins.transfer(exp0, Expr.LocalDef(freshVarSym, fparams, exp1, exp2, tpe, eff, occur, loc), "Inliner.suspendedLocalDef")
         val ctx = ctx0.addVarSubst(sym, freshVarSym)
-          .addSubst(freshVarSym, SubstRange.SuspendedExpr(exp, ctx0.subst, ctx0.cloneContext))
+          .addSubst(freshVarSym, SubstRange.SuspendedExpr(exp, ctx0))
         visitExp(exp2, ctx)
 
       case _ =>
@@ -744,11 +748,9 @@ object Inliner {
   }
 
   /**
-    * Performs beta-reduction, binding `exps` as let-bindings.
-    *
-    * The caller must visit the returned expression.
-    *
-    * [[bindArgs]] creates a series of let-bindings
+    * Visits arguments in their call-site context and the body in its definition
+    * context. Performs beta-reduction, retaining arguments that cannot be
+    * substituted as let-bindings around the visited body:
     * {{{
     *   let sym1 = exp1;
     *   // ...
@@ -763,11 +765,12 @@ object Inliner {
       fparams: List[FormalParam],
       exps: List[Expr],
       body: Expr,
-      callerCtx: LocalContext,
+      callSiteCtx: LocalContext,
+      calleeDefnCtx: LocalContext,
       role: String,
       loc: SourceLocation
   )(implicit sym0: Symbol.DefnSym, sctx: SharedContext, root: MonoAst.Root, flix: Flix): Expr = {
-    val calleeCloneContext = callerCtx.atClone(exp0, body, role).cloneContext
+    val calleeCloneContext = callSiteCtx.atClone(exp0, body, role).cloneContext
 
     var calleeVarSubst = Map.empty[Symbol.VarSym, Symbol.VarSym]
     var calleeSubst = Map.empty[Symbol.VarSym, SubstRange]
@@ -784,24 +787,24 @@ object Inliner {
           // Dead and pure: drop argument
 
         case (Occur.Dead, _) =>
-          // Dead but impure: visit in caller context and keep as statement
-          val visitedArg = visitExp(arg, callerCtx)
+          // Dead but impure: visit in callSiteCtx and keep as statement
+          val visitedArg = visitExp(arg, callSiteCtx)
           remainingStms = remainingStms :+ visitedArg
 
         case (Occur.Once, Type.Pure) =>
-          // Occurs once and pure: unconditionally inline with caller context
+          // Occurs once and pure: unconditionally inline with callSiteCtx
           calleeSubst = calleeSubst.updated(
             freshParamSym,
-            SubstRange.SuspendedExpr(arg, callerCtx.subst, callerCtx.cloneContext)
+            SubstRange.SuspendedExpr(arg, callSiteCtx)
           )
 
         case _ =>
-          val visitedArg = visitExp(arg, callerCtx)
+          val visitedArg = visitExp(arg, callSiteCtx)
           if (isSimple(visitedArg) && visitedArg.eff == Type.Pure) {
-            // Simple and pure: copy propagate with caller context
+            // Simple and pure: copy propagate with callSiteCtx
             calleeSubst = calleeSubst.updated(
               freshParamSym,
-              SubstRange.DoneExpr(visitedArg, callerCtx.cloneContext)
+              SubstRange.DoneExpr(visitedArg)
             )
           } else {
             // Cannot inline argument into body: bind in outer let
@@ -815,9 +818,9 @@ object Inliner {
     }
 
     val calleeCtx = LocalContext(
-      varSubst = callerCtx.varSubst ++ calleeVarSubst,
-      subst = calleeSubst,
-      inScopeVars = callerCtx.inScopeVars ++ calleeInScopeVars,
+      varSubst = calleeDefnCtx.varSubst ++ calleeVarSubst,
+      subst = calleeDefnCtx.subst ++ calleeSubst,
+      inScopeVars = calleeDefnCtx.inScopeVars ++ calleeInScopeVars,
       currentlyInlining = true,
       cloneContext = calleeCloneContext
     )
@@ -892,8 +895,8 @@ object Inliner {
     case Expr.Var(sym, _, _) =>
       val sym1 = ctx0.varSubst.getOrElse(sym, sym)
       ctx0.subst.get(sym1).exists {
-        case SubstRange.SuspendedExpr(e, _, _) => isLambda(e, ctx0)
-        case SubstRange.DoneExpr(e, _) => isLambda(e, ctx0)
+        case SubstRange.SuspendedExpr(exp, definitionContext) => isLambda(exp, definitionContext)
+        case SubstRange.DoneExpr(exp) => isLambda(exp, ctx0)
       }
     case _ => false
   }
@@ -1045,14 +1048,17 @@ object Inliner {
 
     /**
       * An expression that will be inlined but is not yet visited.
-      * We must capture the substitution from its definition site to ensure
-      * we substitute the variables the inliner may have previously decided
-      * to inline.
+      * Captures the immutable definition-site context, including variable bindings,
+      * provenance, and whether evaluation belongs to an inline expansion. Forcing a
+      * caller argument must not inherit the callee's bindings or expansion guard.
+      * Original expressions retain their identity when moved to their sole use;
+      * expressions suspended during cloning acquire a destination-specific identity
+      * when materialized.
       */
-    case class SuspendedExpr(exp: MonoAst.Expr, subst: Map[Symbol.VarSym, SubstRange], cloneContext: Option[GeneratedJvmKey]) extends SubstRange
+    case class SuspendedExpr(exp: MonoAst.Expr, context: LocalContext) extends SubstRange
 
     /** An expression that will be inlined but has already been visited. */
-    case class DoneExpr(exp: MonoAst.Expr, cloneContext: Option[GeneratedJvmKey]) extends SubstRange
+    case class DoneExpr(exp: MonoAst.Expr) extends SubstRange
 
   }
 
@@ -1143,11 +1149,6 @@ object Inliner {
     /** Returns a [[LocalContext]] with the mappings of `mappings` added to [[inScopeVars]]. */
     def addInScopeVars(xs: Iterable[(Symbol.VarSym, BoundKind)]): LocalContext = {
       this.copy(inScopeVars = this.inScopeVars ++ xs)
-    }
-
-    /** Returns a [[LocalContext]] where [[currentlyInlining]] is set to `true`. */
-    def enableInliningMode: LocalContext = {
-      this.copy(currentlyInlining = true)
     }
 
   }

@@ -13,9 +13,10 @@ import scala.collection.concurrent.TrieMap
 class TestJvmProvenancePipeline extends AnyFunSuite {
   private case class Emission(suffixes: Map[String, Set[String]], descriptors: Set[String])
 
-  private def emitted(source: String, newMono: Boolean, threads: Int, checkRuntime: Boolean = false): Emission = {
+  private def emitted(source: String, newMono: Boolean, threads: Int, checkRuntime: Boolean = false, fullLibrary: Boolean = false): Emission = {
     implicit val security: SecurityContext = SecurityContext.Unrestricted
-    val flix = new Flix().setOptions(Options.TestWithLibMin.copy(xnewmono = newMono, threads = threads))
+    val options = if (fullLibrary) Options.TestWithLibAll else Options.TestWithLibMin
+    val flix = new Flix().setOptions(options.copy(xnewmono = newMono, threads = threads))
     val entries = TrieMap.empty[Symbol.DefnSym, String]
     flix.addListener(new FlixListener {
       override def notify(event: FlixEvent): Unit = event match {
@@ -69,6 +70,65 @@ class TestJvmProvenancePipeline extends AnyFunSuite {
                           |""".stripMargin
 
   for (newMono <- List(false, true)) {
+    test(s"monomorphizer $newMono distinguishes lazy flatMap closure copies") {
+      val source = """use DelayList.{ENil, ECons, LCons, LList}
+                     |@Test
+                     |pub def flatMapPure(): Unit \ Assert =
+                     |  Assert.assertEq(expected = ECons(1, ECons(2, ECons(2, ECons(3, ECons(3, ECons(3, ENil)))))), DelayList.flatMap(value -> DelayList.repeat(value) |> DelayList.take(value), ECons(1, LList(lazy LCons(2, lazy LList(lazy ECons(3, LList(lazy ENil))))))))
+                     |""".stripMargin
+      assert(emitted(source, newMono, 1, checkRuntime = true, fullLibrary = true) ==
+        emitted(source, newMono, 4, checkRuntime = true, fullLibrary = true))
+    }
+
+    test(s"monomorphizer $newMono preserves vector pipeline names when adding a list specialization") {
+      val source = """pub def repeatedStdlibDemo(): Int32 = {
+                     |  let integers = List.map(value -> value + 1, 1 :: 2 :: 3 :: Nil) |> List.length;
+                     |  let longs = List.map(value -> value + 1i64, 1i64 :: 2i64 :: Nil) |> List.length;
+                     |  let strings = List.map(value -> "${value}!", "p" :: "q" :: Nil) |> List.length;
+                     |  let booleans = List.map(value -> not value, true :: false :: Nil) |> List.length;
+                     |  let doubles = List.map(value -> value * 2.0f64, 1.0f64 :: 2.0f64 :: Nil) |> List.length;
+                     |  let filteredIntegers = List.filter(value -> value > 1, 1 :: 2 :: 3 :: Nil) |> List.length;
+                     |  let filteredStrings = List.filter(value -> String.length(value) > 1, "y" :: "zz" :: Nil) |> List.length;
+                     |  let vectorIntegers = Vector.map(value -> value + 1, Vector#{1, 2, 3}) |> Vector.length;
+                     |  let vectorStrings = Vector.map(value -> "${value}", Vector#{'a', 'b'}) |> Vector.length;
+                     |  integers + longs + strings + booleans + doubles + filteredIntegers + filteredStrings + vectorIntegers + vectorStrings
+                     |}
+                     |@Test
+                     |pub def pipelineResult(): Unit =
+                     |  if (repeatedStdlibDemo() == 19) () else bug!("Incorrect pipeline result")
+                     |""".stripMargin
+      val edited = source.replace("  integers + longs", "  let bytes = List.map(value -> value + 1i8, 1i8 :: 2i8 :: Nil) |> List.length;\n  integers + longs")
+        .replace(" + vectorStrings\n", " + vectorStrings + bytes\n")
+        .replace("== 19", "== 21")
+      val before = emitted(source, newMono, 1, checkRuntime = true, fullLibrary = true)
+      val after = emitted(edited, newMono, 4, checkRuntime = true, fullLibrary = true)
+      assert(before.suffixes("repeatedStdlibDemo").size > 1)
+      assert(before.suffixes("repeatedStdlibDemo").subsetOf(after.suffixes("repeatedStdlibDemo")))
+      assert(before.descriptors.subsetOf(after.descriptors), (before.descriptors -- after.descriptors).toList.sorted.mkString(", "))
+    }
+
+    test(s"monomorphizer $newMono inlines suspended caller arguments through deep forwarding chains") {
+      val nested = (0 until CompilerConstants.MaxOptimizerRounds + 3).foldLeft("payload(value)") {
+        case (argument, _) => s"forward($argument)"
+      }
+      val source = s"""mod Forwarding {
+                      |@Inline
+                      |def forward(value: Int32): Int32 = value
+                      |@Inline
+                      |def payload(value: Int32): Int32 = value + 7
+                      |@DontInline
+                      |pub def example(value: Int32): Int32 = $nested
+                      |@Test
+                      |pub def forwardsCallerArgument(): Unit =
+                      |  if (example(35) == 42) () else bug!("Incorrect forwarded argument")
+                      |}
+                      |""".stripMargin
+      val first = emitted(source, newMono, 1, checkRuntime = true)
+      assert(!first.suffixes.contains("payload"), "Caller argument remained blocked by forwarding expansions")
+      assert(!first.suffixes.contains("forward"), "Forwarding chain consumed the optimizer round budget")
+      assert(first == emitted(source, newMono, 4, checkRuntime = true))
+    }
+
     test(s"monomorphizer $newMono preserves emitted-symbol provenance across parallel builds and unrelated edits") {
       val first = emitted(program, newMono, 1)
       val second = emitted("pub def unrelated(): Int32 = 23\n" + program, newMono, 4)

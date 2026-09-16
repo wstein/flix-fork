@@ -143,6 +143,32 @@ site and destination clone context. Newly synthesized children use explicit
 semantic roles and structural field positions within the generated expansion.
 Map branches require explicit attribution rather than iteration-order identities.
 Parent keys are digested into bounded fields instead of retaining parent ASTs.
+
+Suspended inliner expressions retain their immutable definition-site context:
+variable renaming, substitutions, in-scope bindings, clone provenance, and the
+inline-expansion guard. Forcing a caller argument restores that context instead
+of inheriting the callee's guard or variable bindings. This lets nested caller
+arguments inline through forwarding wrappers without spending an optimizer round
+per wrapper. Expressions suspended inside a callee retain the guard; recursive
+body expansion is still bounded. This does not promise an optimization fixpoint
+for every program, and the optimizer's round limit is unchanged.
+
+Moving an original expression to its sole use preserves its source identity,
+independently of changes to the consuming expression. A suspension created while
+cloning instead receives destination-specific provenance when materialized.
+Restoring its captured bindings and guard must not give two materializations the
+same lambda identity. The lazy `DelayList.flatMap` assertion regression exercises
+this distinction; attributing every original suspension to its use site would
+reintroduce name churn when a trailing expression changes.
+
+Argument evaluation uses the call-site context, while a local callee's free
+variables use its saved definition context. The new body clone is attributed to
+the actual call site. Lambda-eligibility checks follow captured suspension
+contexts too. Already visited copy-propagated expressions keep their recorded
+source provenance and receive destination-specific clone identities; they do not
+retain an unused definition-context snapshot. These environments are local to
+the inliner traversal and are not stored in the frozen JVM name table.
+
 Lambda dropping gives its synthetic local-definition wrapper a separate origin
 from the retained body. Closure conversion preserves origins during captured
 local-call rewrites. Tuple-switch lowering shares its wildcard body through a
@@ -264,6 +290,12 @@ pattern branches, anonymous classes, unrelated declaration edits, parallel build
 captured recursive local calls, lambda-drop wrappers, and compiler-context cleanup.
 Tuple-switch tests also execute successful and fallback paths with captured
 parameters and 100,000 recursive calls to guard tail-call preservation.
+Inliner tests execute nested forwarding, caller parameter reuse, local captures,
+lambda aliases, and recursive callee-created suspensions under both
+monomorphizers. Forwarding chains exceed the optimizer round limit and must
+eliminate their private helper definitions. A standard-library pipeline test
+checks runtime results and preservation of emitted names when adding an Int8
+`List.map` specialization beside existing list and vector pipelines.
 Descriptor tests change allocation counters while retaining semantic origins and
 check every counter-bearing naming family. Missing frozen mappings and access
 before freezing or after cleanup are rejected. Pipeline checks compare actual
