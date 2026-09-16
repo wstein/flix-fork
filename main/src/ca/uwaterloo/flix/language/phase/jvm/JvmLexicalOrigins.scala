@@ -173,7 +173,7 @@ object JvmLexicalOrigins {
           if (origins.containsKey(exp)) fail("Repeated AST identity in lexical capture.", exp)
           origins.put(exp, key)
           all += ((exp, key))
-          visit(value, env, scope, role)
+          visit(value, env, binding, "value")
           visit(rest, env + (binder.sym -> binding), scope, role)
         case obj: Expr.NewObject =>
           val site = record(exp, scope, role, "anonymous-class", fingerprint(exp, env, 0))

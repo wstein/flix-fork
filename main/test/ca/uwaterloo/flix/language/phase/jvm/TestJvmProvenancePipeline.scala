@@ -107,6 +107,32 @@ class TestJvmProvenancePipeline extends AnyFunSuite {
       assert(before.descriptors.subsetOf(after.descriptors), (before.descriptors -- after.descriptors).toList.sorted.mkString(", "))
     }
 
+    test(s"monomorphizer $newMono preserves pipeline names when prepending a list stage") {
+      val source = """pub def repeatedStdlibDemo(): Int32 = {
+                     |  let integers = List.map(value -> value + 1, 1 :: 2 :: 3 :: Nil) |> List.length;
+                     |  let longs = List.map(value -> value + 1i64, 1i64 :: 2i64 :: Nil) |> List.length;
+                     |  let strings = List.map(value -> "${value}!", "p" :: "q" :: Nil) |> List.length;
+                     |  let booleans = List.map(value -> not value, true :: false :: Nil) |> List.length;
+                     |  let doubles = List.map(value -> value * 2.0f64, 1.0f64 :: 2.0f64 :: Nil) |> List.length;
+                     |  let filteredIntegers = List.filter(value -> value > 1, 1 :: 2 :: 3 :: Nil) |> List.length;
+                     |  let filteredStrings = List.filter(value -> String.length(value) > 1, "y" :: "zz" :: Nil) |> List.length;
+                     |  let vectorIntegers = Vector.map(value -> value + 1, Vector#{1, 2, 3}) |> Vector.length;
+                     |  let vectorStrings = Vector.map(value -> "${value}", Vector#{'a', 'b'}) |> Vector.length;
+                     |  integers + longs + strings + booleans + doubles + filteredIntegers + filteredStrings + vectorIntegers + vectorStrings
+                     |}
+                     |@Test
+                     |pub def pipelineResult(): Unit =
+                     |  if (repeatedStdlibDemo() == 19) () else bug!("Incorrect pipeline result")
+                     |""".stripMargin
+      val edited = source.replace("  let integers", "  let bytes = List.map(value -> value + 100, 1 :: Nil) |> List.length;\n  let integers")
+        .replace("  integers + longs", "  bytes + integers + longs")
+        .replace("== 19", "== 20")
+      val before = emitted(source, newMono, 1, checkRuntime = true, fullLibrary = true)
+      val after = emitted(edited, newMono, 4, checkRuntime = true, fullLibrary = true)
+      assert(before.suffixes("repeatedStdlibDemo").subsetOf(after.suffixes("repeatedStdlibDemo")))
+      assert(before.descriptors.subsetOf(after.descriptors), (before.descriptors -- after.descriptors).toList.sorted.mkString(", "))
+    }
+
     test(s"monomorphizer $newMono inlines suspended caller arguments through deep forwarding chains") {
       val nested = (0 until CompilerConstants.MaxOptimizerRounds + 3).foldLeft("payload(value)") {
         case (argument, _) => s"forward($argument)"
