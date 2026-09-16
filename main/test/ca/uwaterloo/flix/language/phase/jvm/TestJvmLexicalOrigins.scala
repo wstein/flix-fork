@@ -8,18 +8,21 @@ import ca.uwaterloo.flix.util.{InternalCompilerException, Options}
 import org.scalatest.funsuite.AnyFunSuite
 
 class TestJvmLexicalOrigins extends AnyFunSuite with TestUtils {
-  private val owner = GeneratedJvmKey("def", List("example"))
+  test("capture requires explicit declaration-backed origin callbacks") {
+    assertDoesNotCompile("""JvmLexicalOrigins.capture(null, GeneratedJvmKey("definition", Nil), Nil)""")
+  }
 
-  private def declaration(source: String): TypedAst.Def = {
+  private def checked(source: String): TypedAst.Root = {
     val flix = new Flix().setOptions(Options.TestWithLibNix).addVirtualPath(CompilerConstants.VirtualTestFile, source)
     val (root, errors) = flix.check()
     assert(errors.isEmpty, errors.mkString("\n"))
-    root.get.defs.values.find(_.sym.name == "example").get
+    root.get
   }
 
   private def capture(source: String): JvmLexicalOrigins = {
-    val decl = declaration(source)
-    JvmLexicalOrigins.capture(decl.exp, owner, decl.spec.fparams.toList)
+    val root = checked(source)
+    val decl = root.defs.values.find(_.sym.name == "example").get
+    JvmSourceOrigins.capture(root).body(decl.sym)
   }
 
   private def keys(source: String): List[GeneratedJvmKey] = capture(source).entries.map(_._2)
@@ -54,8 +57,9 @@ class TestJvmLexicalOrigins extends AnyFunSuite with TestUtils {
   }
 
   test("lookups use object identity and missing lookups fail closed") {
-    val decl = declaration("def example(): Int32 -> Int32 = x -> x")
-    val origins = JvmLexicalOrigins.capture(decl.exp, owner, decl.spec.fparams.toList)
+    val root = checked("def example(): Int32 -> Int32 = x -> x")
+    val decl = root.defs.values.find(_.sym.name == "example").get
+    val origins = JvmSourceOrigins.capture(root).body(decl.sym)
     val lambda = decl.exp.asInstanceOf[TypedAst.Expr.Lambda]
     assert(origins.get(lambda).nonEmpty)
     assert(origins.get(lambda.copy()).isEmpty)

@@ -30,9 +30,7 @@ object JvmLexicalOrigins {
   type TypeEncoder = (Type, Map[Symbol, GeneratedJvmKey]) => String
 
   def capture(exp: Expr, owner: GeneratedJvmKey, fparams: List[FormalParam],
-              encodeType: TypeEncoder = (tpe, localOrigins) => JvmTypeKey.encodeLexical(tpe, Nil,
-                sym => localOrigins.getOrElse(sym, nominalOrigin(sym))),
-              sourceOrigin: Symbol => GeneratedJvmKey = nominalOrigin): JvmLexicalOrigins = {
+              encodeType: TypeEncoder, sourceOrigin: Symbol => GeneratedJvmKey): JvmLexicalOrigins = {
     new Capture(encodeType, sourceOrigin).run(exp, owner, fparams)
   }
 
@@ -47,20 +45,6 @@ object JvmLexicalOrigins {
 
   private def fail(message: String, exp: Expr): Nothing =
     throw InternalCompilerException(message, exp.loc)
-
-  private def nominalOrigin(sym: Symbol): GeneratedJvmKey = sym match {
-    case defn: Symbol.DefnSym if defn.id.isEmpty => GeneratedJvmKey("definition", defn.namespace :+ defn.text)
-    case enm: Symbol.EnumSym if enm.id.isEmpty => GeneratedJvmKey("enum", enm.namespace :+ enm.text)
-    case struct: Symbol.StructSym if struct.id.isEmpty => GeneratedJvmKey("struct", struct.namespace :+ struct.text)
-    case caze: Symbol.CaseSym if caze.enumSym.id.isEmpty => GeneratedJvmKey("enum-case", caze.namespace :+ caze.name)
-    case sig: Symbol.SigSym => GeneratedJvmKey("signature", sig.namespace :+ sig.name)
-    case op: Symbol.OpSym => GeneratedJvmKey("operation", op.namespace :+ op.name)
-    case eff: Symbol.EffSym => GeneratedJvmKey("effect", eff.namespace :+ eff.name)
-    case sym: Symbol.RestrictableEnumSym => GeneratedJvmKey("restrictable-enum", sym.namespace :+ sym.name)
-    case sym: Symbol.RestrictableCaseSym => GeneratedJvmKey("restrictable-case", sym.namespace :+ sym.name)
-    case field: Symbol.StructFieldSym if field.structSym.id.isEmpty => GeneratedJvmKey("struct-field", field.namespace :+ field.name)
-    case _ => throw InternalCompilerException("Symbol requires a source declaration origin callback.", SourceLocation.Unknown)
-  }
 
   private final class Capture(encodeType: TypeEncoder, sourceOrigin: Symbol => GeneratedJvmKey) {
     private val origins = new IdentityHashMap[Expr, GeneratedJvmKey]()

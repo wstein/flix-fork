@@ -69,6 +69,11 @@ Regions and nested pattern scopes retain distinct binding identities. Source
 positions and comments do not participate. Structural fingerprints are bounded
 SHA-256 digests of framed fields, not hashes of optimized bodies.
 
+Lexical capture requires explicit type and declaration-origin callbacks. There
+is no nominal-symbol fallback: a default implementation and an ordinary
+definition can have the same symbol shape but different declaration families.
+All callers must use the authoritative declaration registry for symbol origins.
+
 Named holes retain their source labels; anonymous holes omit their generated
 names. `HoleSym.isAnonymous` records that distinction at creation time without
 changing allocation, equality, or hashing. Inferring anonymity from a name such

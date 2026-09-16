@@ -75,7 +75,7 @@ class TestJvmSourceOrigins extends AnyFunSuite {
       source.replace("reference", "renamed").replace("rc", "local")))
   }
 
-  test("declaration-backed and nominal lexical capture agree for source enum cases") {
+  test("direct lexical capture uses the same registry as source capture") {
     implicit val security: SecurityContext = SecurityContext.Unrestricted
     val flix = new Flix().setOptions(Options.TestWithLibNix)
     flix.addVirtualPath(CompilerConstants.VirtualTestFile,
@@ -85,7 +85,24 @@ class TestJvmSourceOrigins extends AnyFunSuite {
     val root = result.get
     val example = root.defs.values.find(_.sym.text == "example").get
     val captured = JvmSourceOrigins.capture(root)
-    val nominal = JvmLexicalOrigins.capture(example.exp, captured.provenance.origin(example.sym), example.spec.fparams.toList)
-    assert(captured.body(example.sym).entries.map(_._2) == nominal.entries.map(_._2))
+    val direct = JvmLexicalOrigins.capture(example.exp, captured.provenance.origin(example.sym), example.spec.fparams.toList,
+      (tpe, locals) => JvmTypeKey.encodeLexical(tpe, example.spec.declaredScheme.quantifiers,
+        sym => locals.getOrElse(sym, captured.provenance.origin(sym))), captured.provenance.origin)
+    assert(captured.body(example.sym).entries.map(_._2) == direct.entries.map(_._2))
+  }
+
+  test("default implementations retain their declaration family during lexical capture") {
+    implicit val security: SecurityContext = SecurityContext.Unrestricted
+    val flix = new Flix().setOptions(Options.TestWithLibNix)
+    flix.addVirtualPath(CompilerConstants.VirtualTestFile,
+      "trait Identity[a] { pub def makeThunk(value: a): Unit -> a = () -> value }")
+    val (result, errors) = flix.check()
+    assert(errors.isEmpty, errors.mkString("\n"))
+    val root = result.get
+    val sig = root.sigs.values.find(_.sym.name == "makeThunk").get
+    val implementation = new Symbol.DefnSym(None, sig.sym.trt.namespace :+ sig.sym.trt.name, sig.sym.name, sig.loc)
+    val captured = JvmSourceOrigins.capture(root)
+    assert(captured.provenance.origin(implementation).family == "default-implementation")
+    assert(captured.body(implementation).entries.nonEmpty)
   }
 }
