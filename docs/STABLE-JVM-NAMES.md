@@ -307,5 +307,35 @@ anonymous constructors, and superclass bridges under both monomorphizers.
 
 This revision has no configured Scala formatter or source-linter command.
 Validation uses the existing warnings-as-errors Scala compilation and
-`git diff --check`. The companion lab supplies emitted-name stability checks;
-those become integration gates once all provenance paths are connected.
+`git diff --check`. The companion lab supplies strict emitted-name stability
+checks in addition to the compiler tests. Passing compiler tests alone does not
+establish edit stability.
+
+### Suspended-argument verification (2026-09-16)
+
+Compiler revision `2e1743823` passes the full suite: 16,910 tests in 72 suites,
+zero failures or aborted suites, and eight ignored tests. The focused JVM suite
+passes all 139 tests; the previously failing standard-library suite also passes
+all 14,223 tests when run separately. The forwarding regression fails if caller
+arguments inherit the callee's expansion guard. The lazy flatMap regression
+fails if cloned suspensions reuse their captured provenance unchanged. Conversely,
+attributing every suspension to its destination fails the trailing-expression
+and list-specialization stability regressions under both monomorphizers.
+
+The companion lab at `ef52883` was run against assembly SHA-256
+`f9ecd1a5a11b2cf4f1a20a05628e8168696434eb12b62bf421ec0aedb102d11c`,
+with both `--assert-stable-names --verbose-names` and those options plus
+`--new-monomorphizer`. Both modes preserve all names on identical rebuilds,
+12-thread rebuilds, comment and blank-line edits, local-variable renaming,
+unrelated-definition insertion, lifted-closure insertion, and addition of a
+`List.map` specialization. The specialization edit adds five classes and removes
+none, including no loss of the existing vector pipeline's lifted definitions.
+
+Both strict sweeps still exit nonzero: prepending a list pipeline removes seven
+names and adds ten. This is a separate unresolved edit-stability failure, not a
+successful verification. Lexical capture currently groups identical argument
+wrappers by declaration scope and child role rather than by their distinguishable
+containing call sites; the seven existing `List.length` wrappers are a candidate
+explanation that requires suffix-to-origin tracing. No missing names are
+whitelisted. Parallel rebuilds preserve names but not every classfile byte;
+the observed byte preservation is 99.23% (classic) and 99.27% (new monomorphizer).
