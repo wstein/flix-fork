@@ -1,7 +1,7 @@
 package ca.uwaterloo.flix.tools.pkg
 
-import ca.uwaterloo.flix.api.{Bootstrap, BootstrapError, Version}
-import ca.uwaterloo.flix.util.{FileOps, Formatter, Result}
+import ca.uwaterloo.flix.api.{Bootstrap, BootstrapError, BuildManifest, Version}
+import ca.uwaterloo.flix.util.{Build, FileOps, Formatter, Result}
 import org.scalatest.DoNotDiscover
 import org.scalatest.funsuite.AnyFunSuite
 
@@ -46,14 +46,99 @@ class TestBootstrap extends AnyFunSuite {
     b.check(PkgTestUtils.mkFlix)
   }
 
-  test("build") {
+  test("build writes classes and manifest to build/development by default") {
     val p = Files.createTempDirectory(ProjectPrefix)
-    Bootstrap.init(p)(System.out)
+    Bootstrap.init(p)(System.out).unsafeGet
     val b = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
-    b.build(PkgTestUtils.mkFlix)
+    b.build(PkgTestUtils.mkFlix).unsafeGet
 
-    // The build command does not write anything to disk.
+    val devDir = Bootstrap.getDevelopmentDirectory(p)
+    val devClassDir = Bootstrap.getDevelopmentClassDirectory(p)
+    val manifestFile = Bootstrap.getBuildManifestFile(p, Build.Development)
+
+    assert(Files.exists(devDir))
+    assert(Files.exists(devClassDir))
+    assert(Files.exists(devClassDir.resolve("Main.class")))
+    assert(Files.exists(manifestFile))
+
+    val manifest = BuildManifest.read(manifestFile).get
+    assert(manifest.hasMain)
+    assert(manifest.launch.mainClass.contains("Main"))
+    assert(manifest.launch.runtimeClasspath.head == devClassDir.toAbsolutePath.normalize().toString)
+  }
+
+  test("build with inMemory option writes nothing to disk") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out).unsafeGet
+    val b = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
+    val flix = PkgTestUtils.mkFlix
+    flix.setOptions(flix.options.copy(inMemory = true))
+    b.build(flix).unsafeGet
+
     val buildDir = p.resolve("./build/").normalize()
+    assert(!Files.exists(buildDir))
+  }
+
+  test("build reconciles obsolete class files in build/development") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out).unsafeGet
+    val b = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
+    val devClassDir = Bootstrap.getDevelopmentClassDirectory(p)
+    Files.createDirectories(devClassDir)
+    val staleClass = devClassDir.resolve("Stale.class")
+    Files.write(staleClass, Array[Byte](0xca.toByte, 0xfe.toByte, 0xba.toByte, 0xbe.toByte))
+
+    b.build(PkgTestUtils.mkFlix).unsafeGet
+
+    assert(Files.exists(devClassDir.resolve("Main.class")))
+    assert(!Files.exists(staleClass))
+  }
+
+  test("build removes classes from a previous source after that source is removed") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out).unsafeGet
+    val main = p.resolve("src/Main.flix")
+    FileOps.writeString(main,
+      """def obsolete(n: Int32): Int32 = if (n == 0) 0 else obsolete(n - 1)
+        |def main(): Unit \ IO = println(obsolete(1))
+        |""".stripMargin)
+    val b = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
+    val classDir = Bootstrap.getDevelopmentClassDirectory(p)
+
+    b.build(PkgTestUtils.mkFlix).unsafeGet
+    val obsolete = classDir.resolve("Def$obsolete.class")
+    assert(Files.exists(obsolete), s"Expected the first build to emit $obsolete")
+
+    FileOps.writeString(main, "def main(): Unit \\ IO = println(1)\n")
+    b.build(PkgTestUtils.mkFlix).unsafeGet
+
+    assert(!Files.exists(obsolete), "Expected the removed definition's prior class file to be reconciled away.")
+    assert(Files.exists(classDir.resolve("Main.class")))
+  }
+
+  test("build preserves non-class files in the class output directory") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out).unsafeGet
+    val b = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
+    val note = Bootstrap.getDevelopmentClassDirectory(p).resolve("README.txt")
+    Files.createDirectories(note.getParent)
+    Files.writeString(note, "user note")
+
+    b.build(PkgTestUtils.mkFlix).unsafeGet
+
+    assert(Files.exists(note))
+  }
+
+  test("clean removes build/development directory and manifest") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out).unsafeGet
+    val b = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
+    b.build(PkgTestUtils.mkFlix).unsafeGet
+
+    val buildDir = p.resolve("./build/").normalize()
+    assert(Files.exists(buildDir))
+
+    b.clean().unsafeGet
     assert(!Files.exists(buildDir))
   }
 
@@ -68,6 +153,21 @@ class TestBootstrap extends AnyFunSuite {
     assert(classFiles.nonEmpty)
     assert(classFiles.forall(FileOps.isClassFile))
     assert(Files.exists(classDir.resolve("Main.class")))
+  }
+
+  test("build-classes reconciles obsolete class files in build/class") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out).unsafeGet
+    val b = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
+    val classDir = Bootstrap.getClassDirectory(p)
+    Files.createDirectories(classDir)
+    val staleClass = classDir.resolve("Stale.class")
+    Files.write(staleClass, Array[Byte](0xca.toByte, 0xfe.toByte, 0xba.toByte, 0xbe.toByte))
+
+    b.buildClasses(PkgTestUtils.mkFlix).unsafeGet
+
+    assert(Files.exists(classDir.resolve("Main.class")))
+    assert(!Files.exists(staleClass))
   }
 
   test("build-jar") {

@@ -248,7 +248,7 @@ object Bootstrap {
   /**
     * Returns the path to the build directory relative to the given path `p`.
     */
-  private def getBuildDirectory(p: Path): Path = p.resolve(s"./$buildDirectoryRaw").normalize()
+  def getBuildDirectory(p: Path): Path = p.resolve(s"./$buildDirectoryRaw").normalize()
 
   /**
     * The relative path to the build directory as a string.
@@ -258,9 +258,34 @@ object Bootstrap {
   private val buildDirectoryRaw: String = "build/"
 
   /**
+    * Returns the path to the output directory for `build` relative to the given path `p`.
+    */
+  def getOutputDirectory(p: Path, build: Build): Path = getBuildDirectory(p).resolve(build.directoryName).normalize()
+
+  /**
+    * Returns the directory of the output .class-files for `build` relative to the given path `p`.
+    */
+  def getClassDirectory(p: Path, build: Build): Path = getOutputDirectory(p, build).resolve("class").normalize()
+
+  /**
+    * Returns the path to the development build directory relative to the given path `p`.
+    */
+  def getDevelopmentDirectory(p: Path): Path = getOutputDirectory(p, Build.Development)
+
+  /**
+    * Returns the path to the development .class-files directory relative to the given path `p`.
+    */
+  def getDevelopmentClassDirectory(p: Path): Path = getClassDirectory(p, Build.Development)
+
+  /**
+    * Returns the path to the build manifest file for `build` relative to the given path `p`.
+    */
+  def getBuildManifestFile(p: Path, build: Build): Path = BuildManifest.fileIn(getOutputDirectory(p, build))
+
+  /**
     * Returns the directory of the output .class-files relative to the given path `p`.
     */
-  private def getClassDirectory(p: Path): Path = getBuildDirectory(p).resolve("./class/").normalize()
+  def getClassDirectory(p: Path): Path = getBuildDirectory(p).resolve("./class/").normalize()
 
   /**
     * Returns the directory of the generated documentation files relative to the given path `p`.
@@ -480,19 +505,29 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
   /**
     * Builds (compiles) the source files for the project.
     *
-    * No class files (or other files) are written to the file system.
+    * In development mode (the default), writes classes and the build manifest to
+    * `build/development/`. When `options.inMemory` is true, compiles in memory
+    * without writing to the file system.
     */
-  def build(flix: Flix): Result[CompilationResult, BootstrapError] =
-    compileProject(flix, Build.Development)
+  def build(flix: Flix): Result[CompilationResult, BootstrapError] = {
+    for {
+      result <- compileProject(flix, Build.Development)
+      _ <- if (flix.options.inMemory) Ok(()) else Steps.publishDevelopmentBuild(flix, result)
+    } yield {
+      result
+    }
+  }
 
   /**
     * Builds (compiles) the source files for the project in production mode and
     * writes the generated class files to the build directory.
     */
   def buildClasses(flix: Flix): Result[Unit, BootstrapError] = {
+    val classDir = Bootstrap.getClassDirectory(projectPath)
     for {
       result <- compileProject(flix, Build.Production)
-      _ <- Steps.writeClasses(result.getClasses)
+      _ <- Steps.writeClasses(classDir, result.getClasses)
+      _ <- Steps.reconcileClassDirectory(classDir, result.getClasses)
     } yield {
       ()
     }
@@ -733,6 +768,10 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
     val buildDir = Bootstrap.getBuildDirectory(projectPath)
     val classDir = Bootstrap.getClassDirectory(projectPath)
     val docDir = Bootstrap.getDocumentationDirectory(projectPath)
+    val devDir = Bootstrap.getDevelopmentDirectory(projectPath)
+    val devClassDir = Bootstrap.getDevelopmentClassDirectory(projectPath)
+    val prodDir = Bootstrap.getOutputDirectory(projectPath, Build.Production)
+    val prodClassDir = Bootstrap.getClassDirectory(projectPath, Build.Production)
 
     // Ensure `buildDir` is not dangerous
     checkForDangerousPath(buildDir) match {
@@ -740,10 +779,16 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
       case Ok(()) => ()
     }
 
-    // Ensure all files in `buildDir` are valid class files.
+    // Ensure all files in `buildDir` are valid class files, manifests, docs, or sidecars.
     val files = FileOps.getFilesIn(buildDir, Int.MaxValue).map(_.normalize())
     for (file <- files) {
-      if (file.startsWith(classDir)) {
+      val inClassDir = file.startsWith(classDir) || file.startsWith(devClassDir) || file.startsWith(prodClassDir)
+      val isManifest = file == Bootstrap.getBuildManifestFile(projectPath, Build.Development) ||
+                       file == Bootstrap.getBuildManifestFile(projectPath, Build.Production)
+      val isDebugSidecar = (file.getParent == devDir || file.getParent == prodDir) &&
+                           (file.getFileName.toString == "debug-scopes.json" || file.getFileName.toString == "debug-index.json")
+
+      if (inClassDir) {
         if (!FileOps.checkExt(file, "class")) {
           return Err(BootstrapError.FileError(s"Unexpected file extension in build directory (only '.class' files are allowed): '${projectPath.relativize(file)}'"))
         }
@@ -756,6 +801,8 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
           case Err(e) => return Err(e)
           case Ok(()) => ()
         }
+      } else if (isManifest || isDebugSidecar) {
+        // Valid manifest or debug sidecar in build output directory
       } else {
         return Err(BootstrapError.FileError(s"Unexpected directory in build directory: '${projectPath.relativize(file)}'"))
       }
@@ -1593,6 +1640,13 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
     }
 
     /**
+      * Writes `classes` to `classDir`.
+      */
+    def writeClasses(classDir: Path, classes: Map[ClassDesc, JvmClass]): Result[Unit, BootstrapError] = {
+      Result.traverse(classes.values.toList)(writeClass(classDir, _)).map(_ => ())
+    }
+
+    /**
       * Writes `classes` to the class directory of the project.
       *
       * For example, the class `Foo.Bar.Baz` is written to `build/class/Foo/Bar/Baz.class`.
@@ -1600,8 +1654,110 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
       * @see [[Bootstrap.getClassDirectory]]
       */
     def writeClasses(classes: Map[ClassDesc, JvmClass]): Result[Unit, BootstrapError] = {
-      val classDir = Bootstrap.getClassDirectory(projectPath)
-      Result.traverse(classes.values.toList)(writeClass(classDir, _)).map(_ => ())
+      writeClasses(Bootstrap.getClassDirectory(projectPath), classes)
+    }
+
+    /**
+      * Reconciles `classDir` against `classes` by deleting any class files that are
+      * no longer generated and any empty directories.
+      */
+    def reconcileClassDirectory(classDir: Path, classes: Map[ClassDesc, JvmClass]): Result[Unit, BootstrapError] = {
+      if (!Files.exists(classDir)) return Ok(())
+
+      val expectedFiles = classes.values.map { clazz =>
+        classDir.resolve(ClassDescs.classFileNameOf(clazz.name)).normalize().toAbsolutePath
+      }.toSet
+
+      // The class directory may also contain user-created files. A normal build
+      // only owns generated `.class` files; `clean` is the operation that removes
+      // the complete build directory.
+      val existingFiles = FileOps.getFilesIn(classDir, Int.MaxValue)
+        .filter(FileOps.checkExt(_, "class"))
+        .map(_.normalize().toAbsolutePath)
+      for (file <- existingFiles) {
+        if (!expectedFiles.contains(file)) {
+          FileOps.delete(file) match {
+            case Err(e) => return Err(BootstrapError.FileError(s"Failed to delete stale class file '$file': $e"))
+            case Ok(_) => ()
+          }
+        }
+      }
+
+      val existingDirs = FileOps.getDirectoriesIn(classDir, Int.MaxValue).map(_.normalize().toAbsolutePath)
+      for (dir <- existingDirs.reverse) {
+        try {
+          Files.delete(dir)
+        } catch {
+          case _: Exception => ()
+        }
+      }
+
+      Ok(())
+    }
+
+    /**
+      * Publishes the development build: writes classes, reconciles stale classes, and writes build.json.
+      */
+    def publishDevelopmentBuild(flix: Flix, result: CompilationResult): Result[Unit, BootstrapError] = {
+      val devClassDir = Bootstrap.getDevelopmentClassDirectory(projectPath)
+      val classes = result.getClasses
+
+      for {
+        _ <- writeClasses(devClassDir, classes)
+        _ <- reconcileClassDirectory(devClassDir, classes)
+        _ <- writeDevelopmentManifest(flix, result)
+      } yield ()
+    }
+
+    private def writeDevelopmentManifest(flix: Flix, result: CompilationResult): Result[Unit, BootstrapError] = {
+      val manifestFile = Bootstrap.getBuildManifestFile(projectPath, Build.Development)
+      val devClassDir = Bootstrap.getDevelopmentClassDirectory(projectPath)
+
+      val classes = result.getClasses
+      val products = classes.values.map { clazz =>
+        ClassDescs.classFileNameOf(clazz.name).replace('\\', '/')
+      }.toList.sorted
+
+      val sources = sourcePaths.filter(Files.isRegularFile(_)).map { p =>
+        BuildManifest.relativeName(projectPath, p)
+      }.sorted
+
+      val sourcesDigest = BuildManifest.digestOfSources(projectPath, sourcePaths.filter(Files.isRegularFile(_)))
+
+      val hasMain = result.getMain.isDefined
+      val mainClass = result.getMain.map(defn => ClassDescs.binaryNameOf(defn.className))
+
+      val libDir = Bootstrap.getLibraryDirectory(projectPath)
+      val jars = if (Files.exists(libDir)) {
+        FileOps.getFilesWithExtIn(libDir, EXT_JAR, Int.MaxValue).map(_.toAbsolutePath.normalize().toString).sorted
+      } else Nil
+
+      val runtimeClasspath = (devClassDir.toAbsolutePath.normalize().toString :: jars).distinct
+
+      val javaBin = {
+        val name = if (System.getProperty("os.name", "").toLowerCase.contains("win")) "java.exe" else "java"
+        Path.of(System.getProperty("java.home"), "bin", name).toAbsolutePath.normalize().toString
+      }
+
+      val launch = LaunchSpec(javaBin, mainClass, runtimeClasspath)
+
+      val dependencies = mavenPackagePaths ::: jarPackagePaths
+      val fingerprint = BuildManifest.fingerprintOf(flix.options, dependencies)
+      val frontendFingerprint = BuildManifest.frontendFingerprintOf(flix.options, dependencies)
+
+      val manifest = BuildManifest(
+        fingerprint = fingerprint,
+        frontendFingerprint = frontendFingerprint,
+        products = products,
+        sources = sources,
+        sourcesDigest = sourcesDigest,
+        hasMain = hasMain,
+        launch = launch
+      )
+
+      BuildManifest.write(manifestFile, manifest).mapErr(e =>
+        BootstrapError.FileError(s"Failed to write build manifest: ${e.getMessage}")
+      )
     }
 
     /**

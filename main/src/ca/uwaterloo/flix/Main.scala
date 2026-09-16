@@ -102,7 +102,8 @@ object Main {
       xverify = cmdOpts.xverify,
       xdatalogExecution = sequentialMode,
       xcollectionExecution = sequentialMode,
-      xassumeSingleThreaded = cmdOpts.xsequential
+      xassumeSingleThreaded = cmdOpts.xsequential,
+      inMemory = cmdOpts.inMemory
     )
 
     // Don't use progress bar if benchmarking.
@@ -549,6 +550,7 @@ object Main {
     XPerfFrontend: Boolean = false,
     XPerfPar: Boolean = false,
     xsequential: Boolean = false,
+    inMemory: Boolean = false,
     files: Seq[File] = Seq()
   )
 
@@ -745,6 +747,9 @@ object Main {
 
       opt[Unit]("version").action((_, c) => c.copy(version = true)).
         text("prints the version number.")
+
+      opt[Unit]("in-memory").action((_, c) => c.copy(inMemory = true)).
+        text("runs the build in memory without writing class files to disk.")
 
       // Experimental options:
       note("")

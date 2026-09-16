@@ -48,7 +48,8 @@ object Options {
     xverify = false,
     xdatalogExecution = ExecutionMode.Parallel,
     xcollectionExecution = ExecutionMode.Parallel,
-    xassumeSingleThreaded = false
+    xassumeSingleThreaded = false,
+    inMemory = false
   )
 
   /**
@@ -93,6 +94,7 @@ object Options {
   *                              standard library's concurrent data structures to drop their locks.
   *                              Only sound together with the two options above set to sequential,
   *                              which is why `--Xsequential` is the only way to set it from the CLI.
+  * @param inMemory              runs builds in memory without writing class files to disk.
   */
 case class Options(lib: LibLevel,
                    build: Build,
@@ -110,13 +112,14 @@ case class Options(lib: LibLevel,
                    xsubeffecting: Set[Subeffecting],
                    xnewmono: Boolean,
                    XPerfFrontend: Boolean,
-                    XPerfN: Option[Int],
-                    XPerfPar: Boolean,
-                    xchaosMonkey: Boolean,
-                    xverify: Boolean,
-                    xdatalogExecution: ExecutionMode,
-                    xcollectionExecution: ExecutionMode,
-                    xassumeSingleThreaded: Boolean
+                   XPerfN: Option[Int],
+                   XPerfPar: Boolean,
+                   xchaosMonkey: Boolean,
+                   xverify: Boolean,
+                   xdatalogExecution: ExecutionMode,
+                   xcollectionExecution: ExecutionMode,
+                   xassumeSingleThreaded: Boolean,
+                   inMemory: Boolean
                   ) {
 
   /**
@@ -143,20 +146,29 @@ case class Options(lib: LibLevel,
 /**
   * An option to control whether to run in development or production mode.
   */
-sealed trait Build
+sealed trait Build {
+  /**
+    * The name of the directory this mode's output goes in, under the project's build directory.
+    */
+  def directoryName: String
+}
 
 object Build {
   /**
     * Run in development mode.
     */
-  case object Development extends Build
+  case object Development extends Build {
+    override val directoryName: String = "development"
+  }
 
   /**
     * Run in production mode.
     *
     * Running the compiler in production mode disables certain features that are allowed during development.
     */
-  case object Production extends Build
+  case object Production extends Build {
+    override val directoryName: String = "production"
+  }
 }
 
 sealed trait LibLevel
