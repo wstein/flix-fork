@@ -27,11 +27,7 @@ object JvmNameTable {
     val names = mutable.Map.empty[Symbol, String]
 
     entries.foreach { case (sym, key) =>
-      provenance.get(sym).foreach { previous =>
-        if (previous != key) {
-          throw InternalCompilerException(s"Conflicting JVM naming provenance for '$sym': '$previous' and '$key'.", SourceLocation.Unknown)
-        }
-      }
+      JvmProvenance.checkConsistent(sym, provenance.get(sym), key)
       owners.get(key).foreach { previous =>
         if (previous != sym) {
           throw InternalCompilerException(s"Duplicate JVM naming provenance '$key' for '$previous' and '$sym'.", SourceLocation.Unknown)

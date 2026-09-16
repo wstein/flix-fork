@@ -46,6 +46,28 @@ class TestJvmProvenance extends AnyFunSuite {
     intercept[InternalCompilerException] { new JvmProvenance().origin(symbol(1)) }
   }
 
+  test("registry and table conflicts have identical diagnostics and preserve the registered origin") {
+    val registry = new JvmProvenance()
+    val original = symbol(1)
+    val equivalent = symbol(1)
+    assert(original == equivalent)
+    assert(original ne equivalent)
+    val first = key("first")
+    val second = key("second")
+    registry.register(original, first)
+    registry.register(equivalent, first)
+    val registrationError = intercept[InternalCompilerException] { registry.register(equivalent, second) }
+    val tableError = intercept[InternalCompilerException] {
+      JvmNameTable.build(List(original -> first, equivalent -> second))
+    }
+    assert(registrationError.getMessage == tableError.getMessage)
+    assert(registrationError.getMessage.contains(s"Conflicting JVM naming provenance for '$equivalent': '$first' and '$second'."))
+    assert(registry.origin(equivalent) == first)
+    registry.register(equivalent, first)
+    assert(registry.freeze(List(equivalent)).suffix(original) ==
+      JvmNameTable.build(List(original -> first, equivalent -> first)).suffix(equivalent))
+  }
+
   test("freeze requires provenance for every requested symbol") {
     intercept[InternalCompilerException] { new JvmProvenance().freeze(List(symbol(1))) }
   }

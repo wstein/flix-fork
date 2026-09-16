@@ -158,6 +158,9 @@ Create one `JvmProvenance` per code-generation invocation, including recompiles
 on the same compiler object. Its synchronized registration and origin lookup
 support parallel compiler phases. Conflicting registration fails immediately;
 identical registration is idempotent.
+Registration and direct name-table construction share the same consistency check
+and conflict diagnostic. The check does not mutate either owner's map; rejected
+registration preserves the prior origin, including for equal symbol instances.
 
 After a phase discards symbols, call `retainLive(live)` with the symbols whose
 origins later phases still need. This removes dead entries and replaces the map's

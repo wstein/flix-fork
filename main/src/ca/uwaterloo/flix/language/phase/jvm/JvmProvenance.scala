@@ -12,11 +12,7 @@ final class JvmProvenance {
 
   def register(sym: Symbol, key: GeneratedJvmKey): Unit = synchronized {
     requireOpen()
-    origins.get(sym).foreach { previous =>
-      if (previous != key) {
-        throw InternalCompilerException(s"Conflicting JVM naming provenance for '$sym': '$previous' and '$key'.", SourceLocation.Unknown)
-      }
-    }
+    JvmProvenance.checkConsistent(sym, origins.get(sym), key)
     origins(sym) = key
   }
 
@@ -49,5 +45,15 @@ final class JvmProvenance {
   def close(): Unit = synchronized {
     origins = mutable.Map.empty
     frozen = true
+  }
+}
+
+object JvmProvenance {
+  private[jvm] def checkConsistent(sym: Symbol, previous: Option[GeneratedJvmKey], key: GeneratedJvmKey): Unit = {
+    previous.foreach { origin =>
+      if (origin != key) {
+        throw InternalCompilerException(s"Conflicting JVM naming provenance for '$sym': '$origin' and '$key'.", SourceLocation.Unknown)
+      }
+    }
   }
 }
