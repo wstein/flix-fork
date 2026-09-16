@@ -201,6 +201,22 @@ class TestJvmTypeKey extends AnyFunSuite {
       encode(Type.Cst(TypeConstructor.JvmField(field.copy(ref = field.ref.copy(name = "other"))), loc)))
   }
 
+  test("constructor class variables retain names when declaration parameters are unavailable") {
+    val clazz = ClassDesc.of("example.Box")
+    val objectClass = ClassDesc.of("java.lang.Object")
+    val ref = JavaMethodRef(clazz, "<init>", MethodTypeDesc.of(ClassDesc.ofDescriptor("V"), objectClass), false)
+    def constructor(name: String): JavaMethod = {
+      val variable = JavaTypeVariable(JavaTypeVariableOwner.Class(clazz), name)
+      JavaMethod(ref, 1, Nil, List("value"), List(JavaType.Variable(variable, objectClass)),
+        JavaType.NonGeneric(ClassDesc.ofDescriptor("V")), true, false)
+    }
+    val original = constructor("T")
+    val renamed = constructor("U")
+    def constructorType(method: JavaMethod): Type = Type.Cst(TypeConstructor.JvmConstructor(method), loc)
+    assert(encode(constructorType(original)) == encode(constructorType(original.copy(parameterNames = List("other")))))
+    assert(encode(constructorType(original)) != encode(constructorType(renamed)))
+  }
+
   test("malformed Unicode is rejected") {
     val malformed = new String(Array(0xd800.toChar))
     val enm = new Symbol.EnumSym(None, List(malformed), "Box", loc)

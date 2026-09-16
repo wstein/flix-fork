@@ -39,6 +39,13 @@ commutative set operands use canonical order. Generated nominal types require
 their recorded origins. Simplified types have a separate encoding for erasure;
 that encoding cannot recover already-erased effects.
 
+Java generic parameters use bound indices when their declaration parameter list
+is available. `JvmConstructor` does not carry its owning class's parameter list;
+class variables in constructor signatures therefore retain their declaring class
+and variable name. Renaming those Java class parameters can change a constructor
+key. Constructor-declared parameters still use bound indices. This boundary also
+applies to class variables in field signatures, which lack that parameter list.
+
 The encoder is not a Boolean solver. Callers must normalize other algebraic
 equivalences and resolve associated types before comparing keys across those
 reductions. Unbound variables, erroneous types, and missing origins fail closed.
