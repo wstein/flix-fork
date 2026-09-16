@@ -119,6 +119,50 @@ class TestJvmProvenancePipeline extends AnyFunSuite {
       assert(emitted(source, newMono, 1) == emitted(source, newMono, 4))
     }
 
+    test(s"monomorphizer $newMono preserves emitted struct layouts across unrelated edits and executes field reads and writes") {
+      val source =
+        """struct Record[a, r] {
+          |  keys: a,
+          |  values: a,
+          |  lock: a,
+          |  mut size: Int32,
+          |  mut isLeaf: Bool,
+          |  other: a
+          |}
+          |
+          |mod Record {
+          |  pub def makeRecord(rc: Region[r]): Record[String, r] \ r =
+          |    new Record @ rc {
+          |      keys = "k",
+          |      values = "v",
+          |      lock = "l",
+          |      size = 42,
+          |      isLeaf = true,
+          |      other = "o"
+          |    }
+          |
+          |  @Test
+          |  pub def testStruct(): Unit = region rc {
+          |    let r = makeRecord(rc);
+          |    let ok1 = r->isLeaf and r->size == 42 and r->keys == "k" and r->values == "v";
+          |    r->size = 99;
+          |    r->isLeaf = false;
+          |    let ok2 = not r->isLeaf and r->size == 99;
+          |    if (ok1 and ok2) () else bug!("Incorrect struct field read or write")
+          |  }
+          |}
+          |""".stripMargin
+      val unrelated = "pub def unrelatedFn(x: Int32): Int32 = x + 100\n"
+      val first = emitted(source, newMono, 1, checkRuntime = true)
+      val parallel = emitted(source, newMono, 4, checkRuntime = true)
+      val edited = emitted(unrelated + source, newMono, 4, checkRuntime = true)
+      assert(first == parallel)
+      assertPreserved(first, edited)
+      val structDescriptors = first.descriptors.filter(_.startsWith("LStruct$"))
+      assert(structDescriptors.nonEmpty)
+      assert(first.descriptors.filter(_.startsWith("LStruct$")) == edited.descriptors.filter(_.startsWith("LStruct$")))
+    }
+
     test(s"monomorphizer $newMono preserves emitted nullary and anonymous classes across edits and parallel builds") {
       val imports = "import java.util.function.IntSupplier\nimport java.util.ArrayList\n"
       val source = """enum Box[a] { case Empty, case Box(a) }

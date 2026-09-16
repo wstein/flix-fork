@@ -173,10 +173,11 @@ object Lowering {
   protected[monomorph] def lowerStruct(struct0: TypedAst.Struct): MonoAst.Struct = struct0 match {
     case TypedAst.Struct(doc, ann, mod, sym, tparams0, _, fields0, loc) =>
       val tparams = tparams0.map(lowerTypeParam)
-      val fields = fields0.map {
+      val sortedFields = fields0.toList.sortBy { case (fieldSym, _) => fieldSym.name }
+      val fields = sortedFields.map {
         case (fieldSym, field) => MonoAst.StructField(fieldSym, lowerType(field.tpe), loc)
       }
-      MonoAst.Struct(doc, ann, mod, sym, tparams, fields.toList, loc)
+      MonoAst.Struct(doc, ann, mod, sym, tparams, fields, loc)
   }
 
   /**
