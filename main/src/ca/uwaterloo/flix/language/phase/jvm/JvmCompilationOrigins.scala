@@ -66,6 +66,9 @@ final class JvmCompilationOrigins(val symbols: JvmProvenance) {
     val defaults = root.sigs.values.filter(_.exp.nonEmpty).map { sig =>
       new Symbol.DefnSym(None, sig.sym.namespace, sig.sym.name, sig.loc): Symbol
     }.toSet
+    // Review this live-declaration subset whenever TypedAst.Root gains fields that
+    // carry declarations or bodies needed by later phases. Do not traverse the
+    // whole root: module membership and other metadata can retain discarded symbols.
     val live = (root.defs, root.instances, root.sigs, root.enums, root.structs,
       root.restrictableEnums, root.effects, root.typeAliases, root.traits.keySet,
       root.defaultHandlers)
