@@ -45,4 +45,9 @@ final class JvmProvenance {
       throw InternalCompilerException("JVM naming provenance has already been frozen.", SourceLocation.Unknown)
     }
   }
+
+  def close(): Unit = synchronized {
+    origins = mutable.Map.empty
+    frozen = true
+  }
 }

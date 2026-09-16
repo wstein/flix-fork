@@ -31,6 +31,7 @@ object Optimizer {
       if (currentDelta.nonEmpty) {
         val afterOccurrenceAnalyzer = OccurrenceAnalyzer.run(currentRoot, currentDelta)
         val (newRoot, newDelta) = Inliner.run(afterOccurrenceAnalyzer)
+        flix.jvmOrigins.retainMono(newRoot)
         currentRoot = newRoot
         currentDelta = newDelta
       }

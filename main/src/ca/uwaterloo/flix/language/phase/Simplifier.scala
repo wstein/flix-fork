@@ -103,7 +103,10 @@ object Simplifier {
       SimplifiedAst.Effect(ann, mod, sym, ops, loc)
   }
 
-  private def visitExp(exp0: MonoAst.Expr)(implicit universe: Set[Symbol.EffSym], root: MonoAst.Root, flix: Flix): SimplifiedAst.Expr = exp0 match {
+  private def visitExp(exp0: MonoAst.Expr)(implicit universe: Set[Symbol.EffSym], root: MonoAst.Root, flix: Flix): SimplifiedAst.Expr =
+    flix.jvmOrigins.transfer(exp0, visitExpNode(exp0), "simplification")
+
+  private def visitExpNode(exp0: MonoAst.Expr)(implicit universe: Set[Symbol.EffSym], root: MonoAst.Root, flix: Flix): SimplifiedAst.Expr = exp0 match {
     case MonoAst.Expr.Var(sym, tpe, loc) =>
       val t = visitType(tpe)
       SimplifiedAst.Expr.Var(sym, t, loc)
@@ -818,8 +821,8 @@ object Simplifier {
     exp0 match {
       case MonoAst.Expr.ApplyAtomic(AtomicOp.Tuple, elms, _, _, _) if isTupleFlattenable(rules) =>
         findSwitchColumn(elms, rules) match {
-          case Some(col) => return flattenTupleMatchWithSwitch(elms, rules, col, tpe, loc)
-          case None      => return flattenTupleMatch(elms, rules, tpe, loc)
+          case Some(col) => return flattenTupleMatchWithSwitch(exp0, elms, rules, col, tpe, loc)
+          case None      => return flattenTupleMatch(exp0, elms, rules, tpe, loc)
         }
       case _ => // fall through to general case
     }
@@ -886,12 +889,12 @@ object Simplifier {
         val failure = SimplifiedAst.Expr.JumpTo(next, t, jumpPurity, loc)
 
         // Return the branch with its label.
-        label -> patternMatchList(List(pat), List(matchVar), guard.getOrElse(MonoAst.Expr.Cst(Constant.Bool(true), Type.Bool, SourceLocation.Unknown)), success, failure
-        )
+        val branchBody = patternMatchList(List(pat), List(matchVar), guard.getOrElse(defaultMatchGuard(body)), success, failure)
+        label -> flix.jvmOrigins.synthetic(body, branchBody, "pattern-rule")
     }
     // Construct the error branch.
     val errorExp = SimplifiedAst.Expr.ApplyAtomic(AtomicOp.MatchError, List.empty, t, Purity.Impure, loc)
-    val errorBranch = defaultLab -> errorExp
+    val errorBranch = defaultLab -> flix.jvmOrigins.synthetic(exp0, errorExp, "match-error")
 
     // The initial expression simply jumps to the first label.
     val entry = SimplifiedAst.Expr.JumpTo(ruleLabels.head, t, jumpPurity, loc)
@@ -1091,7 +1094,7 @@ object Simplifier {
     * }
     * }}}
     */
-  private def flattenTupleMatch(elms: List[MonoAst.Expr], rules: List[MonoAst.MatchRule], tpe: Type, loc: SourceLocation)(implicit universe: Set[Symbol.EffSym], root: MonoAst.Root, flix: Flix): SimplifiedAst.Expr = {
+  private def flattenTupleMatch(sourceScrutinee: MonoAst.Expr, elms: List[MonoAst.Expr], rules: List[MonoAst.MatchRule], tpe: Type, loc: SourceLocation)(implicit universe: Set[Symbol.EffSym], root: MonoAst.Root, flix: Flix): SimplifiedAst.Expr = {
     // Create a match variable for each tuple element.
     val matchVars = elms.map(_ => Symbol.freshVarSym("matchVar" + Flix.Delimiter, BoundBy.Let, loc))
     val matchExps = elms.map(visitExp)
@@ -1122,12 +1125,13 @@ object Simplifier {
             throw InternalCompilerException("Unexpected pattern in flattenTupleMatch", loc)
         }
 
-        (label, patternMatchList(innerPats, matchVars, guard.getOrElse(MonoAst.Expr.Cst(Constant.Bool(true), Type.Bool, SourceLocation.Unknown)), success, failure))
+        val branchBody = patternMatchList(innerPats, matchVars, guard.getOrElse(defaultMatchGuard(body)), success, failure)
+        (label, flix.jvmOrigins.synthetic(body, branchBody, "pattern-rule"))
     }
 
     // Error branch.
     val errorExp = SimplifiedAst.Expr.ApplyAtomic(AtomicOp.MatchError, List.empty, t, Purity.Impure, loc)
-    val errorBranch = (defaultLab, errorExp)
+    val errorBranch = (defaultLab, flix.jvmOrigins.synthetic(sourceScrutinee, errorExp, "match-error"))
 
     val entry = SimplifiedAst.Expr.JumpTo(ruleLabels.head, t, jumpPurity, loc)
     val branchPurity = Purity.combineAll(branches.map { case (_, exp) => exp.purity })
@@ -1214,7 +1218,7 @@ object Simplifier {
     * the remaining columns via `patternMatchList`. Multiple rules with the same tag
     * are compiled into a Branch/JumpTo chain within that Switch case.
     */
-  private def flattenTupleMatchWithSwitch(elms: List[MonoAst.Expr], rules: List[MonoAst.MatchRule], switchCol: Int, tpe: Type, loc: SourceLocation)(implicit universe: Set[Symbol.EffSym], root: MonoAst.Root, flix: Flix): SimplifiedAst.Expr = {
+  private def flattenTupleMatchWithSwitch(sourceScrutinee: MonoAst.Expr, elms: List[MonoAst.Expr], rules: List[MonoAst.MatchRule], switchCol: Int, tpe: Type, loc: SourceLocation)(implicit universe: Set[Symbol.EffSym], root: MonoAst.Root, flix: Flix): SimplifiedAst.Expr = {
     // Create a match variable for each tuple element.
     val matchVars = elms.map(_ => Symbol.freshVarSym("matchVar" + Flix.Delimiter, BoundBy.Let, loc))
     val matchExps = elms.map(visitExp)
@@ -1235,7 +1239,9 @@ object Simplifier {
     // Build the overall default expression (from the wildcard rule or MatchError).
     val overallDefault = defaultRules match {
       case MonoAst.MatchRule(MonoAst.Pattern.Wild(_, _), _, body) :: Nil => visitExp(body)
-      case Nil => SimplifiedAst.Expr.ApplyAtomic(AtomicOp.MatchError, List.empty, t, Purity.Impure, loc)
+      case Nil =>
+        val errorExp = SimplifiedAst.Expr.ApplyAtomic(AtomicOp.MatchError, List.empty, t, Purity.Impure, loc)
+        flix.jvmOrigins.synthetic(sourceScrutinee, errorExp, "match-error")
       case _ => throw InternalCompilerException("Unexpected default pattern in flattenTupleMatchWithSwitch", loc)
     }
 
@@ -1261,6 +1267,8 @@ object Simplifier {
 
     val jumpPurity = Purity.combineAll(rules.map(r => simplifyEffect(r.exp.eff)))
     val switchVar = matchVars(switchCol)
+    val overallDefaultLabel = Symbol.freshLabel("default")
+    def defaultJump: SimplifiedAst.Expr = SimplifiedAst.Expr.JumpTo(overallDefaultLabel, t, overallDefault.purity, loc)
 
     // Build a Switch case for each tag group.
     val switchCases: List[(Symbol.CaseSym, SimplifiedAst.Expr)] = tagGroups.map { case (caseSym, groupRules) =>
@@ -1284,10 +1292,10 @@ object Simplifier {
         val remainingVars = matchVars.zipWithIndex.filter(_._2 != switchCol).map(_._1)
 
         val success = visitExp(body)
-        val failure = overallDefault
+        val failure = defaultJump
 
         // Build untag let-bindings for the tag's inner patterns.
-        val guardExpr = guard.getOrElse(MonoAst.Expr.Cst(Constant.Bool(true), Type.Bool, SourceLocation.Unknown))
+        val guardExpr = guard.getOrElse(defaultMatchGuard(body))
         val matchBody = patternMatchList(remainingPats, remainingVars, guardExpr, success, failure)
         val caseBody = tagPat.pats.zipWithIndex.foldRight(matchBody) {
           case ((MonoAst.Pattern.Wild(_, _), _), acc) => acc
@@ -1301,9 +1309,8 @@ object Simplifier {
         (caseSym, caseBody)
       } else {
         // Multiple rules for this tag — generate a Branch/JumpTo mini-match.
-        val defaultLab = Symbol.freshLabel("default")
         val ruleLabels = groupRules.map(_ => Symbol.freshLabel("case"))
-        val nextLabel = ListOps.zip(ruleLabels, ruleLabels.drop(1) ::: defaultLab :: Nil).toMap
+        val nextLabel = ListOps.zip(ruleLabels, ruleLabels.drop(1) ::: overallDefaultLabel :: Nil).toMap
 
         val branches = ListOps.zip(ruleLabels, groupRules).map {
           case (label, MonoAst.MatchRule(MonoAst.Pattern.Tuple(pats, _, _), guard, body)) =>
@@ -1315,7 +1322,7 @@ object Simplifier {
             val next = nextLabel(label)
             val failure = SimplifiedAst.Expr.JumpTo(next, t, jumpPurity, loc)
 
-            val guardExpr = guard.getOrElse(MonoAst.Expr.Cst(Constant.Bool(true), Type.Bool, SourceLocation.Unknown))
+            val guardExpr = guard.getOrElse(defaultMatchGuard(body))
             val matchBody = patternMatchList(remainingPats, remainingVars, guardExpr, success, failure)
             val branchBody = tagPat.pats.zipWithIndex.foldRight(matchBody) {
               case ((MonoAst.Pattern.Wild(_, _), _), acc) => acc
@@ -1326,14 +1333,13 @@ object Simplifier {
                 SimplifiedAst.Expr.Let(sym, untagExp, acc, t, acc.purity, varLoc)
               case _ => throw InternalCompilerException("Unexpected inner pattern in switch", loc)
             }
-            (label, branchBody)
+            (label, flix.jvmOrigins.synthetic(body, branchBody, "pattern-rule"))
           case _ => throw InternalCompilerException("Expected tuple rule", loc)
         }
 
-        val errorBranch = (defaultLab, overallDefault)
         val entry = SimplifiedAst.Expr.JumpTo(ruleLabels.head, t, jumpPurity, loc)
         val branchPurity = Purity.combineAll(branches.map { case (_, exp) => exp.purity })
-        val caseBody = SimplifiedAst.Expr.Branch(entry, branches.toMap + errorBranch, t, branchPurity, loc)
+        val caseBody = SimplifiedAst.Expr.Branch(entry, branches.toMap, t, branchPurity, loc)
         (caseSym, caseBody)
       }
     }
@@ -1347,7 +1353,7 @@ object Simplifier {
       SimplifiedAst.Expr.Var(switchVar, matchExps(switchCol).tpe, loc),
       enumSym,
       switchCases,
-      overallDefault,
+      defaultJump,
       t,
       switchPurity,
       loc
@@ -1355,11 +1361,19 @@ object Simplifier {
 
     // Wrap in let-bindings for each match variable.
     val allPurity = Purity.combine(Purity.combineAll(matchExps.map(_.purity)), switchPurity)
-    matchVars.zip(matchExps).foldRight(switchExpr: SimplifiedAst.Expr) {
+    val switchLabel = Symbol.freshLabel("switch")
+    val switchBranch = flix.jvmOrigins.synthetic(sourceScrutinee, switchExpr, "tuple-switch-dispatch")
+    val entry = SimplifiedAst.Expr.JumpTo(switchLabel, t, switchPurity, loc)
+    val sharedDefault = SimplifiedAst.Expr.Branch(entry,
+      Map(switchLabel -> switchBranch, overallDefaultLabel -> overallDefault), t, switchPurity, loc)
+    matchVars.zip(matchExps).foldRight(sharedDefault: SimplifiedAst.Expr) {
       case ((sym, exp), acc) =>
         SimplifiedAst.Expr.Let(sym, exp, acc, t, allPurity, loc)
     }
   }
+
+  private def defaultMatchGuard(body: MonoAst.Expr)(implicit flix: Flix): MonoAst.Expr =
+    flix.jvmOrigins.synthetic(body, MonoAst.Expr.Cst(Constant.Bool(true), Type.Bool, SourceLocation.Unknown), "pattern-default-guard")
 
   /**
     * Returns an expression that matches the given list of patterns `xs` against the given list of variables `ys`.

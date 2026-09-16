@@ -50,7 +50,10 @@ object ClosureConv {
   /**
     * Performs closure conversion on the given expression `exp0`.
     */
-  private def visitExp(exp0: Expr)(implicit flix: Flix): Expr = exp0 match {
+  private def visitExp(exp0: Expr)(implicit flix: Flix): Expr =
+    flix.jvmOrigins.transfer(exp0, visitExpNode(exp0), "closure-conversion")
+
+  private def visitExpNode(exp0: Expr)(implicit flix: Flix): Expr = exp0 match {
     case Expr.Cst(_, _, _) => exp0
 
     case Expr.Var(_, _, _) => exp0
@@ -315,7 +318,9 @@ object ClosureConv {
     */
   private def applySubst(e0: Expr, subst: Map[Symbol.VarSym, Symbol.VarSym])(implicit flix: Flix): Expr = {
 
-    def visitExp(e: Expr): Expr = e match {
+    def visitExp(e: Expr): Expr = flix.jvmOrigins.transfer(e, visitExpNode(e), "closure-substitution")
+
+    def visitExpNode(e: Expr): Expr = e match {
       case Expr.Cst(_, _, _) => e
 
       case Expr.Var(sym, tpe, loc) => subst.get(sym) match {
@@ -547,8 +552,11 @@ object ClosureConv {
     * }}}
     *
     */
-  private def rewriteApplyLocalDef(expr00: Expr, sym0: Symbol.VarSym, freeVars: List[FreeVar]): Expr = {
-    def visit(expr0: Expr): Expr = expr0 match {
+  private def rewriteApplyLocalDef(expr00: Expr, sym0: Symbol.VarSym, freeVars: List[FreeVar])(implicit flix: Flix): Expr = {
+    def visit(expr0: Expr): Expr =
+      flix.jvmOrigins.transfer(expr0, visitNode(expr0), "closure-local-call-rewrite")
+
+    def visitNode(expr0: Expr): Expr = expr0 match {
       case Expr.Cst(_, _, _) => expr0
 
       case Expr.Var(_, _, _) => expr0

@@ -21,6 +21,7 @@ import ca.uwaterloo.flix.api.{Flix, FlixEvent}
 import ca.uwaterloo.flix.language.ast.MonoAst.{Expr, FormalParam, Occur, Pattern}
 import ca.uwaterloo.flix.language.ast.shared.Constant
 import ca.uwaterloo.flix.language.ast.{AtomicOp, MonoAst, SourceLocation, Symbol, Type}
+import ca.uwaterloo.flix.language.phase.jvm.{GeneratedJvmKey, JvmOriginKey}
 import ca.uwaterloo.flix.util.collection.ListOps
 import ca.uwaterloo.flix.util.collection.Nel
 import ca.uwaterloo.flix.util.{InternalCompilerException, ParOps}
@@ -132,7 +133,16 @@ object Inliner {
     *      (b) If the visited `e1` is nontrivial, it keeps the let-binding, adds the visited `e1` to the set
     *      of in-scope variable definitions and considers it for inlining at every occurrence.
     */
-  private def visitExp(exp0: Expr, ctx0: LocalContext)(implicit sym0: Symbol.DefnSym, sctx: SharedContext, root: MonoAst.Root, flix: Flix): Expr = exp0 match {
+  private def visitExp(exp0: Expr, ctx0: LocalContext)(implicit sym0: Symbol.DefnSym, sctx: SharedContext, root: MonoAst.Root, flix: Flix): Expr = {
+    flix.jvmOrigins.expression(exp0)
+    val result = visitExpInner(exp0, ctx0)
+    ctx0.cloneContext match {
+      case None => flix.jvmOrigins.transfer(exp0, result, "Inliner")
+      case Some(context) => flix.jvmOrigins.cloneTree(exp0, result, context, "Inliner")
+    }
+  }
+
+  private def visitExpInner(exp0: Expr, ctx0: LocalContext)(implicit sym0: Symbol.DefnSym, sctx: SharedContext, root: MonoAst.Root, flix: Flix): Expr = exp0 match {
     case Expr.Cst(cst, tpe, loc) =>
       Expr.Cst(cst, tpe, loc)
 
@@ -149,21 +159,21 @@ object Inliner {
               // Unconditional inline of variable that occurs once.
               // Use the expression substitution from the definition site.
               sctx.changed.putIfAbsent(sym0, ())
-              visitExp(exp, ctx0.withSubst(subst))
+              visitExp(exp, ctx0.withSubst(subst).atClone(exp0, exp, "substitution"))
 
             case Some(SubstRange.DoneExpr(exp)) =>
               // Copy-propagation of visited expr.
               // Use the empty expression substitution since this has already been visited
               // and the context might indicate that if exp is a var, it should be inlined again.
               sctx.changed.putIfAbsent(sym0, ())
-              visitExp(exp, ctx0.withSubst(Map.empty))
+              visitExp(exp, ctx0.withSubst(Map.empty).atClone(exp0, exp, "copyPropagation"))
 
             case None =>
               // It was not unconditionally inlined, so consider inlining at this occurrence site
               useSiteInline(freshVarSym, ctx0) match {
                 case Some(exp) =>
                   sctx.changed.putIfAbsent(sym0, ())
-                  visitExp(exp, ctx0.withSubst(Map.empty))
+                  visitExp(exp, ctx0.withSubst(Map.empty).atClone(exp0, exp, "useSite"))
 
                 case None =>
                   Expr.Var(freshVarSym, tpe, loc)
@@ -186,8 +196,8 @@ object Inliner {
         case Expr.Lambda(fparam, e1, _, _) =>
           sctx.changed.putIfAbsent(sym0, ())
           val e2 = visitExp(exp2, ctx0)
-          val letBinding = bindArgs(e1, Nel.of(fparam), List(e2), loc)
-          visitExp(letBinding, ctx0)
+          val letBinding = flix.jvmOrigins.synthetic(exp0, bindArgs(e1, Nel.of(fparam), List(e2), loc), "Inliner.beta.bindArgs")
+          visitExp(letBinding, ctx0.atClone(exp0, e1, "beta"))
 
         case e1 =>
           val e2 = visitExp(exp2, ctx0)
@@ -200,8 +210,8 @@ object Inliner {
         sctx.changed.putIfAbsent(sym0, ())
         flix.emitEvent(FlixEvent.InlinedDef(sym))
         val defn = root.defs(sym)
-        val ctx = ctx0.withSubst(Map.empty).enableInliningMode
-        val letBinding = bindArgs(defn.exp, defn.spec.fparams, es, loc)
+        val ctx = ctx0.withSubst(Map.empty).enableInliningMode.atClone(exp0, defn.exp, "definition")
+        val letBinding = flix.jvmOrigins.synthetic(exp0, bindArgs(defn.exp, defn.spec.fparams, es, loc), "Inliner.definition.bindArgs")
         visitExp(letBinding, ctx)
       } else {
         sctx.live.putIfAbsent(sym, ())
@@ -215,8 +225,8 @@ object Inliner {
       ctx0.subst.get(sym1) match {
         case Some(SubstRange.SuspendedExpr(Expr.LocalDef(_, fparams, exp, _, _, _, _, _), subst)) =>
           val es = exps.map(visitExp(_, ctx0))
-          val letBinding = bindArgs(exp, fparams, es, loc)
-          visitExp(letBinding, ctx0.withSubst(subst))
+          val letBinding = flix.jvmOrigins.synthetic(exp0, bindArgs(exp, fparams, es, loc), "Inliner.localDef.bindArgs")
+          visitExp(letBinding, ctx0.withSubst(subst).atClone(exp0, exp, "localDef"))
 
         case None | Some(_) =>
           // It was not unconditionally inlined, so return same expr with visited subexpressions
@@ -279,7 +289,7 @@ object Inliner {
         // so unconditionally inline
         sctx.changed.putIfAbsent(sym0, ())
         val freshVarSym = Symbol.freshVarSym(sym)
-        val exp = Expr.LocalDef(freshVarSym, fparams, exp1, exp2, tpe, eff, occur, loc)
+        val exp = flix.jvmOrigins.transfer(exp0, Expr.LocalDef(freshVarSym, fparams, exp1, exp2, tpe, eff, occur, loc), "Inliner.suspendedLocalDef")
         val ctx = ctx0.addVarSubst(sym, freshVarSym)
           .addSubst(freshVarSym, SubstRange.SuspendedExpr(exp, ctx0.subst))
         visitExp(exp2, ctx)
@@ -1003,7 +1013,7 @@ object Inliner {
 
   private object LocalContext {
     /** Returns the empty context with `currentlyInlining` set to `false`. */
-    val Empty: LocalContext = LocalContext(Map.empty, Map.empty, Map.empty, currentlyInlining = false)
+    val Empty: LocalContext = LocalContext(Map.empty, Map.empty, Map.empty, currentlyInlining = false, cloneContext = None)
   }
 
   /**
@@ -1013,8 +1023,14 @@ object Inliner {
     * @param subst             a substitution on variables to expressions.
     * @param inScopeVars       a set of variables considered to be in scope.
     * @param currentlyInlining a flag denoting whether the current traversal is part of an inline-expansion process.
+    * @param cloneContext      the immutable destination context for copied expressions.
     */
-  private case class LocalContext(varSubst: Map[Symbol.VarSym, Symbol.VarSym], subst: Map[Symbol.VarSym, SubstRange], inScopeVars: Map[Symbol.VarSym, BoundKind], currentlyInlining: Boolean) {
+  private case class LocalContext(varSubst: Map[Symbol.VarSym, Symbol.VarSym], subst: Map[Symbol.VarSym, SubstRange], inScopeVars: Map[Symbol.VarSym, BoundKind], currentlyInlining: Boolean, cloneContext: Option[GeneratedJvmKey]) {
+
+    def atClone(destination: Expr, source: Expr, role: String)(implicit flix: Flix): LocalContext = {
+      val parents = cloneContext.toList ::: List(flix.jvmOrigins.expression(destination), flix.jvmOrigins.expression(source))
+      this.copy(cloneContext = Some(JvmOriginKey.compose("inliner-clone", parents, List(role))))
+    }
 
     /** Returns a [[LocalContext]] with the mapping `old -> fresh` added to [[varSubst]]. */
     def addVarSubst(oldVar: Symbol.VarSym, freshVar: Symbol.VarSym): LocalContext = {

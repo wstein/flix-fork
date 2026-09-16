@@ -328,6 +328,7 @@ private[monomorph2] object Specialize {
       val substMap = (ListOps.zip(prefixTparams, args.take(prefixTparams.length)) ++ ListOps.zip(defn.spec.tparams, args.drop(prefixTparams.length)))
         .map { case (tp, ty) => tp.sym -> ty }.toMap
       val freshSym = Symbol.freshDefnSym(defn.sym)
+      flix.jvmOrigins.specializedSymbol(freshSym, defn.sym, args)
       val subst = StrictSubstitution.mk(Substitution(substMap))
       (freshSym, defn, subst, subst(defn.spec.declaredScheme.base))
     }
@@ -345,10 +346,12 @@ private[monomorph2] object Specialize {
     } yield {
       val substMap = ListOps.zip(enm.tparams, args).map { case (tp, ty) => tp.sym -> ty }.toMap
       val freshSym = Symbol.freshEnumSym(enm.sym)
+      flix.jvmOrigins.specializedSymbol(freshSym, enm.sym, args)
       val subst = StrictSubstitution.mk(Substitution(substMap))
       val newCases = enm.cases.map {
         case (caseSym, TypedAst.Case(_, tpes, sc, cloc)) =>
           val newCaseSym = new Symbol.CaseSym(freshSym, caseSym.name, caseSym.ordinal, caseSym.loc)
+          flix.jvmOrigins.specializedSymbol(newCaseSym, caseSym, args)
           newCaseSym -> TypedAst.Case(newCaseSym, tpes.map(subst.apply), sc, cloc)
       }
       val newEnum = TypedAst.Enum(enm.doc, enm.ann, enm.mod, freshSym, Nil, enm.derives, newCases, enm.loc)
@@ -368,10 +371,12 @@ private[monomorph2] object Specialize {
     } yield {
       val substMap = ListOps.zip(enm.index :: enm.tparams, args).map { case (tp, ty) => tp.sym -> ty }.toMap
       val freshSym = Symbol.freshEnumSym(SpecializeAndLower.lowerRestrictableEnumSym(sym))
+      flix.jvmOrigins.specializedSymbol(freshSym, sym, args)
       val subst = StrictSubstitution.mk(Substitution(substMap))
       val newCases = enm.cases.map {
         case (caseSym, TypedAst.RestrictableCase(_, tpes, sc, cloc)) =>
           val newCaseSym = new Symbol.CaseSym(freshSym, caseSym.name, Symbol.CaseSym.NoOrdinal, caseSym.loc)
+          flix.jvmOrigins.specializedSymbol(newCaseSym, caseSym, args)
           newCaseSym -> TypedAst.Case(newCaseSym, tpes.map(subst.apply), sc, cloc)
       }
       val newEnum = TypedAst.Enum(enm.doc, enm.ann, enm.mod, freshSym, Nil, enm.derives, newCases, enm.loc)
@@ -391,10 +396,12 @@ private[monomorph2] object Specialize {
     } yield {
       val substMap = ListOps.zip(struct.tparams, args).map { case (tp, ty) => tp.sym -> ty }.toMap
       val freshSym = Symbol.freshStructSym(struct.sym)
+      flix.jvmOrigins.specializedSymbol(freshSym, struct.sym, args)
       val subst = StrictSubstitution.mk(Substitution(substMap))
       val newFields = struct.fields.map {
         case (fieldSym, TypedAst.StructField(_, tpe, floc)) =>
           val newFieldSym = new Symbol.StructFieldSym(freshSym, fieldSym.name, fieldSym.loc)
+          flix.jvmOrigins.specializedSymbol(newFieldSym, fieldSym, args)
           newFieldSym -> TypedAst.StructField(newFieldSym, subst(tpe), floc)
       }
       val newStruct = TypedAst.Struct(struct.doc, struct.ann, struct.mod, freshSym, Nil, struct.sc, newFields, struct.loc)

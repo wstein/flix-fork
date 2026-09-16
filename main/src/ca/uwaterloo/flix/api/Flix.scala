@@ -22,7 +22,7 @@ import ca.uwaterloo.flix.language.dbg.AstPrinter
 import ca.uwaterloo.flix.language.fmt.FormatOptions
 import ca.uwaterloo.flix.language.jvm.{ByteBuddyJavaTypeProvider, DependencyClassPath, ExternalJarLoader, JavaTypeProvider}
 import ca.uwaterloo.flix.language.phase.*
-import ca.uwaterloo.flix.language.phase.jvm.CodeGen
+import ca.uwaterloo.flix.language.phase.jvm.{CodeGen, JvmCompilationOrigins}
 import ca.uwaterloo.flix.language.phase.monomorph.Specialization
 import ca.uwaterloo.flix.language.phase.monomorph2.Monomorpher2
 import ca.uwaterloo.flix.language.phase.optimizer.{LambdaDrop, Optimizer}
@@ -70,6 +70,22 @@ object Flix {
   * Main programmatic interface for Flix.
   */
 class Flix {
+  private var activeJvmOrigins: Option[JvmCompilationOrigins] = None
+
+  def jvmOrigins: JvmCompilationOrigins = activeJvmOrigins.getOrElse(
+    throw InternalCompilerException("JVM provenance is unavailable outside code generation.", SourceLocation.Unknown))
+
+  private[flix] def withJvmOrigins[A](root: TypedAst.Root)(body: => A): A = {
+    if (activeJvmOrigins.nonEmpty) {
+      throw InternalCompilerException("Nested code generation cannot share JVM provenance.", SourceLocation.Unknown)
+    }
+    val origins = JvmCompilationOrigins.capture(root)
+    activeJvmOrigins = Some(origins)
+    try body finally {
+      activeJvmOrigins = None
+      origins.close()
+    }
+  }
 
   /**
     * A sequence of inputs to be parsed into Flix ASTs.
@@ -643,7 +659,11 @@ class Flix {
     * we explicitly set certain local variables to `null` once they are no longer needed.
     * This manual cleanup has been verified as effective in the profiler.
     */
-  def codeGen(typedAst: TypedAst.Root): CompilationResult = try {
+  def codeGen(typedAst: TypedAst.Root): CompilationResult = withJvmOrigins(typedAst) {
+    codeGenWithOrigins(typedAst)
+  }
+
+  private def codeGenWithOrigins(typedAst: TypedAst.Root): CompilationResult = try {
     // Mark this object as implicit.
     implicit val flix: Flix = this
 
@@ -654,41 +674,52 @@ class Flix {
     initThreadPool()
 
     var treeShaker1Ast = TreeShaker1.run(typedAst)
+    jvmOrigins.retainSource(treeShaker1Ast)
     // Note: Do not null typedAst. It is used later.
 
     var monomorpherAst =
       if (options.xnewmono) Monomorpher2.run(treeShaker1Ast)
       else Specialization.run(treeShaker1Ast)
+    jvmOrigins.retainMono(monomorpherAst)
     treeShaker1Ast = null // Explicitly null-out such that the memory becomes eligible for GC.
 
     var lambdaDropAst = LambdaDrop.run(monomorpherAst)
+    jvmOrigins.retainMono(lambdaDropAst)
     monomorpherAst = null // Explicitly null-out such that the memory becomes eligible for GC.
 
     var optimizerAst = Optimizer.run(lambdaDropAst)
     lambdaDropAst = null // Explicitly null-out such that the memory becomes eligible for GC.
 
     var simplifierAst = Simplifier.run(optimizerAst)
+    jvmOrigins.retainRoot(simplifierAst, keepExpressions = true)
     optimizerAst = null // Explicitly null-out such that the memory becomes eligible for GC.
 
     var closureConvAst = ClosureConv.run(simplifierAst)
+    jvmOrigins.retainRoot(closureConvAst, keepExpressions = true)
     simplifierAst = null // Explicitly null-out such that the memory becomes eligible for GC.
 
     var lambdaLiftAst = LambdaLift.run(closureConvAst)
+    jvmOrigins.retainRoot(lambdaLiftAst, keepExpressions = false)
     closureConvAst = null // Explicitly null-out such that the memory becomes eligible for GC.
 
     var treeShaker2Ast = TreeShaker2.run(lambdaLiftAst)
+    jvmOrigins.retainRoot(treeShaker2Ast, keepExpressions = false)
     lambdaLiftAst = null // Explicitly null-out such that the memory becomes eligible for GC.
 
     var effectBinderAst = EffectBinder.run(treeShaker2Ast)
+    jvmOrigins.retainRoot(effectBinderAst, keepExpressions = false)
     treeShaker2Ast = null // Explicitly null-out such that the memory becomes eligible for GC.
 
     var tailPosAst = TailPos.run(effectBinderAst)
+    jvmOrigins.retainRoot(tailPosAst, keepExpressions = false)
     effectBinderAst = null // Explicitly null-out such that the memory becomes eligible for GC.
 
     var eraserAst = Eraser.run(tailPosAst)
+    jvmOrigins.retainRoot(eraserAst, keepExpressions = false)
     tailPosAst = null // Explicitly null-out such that the memory becomes eligible for GC.
 
     var reducerAst = Reducer.run(eraserAst)
+    jvmOrigins.retainRoot(reducerAst, keepExpressions = false)
     eraserAst = null // Explicitly null-out such that the memory becomes eligible for GC.
 
     // Generate JVM classes.

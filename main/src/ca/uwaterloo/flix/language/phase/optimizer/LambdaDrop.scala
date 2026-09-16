@@ -110,8 +110,8 @@ object LambdaDrop {
   private def lambdaDrop(defn: MonoAst.Def)(implicit lctx: LocalContext, flix: Flix): MonoAst.Def = {
     implicit val params: List[(MonoAst.FormalParam, ParamKind)] = paramKinds(lctx.recursiveCalls.toList, defn.spec.fparams)
     implicit val (newDefnSym, subst): (Symbol.VarSym, Substitution) = mkSubst(defn, params)
-    val rewrittenExp = rewriteExp(defn.exp)(defn.sym, newDefnSym, subst, params)
-    val body = mkLocalDefExpr(rewrittenExp, newDefnSym)
+    val rewrittenExp = rewriteExp(defn.exp)(defn.sym, newDefnSym, subst, params, flix)
+    val body = flix.jvmOrigins.synthetic(defn.exp, mkLocalDefExpr(rewrittenExp, newDefnSym), "LambdaDrop.localDef")
     defn.copy(exp = body)
   }
 
@@ -220,7 +220,13 @@ object LambdaDrop {
     *                   It is up to the caller to ensure which variables the substitution is defined over.
     * @param fparams0   the formal parameters and their [[ParamKind]]s of the function to rewrite.
     */
-  private def rewriteExp(expr0: MonoAst.Expr)(implicit oldDefnSym: Symbol.DefnSym, newDefnSym: Symbol.VarSym, subst: Substitution, fparams0: List[(MonoAst.FormalParam, ParamKind)]): MonoAst.Expr = expr0 match {
+  private def rewriteExp(expr0: MonoAst.Expr)(implicit oldDefnSym: Symbol.DefnSym, newDefnSym: Symbol.VarSym, subst: Substitution, fparams0: List[(MonoAst.FormalParam, ParamKind)], flix: Flix): MonoAst.Expr = {
+    flix.jvmOrigins.expression(expr0)
+    val result = rewriteExpInner(expr0)
+    flix.jvmOrigins.transfer(expr0, result, "LambdaDrop")
+  }
+
+  private def rewriteExpInner(expr0: MonoAst.Expr)(implicit oldDefnSym: Symbol.DefnSym, newDefnSym: Symbol.VarSym, subst: Substitution, fparams0: List[(MonoAst.FormalParam, ParamKind)], flix: Flix): MonoAst.Expr = expr0 match {
     case Expr.Cst(_, _, _) =>
       expr0
 

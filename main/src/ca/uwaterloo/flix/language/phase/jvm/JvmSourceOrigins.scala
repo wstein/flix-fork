@@ -12,6 +12,9 @@ final class JvmSourceOrigins private (val provenance: JvmProvenance,
   def releaseBodies(): Unit = {
     bodies = Map.empty
   }
+
+  def foreachExpression(consume: (TypedAst.Expr, GeneratedJvmKey) => Unit): Unit =
+    bodies.values.foreach(_.allEntries.foreach { case (exp, key) => consume(exp, key) })
 }
 
 object JvmSourceOrigins {
