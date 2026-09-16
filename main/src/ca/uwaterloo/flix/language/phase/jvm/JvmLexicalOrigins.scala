@@ -12,7 +12,8 @@ import scala.collection.mutable
 /** Temporary, declaration-local identity lookup. Release after copying origins to generated symbols. */
 final class JvmLexicalOrigins private (private val origins: IdentityHashMap[Expr, GeneratedJvmKey],
                                        val entries: List[(Expr, GeneratedJvmKey)],
-                                       val allEntries: List[(Expr, GeneratedJvmKey)]) {
+                                       val allEntries: List[(Expr, GeneratedJvmKey)],
+                                       private[jvm] val fingerprintEvaluations: Long) {
   def get(exp: Expr): Option[GeneratedJvmKey] = Option(origins.get(exp))
 
   def originOf(exp: Expr): GeneratedJvmKey = get(exp).getOrElse {
@@ -51,13 +52,15 @@ object JvmLexicalOrigins {
     private val ordered = mutable.ListBuffer.empty[(Expr, GeneratedJvmKey)]
     private val all = mutable.ListBuffer.empty[(Expr, GeneratedJvmKey)]
     private val groups = mutable.Map.empty[(String, String, String), Int]
+    private val fingerprints = new IdentityHashMap[Env, IdentityHashMap[Expr, mutable.Map[Int, String]]]()
+    private var fingerprintEvaluations = 0L
 
     def run(exp: Expr, owner: GeneratedJvmKey, fparams: List[FormalParam]): JvmLexicalOrigins = {
       val env = Env(fparams.zipWithIndex.map { case (param, index) =>
         param.bnd.sym -> frame("parameter", List(index.toString))
       }.toMap, Map.empty)
       visit(exp, env, frame(owner.family, owner.fields), "body", isRoot = true)
-      new JvmLexicalOrigins(origins, ordered.toList, all.toList)
+      new JvmLexicalOrigins(origins, ordered.toList, all.toList, fingerprintEvaluations)
     }
 
     private def symbol(sym: Symbol): String = {
@@ -100,7 +103,7 @@ object JvmLexicalOrigins {
 
     private def visit(exp: Expr, env: Env, scope: String, role: String, isRoot: Boolean = false): Unit = {
       exp match {
-        case _: Expr.Lambda | _: Expr.LocalDef | _: Expr.NewObject => ()
+        case _: Expr.Lambda | _: Expr.LocalDef | _: Expr.NewObject | _: Expr.Let => ()
         case _ =>
           val site = if (isRoot) frame("root", List(scope, role)) else identity(scope, "expression:" + role, fingerprint(exp, env, 0))
           val key = GeneratedJvmKey("lexical-expression", List(site))
@@ -119,6 +122,11 @@ object JvmLexicalOrigins {
           visit(rest, recursive, scope, role)
         case Expr.Let(binder, value, rest, _, _, _) =>
           val binding = identity(scope, "let:" + role, fingerprint(value, env, 0))
+          val site = if (isRoot) frame("root", List(scope, role)) else frame("let-expression", List(binding))
+          val key = GeneratedJvmKey("lexical-expression", List(site))
+          if (origins.containsKey(exp)) fail("Repeated AST identity in lexical capture.", exp)
+          origins.put(exp, key)
+          all += ((exp, key))
           visit(value, env, scope, role)
           visit(rest, env + (binder.sym -> binding), scope, role)
         case Expr.NewObject(_, _, _, _, constructors, methods, _) =>
@@ -133,7 +141,7 @@ object JvmLexicalOrigins {
         case _ =>
           val key = origins.get(exp)
           val (_, _, children) = scopedShape(exp, env, 0, Some(frame(key.family, key.fields)))
-          children.foreach { case (childRole, child, childEnv) => visit(child, childEnv, scope, role + "/" + childRole) }
+          children.foreach { case (childRole, child, childEnv) => visit(child, childEnv, scope, frame("role-path", List(role, childRole))) }
       }
     }
 
@@ -145,7 +153,16 @@ object JvmLexicalOrigins {
       case _ => fail("Expected local definition.", exp)
     }
 
-    private def fingerprint(exp: Expr, env: Env, depth: Int): String = exp match {
+    private def fingerprint(exp: Expr, env: Env, depth: Int): String = {
+      val expressions = fingerprints.computeIfAbsent(env, _ => new IdentityHashMap[Expr, mutable.Map[Int, String]]())
+      val depths = expressions.computeIfAbsent(exp, _ => mutable.Map.empty[Int, String])
+      depths.getOrElseUpdate(depth, {
+        fingerprintEvaluations += 1
+        fingerprintUncached(exp, env, depth)
+      })
+    }
+
+    private def fingerprintUncached(exp: Expr, env: Env, depth: Int): String = exp match {
       case Expr.Var(sym, _, _) => frame("var", List(reference(sym, env, exp)))
       case Expr.Lambda(param, body, _, _) =>
         frame("lambda", List(parameters(List(param), env), fingerprint(body, bind(List(param), env, depth.toString), depth + 1)))
@@ -168,7 +185,10 @@ object JvmLexicalOrigins {
       case Expr.Use(_, _, body, _) => fingerprint(body, env, depth)
       case _ =>
         val (tag, fields, children) = scopedShape(exp, env, depth)
-        frame(tag, fields ::: children.map { case (role, child, childEnv) => frame(role, List(fingerprint(child, childEnv, depth + 1))) })
+        frame(tag, fields ::: children.map { case (role, child, childEnv) =>
+          val childDepth = if (childEnv eq env) depth else depth + 1
+          frame(role, List(fingerprint(child, childEnv, childDepth)))
+        })
     }
 
     private def pattern(pat: TypedAst.Pattern): (String, List[Symbol.VarSym]) = pat match {
@@ -418,6 +438,7 @@ object JvmLexicalOrigins {
         case Expr.PutField(field, receiver, value, _, _, _) => node("put-field", List(javaField(field)), "receiver" -> receiver, "value" -> value)
         case Expr.GetStaticField(field, _, _, _) => node("get-static-field", List(javaField(field)))
         case Expr.PutStaticField(field, value, _, _, _) => node("put-static-field", List(javaField(field)), "value" -> value)
+        case _: Expr.Error => fail("JVM lexical origins require an error-free typed AST.", exp)
         case _ => fail("Unsupported expression in lexical JVM origin: " + exp.productPrefix, exp)
       }
     }

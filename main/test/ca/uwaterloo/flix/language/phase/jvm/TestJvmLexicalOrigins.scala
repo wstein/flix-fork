@@ -3,7 +3,7 @@ package ca.uwaterloo.flix.language.phase.jvm
 import ca.uwaterloo.flix.api.Flix
 import ca.uwaterloo.flix.TestUtils
 import ca.uwaterloo.flix.api.CompilerConstants
-import ca.uwaterloo.flix.language.ast.TypedAst
+import ca.uwaterloo.flix.language.ast.{SemanticOp, TypedAst}
 import ca.uwaterloo.flix.util.{InternalCompilerException, Options}
 import org.scalatest.funsuite.AnyFunSuite
 
@@ -26,6 +26,66 @@ class TestJvmLexicalOrigins extends AnyFunSuite with TestUtils {
   }
 
   private def keys(source: String): List[GeneratedJvmKey] = capture(source).entries.map(_._2)
+
+  test("sequential let fingerprint evaluations grow linearly") {
+    List(16, 32, 64).foreach { size =>
+      val bindings = (1 to size).map { index =>
+        val previous = if (index == 1) "seed" else s"value${index - 1}"
+        s"let value$index = $previous;"
+      }.mkString(" ")
+      val origins = capture(s"def example(seed: Int32): Int32 = { $bindings value$size }")
+      assert(origins.fingerprintEvaluations > 0)
+      assert(origins.fingerprintEvaluations <= 8L * (size + 1),
+        s"$size lets required ${origins.fingerprintEvaluations} fingerprint evaluations")
+    }
+  }
+
+  test("nonbinding chain fingerprint evaluations grow linearly") {
+    List(16, 32, 64).foreach { size =>
+      val root = checked("def example(value: Bool): Bool = value")
+      val decl = root.defs.values.find(_.sym.name == "example").get
+      val body = (1 to size).foldLeft(decl.exp) { (inner, _) =>
+        TypedAst.Expr.Unary(SemanticOp.BoolOp.Not, inner, inner.tpe, inner.eff, inner.loc)
+      }
+      val modified = root.copy(defs = root.defs.updated(decl.sym, decl.copy(exp = body)))
+      val origins = JvmSourceOrigins.capture(modified).body(decl.sym)
+      assert(origins.fingerprintEvaluations > 0)
+      assert(origins.fingerprintEvaluations <= 2L * (size + 1),
+        s"$size unary nodes required ${origins.fingerprintEvaluations} fingerprint evaluations")
+    }
+  }
+
+  test("let expression origins do not depend on the chain tail") {
+    val prefix = "def example(seed: Int32): Int32 = { let first = seed; let second = first; "
+    val before = capture(prefix + "second }")
+    val after = capture(prefix + "if (true) second else 3 }")
+    def letKeys(origins: JvmLexicalOrigins): List[GeneratedJvmKey] = origins.allEntries.collect {
+      case (_: TypedAst.Expr.Let, key) => key
+    }
+    assert(letKeys(before).size == 2)
+    assert(letKeys(before) == letKeys(after))
+  }
+
+  test("nested lambda fingerprints preserve binding context") {
+    val original = "def example(): Int32 -> (Int32 -> (Int32, Int32)) = outer -> inner -> (outer, inner)"
+    val renamed = "def example(): Int32 -> (Int32 -> (Int32, Int32)) = first -> second -> (first, second)"
+    val swapped = "def example(): Int32 -> (Int32 -> (Int32, Int32)) = outer -> inner -> (inner, outer)"
+    assert(keys(original) == keys(renamed))
+    assert(keys(original) != keys(swapped))
+  }
+
+  test("error expressions require an error-free typed AST") {
+    val invalid = new Flix().setOptions(Options.TestWithLibNix)
+      .addVirtualPath(CompilerConstants.VirtualTestFile, "def broken(): Int32 = true")
+    val (_, errors) = invalid.check()
+    assert(errors.nonEmpty)
+    val root = checked("def example(): Int32 = 1")
+    val decl = root.defs.values.find(_.sym.name == "example").get
+    val error = TypedAst.Expr.Error(errors.head, decl.exp.tpe, decl.exp.eff)
+    val modified = root.copy(defs = root.defs.updated(decl.sym, decl.copy(exp = error)))
+    val exception = intercept[InternalCompilerException] { JvmSourceOrigins.capture(modified) }
+    assert(exception.getMessage.contains("error-free typed AST"))
+  }
 
   test("alpha renaming and comments preserve lambda origins") {
     assert(keys("def example(a: Int32): Int32 -> (Int32, Int32) = x -> (x, a)") ==

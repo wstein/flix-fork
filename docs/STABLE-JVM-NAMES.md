@@ -76,6 +76,15 @@ Regions and nested pattern scopes retain distinct binding identities. Source
 positions and comments do not participate. Structural fingerprints are bounded
 SHA-256 digests of framed fields, not hashes of optimized bodies.
 
+Let-expression identity uses the binding's right-hand side rather than its
+remaining statement chain. Fingerprints are memoized by expression identity,
+lexical environment identity, and binding depth; nonbinding edges reuse the same
+depth. Sequential let and nonbinding chains have operation-count regression tests
+at increasing sizes. Distinct binding contexts require distinct fingerprints;
+this is not a general linear-time guarantee for arbitrary nested scopes. Role
+paths use bounded framed hashes. Error expressions are rejected with an explicit
+error-free typed-AST contract diagnostic.
+
 Lexical capture requires explicit type and declaration-origin callbacks. There
 is no nominal-symbol fallback: a default implementation and an ordinary
 definition can have the same symbol shape but different declaration families.
