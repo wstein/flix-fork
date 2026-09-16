@@ -103,6 +103,21 @@ class TestBootstrap extends AnyFunSuite {
     assert(Files.exists(classDir.resolve("Main.class")))
   }
 
+  test("build-classes reconciles obsolete class files in build/class") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out).unsafeGet
+    val b = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
+    val classDir = Bootstrap.getClassDirectory(p)
+    Files.createDirectories(classDir)
+    val staleClass = classDir.resolve("Stale.class")
+    Files.write(staleClass, Array[Byte](0xca.toByte, 0xfe.toByte, 0xba.toByte, 0xbe.toByte))
+
+    b.buildClasses(PkgTestUtils.mkFlix).unsafeGet
+
+    assert(Files.exists(classDir.resolve("Main.class")))
+    assert(!Files.exists(staleClass))
+  }
+
   test("build-jar") {
     val p = Files.createTempDirectory(ProjectPrefix)
     Bootstrap.init(p)(System.out)

@@ -493,9 +493,11 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
     * writes the generated class files to the build directory.
     */
   def buildClasses(flix: Flix): Result[Unit, BootstrapError] = {
+    val classDir = Bootstrap.getClassDirectory(projectPath)
     for {
       result <- compileProject(flix, Build.Production)
-      _ <- Steps.writeClasses(result.getClasses)
+      _ <- Steps.writeClasses(classDir, result.getClasses)
+      _ <- Steps.reconcileClassDirectory(classDir, result.getClasses)
     } yield {
       ()
     }
