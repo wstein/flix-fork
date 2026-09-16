@@ -387,7 +387,11 @@ object Eraser {
           enumSpecializations.computeIfAbsent((sym, targs), _ => sym)
         case _ =>
           // Do specialization.
-          enumSpecializations.computeIfAbsent((sym, targs), _ => Symbol.freshEnumSym(sym))
+          enumSpecializations.computeIfAbsent((sym, targs), _ => {
+            val fresh = Symbol.freshEnumSym(sym)
+            flix.jvmOrigins.erasedSymbol(fresh, sym, targs)
+            fresh
+          })
       }
     }
 
@@ -406,7 +410,11 @@ object Eraser {
           structSpecializations.computeIfAbsent((sym, targs), _ => sym)
         case _ =>
           // Do specialization.
-          structSpecializations.computeIfAbsent((sym, targs), _ => Symbol.freshStructSym(sym))
+          structSpecializations.computeIfAbsent((sym, targs), _ => {
+            val fresh = Symbol.freshStructSym(sym)
+            flix.jvmOrigins.erasedSymbol(fresh, sym, targs)
+            fresh
+          })
       }
     }
 

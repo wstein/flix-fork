@@ -141,7 +141,7 @@ object Lowering {
   /**
     * Lowers the given enum `enum0` from a restrictable enum into a regular enum.
     */
-  protected[monomorph] def lowerRestrictableEnum(enum0: TypedAst.RestrictableEnum): MonoAst.Enum = enum0 match {
+  protected[monomorph] def lowerRestrictableEnum(enum0: TypedAst.RestrictableEnum)(implicit flix: Flix): MonoAst.Enum = enum0 match {
     case TypedAst.RestrictableEnum(doc, ann, mod, sym0, index0, tparams0, _, cases0, loc) =>
       // index is erased since related checking has concluded.
       // Restrictable tag is lowered into a regular tag
@@ -173,10 +173,11 @@ object Lowering {
   protected[monomorph] def lowerStruct(struct0: TypedAst.Struct): MonoAst.Struct = struct0 match {
     case TypedAst.Struct(doc, ann, mod, sym, tparams0, _, fields0, loc) =>
       val tparams = tparams0.map(lowerTypeParam)
-      val fields = fields0.map {
+      val sortedFields = fields0.toList.sortBy { case (fieldSym, _) => fieldSym.name }
+      val fields = sortedFields.map {
         case (fieldSym, field) => MonoAst.StructField(fieldSym, lowerType(field.tpe), loc)
       }
-      MonoAst.Struct(doc, ann, mod, sym, tparams, fields.toList, loc)
+      MonoAst.Struct(doc, ann, mod, sym, tparams, fields, loc)
   }
 
   /**
@@ -202,7 +203,10 @@ object Lowering {
   /**
     * Lowers `exp0` replacing all types with the lowered types and lowering channels and fixpoint to the primitives.
     */
-  private def lowerExp(exp0: TypedAst.Expr)(implicit ctx: Context, lctx: LocalContext, root: TypedAst.Root, flix: Flix): MonoAst.Expr = exp0 match {
+  private def lowerExp(exp0: TypedAst.Expr)(implicit ctx: Context, lctx: LocalContext, root: TypedAst.Root, flix: Flix): MonoAst.Expr =
+    flix.jvmOrigins.transfer(exp0, lowerExpNode(exp0), "old-monomorph-lowering")
+
+  private def lowerExpNode(exp0: TypedAst.Expr)(implicit ctx: Context, lctx: LocalContext, root: TypedAst.Root, flix: Flix): MonoAst.Expr = exp0 match {
     case TypedAst.Expr.Cst(cst, tpe, loc) => MonoAst.Expr.Cst(cst, lowerType(tpe), loc)
 
     case TypedAst.Expr.Var(sym, tpe, loc) => MonoAst.Expr.Var(sym, lowerType(tpe), loc)
@@ -797,7 +801,7 @@ object Lowering {
   /**
     * Lowers `sym` from a restrictable case sym use into a regular case sym use.
     */
-  private def lowerRestrictableCaseSymUse(symUse: SymUse.RestrictableCaseSymUse): SymUse.CaseSymUse = {
+  private def lowerRestrictableCaseSymUse(symUse: SymUse.RestrictableCaseSymUse)(implicit flix: Flix): SymUse.CaseSymUse = {
     SymUse.CaseSymUse(lowerRestrictableCaseSym(symUse.sym), symUse.sym.loc)
   }
 
@@ -962,14 +966,18 @@ object Lowering {
     val defnSym = lookup(defaultHandler.handlerSym, handlerArrowType)
     val handlerDefSymUse = SymUse.DefSymUse(defnSym, expLoc)
     val handlerCall = TypedAst.Expr.ApplyDef(handlerDefSymUse, List(innerLambda), List(innerLambda.tpe), handlerArrowType, defn.spec.retTpe, eff, ApplyPosition.NonTail, expLoc)
-    defn.copy(spec = spec, exp = handlerCall)
+    val attributedCall = flix.jvmOrigins.synthetic(defn.exp, handlerCall, "old-monomorph-default-handler")
+    defn.copy(spec = spec, exp = attributedCall)
   }
 
   /**
     * Lowers `sym` from a restrictable enum sym into a regular enum sym.
     */
-  private def lowerRestrictableEnumSym(sym: Symbol.RestrictableEnumSym): Symbol.EnumSym =
-    new Symbol.EnumSym(None, sym.namespace, sym.name, sym.loc)
+  private def lowerRestrictableEnumSym(sym: Symbol.RestrictableEnumSym)(implicit flix: Flix): Symbol.EnumSym = {
+    val loweredSym = new Symbol.EnumSym(None, sym.namespace, sym.name, sym.loc)
+    flix.jvmOrigins.symbols.register(loweredSym, flix.jvmOrigins.symbols.origin(sym))
+    loweredSym
+  }
 
   /**
     * Returns the definition associated with the given symbol `sym`.
@@ -1086,9 +1094,11 @@ object Lowering {
     *
     * NB: Ordinal is -1 because restrictable enums do not have fixed ordinals.
     */
-  private def lowerRestrictableCaseSym(sym: Symbol.RestrictableCaseSym): Symbol.CaseSym = {
+  private def lowerRestrictableCaseSym(sym: Symbol.RestrictableCaseSym)(implicit flix: Flix): Symbol.CaseSym = {
     val enumSym = lowerRestrictableEnumSym(sym.enumSym)
-    new Symbol.CaseSym(enumSym, sym.name, -1, sym.loc)
+    val loweredSym = new Symbol.CaseSym(enumSym, sym.name, -1, sym.loc)
+    flix.jvmOrigins.symbols.register(loweredSym, flix.jvmOrigins.symbols.origin(sym))
+    loweredSym
   }
 
   /**
@@ -2103,7 +2113,10 @@ object Lowering {
   /**
     * Applies the given substitution `subst` to the given expression `exp0`.
     */
-  private def substExp(exp0: MonoAst.Expr, subst: Map[Symbol.VarSym, Symbol.VarSym]): MonoAst.Expr = exp0 match {
+  private def substExp(exp0: MonoAst.Expr, subst: Map[Symbol.VarSym, Symbol.VarSym])(implicit flix: Flix): MonoAst.Expr =
+    flix.jvmOrigins.transfer(exp0, substExpNode(exp0, subst), "old-monomorph-lowering-substitution")
+
+  private def substExpNode(exp0: MonoAst.Expr, subst: Map[Symbol.VarSym, Symbol.VarSym])(implicit flix: Flix): MonoAst.Expr = exp0 match {
     case MonoAst.Expr.Cst(_, _, _) => exp0
 
     case MonoAst.Expr.Var(sym, tpe, loc) =>

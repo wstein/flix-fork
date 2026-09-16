@@ -24,6 +24,7 @@ import ca.uwaterloo.flix.language.ast.jvm.JavaMethod
 import ca.uwaterloo.flix.language.ast.ops.TypedAstOps
 import ca.uwaterloo.flix.language.ast.shared.*
 import ca.uwaterloo.flix.language.jvm.{ClassDescs, JavaMemberResolver}
+import ca.uwaterloo.flix.language.phase.jvm.JvmOriginKey
 import ca.uwaterloo.flix.language.phase.monomorph2.Specialize.*
 import ca.uwaterloo.flix.language.phase.monomorph2.Symbols.{Defs, Enums, Types}
 import ca.uwaterloo.flix.language.phase.typer.ConstraintSolver2
@@ -103,7 +104,7 @@ private[monomorph2] object SpecializeAndLower {
 
   /** Specializes and lowers `defn0` under `subst` into a `MonoAst.Def` with the specialized symbol `freshSym`. */
   private[monomorph2] def visitDef(freshSym: Symbol.DefnSym, defn0: TypedAst.Def, subst: StrictSubstitution)(implicit tables: SpecializationTables, root: TypedAst.Root, flix: Flix): MonoAst.Def = {
-    implicit val lctx: LocalContext = LocalContext.empty
+    implicit val lctx: LocalContext = LocalContext(freshSym, None, None)
     val defn = wrapIfEntryPoint(defn0)
     defn match {
       case TypedAst.Def(_, spec0, exp, loc) =>
@@ -135,7 +136,10 @@ private[monomorph2] object SpecializeAndLower {
     *   - def/sig/case/struct symbols are resolved against the solver solution,
     *   - types are lowered and Datalog/channel expressions are lowered to the primitives.
     */
-  private def visitExp(exp0: TypedAst.Expr, env0: Map[Symbol.VarSym, Symbol.VarSym], subst: StrictSubstitution)(implicit tables: SpecializationTables, lctx: LocalContext, root: TypedAst.Root, flix: Flix): MonoAst.Expr = exp0 match {
+  private def visitExp(exp0: TypedAst.Expr, env0: Map[Symbol.VarSym, Symbol.VarSym], subst: StrictSubstitution)(implicit tables: SpecializationTables, lctx: LocalContext, root: TypedAst.Root, flix: Flix): MonoAst.Expr =
+    flix.jvmOrigins.specialize(exp0, visitExpInner(exp0, env0, subst), lctx.owner, "SpecializeAndLower")
+
+  private def visitExpInner(exp0: TypedAst.Expr, env0: Map[Symbol.VarSym, Symbol.VarSym], subst: StrictSubstitution)(implicit tables: SpecializationTables, lctx: LocalContext, root: TypedAst.Root, flix: Flix): MonoAst.Expr = exp0 match {
     case TypedAst.Expr.Cst(cst, tpe, loc) =>
       val t = visitType(tpe, subst)
       MonoAst.Expr.Cst(cst, t, loc)
@@ -545,6 +549,9 @@ private[monomorph2] object SpecializeAndLower {
       // would reuse the same anonymous class name and collide, so one specialization would
       // run with the other's generated class.
       val freshSym = Symbol.mkFreshAnonClassSym(sym.loc)
+      val owner = lctx.owner
+      flix.jvmOrigins.symbols.register(freshSym, JvmOriginKey.compose("monomorph2-anonymous-class",
+        List(flix.jvmOrigins.symbols.origin(owner), flix.jvmOrigins.expression(exp0))))
       val cs = constructors.map {
         case TypedAst.JvmConstructor(cExp, cRetTpe, cEff, cLoc) =>
           MonoAst.JvmConstructor(visitExp(cExp, env0, subst), visitType(cRetTpe, subst), subst(cEff), cLoc)
@@ -555,7 +562,9 @@ private[monomorph2] object SpecializeAndLower {
           val fs = mFparams.map(lowerFormalParam).map(Specialize.rewriteFormalParam)
           val thisParam = fs.head
           val thisRef = MonoAst.Expr.Var(thisParam.sym, thisParam.tpe, loc)
-          implicit val lctx: LocalContext = LocalContext(Some(freshSym), Some(thisRef))
+          flix.jvmOrigins.record(thisRef, JvmOriginKey.compose("monomorph2-anonymous-this",
+            List(flix.jvmOrigins.symbols.origin(owner), flix.jvmOrigins.expression(mExp))))
+          implicit val lctx: LocalContext = LocalContext(owner, Some(freshSym), Some(thisRef))
           val e0 = visitExp(mExp, env0 ++ env1, subst)
           // If this overrides a Java method whose erased return type is a reference (e.g. `Object`
           // for a generic interface method) but the Flix result is primitive, box it to match the
@@ -896,13 +905,14 @@ private[monomorph2] object SpecializeAndLower {
       // pre-resolving here would crash, since root.defs has no entry for a fresh sym.
       val handlerDefSymUse = SymUse.DefSymUse(defaultHandler.handlerSym, expLoc)
       val handlerCall = TypedAst.Expr.ApplyDef(handlerDefSymUse, List(innerLambda), handlerTypeArgs, handlerArrowType, spec0.retTpe, eff, ApplyPosition.NonTail, expLoc)
-      TypedAst.Def(sym, spec, handlerCall, defLoc)
+      TypedAst.Def(sym, spec, flix.jvmOrigins.synthetic(exp, handlerCall, "monomorph2-default-handler"), defLoc)
   }
 
   /**
     * A local context threaded through `visitExp` to carry information from an
     * enclosing `NewObject` to nested `InvokeSuperMethod` expressions.
     *
+    * @param owner     The specialized definition owning the expression tree.
     * @param sym       The internal name of the enclosing anonymous class.
     *                  Set to `Some` when lowering a `NewObject` method body; `None` otherwise.
     *                  Injected into `AtomicOp.InvokeSuperMethod` so the backend can generate
@@ -911,11 +921,7 @@ private[monomorph2] object SpecializeAndLower {
     *                  parameter of the JvmMethod). Prepended to `InvokeSuperMethod` arguments
     *                  so the backend receives the receiver object as the first expression.
     */
-  private case class LocalContext(sym: Option[Symbol.AnonClassSym], thisRef: Option[MonoAst.Expr])
-
-  private object LocalContext {
-    val empty: LocalContext = LocalContext(None, None)
-  }
+  private case class LocalContext(owner: Symbol.DefnSym, sym: Option[Symbol.AnonClassSym], thisRef: Option[MonoAst.Expr])
 
   /** Lowers the given enum `enum0`. */
   private[monomorph2] def lowerEnum(enum0: TypedAst.Enum)(implicit tables: SpecializationTables, root: TypedAst.Root, flix: Flix): MonoAst.Enum = enum0 match {
@@ -941,10 +947,11 @@ private[monomorph2] object SpecializeAndLower {
   private[monomorph2] def lowerStruct(struct0: TypedAst.Struct)(implicit tables: SpecializationTables, root: TypedAst.Root, flix: Flix): MonoAst.Struct = struct0 match {
     case TypedAst.Struct(doc, ann, mod, sym, tparams0, _, fields0, loc) =>
       val tparams = tparams0.map(lowerTypeParam)
-      val fields = fields0.map {
+      val sortedFields = fields0.toList.sortBy { case (fieldSym, _) => fieldSym.name }
+      val fields = sortedFields.map {
         case (fieldSym, field) => MonoAst.StructField(fieldSym, visitTypeSubstituted(Canonicalization.simplify(field.tpe, isGround = false)), loc)
       }
-      MonoAst.Struct(doc, ann, mod, sym, tparams, fields.toList, loc)
+      MonoAst.Struct(doc, ann, mod, sym, tparams, fields, loc)
   }
 
   /** Lowers the given `op`. */
@@ -1926,7 +1933,8 @@ private[monomorph2] object SpecializeAndLower {
       case (acc, (oldSym, _)) => acc + (oldSym -> Symbol.freshVarSym(oldSym))
     }
     // Rename every symbol in `exp` for its fresh equivalent.
-    val freshExp = renameExp(exp, freshVars)
+    val freshExp = flix.jvmOrigins.cloneTree(exp, renameExp(exp, freshVars),
+      flix.jvmOrigins.expression(exp), "monomorph2-curry-fresh-lambda")
     // Curry `freshExp` in a lambda expression for each free variable.
     vars.foldRight(freshExp) {
       case ((oldSym, tpe), acc) =>
@@ -2502,6 +2510,9 @@ private[monomorph2] object SpecializeAndLower {
   /**
     * Lowers `sym` from a restrictable enum sym into a regular enum sym.
     */
-  private[monomorph2] def lowerRestrictableEnumSym(sym: Symbol.RestrictableEnumSym): Symbol.EnumSym =
-    new Symbol.EnumSym(None, sym.namespace, sym.name, sym.loc)
+  private[monomorph2] def lowerRestrictableEnumSym(sym: Symbol.RestrictableEnumSym)(implicit flix: Flix): Symbol.EnumSym = {
+    val loweredSym = new Symbol.EnumSym(None, sym.namespace, sym.name, sym.loc)
+    flix.jvmOrigins.symbols.register(loweredSym, flix.jvmOrigins.symbols.origin(sym))
+    loweredSym
+  }
 }

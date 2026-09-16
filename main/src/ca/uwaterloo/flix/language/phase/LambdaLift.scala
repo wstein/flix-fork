@@ -107,6 +107,7 @@ object LambdaLift {
 
       // Generate a fresh symbol for the new lifted definition.
       val freshSymbol = Symbol.freshDefnSym(sym0)
+      flix.jvmOrigins.derivedSymbol(freshSymbol, e, "lifted-lambda")
 
       // Construct annotations and modifiers for the fresh definition.
       val ann = Annotations.Empty
@@ -196,6 +197,7 @@ object LambdaLift {
 
     case SimplifiedAst.Expr.LocalDef(sym, fparams, exp1, exp2, _, _, loc) =>
       val freshDefnSym = Symbol.freshDefnSym(sym0)
+      flix.jvmOrigins.derivedSymbol(freshDefnSym, e, "lifted-local-definition")
       val updatedLiftedLocalDefs = liftedLocalDefs + (sym -> freshDefnSym)
       // It is **very important** we add the mapping `sym -> freshDefnSym` to liftedLocalDefs
       // before visiting the body since exp1 may contain recursive calls to `sym`

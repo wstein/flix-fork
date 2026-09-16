@@ -33,6 +33,10 @@ object CodeGen {
 
   /** Emits JVM bytecode for `root`. */
   def run(root: Root)(implicit flix: Flix): BytecodeAst.Root = flix.phase("CodeGen") {
+    val namedSymbols: Set[Symbol] = root.defs.keySet.map(sym => sym: Symbol) ++
+      root.enums.values.flatMap(getNullaryTagsOf).map(_.sym.enumSym) ++
+      root.anonClasses.map(_.sym)
+    flix.jvmOrigins.freeze(namedSymbols)
     implicit val r: Root = root
 
     // Types/classes required for Flix runtime.

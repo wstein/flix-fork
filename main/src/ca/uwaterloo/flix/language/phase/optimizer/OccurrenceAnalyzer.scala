@@ -42,8 +42,8 @@ object OccurrenceAnalyzer {
   /**
     * Performs occurrence analysis on `defn`.
     */
-  private def visitDef(defn: MonoAst.Def): MonoAst.Def = {
-    val (exp, ctx) = visitExp(defn.exp)(defn.sym)
+  private def visitDef(defn: MonoAst.Def)(implicit flix: Flix): MonoAst.Def = {
+    val (exp, ctx) = visitExp(defn.exp)(defn.sym, flix)
     val defContext = DefContext(isSelfRef(ctx.selfOccur))
     val fparams = defn.spec.fparams.map(visitFormalParam(_, ctx))
     val spec = defn.spec.copy(fparams = fparams, defContext = defContext)
@@ -53,7 +53,13 @@ object OccurrenceAnalyzer {
   /**
     * Performs occurrence analysis on `exp0`
     */
-  private def visitExp(exp0: Expr)(implicit sym0: Symbol.DefnSym): (Expr, ExprContext) = {
+  private def visitExp(exp0: Expr)(implicit sym0: Symbol.DefnSym, flix: Flix): (Expr, ExprContext) = {
+    flix.jvmOrigins.expression(exp0)
+    val (result, ctx) = visitExpInner(exp0)
+    (flix.jvmOrigins.transfer(exp0, result, "OccurrenceAnalyzer"), ctx)
+  }
+
+  private def visitExpInner(exp0: Expr)(implicit sym0: Symbol.DefnSym, flix: Flix): (Expr, ExprContext) = {
     exp0 match {
       case Expr.Cst(_, _, _) =>
         (exp0, ExprContext.Empty)
@@ -254,7 +260,7 @@ object OccurrenceAnalyzer {
     }
   }
 
-  private def visitMatchRule(rule: MonoAst.MatchRule)(implicit sym0: Symbol.DefnSym): (MonoAst.MatchRule, ExprContext) = rule match {
+  private def visitMatchRule(rule: MonoAst.MatchRule)(implicit sym0: Symbol.DefnSym, flix: Flix): (MonoAst.MatchRule, ExprContext) = rule match {
     case MonoAst.MatchRule(pat, guard, exp) =>
       val (g, ctx1) = guard.map(visitExp).unzip
       val (e, ctx2) = visitExp(exp)
@@ -268,7 +274,7 @@ object OccurrenceAnalyzer {
       }
   }
 
-  private def visitExtMatchRule(rule: MonoAst.ExtMatchRule)(implicit sym0: Symbol.DefnSym): (MonoAst.ExtMatchRule, ExprContext) = rule match {
+  private def visitExtMatchRule(rule: MonoAst.ExtMatchRule)(implicit sym0: Symbol.DefnSym, flix: Flix): (MonoAst.ExtMatchRule, ExprContext) = rule match {
     case MonoAst.ExtMatchRule(pat, exp, loc) =>
       val (e, ctx1) = visitExp(exp)
       val (p, syms) = visitExtPattern(pat, ctx1)
@@ -280,7 +286,7 @@ object OccurrenceAnalyzer {
       }
   }
 
-  private def visitCatchRule(rule: MonoAst.CatchRule)(implicit sym0: Symbol.DefnSym): (MonoAst.CatchRule, ExprContext) = rule match {
+  private def visitCatchRule(rule: MonoAst.CatchRule)(implicit sym0: Symbol.DefnSym, flix: Flix): (MonoAst.CatchRule, ExprContext) = rule match {
     case MonoAst.CatchRule(sym, clazz, exp) =>
       val (e, ctx1) = visitExp(exp)
       val ctx2 = ctx1.removeVar(sym)
@@ -291,7 +297,7 @@ object OccurrenceAnalyzer {
       }
   }
 
-  private def visitHandlerRule(rule: MonoAst.HandlerRule)(implicit sym0: Symbol.DefnSym): (MonoAst.HandlerRule, ExprContext) = rule match {
+  private def visitHandlerRule(rule: MonoAst.HandlerRule)(implicit sym0: Symbol.DefnSym, flix: Flix): (MonoAst.HandlerRule, ExprContext) = rule match {
     case MonoAst.HandlerRule(op, fparams, exp) =>
       val (e, ctx1) = visitExp(exp)
       val fps = fparams.map(visitFormalParam(_, ctx1))
@@ -303,7 +309,7 @@ object OccurrenceAnalyzer {
       }
   }
 
-  private def visitJvmConstructor(constructor: MonoAst.JvmConstructor)(implicit sym0: Symbol.DefnSym): (MonoAst.JvmConstructor, ExprContext) = constructor match {
+  private def visitJvmConstructor(constructor: MonoAst.JvmConstructor)(implicit sym0: Symbol.DefnSym, flix: Flix): (MonoAst.JvmConstructor, ExprContext) = constructor match {
     case MonoAst.JvmConstructor(exp, retTpe, eff, loc) =>
       val (e, ctx1) = visitExp(exp)
       if (e eq exp) {
@@ -313,7 +319,7 @@ object OccurrenceAnalyzer {
       }
   }
 
-  private def visitJvmMethod(method: MonoAst.JvmMethod)(implicit sym0: Symbol.DefnSym): (MonoAst.JvmMethod, ExprContext) = method match {
+  private def visitJvmMethod(method: MonoAst.JvmMethod)(implicit sym0: Symbol.DefnSym, flix: Flix): (MonoAst.JvmMethod, ExprContext) = method match {
     case MonoAst.JvmMethod(ann, ident, fparams, exp, retTpe, eff, javaSig, loc) =>
       val (e, ctx1) = visitExp(exp)
       val fps = fparams.map(visitFormalParam(_, ctx1))
@@ -529,7 +535,8 @@ object OccurrenceAnalyzer {
 
     /** Returns a new [[ExprContext]] with the mapping `sym -> occur` added to [[vars]]. */
     def addVar(sym: VarSym, occur: Occur): ExprContext = {
-      this.copy(vars = this.vars + (sym -> occur))
+      val newOccur = combineSeq(this.vars.getOrElse(sym, Occur.Dead), occur)
+      this.copy(vars = this.vars + (sym -> newOccur))
     }
 
     /** Returns a new [[ExprContext]] with `sym` and the corresponding value removed from [[vars]]. */
