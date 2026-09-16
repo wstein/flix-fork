@@ -45,7 +45,8 @@ object Options {
     XPerfFrontend = false,
     XPerfPar = false,
     xchaosMonkey = false,
-    xverify = false
+    xverify = false,
+    inMemory = false
   )
 
   /**
@@ -83,6 +84,7 @@ object Options {
   * @param progress       print progress during compilation.
   * @param threads        selects the number of threads to use.
   * @param assumeYes      run non-interactively and assume answer to all prompts is yes.
+  * @param inMemory       whether to run the build in memory without writing class files to disk.
   */
 case class Options(lib: LibLevel,
                    build: Build,
@@ -103,26 +105,36 @@ case class Options(lib: LibLevel,
                    XPerfPar: Boolean,
                    XPerfN: Option[Int],
                    xchaosMonkey: Boolean,
-                   xverify: Boolean
+                   xverify: Boolean,
+                   inMemory: Boolean
                   )
 
 /**
   * An option to control whether to run in development or production mode.
   */
-sealed trait Build
+sealed trait Build {
+  /**
+    * The name of the directory this mode's output goes in, under the project's build directory.
+    */
+  def directoryName: String
+}
 
 object Build {
   /**
     * Run in development mode.
     */
-  case object Development extends Build
+  case object Development extends Build {
+    override val directoryName: String = "development"
+  }
 
   /**
     * Run in production mode.
     *
     * Running the compiler in production mode disables certain features that are allowed during development.
     */
-  case object Production extends Build
+  case object Production extends Build {
+    override val directoryName: String = "production"
+  }
 }
 
 sealed trait LibLevel

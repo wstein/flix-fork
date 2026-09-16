@@ -93,7 +93,8 @@ object Main {
       XPerfPar = cmdOpts.XPerfPar,
       XPerfN = cmdOpts.XPerfN,
       xchaosMonkey = Options.Default.xchaosMonkey,
-      xverify = cmdOpts.xverify
+      xverify = cmdOpts.xverify,
+      inMemory = cmdOpts.inMemory
     )
 
     // Don't use progress bar if benchmarking.
@@ -539,6 +540,7 @@ object Main {
     XPerfN: Option[Int] = None,
     XPerfFrontend: Boolean = false,
     XPerfPar: Boolean = false,
+    inMemory: Boolean = false,
     files: Seq[File] = Seq()
   )
 
@@ -735,6 +737,9 @@ object Main {
 
       opt[Unit]("version").action((_, c) => c.copy(version = true)).
         text("prints the version number.")
+
+      opt[Unit]("in-memory").action((_, c) => c.copy(inMemory = true)).
+        text("runs the build in memory without writing class files to disk.")
 
       // Experimental options:
       note("")
