@@ -40,8 +40,8 @@ object GenFunAndClosureClasses {
     * String.charAt     =>    String/Def$charAt
     * List.length       =>    List/Def$length
     */
-  def defnDesc(sym: Symbol.DefnSym): ClassDesc =
-    Mangle.mkDesc(sym.namespace, Mangle.mkClassName("Def", sym.name))
+  def defnDesc(sym: Symbol.DefnSym)(implicit flix: Flix): ClassDesc =
+    Mangle.mkDesc(sym.namespace, Mangle.mkClassName("Def", JvmNames.defnName(sym)))
 
   /**
     * Returns the descriptor of the closure class `Clo$Name` of `sym`.
@@ -49,8 +49,8 @@ object GenFunAndClosureClasses {
     * String.charAt     =>    String/Clo$charAt
     * List.map          =>    List/Clo$map
     */
-  def closureDesc(sym: Symbol.DefnSym): ClassDesc =
-    Mangle.mkDesc(sym.namespace, Mangle.mkClassName("Clo", sym.name))
+  def closureDesc(sym: Symbol.DefnSym)(implicit flix: Flix): ClassDesc =
+    Mangle.mkDesc(sym.namespace, Mangle.mkClassName("Clo", JvmNames.defnName(sym)))
 
   /**
     * Returns a map of function- and closure-classes for the given set `defs`.

@@ -24,7 +24,7 @@ import ca.uwaterloo.flix.language.phase.jvm.ClassMaker.{ConstructorMethod, Insta
 import ca.uwaterloo.flix.language.phase.jvm.Instructions.*
 import ca.uwaterloo.flix.language.phase.jvm.Mangle.mkDesc
 import ca.uwaterloo.flix.language.phase.jvm.MethodTypeDescs.mkDescriptor
-import ca.uwaterloo.flix.language.phase.jvm.{ClassConstants, ClassMaker, GenFunAndClosureClasses, Mangle, TypeDescs}
+import ca.uwaterloo.flix.language.phase.jvm.{ClassConstants, ClassMaker, GenFunAndClosureClasses, JvmNames, Mangle, TypeDescs}
 import org.objectweb.asm.MethodVisitor
 
 import java.lang.constant.ClassDesc
@@ -44,7 +44,7 @@ object GenNamespace {
     cm.mkConstructor(Constructor(ns), IsPublic, nullarySuperConstructor(ClassConstants.Object.Constructor)(_))
 
     for (defn <- defs) {
-      cm.mkStaticMethod(ShimMethod(ns, defn), IsPublic, IsFinal, shimIns(defn)(_))
+      cm.mkStaticMethod(ShimMethod(ns, defn), IsPublic, IsFinal, shimIns(defn)(_, flix))
     }
 
     cm.closeClassMaker()
@@ -52,15 +52,16 @@ object GenNamespace {
 
   private def Constructor(ns: List[String]): ConstructorMethod = ConstructorMethod(desc(ns), Nil)
 
-  def ShimMethod(ns: List[String], defn: JvmAst.Def): StaticMethod = {
+  def ShimMethod(ns: List[String], defn: JvmAst.Def)(implicit flix: Flix): StaticMethod = {
     val erasedArgs = defn.fparams.map(_.tpe).map(TypeDescs.toErasedClassDesc)
     val erasedResult = TypeDescs.toErasedClassDesc(defn.unboxedType.tpe)
     // Exported names are checked in Safety, so no mangling is needed.
-    val name = if (defn.ann.isExport) defn.sym.name else "m_" + Mangle.mangle(defn.sym.name)
+    val defnName = JvmNames.defnName(defn.sym)
+    val name = if (defn.ann.isExport) defn.sym.text else "m_" + Mangle.mangle(defnName)
     StaticMethod(desc(ns), name, mkDescriptor(erasedArgs *)(erasedResult))
   }
 
-  private def shimIns(defn: JvmAst.Def)(implicit mv: MethodVisitor): Unit = {
+  private def shimIns(defn: JvmAst.Def)(implicit mv: MethodVisitor, flix: Flix): Unit = {
     val defnDesc = GenFunAndClosureClasses.defnDesc(defn.sym)
     val paramTypes = defn.fparams.map(fp => TypeDescs.toErasedClassDesc(fp.tpe))
     withNames(0, paramTypes) {

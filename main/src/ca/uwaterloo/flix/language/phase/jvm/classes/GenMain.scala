@@ -42,14 +42,14 @@ object GenMain {
   def genByteCode(sym: Symbol.DefnSym)(implicit flix: Flix): Array[Byte] = {
     val cm = ClassMaker.mkClass(this.Desc, IsFinal)
 
-    cm.mkStaticMethod(MainMethod, IsPublic, NotFinal, mainIns(sym)(_))
+    cm.mkStaticMethod(MainMethod, IsPublic, NotFinal, mainIns(sym)(_, flix))
 
     cm.closeClassMaker()
   }
 
   def MainMethod: StaticMethod = StaticMethod(this.Desc, "main", mkVoidDescriptor(JavaClasses.String.arrayType()))
 
-  private def mainIns(sym: Symbol.DefnSym)(implicit mv: MethodVisitor): Unit = {
+  private def mainIns(sym: Symbol.DefnSym)(implicit mv: MethodVisitor, flix: Flix): Unit = {
     val defName = GenFunAndClosureClasses.defnDesc(sym)
     withName(0, JavaClasses.String.arrayType())(args => {
       args.load()

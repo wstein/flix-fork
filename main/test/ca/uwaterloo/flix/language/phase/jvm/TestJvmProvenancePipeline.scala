@@ -5,18 +5,21 @@ import ca.uwaterloo.flix.language.ast.Symbol
 import ca.uwaterloo.flix.language.ast.shared.SecurityContext
 import ca.uwaterloo.flix.runtime.JvmLoader
 import ca.uwaterloo.flix.util.{InternalCompilerException, Options}
+import org.objectweb.asm.ClassReader
 import org.scalatest.funsuite.AnyFunSuite
 
 import scala.collection.concurrent.TrieMap
 
 class TestJvmProvenancePipeline extends AnyFunSuite {
-  private def emitted(source: String, newMono: Boolean, threads: Int, checkRuntime: Boolean = false): Map[String, Set[String]] = {
+  private case class Emission(suffixes: Map[String, Set[String]], descriptors: Set[String])
+
+  private def emitted(source: String, newMono: Boolean, threads: Int, checkRuntime: Boolean = false): Emission = {
     implicit val security: SecurityContext = SecurityContext.Unrestricted
     val flix = new Flix().setOptions(Options.TestWithLibMin.copy(xnewmono = newMono, threads = threads))
-    val entries = TrieMap.empty[Symbol.DefnSym, GeneratedJvmKey]
+    val entries = TrieMap.empty[Symbol.DefnSym, String]
     flix.addListener(new FlixListener {
       override def notify(event: FlixEvent): Unit = event match {
-        case FlixEvent.EmittedClass(sym, _) => entries.put(sym, flix.jvmOrigins.symbols.origin(sym)); ()
+        case FlixEvent.EmittedClass(sym, _) => entries.put(sym, flix.jvmOrigins.nameTable.suffix(sym)); ()
         case _ => ()
       }
     })
@@ -29,7 +32,18 @@ class TestJvmProvenancePipeline extends AnyFunSuite {
     val compilation = flix.codeGen(root.copy(entryPoints = entriesToKeep))
     assert(entries.nonEmpty)
     intercept[InternalCompilerException] { flix.jvmOrigins }
-    val table = JvmNameTable.build(entries)
+    val descriptors = compilation.getClasses.iterator.map { case (descriptor, clazz) =>
+      val internalName = new ClassReader(clazz.bytecode).getClassName
+      val actualDescriptor = s"L$internalName;"
+      assert(actualDescriptor == descriptor.descriptorString(), s"Classfile name disagrees with map key: $internalName")
+      assert(clazz.name == descriptor)
+      actualDescriptor
+    }.toSet
+    entries.foreach { case (sym, suffix) =>
+      if (sym.id.nonEmpty) {
+        assert(descriptors.exists(_.contains(suffix)), s"No emitted class contains the frozen suffix for $sym: $suffix")
+      }
+    }
     if (checkRuntime) {
       val tests = JvmLoader.load(compilation).tests
       assert(tests.nonEmpty)
@@ -38,7 +52,14 @@ class TestJvmProvenancePipeline extends AnyFunSuite {
         test.run()
       }
     }
-    entries.keys.groupBy(_.text).map { case (name, syms) => name -> syms.map(table.suffix).toSet }
+    val suffixes = entries.keys.groupBy(_.text).map { case (name, syms) => name -> syms.map(entries.apply).toSet }
+    Emission(suffixes, descriptors)
+  }
+
+  private def assertPreserved(before: Emission, after: Emission): Unit = {
+    before.suffixes.foreach { case (name, suffixes) => assert(after.suffixes(name) == suffixes, name) }
+    assert(before.descriptors.subsetOf(after.descriptors),
+      s"Emitted class descriptors changed: ${(before.descriptors -- after.descriptors).toList.sorted.mkString(", ")}")
   }
 
   private val program = """@DontInline
@@ -51,8 +72,8 @@ class TestJvmProvenancePipeline extends AnyFunSuite {
     test(s"monomorphizer $newMono preserves emitted-symbol provenance across parallel builds and unrelated edits") {
       val first = emitted(program, newMono, 1)
       val second = emitted("pub def unrelated(): Int32 = 23\n" + program, newMono, 4)
-      first.foreach { case (name, keys) => assert(second(name) == keys, name) }
-      assert(first.keys.exists(_.contains("provenanceIdentity")))
+      assertPreserved(first, second)
+      assert(first.suffixes.keys.exists(_.contains("provenanceIdentity")))
     }
 
     test(s"monomorphizer $newMono distinguishes inlined clones of identical lambda sites") {
@@ -98,17 +119,53 @@ class TestJvmProvenancePipeline extends AnyFunSuite {
       assert(emitted(source, newMono, 1) == emitted(source, newMono, 4))
     }
 
-    test(s"monomorphizer $newMono preserves provenance through patterns and anonymous classes") {
-      val source = """import java.lang.Runnable
-                     |enum Box[a] { case Empty, case Box(a) }
+    test(s"monomorphizer $newMono preserves emitted nullary and anonymous classes across edits and parallel builds") {
+      val imports = "import java.util.function.IntSupplier\nimport java.util.ArrayList\n"
+      val source = """enum Box[a] { case Empty, case Box(a) }
                      |@DontInline
                      |pub def selectValue(value: Box[Int32]): Int32 -> Int32 = match value {
                      |  case Box.Empty => argument -> argument
                      |  case Box.Box(inner) => argument -> if (true) inner else argument
                      |}
-                     |pub def example(): Runnable \ IO = new Runnable { def $run(_this: Runnable): Unit = () }
+                     |@DontInline
+                     |pub def boolValue(value: Box[Bool]): Bool = match value {
+                     |  case Box.Empty => true
+                     |  case Box.Box(inner) => inner
+                     |}
+                     |@DontInline
+                     |pub def example(value: Int32): IntSupplier \ IO = new IntSupplier {
+                     |  def $getAsInt(_this: IntSupplier): Int32 = value
+                     |}
+                     |@DontInline
+                     |pub def superList(): ArrayList[String] \ IO = new ArrayList[String] {
+                     |  def new(): ArrayList[String] \ IO = super()
+                     |  def size(_this: ArrayList[String]): Int32 \ IO = super.size()
+                     |}
+                     |@Test
+                     |pub def nullaryAndAnonymousReferences(): Unit \ IO = {
+                     |  let supplier = example(37);
+                     |  let actual = supplier.getAsInt();
+                     |  let list = superList();
+                     |  let _ = list.add("entry");
+                     |  let size = list.size();
+                     |  if (actual == 37 and size == 1 and selectValue(Box.Empty)(7) == 7 and
+                     |      selectValue(Box.Box(12))(7) == 12 and boolValue(Box.Empty) and
+                     |      not boolValue(Box.Box(false))) () else bug!("Incorrect nullary or anonymous class reference")
+                     |}
                      |""".stripMargin
-      assert(emitted(source, newMono, 1) == emitted(source, newMono, 4))
+      val unrelated = """enum Unrelated { case First, case Second }
+                        |pub def unrelatedCase(): Unrelated = Unrelated.First
+                        |pub def unrelatedObject(): Runnable \ IO = new Runnable { def $run(_this: Runnable): Unit = () }
+                        |""".stripMargin
+      val first = emitted(imports + source, newMono, 1, checkRuntime = true)
+      val parallel = emitted(imports + source, newMono, 4, checkRuntime = true)
+      val edited = emitted(imports + "import java.lang.Runnable\n" + unrelated + source, newMono, 4, checkRuntime = true)
+      assert(first == parallel)
+      assertPreserved(first, edited)
+      val nullaryDescriptors = first.descriptors.filter(desc => desc.startsWith("LCase$Box") && desc.contains("$Empty"))
+      assert(nullaryDescriptors.size >= 2, nullaryDescriptors.toString)
+      assert(first.descriptors.exists(_.startsWith("LAnon$")))
+      assert(edited.descriptors.count(_.startsWith("LAnon$")) > first.descriptors.count(_.startsWith("LAnon$")))
     }
   }
 }

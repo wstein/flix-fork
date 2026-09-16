@@ -24,7 +24,7 @@ import ca.uwaterloo.flix.language.phase.jvm.ClassMaker.Volatility.NotVolatile
 import ca.uwaterloo.flix.language.phase.jvm.ClassMaker.{ConstructorMethod, StaticConstructorMethod, StaticField}
 import ca.uwaterloo.flix.language.phase.jvm.Instructions.*
 import ca.uwaterloo.flix.language.phase.jvm.Mangle.mkDesc
-import ca.uwaterloo.flix.language.phase.jvm.{ClassMaker, Mangle}
+import ca.uwaterloo.flix.language.phase.jvm.{ClassMaker, JvmNames, Mangle}
 import org.objectweb.asm.MethodVisitor
 
 import java.lang.constant.ClassDesc
@@ -51,8 +51,8 @@ object GenNullaryTag {
     * `Def$map` and `Eff$Console`, or, for an enum in the root namespace, `Tag$Obj` and
     * `Struct$Obj`.
     */
-  def desc(sym: Symbol.CaseSym): ClassDesc =
-    mkDesc(sym.enumSym.namespace, Mangle.mkClassName("Case", List(sym.enumSym.name, sym.name)))
+  def desc(sym: Symbol.CaseSym)(implicit flix: Flix): ClassDesc =
+    mkDesc(sym.enumSym.namespace, Mangle.mkClassName("Case", List(JvmNames.enumName(sym.enumSym), sym.name)))
 
   def genByteCode(sym: Symbol.CaseSym)(implicit flix: Flix): Array[Byte] = {
     val d = desc(sym)
@@ -65,12 +65,12 @@ object GenNullaryTag {
     cm.closeClassMaker()
   }
 
-  def SingletonField(sym: Symbol.CaseSym): StaticField = {
+  def SingletonField(sym: Symbol.CaseSym)(implicit flix: Flix): StaticField = {
     val d = desc(sym)
     StaticField(d, "singleton", d)
   }
 
-  private def Constructor(sym: Symbol.CaseSym): ConstructorMethod =
+  private def Constructor(sym: Symbol.CaseSym)(implicit flix: Flix): ConstructorMethod =
     ConstructorMethod(desc(sym), Nil)
 
   /** `[] --> return` */

@@ -10,6 +10,22 @@ import scala.collection.mutable
 final class JvmCompilationOrigins(val symbols: JvmProvenance) {
   private var expressions = new IdentityHashMap[AnyRef, GeneratedJvmKey]()
   private var closed = false
+  private var freezeStarted = false
+  private var frozenNames: Option[JvmNameTable] = None
+
+  def nameTable: JvmNameTable = synchronized {
+    frozenNames.getOrElse(fail("JVM names are not available outside frozen code generation."))
+  }
+
+  def freeze(required: Iterable[Symbol]): Unit = synchronized {
+    requireOpen()
+    freezeStarted = true
+    try {
+      frozenNames = Some(symbols.freeze(required))
+    } finally {
+      expressions = new IdentityHashMap[AnyRef, GeneratedJvmKey]()
+    }
+  }
 
   def expression(exp: AnyRef): GeneratedJvmKey = synchronized {
     Option(expressions.get(exp)).getOrElse(fail(s"Missing expression provenance for ${exp.getClass.getSimpleName}."))
@@ -99,6 +115,7 @@ final class JvmCompilationOrigins(val symbols: JvmProvenance) {
 
   def close(): Unit = synchronized {
     expressions = new IdentityHashMap[AnyRef, GeneratedJvmKey]()
+    frozenNames = None
     symbols.close()
     closed = true
   }
@@ -137,7 +154,10 @@ final class JvmCompilationOrigins(val symbols: JvmProvenance) {
     case _ => false
   }
 
-  private def requireOpen(): Unit = if (closed) fail("Compilation provenance is closed.")
+  private def requireOpen(): Unit = {
+    if (closed) fail("Compilation provenance is closed.")
+    if (freezeStarted) fail("Compilation provenance has already been frozen.")
+  }
 
   private def fail(message: String): Nothing = throw InternalCompilerException(message, SourceLocation.Unknown)
 }

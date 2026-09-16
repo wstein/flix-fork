@@ -11,6 +11,39 @@ class TestJvmCompilationOrigins extends AnyFunSuite {
   private val owner = GeneratedJvmKey("definition", List("example"))
   private def literal(value: Int): MonoAst.Expr = MonoAst.Expr.Cst(Constant.Int32(value), Type.Int32, loc)
 
+  test("freezing publishes strict names and releases mutable provenance") {
+    val origins = new JvmCompilationOrigins(new JvmProvenance)
+    val sym = new Symbol.DefnSym(Some(1), Nil, "example", loc)
+    val discarded = new Symbol.DefnSym(Some(2), Nil, "discarded", loc)
+    val source = literal(0)
+    origins.record(source, owner)
+    origins.symbols.register(sym, owner)
+    origins.symbols.register(discarded, GeneratedJvmKey("discarded", Nil))
+    intercept[InternalCompilerException] { origins.nameTable }
+    origins.freeze(List(sym))
+    assert(origins.nameTable.suffix(sym) == JvmNameTable.build(List(sym -> owner)).suffix(sym))
+    intercept[InternalCompilerException] { origins.nameTable.suffix(discarded) }
+    intercept[InternalCompilerException] { origins.symbols.origin(sym) }
+    intercept[InternalCompilerException] { origins.expression(source) }
+    intercept[InternalCompilerException] { origins.record(source, owner) }
+    intercept[InternalCompilerException] { origins.freeze(List(sym)) }
+    origins.close()
+    intercept[InternalCompilerException] { origins.nameTable }
+  }
+
+  test("a failed freeze releases provenance without publishing a partial table") {
+    val origins = new JvmCompilationOrigins(new JvmProvenance)
+    val sym = new Symbol.DefnSym(Some(1), Nil, "missing", loc)
+    val source = literal(0)
+    origins.record(source, owner)
+    intercept[InternalCompilerException] { origins.freeze(List(sym)) }
+    intercept[InternalCompilerException] { origins.nameTable }
+    intercept[InternalCompilerException] { origins.expression(source) }
+    intercept[InternalCompilerException] { origins.record(source, owner) }
+    intercept[InternalCompilerException] { origins.freeze(Nil) }
+    origins.close()
+  }
+
   test("transfers preserve source identity and give generated children separate roles") {
     val origins = new JvmCompilationOrigins(new JvmProvenance)
     val source = literal(0)

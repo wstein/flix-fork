@@ -42,8 +42,8 @@ object GenAnonymousClasses {
     * Unlike defs and effects, an anonymous class has no enclosing namespace,
     * so it is placed in the root package.
     */
-  def desc(sym: Symbol.AnonClassSym): ClassDesc =
-    Mangle.mkDesc(Mangle.RootPackage, Mangle.mkClassName("Anon", sym.id.toString))
+  def desc(sym: Symbol.AnonClassSym)(implicit flix: Flix): ClassDesc =
+    Mangle.mkDesc(Mangle.RootPackage, Mangle.mkClassName("Anon", flix.jvmOrigins.nameTable.suffix(sym)))
 
   /**
     * Returns the name of the bridge method through which `method` is called on the superclass.
