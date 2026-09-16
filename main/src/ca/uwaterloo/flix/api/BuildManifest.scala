@@ -219,7 +219,7 @@ object BuildManifest {
     s"dep=$n:$size:$modified"
   }
 
-  private def relativeName(projectPath: Path, p: Path): String = {
+  def relativeName(projectPath: Path, p: Path): String = {
     val rel = if (p.startsWith(projectPath)) projectPath.relativize(p).toString else p.toString
     rel.replace('\\', '/')
   }
