@@ -1639,7 +1639,12 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
         classDir.resolve(ClassDescs.classFileNameOf(clazz.name)).normalize().toAbsolutePath
       }.toSet
 
-      val existingFiles = FileOps.getFilesIn(classDir, Int.MaxValue).map(_.normalize().toAbsolutePath)
+      // The class directory may also contain user-created files. A normal build
+      // only owns generated `.class` files; `clean` is the operation that removes
+      // the complete build directory.
+      val existingFiles = FileOps.getFilesIn(classDir, Int.MaxValue)
+        .filter(FileOps.checkExt(_, "class"))
+        .map(_.normalize().toAbsolutePath)
       for (file <- existingFiles) {
         if (!expectedFiles.contains(file)) {
           FileOps.delete(file) match {

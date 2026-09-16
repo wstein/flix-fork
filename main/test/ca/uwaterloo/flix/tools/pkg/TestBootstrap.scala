@@ -77,6 +77,41 @@ class TestBootstrap extends AnyFunSuite {
     assert(!Files.exists(staleClass))
   }
 
+  test("build removes classes from a previous source after that source is removed") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out).unsafeGet
+    val main = p.resolve("src/Main.flix")
+    FileOps.writeString(main,
+      """def obsolete(n: Int32): Int32 = if (n == 0) 0 else obsolete(n - 1)
+        |def main(): Unit \ IO = println(obsolete(1))
+        |""".stripMargin)
+    val b = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
+    val classDir = Bootstrap.getDevelopmentClassDirectory(p)
+
+    b.build(PkgTestUtils.mkFlix).unsafeGet
+    val obsolete = classDir.resolve("Def$obsolete.class")
+    assert(Files.exists(obsolete), s"Expected the first build to emit $obsolete")
+
+    FileOps.writeString(main, "def main(): Unit \\ IO = println(1)\n")
+    b.build(PkgTestUtils.mkFlix).unsafeGet
+
+    assert(!Files.exists(obsolete), "Expected the removed definition's prior class file to be reconciled away.")
+    assert(Files.exists(classDir.resolve("Main.class")))
+  }
+
+  test("build preserves non-class files in the class output directory") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out).unsafeGet
+    val b = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
+    val note = Bootstrap.getDevelopmentClassDirectory(p).resolve("README.txt")
+    Files.createDirectories(note.getParent)
+    Files.writeString(note, "user note")
+
+    b.build(PkgTestUtils.mkFlix).unsafeGet
+
+    assert(Files.exists(note))
+  }
+
   test("clean removes build/development directory and manifest") {
     val p = Files.createTempDirectory(ProjectPrefix)
     Bootstrap.init(p)(System.out).unsafeGet
