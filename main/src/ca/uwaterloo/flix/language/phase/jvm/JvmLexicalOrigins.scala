@@ -41,6 +41,16 @@ object JvmLexicalOrigins {
     def ++(bindings: Iterable[(Symbol.VarSym, String)]): Env = copy(values = values ++ bindings)
   }
 
+  private sealed trait BindingContext {
+    def scope: String
+  }
+
+  private case class AlphaBinding(depth: Int) extends BindingContext {
+    def scope: String = depth.toString
+  }
+
+  private case class SiteBinding(scope: String) extends BindingContext
+
   private def frame(tag: String, parts: List[String]): String =
     Base64.getEncoder.encodeToString(MessageDigest.getInstance("SHA-256").digest(GeneratedJvmKey(tag, parts).bytes))
 
@@ -84,6 +94,41 @@ object JvmLexicalOrigins {
         case TypeSource.Inferred => frame("inferred", Nil)
       }))
 
+    private def mapLambdaBody[A](lambda: Expr.Lambda, env: Env, context: BindingContext)
+                                (consume: (FormalParam, Expr, Env) => A): A =
+      consume(lambda.fparam, lambda.exp, bind(List(lambda.fparam), env, context.scope))
+
+    private def mapLocalDefBodies[A, B](local: Expr.LocalDef, env: Env, context: BindingContext)
+                                      (body: (List[FormalParam], Expr, Env) => A,
+                                       rest: (Expr, () => Env) => B): (A, B) = {
+      val binding = context match {
+        case AlphaBinding(_) => frame("recursive", List(context.scope))
+        case SiteBinding(_) => frame("local-def", List(context.scope))
+      }
+      val recursive = env + (local.bnd.sym -> binding)
+      val params = local.fparams.toList
+      val result = body(params, local.exp1, bind(params, recursive, context.scope))
+      val continuation = () => context match {
+        case AlphaBinding(_) => env + (local.bnd.sym -> binding)
+        case SiteBinding(_) => recursive
+      }
+      (result, rest(local.exp2, continuation))
+    }
+
+    private def mapObjectBodies[A, B](obj: Expr.NewObject, env: Env, context: BindingContext)
+                                    (constructor: (TypedAst.JvmConstructor, Env) => A,
+                                     method: (TypedAst.JvmMethod, Env, String) => B): (List[A], List[B]) = {
+      val constructors = obj.constructors.map(constructor(_, env))
+      val methods = obj.methods.map { entry =>
+        val methodScope = context match {
+          case AlphaBinding(_) => context.scope
+          case SiteBinding(site) => frame("method", List(site, entry.ident.name, parameters(entry.fparams.toList, env)))
+        }
+        method(entry, bind(entry.fparams.toList, env, methodScope), methodScope)
+      }
+      (constructors, methods)
+    }
+
     private def identity(scope: String, role: String, fingerprint: String): String = {
       val group = (scope, role, fingerprint)
       val ordinal = groups.getOrElse(group, 0)
@@ -112,14 +157,15 @@ object JvmLexicalOrigins {
           all += ((exp, key))
       }
       exp match {
-        case Expr.Lambda(param, body, _, _) =>
+        case lambda: Expr.Lambda =>
           val site = record(exp, scope, role, "lambda", fingerprint(exp, env, 0))
-          visit(body, bind(List(param), env, site), site, "body")
-        case Expr.LocalDef(_, binder, params, body, rest, _, _, _) =>
-          val site = record(exp, scope, role, "local-def", localFingerprint(exp, env, 0))
-          val recursive = env + (binder.sym -> frame("local-def", List(site)))
-          visit(body, bind(params.toList, recursive, site), site, "body")
-          visit(rest, recursive, scope, role)
+          mapLambdaBody(lambda, env, SiteBinding(site)) { (_, body, inner) => visit(body, inner, site, "body") }
+        case local: Expr.LocalDef =>
+          val site = record(exp, scope, role, "local-def", localFingerprint(local, env, 0))
+          mapLocalDefBodies(local, env, SiteBinding(site))(
+            (_, body, inner) => visit(body, inner, site, "body"),
+            (rest, recursive) => visit(rest, recursive(), scope, role))
+          ()
         case Expr.Let(binder, value, rest, _, _, _) =>
           val binding = identity(scope, "let:" + role, fingerprint(value, env, 0))
           val site = if (isRoot) frame("root", List(scope, role)) else frame("let-expression", List(binding))
@@ -129,13 +175,12 @@ object JvmLexicalOrigins {
           all += ((exp, key))
           visit(value, env, scope, role)
           visit(rest, env + (binder.sym -> binding), scope, role)
-        case Expr.NewObject(_, _, _, _, constructors, methods, _) =>
+        case obj: Expr.NewObject =>
           val site = record(exp, scope, role, "anonymous-class", fingerprint(exp, env, 0))
-          constructors.foreach(constructor => visit(constructor.exp, env, site, "constructor"))
-          methods.foreach { method =>
-            val methodScope = frame("method", List(site, method.ident.name, parameters(method.fparams.toList, env)))
-            visit(method.exp, bind(method.fparams.toList, env, methodScope), methodScope, "body")
-          }
+          mapObjectBodies(obj, env, SiteBinding(site))(
+            (constructor, inner) => visit(constructor.exp, inner, site, "constructor"),
+            (method, inner, methodScope) => visit(method.exp, inner, methodScope, "body"))
+          ()
         case Expr.Var(sym, _, _) => reference(sym, env, exp); ()
         case Expr.Use(_, _, body, _) => visit(body, env, scope, role)
         case _ =>
@@ -145,13 +190,11 @@ object JvmLexicalOrigins {
       }
     }
 
-    private def localFingerprint(exp: Expr, env: Env, depth: Int): String = exp match {
-      case Expr.LocalDef(_, binder, params, body, _, _, _, _) =>
-        val recursive = env + (binder.sym -> frame("recursive", List(depth.toString)))
-        frame("local-def", List(parameters(params.toList, env),
-          fingerprint(body, bind(params.toList, recursive, depth.toString), depth + 1)))
-      case _ => fail("Expected local definition.", exp)
-    }
+    private def localFingerprint(local: Expr.LocalDef, env: Env, depth: Int): String =
+      mapLocalDefBodies(local, env, AlphaBinding(depth))(fingerprintLocalBody(env, depth), (_, _) => ())._1
+
+    private def fingerprintLocalBody(env: Env, depth: Int)(params: List[FormalParam], body: Expr, inner: Env): String =
+      frame("local-def", List(parameters(params, env), fingerprint(body, inner, depth + 1)))
 
     private def fingerprint(exp: Expr, env: Env, depth: Int): String = {
       val expressions = fingerprints.computeIfAbsent(env, _ => new IdentityHashMap[Expr, mutable.Map[Int, String]]())
@@ -164,23 +207,26 @@ object JvmLexicalOrigins {
 
     private def fingerprintUncached(exp: Expr, env: Env, depth: Int): String = exp match {
       case Expr.Var(sym, _, _) => frame("var", List(reference(sym, env, exp)))
-      case Expr.Lambda(param, body, _, _) =>
-        frame("lambda", List(parameters(List(param), env), fingerprint(body, bind(List(param), env, depth.toString), depth + 1)))
+      case lambda: Expr.Lambda =>
+        mapLambdaBody(lambda, env, AlphaBinding(depth)) { (param, body, inner) =>
+          frame("lambda", List(parameters(List(param), env), fingerprint(body, inner, depth + 1)))
+        }
       case Expr.Let(binder, value, rest, _, _, _) =>
         frame("let", List(fingerprint(value, env, depth),
           fingerprint(rest, env + (binder.sym -> frame("let-bound", List(depth.toString))), depth + 1)))
-      case Expr.LocalDef(_, binder, _, _, rest, _, _, _) =>
-        frame("local", List(localFingerprint(exp, env, depth),
-          fingerprint(rest, env + (binder.sym -> frame("recursive", List(depth.toString))), depth + 1)))
-      case Expr.NewObject(_, clazz, _, _, constructors, methods, _) =>
-        val constructorKeys = constructors.map(constructor => frame("constructor", List(
-          encode(constructor.retTpe, env), encode(constructor.eff, env), fingerprint(constructor.exp, env, depth))))
-        val methodKeys = methods.map { method =>
-          frame("method", List(method.ident.name, parameters(method.fparams.toList, env), encode(method.retTpe, env),
+      case local: Expr.LocalDef =>
+        val (bodyKey, restKey) = mapLocalDefBodies(local, env, AlphaBinding(depth))(
+          fingerprintLocalBody(env, depth),
+          (rest, recursive) => fingerprint(rest, recursive(), depth + 1))
+        frame("local", List(bodyKey, restKey))
+      case obj: Expr.NewObject =>
+        val (constructorKeys, methodKeys) = mapObjectBodies(obj, env, AlphaBinding(depth))(
+          (constructor, inner) => frame("constructor", List(
+            encode(constructor.retTpe, env), encode(constructor.eff, env), fingerprint(constructor.exp, inner, depth))),
+          (method, inner, _) => frame("method", List(method.ident.name, parameters(method.fparams.toList, env), encode(method.retTpe, env),
             encode(method.eff, env), frame("annotations", method.ann.map(ann => frame("annotation", List(ann.clazz.descriptorString(), ann.isRuntimeVisible.toString))).sorted),
-            fingerprint(method.exp, bind(method.fparams.toList, env, depth.toString), depth + 1)))
-        }
-        frame("anonymous-class", List(clazz.desc.descriptorString(), clazz.isInterface.toString,
+            fingerprint(method.exp, inner, depth + 1))))
+        frame("anonymous-class", List(obj.clazz.desc.descriptorString(), obj.clazz.isInterface.toString,
           frame("constructors", constructorKeys), frame("methods", methodKeys.sorted)))
       case Expr.Use(_, _, body, _) => fingerprint(body, env, depth)
       case _ =>

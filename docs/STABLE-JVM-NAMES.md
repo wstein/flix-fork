@@ -88,10 +88,19 @@ paths use bounded framed hashes. Error expressions are rejected with an explicit
 error-free typed-AST contract diagnostic.
 
 Fingerprint traversal alpha-normalizes nested binders; origin traversal binds
-them to recorded lexical sites. These contexts are intentionally distinct. Shared
-expression-shape and binding helpers must preserve that distinction; a local
-definition's site excludes its continuation even when an enclosing structural
-fingerprint includes it.
+them to recorded lexical sites. Shared scoped combinators enumerate lambda,
+local-definition, and anonymous-class bodies and prepare their binding
+environments. Explicit alpha and site contexts preserve their different scope
+keys without duplicating the traversal. Local-definition continuations have lazy
+environment preparation: site fingerprinting excludes the continuation, while
+full-expression fingerprinting and origin visitation include it. Anonymous-class
+fingerprints sort method keys; visitation retains source order. Fingerprint-only
+type and annotation metadata is encoded by the fingerprint consumer, not by the
+shared traversal.
+Golden fixtures pin the pre-refactor keys, traversal order, and fingerprint
+evaluation counts for nested lambdas, recursive local definitions, and anonymous
+classes with explicit constructors. Reversing anonymous-class methods changes
+visitation order but not their semantic origins or the enclosing class key.
 
 Lexical capture requires explicit type and declaration-origin callbacks. There
 is no nominal-symbol fallback: a default implementation and an ordinary

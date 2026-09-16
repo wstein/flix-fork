@@ -27,6 +27,110 @@ class TestJvmLexicalOrigins extends AnyFunSuite with TestUtils {
 
   private def keys(source: String): List[GeneratedJvmKey] = capture(source).entries.map(_._2)
 
+  private def characterization(origins: JvmLexicalOrigins): List[String] = {
+    def entry(prefix: String, exp: TypedAst.Expr, key: GeneratedJvmKey): String =
+      s"$prefix:${exp.getClass.getSimpleName}:${key.family}:${key.fields.mkString(":")}"
+    List(s"fingerprintEvaluations:${origins.fingerprintEvaluations}") :::
+      origins.entries.map { case (exp, key) => entry("entry", exp, key) } :::
+      origins.allEntries.map { case (exp, key) => entry("all", exp, key) }
+  }
+
+  test("golden nested lambda origins and traversal order") {
+    val origins = capture("def example(captured: Int32): Int32 -> (Int32 -> (Int32, Int32, Int32)) = outer -> inner -> (captured, outer, inner)")
+    val actual = characterization(origins)
+    assert(actual == List(
+      "fingerprintEvaluations:15",
+      "entry:Lambda:lexical-lambda:Z4EEGU/32ru4uYTUrOGvmYe86GrNGTY/2SCQj3fsCuQ=",
+      "entry:Lambda:lexical-lambda:WBCtsc79/26rlV4dexWvS2JVCZjAotIiAIb8v/rX7VI=",
+      "all:Lambda:lexical-lambda:Z4EEGU/32ru4uYTUrOGvmYe86GrNGTY/2SCQj3fsCuQ=",
+      "all:Lambda:lexical-lambda:WBCtsc79/26rlV4dexWvS2JVCZjAotIiAIb8v/rX7VI=",
+      "all:Tuple:lexical-expression:bAi4yp4Mrhtmm+UAA5BeBubCHRKK5xlm85Z/rTo/+CA=",
+      "all:Var:lexical-expression:JllLOBht1hcj1zVTXd4fKsfeuVlT0I0sgm8g1ye0d/E=",
+      "all:Var:lexical-expression:XzHa9bPR41QNVwWVaTkOVjNGurbk8domxd8z3GR2+EI=",
+      "all:Var:lexical-expression:WDSaFNMFVMlTvRPjAmxSnVidp/K68Y6nBPYQab7KtQU="
+    ))
+  }
+
+  test("golden recursive local definition origins and traversal order") {
+    val source = """def example(): Int32 -> (Int32 -> Int32) = captured -> {
+                   |    def inner(value) = if (true) captured else inner(value);
+                   |    argument -> inner(argument)
+                   |}
+                   |""".stripMargin
+    val actual = characterization(capture(source))
+    assert(actual == List(
+      "fingerprintEvaluations:25",
+      "entry:Lambda:lexical-lambda:5i0cNh/2lBa/oH71TNUVdGX6vdqdgP/xSxlPEx2GrrE=",
+      "entry:LocalDef:lexical-local-def:yN4uH45t26nECfJBgK7dt0M+AqTxCe8LRlns10EF5IM=",
+      "entry:Lambda:lexical-lambda:k+pXZdQrW3glrJKt1rXvok0HAHx0AHdsrbF1sk4YLEM=",
+      "all:Lambda:lexical-lambda:5i0cNh/2lBa/oH71TNUVdGX6vdqdgP/xSxlPEx2GrrE=",
+      "all:LocalDef:lexical-local-def:yN4uH45t26nECfJBgK7dt0M+AqTxCe8LRlns10EF5IM=",
+      "all:IfThenElse:lexical-expression:+BbM/+2rG6rO5+4gh++fIQCU1gX2narZNqrxmhNYa24=",
+      "all:Cst:lexical-expression:EzG41EUWWjkOBJSyZjhscAyf0c57pXoGo47tdrm+hLg=",
+      "all:Var:lexical-expression:m8OHLO45oFhbSBaVqv1uYBr9m5tFsH6yIMlly4juZL0=",
+      "all:ApplyLocalDef:lexical-expression:kps8IrQCvd4ib4CLPRdDz7EnLy3c06Eou0gxt6T8Wgc=",
+      "all:Var:lexical-expression:66nHKnPDPWAtoCPnG1Igyt4iO6nb6gdzZWRUNHMEyho=",
+      "all:Lambda:lexical-lambda:k+pXZdQrW3glrJKt1rXvok0HAHx0AHdsrbF1sk4YLEM=",
+      "all:ApplyLocalDef:lexical-expression:9ZJjV7nedQEcayyOkgwD0PHDc92x2eTf/MbN3s7k1gk=",
+      "all:Var:lexical-expression:Nh33Saa2kqal9vvs3xvdv9Ma+3LNaaSgYhPvAZXwFI0="
+    ))
+  }
+
+  test("golden anonymous constructor and method origins and traversal order") {
+    val source = """import java.lang.Thread
+                   |eff IO
+                   |def example(label: String, number: Int32): Thread \ IO = new Thread {
+                   |    def new(): Thread \ IO = super(label)
+                   |    def toString(_this: Thread): String = {
+                   |        let identity = (value: String) -> value;
+                   |        identity(label)
+                   |    }
+                   |    def hashCode(_this: Thread): Int32 = number
+                   |}
+                   |""".stripMargin
+    val root = checked(source)
+    val decl = root.defs.values.find(_.sym.name == "example").get
+    val original = decl.exp.asInstanceOf[TypedAst.Expr.NewObject]
+    assert(original.constructors.nonEmpty)
+    assert(original.methods.size == 2)
+    val origins = JvmSourceOrigins.capture(root).body(decl.sym)
+    val reversedBody = original.copy(methods = original.methods.reverse)
+    val reversedRoot = root.copy(defs = root.defs.updated(decl.sym, decl.copy(exp = reversedBody)))
+    val reversed = JvmSourceOrigins.capture(reversedRoot).body(decl.sym)
+    assert(origins.originOf(original) == reversed.originOf(reversedBody))
+    assert(origins.allEntries.map(_._2).toSet == reversed.allEntries.map(_._2).toSet)
+    val actual = characterization(origins) ::: List("reversed-methods") ::: characterization(reversed)
+    assert(actual == List(
+      "fingerprintEvaluations:17",
+      "entry:NewObject:lexical-anonymous-class:x+ZX+NgdG1W+uOVZ4BU5aQsJYVwZcgRbUiTH3ObosqY=",
+      "entry:Lambda:lexical-lambda:OndSY2m9/a9DlSI7jUGuYpCnRPLQkMArqjT2/qZGIOM=",
+      "all:NewObject:lexical-anonymous-class:x+ZX+NgdG1W+uOVZ4BU5aQsJYVwZcgRbUiTH3ObosqY=",
+      "all:InvokeSuperConstructor:lexical-expression:PhMnV7WHjYgxq4svW59GiDyW8RlNV8L/g2Vn44lBj4c=",
+      "all:Var:lexical-expression:SGgUMVbXz2OWuDHVr49UfaWWfOaRvRNW8d4NvSxbJFc=",
+      "all:Let:lexical-expression:HXQDptCOKtr6UmC41Gfoyscq3HP71RxG4a0V4NKf+Ss=",
+      "all:Lambda:lexical-lambda:OndSY2m9/a9DlSI7jUGuYpCnRPLQkMArqjT2/qZGIOM=",
+      "all:Var:lexical-expression:txhuRCKtNcQVEGYakX7Ah45gQRMzD7MD+831anyb1O4=",
+      "all:ApplyClo:lexical-expression:fPMaicP/82QPeubDqqy1HHGIkcGmiTwcAZzEu6TbUWQ=",
+      "all:Var:lexical-expression:xePXZRpVuSTrGTNKe7kHCSQXdtf7yWjldecHI/wtnUw=",
+      "all:Var:lexical-expression:DABQ2k3qiIH2aA6dgsH5XywS1ehRHjp18uVfyY1qxkU=",
+      "all:Var:lexical-expression:m/dKpZc5xtL2Qivt/SV01Cm6zzA6MpeSRdR6DpJJ23Y=",
+      "reversed-methods",
+      "fingerprintEvaluations:17",
+      "entry:NewObject:lexical-anonymous-class:x+ZX+NgdG1W+uOVZ4BU5aQsJYVwZcgRbUiTH3ObosqY=",
+      "entry:Lambda:lexical-lambda:OndSY2m9/a9DlSI7jUGuYpCnRPLQkMArqjT2/qZGIOM=",
+      "all:NewObject:lexical-anonymous-class:x+ZX+NgdG1W+uOVZ4BU5aQsJYVwZcgRbUiTH3ObosqY=",
+      "all:InvokeSuperConstructor:lexical-expression:PhMnV7WHjYgxq4svW59GiDyW8RlNV8L/g2Vn44lBj4c=",
+      "all:Var:lexical-expression:SGgUMVbXz2OWuDHVr49UfaWWfOaRvRNW8d4NvSxbJFc=",
+      "all:Var:lexical-expression:m/dKpZc5xtL2Qivt/SV01Cm6zzA6MpeSRdR6DpJJ23Y=",
+      "all:Let:lexical-expression:HXQDptCOKtr6UmC41Gfoyscq3HP71RxG4a0V4NKf+Ss=",
+      "all:Lambda:lexical-lambda:OndSY2m9/a9DlSI7jUGuYpCnRPLQkMArqjT2/qZGIOM=",
+      "all:Var:lexical-expression:txhuRCKtNcQVEGYakX7Ah45gQRMzD7MD+831anyb1O4=",
+      "all:ApplyClo:lexical-expression:fPMaicP/82QPeubDqqy1HHGIkcGmiTwcAZzEu6TbUWQ=",
+      "all:Var:lexical-expression:xePXZRpVuSTrGTNKe7kHCSQXdtf7yWjldecHI/wtnUw=",
+      "all:Var:lexical-expression:DABQ2k3qiIH2aA6dgsH5XywS1ehRHjp18uVfyY1qxkU="
+    ))
+  }
+
   test("sequential let fingerprint evaluations grow linearly") {
     List(16, 32, 64).foreach { size =>
       val bindings = (1 to size).map { index =>
