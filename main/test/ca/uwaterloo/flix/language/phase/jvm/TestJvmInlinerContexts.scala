@@ -11,7 +11,7 @@ class TestJvmInlinerContexts extends AnyFunSuite {
   private def runTest(source: String, newMono: Boolean): Unit = {
     implicit val security: SecurityContext = SecurityContext.Unrestricted
     val flix = new Flix().setOptions(Options.TestWithLibMin.copy(xnewmono = newMono, threads = 1))
-    flix.addVirtualPath(CompilerConstants.VirtualTestFile, source)
+    flix.addSource(CompilerConstants.VirtualTestFile, sctx = security, text = source)
     val (checked, errors) = flix.check()
     assert(errors.isEmpty, errors.mkString("\n"))
     val root = checked.get

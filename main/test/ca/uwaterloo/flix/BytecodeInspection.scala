@@ -49,7 +49,7 @@ trait BytecodeInspection extends Assertions {
     )
     val flix = new Flix().setOptions(opts)
     implicit val sctx: SecurityContext = SecurityContext.Unrestricted
-    flix.addVirtualPath(CompilerConstants.VirtualTestFile, program)
+    flix.addSource(CompilerConstants.VirtualTestFile, sctx = sctx, text = program)
 
     val compilationResult = flix.compile() match {
       case Result.Ok(result) => result

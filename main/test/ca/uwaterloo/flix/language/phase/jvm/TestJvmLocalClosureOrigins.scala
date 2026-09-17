@@ -16,7 +16,7 @@ class TestJvmLocalClosureOrigins extends AnyFunSuite {
                      |        if (remaining <= 0) captured else loop(remaining - 1);
                      |    increment -> loop(limit) + increment
                      |""".stripMargin
-      flix.addVirtualPath(CompilerConstants.VirtualTestFile, source)
+      flix.addSource(CompilerConstants.VirtualTestFile, sctx = security, text = source)
       val (checked, errors) = flix.check()
       assert(errors.isEmpty, errors.mkString("\n"))
       val root = checked.get

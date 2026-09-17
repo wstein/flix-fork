@@ -33,7 +33,8 @@ import org.json4s.native.JsonMethods
 
 import java.io.{File, PrintStream}
 import java.net.BindException
-import java.nio.file.Paths
+import java.nio.file.{Path, Paths}
+import scala.collection.mutable
 
 object Main {
 
@@ -183,20 +184,27 @@ object Main {
           // running the given files loads the compiled program into the JVM.
           featureNotSupportedInNativeImage()
 
-          // configure Flix and add the paths.
-          val flix = new Flix()
-          flix.setOptions(options)
-          implicit val sctx: SecurityContext = SecurityContext.Unrestricted
+          // collect the given source files. Packages and JARs are declared in `flix.toml`.
+          val sctx: SecurityContext = SecurityContext.Unrestricted
+          val flixFiles = mutable.ArrayBuffer.empty[Path]
           for (file <- cmdOpts.files) {
             val ext = file.getName.split('.').last
             ext match {
-              case "flix" => flix.addFile(file.toPath)
-              case "fpkg" => flix.addPkg(file.toPath)
-              case "jar" => flix.addJar(file.toPath)
+              case "flix" => flixFiles += file.toPath
+              case "fpkg" | "jar" =>
+                Console.println(s"Cannot load '${file.getName}'. Flix packages and Java archives must be declared in '${Bootstrap.FLIX_TOML}'.")
+                System.exit(1)
               case _ =>
                 Console.println(s"Unrecognized file extension: '$ext'.")
                 System.exit(1)
             }
+          }
+
+          // configure Flix and add the source files.
+          val flix = new Flix()
+          flix.setOptions(options)
+          for (p <- flixFiles) {
+            flix.addFile(p, sctx)
           }
 
           flix.setFormatter(formatter)
@@ -227,8 +235,7 @@ object Main {
           if (cmdOpts.files.isEmpty) {
             exitOnResult {
               Bootstrap.bootstrap(cwd, options.githubToken).flatMap { bootstrap =>
-                val flix = new Flix().setFormatter(formatter)
-                flix.setOptions(options)
+                val flix = bootstrap.mkFlix(options, formatter)
                 bootstrap.check(flix)
               }
             }
@@ -246,8 +253,7 @@ object Main {
           }
           exitOnResult {
             Bootstrap.bootstrap(cwd, options.githubToken).flatMap { bootstrap =>
-              val flix = new Flix().setFormatter(formatter)
-              flix.setOptions(options)
+              val flix = bootstrap.mkFlix(options, formatter)
               bootstrap.build(flix)
             }
           }
@@ -259,8 +265,7 @@ object Main {
           }
           exitOnResult {
             Bootstrap.bootstrap(cwd, options.githubToken).flatMap { bootstrap =>
-              val flix = new Flix().setFormatter(formatter)
-              flix.setOptions(options)
+              val flix = bootstrap.mkFlix(options, formatter)
               bootstrap.buildClasses(flix)
             }
           }
@@ -272,8 +277,7 @@ object Main {
           }
           exitOnResult {
             Bootstrap.bootstrap(cwd, options.githubToken).flatMap { bootstrap =>
-              val flix = new Flix().setFormatter(formatter)
-              flix.setOptions(options)
+              val flix = bootstrap.mkFlix(options, formatter)
               bootstrap.buildJar(flix)
             }
           }
@@ -285,8 +289,7 @@ object Main {
           }
           exitOnResult {
             Bootstrap.bootstrap(cwd, options.githubToken).flatMap { bootstrap =>
-              val flix = new Flix().setFormatter(formatter)
-              flix.setOptions(options)
+              val flix = bootstrap.mkFlix(options, formatter)
               bootstrap.buildFatJar(flix)
             }
           }
@@ -298,7 +301,8 @@ object Main {
           }
           exitOnResult {
             Bootstrap.bootstrap(cwd, options.githubToken).flatMap { bootstrap =>
-              bootstrap.buildPkg()
+              val flix = bootstrap.mkFlix(options, formatter)
+              bootstrap.buildPkg(flix)
             }
           }
 
@@ -317,8 +321,7 @@ object Main {
           if (cmdOpts.files.isEmpty) {
             exitOnResult {
               Bootstrap.bootstrap(cwd, options.githubToken).flatMap { bootstrap =>
-                val flix = new Flix().setFormatter(formatter)
-                flix.setOptions(options)
+                val flix = bootstrap.mkFlix(options, formatter)
                 bootstrap.doc(flix)
               }
             }
@@ -335,8 +338,7 @@ object Main {
           if (cmdOpts.files.isEmpty) {
             exitOnResult {
               Bootstrap.bootstrap(cwd, options.githubToken).flatMap { bootstrap =>
-                val flix = new Flix().setFormatter(formatter)
-                flix.setOptions(options)
+                val flix = bootstrap.mkFlix(options, formatter)
                 bootstrap.format(flix)
               }
             }
@@ -359,8 +361,7 @@ object Main {
           featureNotSupportedInNativeImage()
           exitOnResult {
             Bootstrap.bootstrap(cwd, options.githubToken).flatMap { bootstrap =>
-              val flix = new Flix().setFormatter(formatter)
-              flix.setOptions(options)
+              val flix = bootstrap.mkFlix(options, formatter)
               bootstrap.run(flix, cmdOpts.args.toArray)
             }
           }
@@ -370,8 +371,7 @@ object Main {
           if (cmdOpts.files.isEmpty) {
             exitOnResult {
               Bootstrap.bootstrap(cwd, options.githubToken).flatMap { bootstrap =>
-                val flix = new Flix().setFormatter(formatter)
-                flix.setOptions(options.copy(progress = false))
+                val flix = bootstrap.mkFlix(options.copy(progress = false), formatter)
                 bootstrap.test(flix)
               }
             }
@@ -435,8 +435,7 @@ object Main {
           }
           exitOnResult {
             Bootstrap.bootstrap(cwd, options.githubToken).flatMap { bootstrap =>
-              val flix = new Flix().setFormatter(formatter)
-              flix.setOptions(options.copy(progress = false))
+              val flix = bootstrap.mkFlix(options.copy(progress = false), formatter)
               bootstrap.release(flix)(System.err)
             }
           }
@@ -448,8 +447,7 @@ object Main {
           }
           Bootstrap.bootstrap(cwd, options.githubToken).flatMap {
             bootstrap =>
-              val flix = new Flix().setFormatter(formatter)
-              flix.setOptions(options.copy(progress = false))
+              val flix = bootstrap.mkFlix(options.copy(progress = false), formatter)
               bootstrap.outdated(flix)(System.err)
           } match {
             case Result.Ok(false) =>
@@ -470,8 +468,7 @@ object Main {
           }
           exitOnResult {
             Bootstrap.bootstrap(cwd, options.githubToken).flatMap { bootstrap =>
-              val flix = new Flix().setFormatter(formatter)
-              flix.setOptions(options.copy(progress = false))
+              val flix = bootstrap.mkFlix(options.copy(progress = false), formatter)
               bootstrap.stat(flix)(System.out)
             }
           }
@@ -483,8 +480,7 @@ object Main {
           }
           exitOnResult {
             Bootstrap.bootstrap(cwd, options.githubToken).flatMap { bootstrap =>
-              val flix = new Flix().setFormatter(formatter)
-              flix.setOptions(options.copy(progress = false))
+              val flix = bootstrap.mkFlix(options.copy(progress = false), formatter)
               bootstrap.checkEffects(flix)
             }
           }
@@ -497,8 +493,7 @@ object Main {
           exitOnResult {
             Bootstrap.bootstrap(cwd, options.githubToken).flatMap {
               bootstrap =>
-                val flix = new Flix().setFormatter(formatter)
-                flix.setOptions(options.copy(progress = false))
+                val flix = bootstrap.mkFlix(options.copy(progress = false), formatter)
                 bootstrap.lockEffects(flix)
             }
           }
@@ -812,7 +807,7 @@ object Main {
       arg[File]("<file>...").action((x, c) => c.copy(files = c.files :+ x))
         .optional()
         .unbounded()
-        .text("input Flix source code files, Flix packages, and Java archives.")
+        .text("input Flix source code files.")
 
     }
 
@@ -841,10 +836,10 @@ object Main {
   private def mkFlixWithFiles(files: Seq[File], options: Options)(implicit formatter: Formatter): Flix = {
     val flix = new Flix().setFormatter(formatter)
     flix.setOptions(options)
-    implicit val sctx: SecurityContext = SecurityContext.Unrestricted
+    val sctx: SecurityContext = SecurityContext.Unrestricted
     for (file <- files) {
       if (file.getName.endsWith(".flix")) {
-        flix.addFile(file.toPath)
+        flix.addFile(file.toPath, sctx)
       } else {
         Console.println(s"Unrecognized file: '${file.getName}'. Only .flix files are supported.")
         System.exit(1)

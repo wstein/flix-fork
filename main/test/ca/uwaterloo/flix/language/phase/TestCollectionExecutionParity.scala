@@ -38,7 +38,7 @@ class TestCollectionExecutionParity extends AnyFunSuite with TestUtils {
   private def run(src: String, options: Options, label: String): Unit = {
     val flix = new Flix().setOptions(options)
     implicit val sctx: SecurityContext = SecurityContext.Unrestricted
-    flix.addVirtualPath(CompilerConstants.VirtualTestFile, src)
+    flix.addSource(CompilerConstants.VirtualTestFile, sctx = sctx, text = src)
     flix.compile() match {
       case Result.Ok(res) =>
         val tests = JvmLoader.load(res).tests

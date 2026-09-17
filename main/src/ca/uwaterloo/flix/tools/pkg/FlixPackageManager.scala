@@ -15,7 +15,7 @@
  */
 package ca.uwaterloo.flix.tools.pkg
 
-import ca.uwaterloo.flix.api.Bootstrap
+import ca.uwaterloo.flix.api.{Bootstrap, InstalledPackage}
 import ca.uwaterloo.flix.language.ast.shared.SecurityContext
 import ca.uwaterloo.flix.tools.pkg.Dependency.{FlixDependency, JarDependency, MavenDependency}
 import ca.uwaterloo.flix.tools.pkg.github.GitHub
@@ -98,6 +98,33 @@ object FlixPackageManager {
   }
 
   /**
+    * Finds every package that is required at more than one version in `manifests`.
+    *
+    * A package may occur at exactly one version in the dependency graph. Two dependents
+    * that require different versions of the same package is an error: both versions would
+    * otherwise be installed and compiled together, which duplicates every definition the
+    * package declares.
+    */
+  def checkSingleVersion(manifests: List[Manifest]): List[PackageError] = {
+    // Pair every dependency declaration with the manifest that declares it.
+    val requirements = manifests.flatMap(m => findFlixDependencies(m).map(dep => (m, dep)))
+
+    // Report every package that is required at more than one version.
+    val byPackage = requirements.groupBy { case (_, dep) => dep.identifier }
+    byPackage.toList.sortBy { case (identifier, _) => identifier }.flatMap {
+      case (identifier, reqs) =>
+        val versions = reqs.map { case (_, dep) => dep.version }.distinct
+        if (versions.sizeIs > 1) {
+          // Order by version, and then by dependent, so the message is deterministic.
+          val sorted = reqs.sortBy { case (dependent, dep) => (dep.version, dependent.name) }
+          Some(PackageError.MultipleVersions(identifier, sorted))
+        } else {
+          None
+        }
+    }
+  }
+
+  /**
     * Finds the Flix dependencies in a Manifest.
     */
   def findFlixDependencies(manifest: Manifest): List[FlixDependency] = {
@@ -120,25 +147,25 @@ object FlixPackageManager {
   }
 
   /**
-    * Installs all the Flix dependencies of `resolution` into the `lib/` directory of `projectRoot` and
-    * returns a list of paths to all the dependencies along with their allowed security context.
+    * Installs all the Flix dependencies of `resolution` into the `lib/` directory of `projectRoot`
+    * and returns the installed packages.
     */
-  def installAll(resolution: SecureResolution, projectRoot: Path, apiKey: Option[String])(implicit formatter: Formatter, out: PrintStream): Result[List[(Path, SecurityContext)], PackageError] = {
+  def installAll(resolution: SecureResolution, projectRoot: Path, apiKey: Option[String])(implicit formatter: Formatter, out: PrintStream): Result[List[InstalledPackage], PackageError] = {
     out.println("Downloading Flix dependencies...")
     val authenticatedReleases = mutable.Map.from(resolution.authenticatedReleases)
 
-    val flixPaths = resolution.manifestToFlixDeps.map { case (manifest, dep) =>
-      val sctx = resolution.security(manifest)
+    // Every dependency declaration, paired with the manifest of the package it resolves to.
+    val installed = resolution.manifestToFlixDeps.map { case (manifest, dep) =>
       val depName: String = s"${dep.username}/${dep.projectName}"
       install(depName, dep.version, fpkgAssetName(manifest), Bootstrap.EXT_FPKG, projectRoot, apiKey, authenticatedReleases) match {
-        case Ok(p) => (p, sctx)
+        case Ok(p) => InstalledPackage(p, dep.identifier, resolution.security(manifest), mountsOf(manifest))
         case Err(e) =>
           out.println(s"ERROR: Installation of `$depName' failed.")
           return Err(e)
       }
     }.toList
 
-    Ok(flixPaths)
+    Ok(installed)
   }
 
   /**
@@ -148,6 +175,13 @@ object FlixPackageManager {
     */
   private[pkg] def fpkgAssetName(manifest: Manifest): String =
     s"${manifest.name}.${Bootstrap.EXT_FPKG}"
+
+  /**
+    * Returns the mount table of `manifest`: the name of each mount to the identifier of the
+    * dependency it names.
+    */
+  private def mountsOf(manifest: Manifest): Map[String, String] =
+    manifest.flixDependencies.map(dep => dep.mount -> dep.identifier).toMap
 
   /**
     * Installs a flix package from the Github `project`.

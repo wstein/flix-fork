@@ -22,7 +22,7 @@ import ca.uwaterloo.flix.api.lsp.provider.CompletionProvider
 import ca.uwaterloo.flix.api.lsp.provider.completion.Completion
 import ca.uwaterloo.flix.language.CompilationMessage
 import ca.uwaterloo.flix.language.ast.TypedAst.Root
-import ca.uwaterloo.flix.language.ast.shared.{Input, SecurityContext, Source, SymUse}
+import ca.uwaterloo.flix.language.ast.shared.{Origin, SecurityContext, Source, SourceName, SymUse}
 
 import java.nio.file.Path
 import ca.uwaterloo.flix.language.ast.{SourceLocation, Symbol, Token, TokenKind, TypedAst}
@@ -97,6 +97,8 @@ class TestCompletionProvider extends AnyFunSuite {
     * Every test will use the same uri so that adding a new source with this uri will replace the old one.
     */
   private val Uri = CompilerConstants.VirtualTestFile.toString
+
+  private val Name = SourceName.PathName(CompilerConstants.VirtualTestFile)
 
   /**
     * A limit on the maximum number of inputs tested by each property.
@@ -417,7 +419,7 @@ class TestCompletionProvider extends AnyFunSuite {
   /**
     * Returns all autocomplete suggestions at the given position `pos` for the given AST `root` with the given `errors`.
     */
-  private def autoComplete(pos: Position, root: Root, errors: List[CompilationMessage]): List[Completion] = CompletionProvider.getCompletions(Uri, pos, errors)(root, Flix)
+  private def autoComplete(pos: Position, root: Root, errors: List[CompilationMessage]): List[Completion] = CompletionProvider.getCompletions(Name, pos, errors)(root, Flix)
 
   /**
     * Returns all *block comment* tokens in the given program `prg` associated with the given AST `root`.
@@ -610,7 +612,7 @@ class TestCompletionProvider extends AnyFunSuite {
       }
     }
 
-    Visitor.visitRoot(root, DefSymUseConsumer, FileAcceptor(Uri))
+    Visitor.visitRoot(root, DefSymUseConsumer, FileAcceptor(Name))
 
     occurs.toList
   }
@@ -628,7 +630,7 @@ class TestCompletionProvider extends AnyFunSuite {
       }
     }
 
-    Visitor.visitRoot(root, VarConsumer, FileAcceptor(Uri))
+    Visitor.visitRoot(root, VarConsumer, FileAcceptor(Name))
 
     occurs.toList
   }
@@ -638,7 +640,7 @@ class TestCompletionProvider extends AnyFunSuite {
     */
   private def compile(program: String): (Root, List[CompilationMessage]) = {
     implicit val sctx: SecurityContext = SecurityContext.Unrestricted
-    Flix.addVirtualPath(CompilerConstants.VirtualTestFile, program)
+    Flix.addSource(CompilerConstants.VirtualTestFile, program, sctx)
     Flix.check() match {
       case (Some(root), errors) => (root, errors)
       case (None, _) => fail("Compilation failed: a root is expected.")
@@ -654,7 +656,7 @@ class TestCompletionProvider extends AnyFunSuite {
     */
   private def compileWithSuccess(program: String): Root = {
     implicit val sctx: SecurityContext = SecurityContext.Unrestricted
-    Flix.addVirtualPath(CompilerConstants.VirtualTestFile, program)
+    Flix.addSource(CompilerConstants.VirtualTestFile, program, sctx)
     Flix.check() match {
       case (Some(root), Nil) => root
       case (optRoot, errors) =>
@@ -723,11 +725,8 @@ class TestCompletionProvider extends AnyFunSuite {
   /**
     * Creates a source object from the given string `content`.
     */
-  private def mkSource(content: String): Source = {
-    val sctx = SecurityContext.Unrestricted
-    val input = Input.VirtualFile(CompilerConstants.VirtualTestFile, content, sctx)
-    Source.fromString(input, content)
-  }
+  private def mkSource(content: String): Source =
+    Source.fromString(SourceName.PathName(CompilerConstants.VirtualTestFile), Origin.User, SecurityContext.Unrestricted, content)
 
   /**
     * A program `prg` with a hole - the cut - at the specified position `pos`.

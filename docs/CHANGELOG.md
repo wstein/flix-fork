@@ -12,6 +12,9 @@ Unreleased:
   targeted release API lookup, reused to download both `flix.toml` and the
   manifest-named fpkg through the authenticated asset API.
 
+Version 0.76.1:
+- Compiler: Restructure LSP internals (thanks Magnus!)
+
 Version 0.76.0:
 - Compiler: Added support for building the compiler as a Graal native image (thanks Magnus!)
 - Compiler: Reimplemented bytecode generation to use nominal class descriptors (thanks Magnus!)

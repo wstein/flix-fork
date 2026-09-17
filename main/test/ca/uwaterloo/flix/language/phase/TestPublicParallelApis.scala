@@ -117,7 +117,7 @@ class TestPublicParallelApis extends AnyFunSuite with TestUtils with BytecodeIns
   private def run(program: String, options: Options): String = {
     val flix = new Flix().setOptions(options.copy(entryPoint = Some(Symbol.mkDefnSym("main"))))
     implicit val sctx: SecurityContext = SecurityContext.Unrestricted
-    flix.addVirtualPath(CompilerConstants.VirtualTestFile, program)
+    flix.addSource(CompilerConstants.VirtualTestFile, sctx = sctx, text = program)
     flix.compile() match {
       case Result.Ok(result) =>
         val buffer = new ByteArrayOutputStream()

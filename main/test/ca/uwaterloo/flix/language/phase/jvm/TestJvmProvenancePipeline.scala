@@ -24,7 +24,7 @@ class TestJvmProvenancePipeline extends AnyFunSuite {
         case _ => ()
       }
     })
-    flix.addVirtualPath(CompilerConstants.VirtualTestFile, source)
+    flix.addSource(CompilerConstants.VirtualTestFile, sctx = security, text = source)
     val (checked, errors) = flix.check()
     assert(errors.isEmpty, errors.mkString("\n"))
     val root = checked.get

@@ -11,7 +11,7 @@ class TestJvmSourceOrigins extends AnyFunSuite {
   test("capture includes every standard library body and default implementation") {
     implicit val security: SecurityContext = SecurityContext.Unrestricted
     val flix = new Flix().setOptions(Options.TestWithLibAll)
-    flix.addVirtualPath(CompilerConstants.VirtualTestFile,
+    flix.addSource(CompilerConstants.VirtualTestFile, sctx = security, text =
       "pub def example(value: Int32): Int32 -> Int32 = argument -> argument + value")
     val (result, errors) = flix.check()
     assert(errors.isEmpty, errors.mkString("\n"))
@@ -33,7 +33,7 @@ class TestJvmSourceOrigins extends AnyFunSuite {
   test("anonymous class origins transfer to the symbol registry before releasing source bodies") {
     implicit val security: SecurityContext = SecurityContext.Unrestricted
     val flix = new Flix().setOptions(Options.TestWithLibMin)
-    flix.addVirtualPath(CompilerConstants.VirtualTestFile,
+    flix.addSource(CompilerConstants.VirtualTestFile, sctx = security, text =
       """import java.lang.Runnable
         |pub def example(): Runnable \ IO = new Runnable {
         |  def $run(_this: Runnable): Unit = ()
@@ -56,7 +56,7 @@ class TestJvmSourceOrigins extends AnyFunSuite {
     implicit val security: SecurityContext = SecurityContext.Unrestricted
     def keys(source: String): List[GeneratedJvmKey] = {
       val flix = new Flix().setOptions(Options.TestWithLibAll)
-      flix.addVirtualPath(CompilerConstants.VirtualTestFile, source)
+      flix.addSource(CompilerConstants.VirtualTestFile, sctx = security, text = source)
       val (result, errors) = flix.check()
       assert(errors.isEmpty, errors.mkString("\n"))
       val root = result.get
@@ -78,7 +78,7 @@ class TestJvmSourceOrigins extends AnyFunSuite {
   test("direct lexical capture uses the same registry as source capture") {
     implicit val security: SecurityContext = SecurityContext.Unrestricted
     val flix = new Flix().setOptions(Options.TestWithLibNix)
-    flix.addVirtualPath(CompilerConstants.VirtualTestFile,
+    flix.addSource(CompilerConstants.VirtualTestFile, sctx = security, text =
       "enum Choice { case Selected(Int32) }\npub def example(): Int32 -> Choice = value -> Choice.Selected(value)")
     val (result, errors) = flix.check()
     assert(errors.isEmpty, errors.mkString("\n"))
@@ -94,7 +94,7 @@ class TestJvmSourceOrigins extends AnyFunSuite {
   test("default implementations retain their declaration family during lexical capture") {
     implicit val security: SecurityContext = SecurityContext.Unrestricted
     val flix = new Flix().setOptions(Options.TestWithLibNix)
-    flix.addVirtualPath(CompilerConstants.VirtualTestFile,
+    flix.addSource(CompilerConstants.VirtualTestFile, sctx = security, text =
       "trait Identity[a] { pub def makeThunk(value: a): Unit -> a = () -> value }")
     val (result, errors) = flix.check()
     assert(errors.isEmpty, errors.mkString("\n"))

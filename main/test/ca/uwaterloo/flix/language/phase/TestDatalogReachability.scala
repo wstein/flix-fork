@@ -151,7 +151,7 @@ class TestDatalogReachability extends AnyFunSuite with TestUtils {
     )
     val flix = new Flix().setOptions(options)
     implicit val sctx: SecurityContext = SecurityContext.Unrestricted
-    flix.addVirtualPath(CompilerConstants.VirtualTestFile, DatalogProgram)
+    flix.addSource(CompilerConstants.VirtualTestFile, sctx = sctx, text = DatalogProgram)
 
     val compilationResult = flix.compile() match {
       case Result.Ok(result) => result

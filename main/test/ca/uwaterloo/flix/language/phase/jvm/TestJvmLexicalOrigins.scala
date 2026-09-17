@@ -13,7 +13,7 @@ class TestJvmLexicalOrigins extends AnyFunSuite with TestUtils {
   }
 
   private def checked(source: String): TypedAst.Root = {
-    val flix = new Flix().setOptions(Options.TestWithLibNix).addVirtualPath(CompilerConstants.VirtualTestFile, source)
+    val flix = new Flix().setOptions(Options.TestWithLibNix).addSource(CompilerConstants.VirtualTestFile, sctx = sctx, text = source)
     val (root, errors) = flix.check()
     assert(errors.isEmpty, errors.mkString("\n"))
     root.get
@@ -180,7 +180,7 @@ class TestJvmLexicalOrigins extends AnyFunSuite with TestUtils {
 
   test("error expressions require an error-free typed AST") {
     val invalid = new Flix().setOptions(Options.TestWithLibNix)
-      .addVirtualPath(CompilerConstants.VirtualTestFile, "def broken(): Int32 = true")
+      .addSource(CompilerConstants.VirtualTestFile, sctx = sctx, text = "def broken(): Int32 = true")
     val (_, errors) = invalid.check()
     assert(errors.nonEmpty)
     val root = checked("def example(): Int32 = 1")

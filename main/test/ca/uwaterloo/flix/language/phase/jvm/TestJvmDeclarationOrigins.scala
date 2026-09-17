@@ -11,7 +11,7 @@ class TestJvmDeclarationOrigins extends AnyFunSuite {
   private def checked(source: String): TypedAst.Root = {
     implicit val security: SecurityContext = SecurityContext.Unrestricted
     val flix = new Flix().setOptions(Options.TestWithLibNix)
-    flix.addVirtualPath(CompilerConstants.VirtualTestFile, source)
+    flix.addSource(CompilerConstants.VirtualTestFile, sctx = security, text = source)
     val (root, errors) = flix.check()
     assert(errors.isEmpty, errors.mkString("\n"))
     root.get
@@ -83,7 +83,7 @@ class TestJvmDeclarationOrigins extends AnyFunSuite {
   test("derived members and standard library declarations can be captured") {
     implicit val security: SecurityContext = SecurityContext.Unrestricted
     val flix = new Flix().setOptions(Options.TestWithLibAll)
-    flix.addVirtualPath(CompilerConstants.VirtualTestFile, "enum Color with Eq, Order, ToString { case Red, case Blue }")
+    flix.addSource(CompilerConstants.VirtualTestFile, sctx = security, text = "enum Color with Eq, Order, ToString { case Red, case Blue }")
     val (result, errors) = flix.check()
     assert(errors.isEmpty, errors.mkString("\n"))
     val root = result.get

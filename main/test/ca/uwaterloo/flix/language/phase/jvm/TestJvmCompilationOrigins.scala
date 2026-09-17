@@ -138,7 +138,7 @@ class TestJvmCompilationOrigins extends AnyFunSuite {
   test("source pruning removes unreachable bodies without losing default implementation origins") {
     implicit val security: SecurityContext = SecurityContext.Unrestricted
     val flix = new Flix().setOptions(Options.TestWithLibNix)
-    flix.addVirtualPath(CompilerConstants.VirtualTestFile,
+    flix.addSource(CompilerConstants.VirtualTestFile, sctx = security, text =
       "trait Identity[a] { pub def makeThunk(value: a): Unit -> a = () -> value }\n" +
         "pub def discarded(): Int32 = 1")
     val (result, errors) = flix.check()
