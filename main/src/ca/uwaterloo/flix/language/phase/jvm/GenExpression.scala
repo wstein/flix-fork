@@ -776,6 +776,20 @@ object GenExpression {
         DUP()
         fieldExps.foreach(compileExpr)
         INVOKESPECIAL(GenStruct.Constructor(structElms))
+        // Which struct this is, and what its fields are called, under `--Xdebug` only. The class is
+        // shared by every struct of the same erased shape and names its fields `field0`, `field1`,
+        // so without this a reader has the values and no idea what any of them is.
+        if (flix.options.xdebug) {
+          val struct = root.structs(sym)
+          val names = struct.fields.map(_.sym.name).mkString(",")
+          // `text` and the namespace rather than `toString`: a specialised struct symbol carries a
+          // fresh id -- `Counter$224018` -- which is compiler bookkeeping and not what the source
+          // calls it. A reader wants the name they wrote.
+          val qualified = (struct.sym.namespace :+ struct.sym.text).mkString(".")
+          DUP()
+          pushString(s"$qualified{$names}")
+          PUTFIELD(GenStruct.NameField(structElms))
+        }
 
       case AtomicOp.StructGet(field) =>
 

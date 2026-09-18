@@ -41,6 +41,12 @@ compiler captures use `_` so later names cannot shift onto the wrong value. A cl
 class belongs to one lifted lambda, making class-level metadata unambiguous. The IDEA
 renderer uses this constant to display captured values by their source names.
 
+Debug struct values carry a per-instance `struct` field such as
+`Counter{count,label}`. This cannot be a class constant: the JVM backend deliberately
+shares `Struct$…` classes between source structs with the same erased field shape. The
+per-value string lets IDEA pair `field0`, `field1`, and so on with the correct source
+names without guessing from layout. Release classes and values carry no such field.
+
 User-source `let` bindings are materialized in debug builds. The inliner registers them
 as `DebugLocal`, an explicit non-substitutable binding state, even when occurrence
 analysis says a pure binding is used once. This preserves the inliner's substitution
