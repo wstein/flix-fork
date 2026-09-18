@@ -17,19 +17,37 @@ package ca.uwaterloo.flix.runtime
 
 import java.util.concurrent.atomic.AtomicLong
 
-sealed trait CoverageProbeKind
+sealed trait CoverageProbeKind {
+  def wireName: String
+
+  final def isBranch: Boolean = this match {
+    case CoverageProbeKind.BranchTrue | CoverageProbeKind.BranchFalse | CoverageProbeKind.BranchRule => true
+    case CoverageProbeKind.Function | CoverageProbeKind.Line => false
+  }
+}
 
 object CoverageProbeKind {
-  case object Function extends CoverageProbeKind
-  case object Line extends CoverageProbeKind
-  case object BranchTrue extends CoverageProbeKind
-  case object BranchFalse extends CoverageProbeKind
-  case object BranchRule extends CoverageProbeKind
+  case object Function extends CoverageProbeKind { val wireName: String = "function" }
+  case object Line extends CoverageProbeKind { val wireName: String = "line" }
+  case object BranchTrue extends CoverageProbeKind { val wireName: String = "branch-true" }
+  case object BranchFalse extends CoverageProbeKind { val wireName: String = "branch-false" }
+  case object BranchRule extends CoverageProbeKind { val wireName: String = "branch-rule" }
 }
 
 case class CoverageProbe(id: Int, source: String, line: Int, kind: CoverageProbeKind, qualifiedName: String)
 
 case class CoverageSession(sessionId: Long, probes: Vector[CoverageProbe])
+
+/** One coherent counter snapshot and the execution context which produced it. */
+case class CoverageSnapshot(session: CoverageSession,
+                            counts: Vector[Long],
+                            partial: Boolean,
+                            testFilters: List[String]) {
+  require(session.probes.map(_.id) == session.probes.indices, "Coverage probe ids must be dense and ordered.")
+  require(counts.size == session.probes.size, "Coverage counters must match the probe table.")
+
+  def count(probe: CoverageProbe): Long = counts(probe.id)
+}
 
 object CoverageSession {
   private val NextId = new AtomicLong(1L)

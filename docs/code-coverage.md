@@ -36,9 +36,23 @@ outcomes, and selected rule bodies in matches, restrictable choices, extensible 
 handlers, and effect handlers. A rule or branch probe executes inside the selected body; it cannot be
 inferred from a surrounding line probe.
 
+## Report model
+
+A report is rendered from one immutable `CoverageSnapshot`: the ordered probe table, a same-sized
+counter vector, whether execution stopped early, and the exact test filters used for the run. JSON,
+LCOV, and the terminal summary therefore cannot observe different counter states. Filtered test
+runs describe only the selected execution and retain their filters in JSON and in the summary; they
+are never presented as an unqualified whole-suite result. Cancellation will set `partial` rather
+than discarding the counters collected before cancellation.
+
+JSON format 1 groups functions, executable lines, and individual branch outcomes beneath each
+source path, with paths and entries emitted deterministically. LCOV includes zero-hit functions,
+lines, and branches and uses `-` for an untaken branch. The serializers are pure; command-specific
+file publication is intentionally a separate integration step.
+
 Both monomorphizers lower the probe to the same JVM operation. Loading the compilation installs the
 session in the generated program's isolated class loader and returns a handle for taking snapshots
 and releasing its counters.
 
-The migration still deliberately provides no `--coverage` CLI flag. Report formats, filtered-run
-semantics, cancellation, and LSP events remain separate later slices.
+The migration still deliberately provides no `--coverage` CLI flag. CLI publication, cancellation
+plumbing, TestEventSink integration, and LSP events remain separate later slices.
