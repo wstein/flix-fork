@@ -24,5 +24,8 @@ import ca.uwaterloo.flix.language.ast.Symbol
   *
   * @param main  the reflected main function, if present. Takes the program arguments.
   * @param tests the reflected test functions in the program.
+  * @param coverage access to the loaded program's isolated coverage counters, if enabled.
   */
-case class LoadedProgram(main: Option[Array[String] => Unit], tests: Map[Symbol.DefnSym, TestFn])
+case class LoadedProgram(main: Option[Array[String] => Unit],
+                         tests: Map[Symbol.DefnSym, TestFn],
+                         coverage: Option[CoverageHandle])

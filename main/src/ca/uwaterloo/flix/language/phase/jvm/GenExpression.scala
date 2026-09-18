@@ -1090,6 +1090,12 @@ object GenExpression {
         INVOKESPECIAL(GenHoleError.Constructor) // HoleError
         ATHROW()
 
+      case AtomicOp.CoverageHit(sessionId, probeId) =>
+        compileLong(sessionId)
+        pushInt(probeId)
+        INVOKESTATIC(CoverageRuntime.HitMethod)
+        GETSTATIC(GenUnit.SingletonField)
+
       case AtomicOp.MatchError =>
         // Add source line number for debugging (failable by design)
         addLoc(loc)

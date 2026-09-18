@@ -251,7 +251,7 @@ object Inliner {
       Expr.Let(freshVarSym, e1, e2, tpe, eff, occur, loc)
 
     case Expr.Let(sym, exp1, exp2, tpe, eff, occur, loc) => (occur, exp1.eff) match {
-      case (Occur.Dead, Type.Pure) =>
+      case (Occur.Dead, Type.Pure) if !mustPreserve(exp1) =>
         // Eliminate dead binder
         sctx.changed.putIfAbsent(sym0, ())
         visitExp(exp2, ctx0)
@@ -343,9 +343,9 @@ object Inliner {
       visitExp(exp, ctx0)
 
     case Expr.Stm(exps, exp, tpe, eff, loc) =>
-      val impureExps = exps.filterNot(_.eff == Type.Pure)
-      if (impureExps.length != exps.length) sctx.changed.putIfAbsent(sym0, ())
-      val es = impureExps.map(visitExp(_, ctx0))
+      val retainedExps = exps.filter(e => e.eff != Type.Pure || mustPreserve(e))
+      if (retainedExps.length != exps.length) sctx.changed.putIfAbsent(sym0, ())
+      val es = retainedExps.map(visitExp(_, ctx0))
       val e = visitExp(exp, ctx0)
       Expr.Stm(es, e, tpe, eff, loc)
 
@@ -901,6 +901,12 @@ object Inliner {
 
     !defn.spec.defContext.isSelfRef &&
       (isSingleAction(defn.exp) || isSimple(defn.exp) || hasKnownLambda(exps, ctx0))
+  }
+
+  /** Returns whether a source-pure compiler operation has an internal side effect. */
+  private def mustPreserve(exp: MonoAst.Expr): Boolean = exp match {
+    case Expr.ApplyAtomic(AtomicOp.CoverageHit(_, _), _, _, _, _) => true
+    case _ => false
   }
 
   /**

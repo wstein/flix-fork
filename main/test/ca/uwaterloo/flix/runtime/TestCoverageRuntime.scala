@@ -56,4 +56,38 @@ class TestCoverageRuntime extends AnyFunSuite {
     assert(!classNames(coverage = false).contains("dev.flix.runtime.Coverage"))
   }
 
+  test("compiled function-entry probes execute in the loaded program session") {
+    for (newMonomorphizer <- List(false, true)) {
+      val flix = new Flix().setOptions(Options.DefaultTest.copy(coverage = true, xnewmono = newMonomorphizer))
+      flix.addSource(CompilerConstants.VirtualTestFile,
+        """import java.lang.System
+          |
+          |def answer(): Int64 \ IO = System.currentTimeMillis()
+          |
+          |pub def main(): Unit \ IO =
+          |    let _ = answer();
+          |    ()
+          |""".stripMargin,
+        SecurityContext.Unrestricted)
+
+      val compilation = flix.compile() match {
+        case Result.Ok(result) => result
+        case Result.Err(errors) => fail(errors.map(_.summary).mkString("; "))
+      }
+      val session = compilation.getCoverageSession.getOrElse(fail("Expected coverage metadata"))
+      val loaded = JvmLoader.load(compilation)
+      val coverage = loaded.coverage.getOrElse(fail("Expected loaded coverage session"))
+      try {
+        loaded.main.getOrElse(fail("Expected main entry point"))(Array.empty)
+
+        val byName = session.probes.map(_.qualifiedName).zip(coverage.snapshot()).toMap
+        assert(session.probes.map(_.qualifiedName).toSet == Set("answer", "main"))
+        assert(byName("answer") == 1L)
+        assert(byName("main") == 1L)
+      } finally {
+        coverage.close()
+      }
+    }
+  }
+
 }

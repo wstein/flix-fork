@@ -11,11 +11,21 @@ manifest fingerprint includes this policy, so an incremental build cannot reuse 
 for a coverage build or vice versa.
 
 The runtime owns thread-safe counters keyed by a compilation-session identity. Installing one
-session cannot reset or contaminate another concurrent compilation. The instrumentation slice will
-make generated probes carry both the session identity and probe index. A snapshot is a point-in-time
-copy; closing a session releases its counters.
+session cannot reset or contaminate another concurrent compilation. Generated probes carry both the
+session identity and probe index. A snapshot is a point-in-time copy; closing a session releases its
+counters.
 
-This first migration slice deliberately provides no `--coverage` CLI flag and inserts no probes.
-The next slice adds compiler-owned source instrumentation and installs its session before executing
-tests. Report formats, filtered-run semantics, cancellation, and LSP events remain separate later
-slices.
+## Function probes
+
+Coverage compilation instruments every reachable, non-test definition owned by user source with a
+function-entry probe. Bundled library and package definitions are excluded by their source origin,
+not by path or namespace conventions. The probe remains source-level pure so it cannot change a
+function's declared effect, but the optimizer treats it as a compiler-owned side effect and must not
+discard it.
+
+Both monomorphizers lower the probe to the same JVM operation. Loading the compilation installs the
+session in the generated program's isolated class loader and returns a handle for taking snapshots
+and releasing its counters.
+
+The migration still deliberately provides no `--coverage` CLI flag. Line and branch probes, report
+formats, filtered-run semantics, cancellation, and LSP events remain separate later slices.

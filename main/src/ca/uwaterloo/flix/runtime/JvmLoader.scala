@@ -20,7 +20,7 @@ package ca.uwaterloo.flix.runtime
 import ca.uwaterloo.flix.api.{CrashHandler, Flix}
 import ca.uwaterloo.flix.language.ast.{SourceLocation, Symbol}
 import ca.uwaterloo.flix.language.jvm.ClassDescs
-import ca.uwaterloo.flix.language.phase.jvm.JvmClass
+import ca.uwaterloo.flix.language.phase.jvm.{CoverageRuntime, JvmClass}
 import ca.uwaterloo.flix.util.collection.MapOps
 import ca.uwaterloo.flix.util.{InternalCompilerException, NativeImage}
 
@@ -66,8 +66,15 @@ object JvmLoader {
       val main = root.main.map {
         case defn => wrapMain(loadMethod(defn.className, defn.methodName))
       }
+      val coverage = result.getCoverageSession.map { session =>
+        val runtimeClass = loadedClasses.getOrElse(CoverageRuntime.Desc,
+          throw InternalCompilerException("Coverage runtime is missing from a coverage build.", SourceLocation.Unknown))
+        val install = runtimeClass.getMethod("install", java.lang.Long.TYPE, java.lang.Integer.TYPE)
+        install.invoke(null, Long.box(session.sessionId), Int.box(session.probes.length))
+        new CoverageHandle(session.sessionId, runtimeClass)
+      }
 
-      LoadedProgram(main, tests)
+      LoadedProgram(main, tests, coverage)
     } catch {
       case ex: Throwable =>
         CrashHandler.handleCrash(ex)(result.flix)

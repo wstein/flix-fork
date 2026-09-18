@@ -38,7 +38,8 @@ class CompilationResult(val root: BytecodeAst.Root,
                         val codeSize: Int,
                         val flix: Flix,
                         val debugDefinitions: Map[String, Map[String, List[JvmLexicalOrigins.Binding]]] = Map.empty,
-                        val debugCalls: List[DebugCalls.Call] = Nil
+                        val debugCalls: List[DebugCalls.Call] = Nil,
+                        val coverageSession: Option[CoverageSession] = None
                        ) {
 
   /** Returns the generated JVM classes. */
@@ -51,6 +52,9 @@ class CompilationResult(val root: BytecodeAst.Root,
 
   /** Returns direct call sites resolved to stable generated definitions for a debug compilation. */
   def getDebugCalls: List[DebugCalls.Call] = debugCalls
+
+  /** Returns coverage probe metadata when this was a coverage compilation. */
+  def getCoverageSession: Option[CoverageSession] = coverageSession
 
   /** Optionally returns the main entry point. */
   def getMain: Option[BytecodeAst.Def] =

@@ -17,11 +17,16 @@ package ca.uwaterloo.flix.language.phase.jvm
 
 import ca.uwaterloo.flix.language.ast.SourceLocation
 import ca.uwaterloo.flix.language.jvm.ClassDescs
+import ca.uwaterloo.flix.language.phase.jvm.ClassMaker.StaticMethod
 import ca.uwaterloo.flix.util.InternalCompilerException
+
+import java.lang.constant.MethodTypeDesc
 
 /** Runtime classes present only in a coverage build, loaded from the compiler's class path. */
 object CoverageRuntime {
   private val ClassName = "dev.flix.runtime.Coverage"
+  val Desc = ClassDescs.ofBinaryName(ClassName).get
+  val HitMethod: StaticMethod = StaticMethod(Desc, "hit", MethodTypeDesc.ofDescriptor("(JI)V"))
 
   def classes: List[JvmClass] = {
     val resource = "/" + ClassName.replace('.', '/') + ".class"
@@ -30,6 +35,6 @@ object CoverageRuntime {
       throw InternalCompilerException(s"Missing coverage runtime class: $resource", SourceLocation.Unknown)
     }
     val bytes = try stream.readAllBytes() finally stream.close()
-    List(JvmClass(ClassDescs.ofBinaryName(ClassName).get, bytes))
+    List(JvmClass(Desc, bytes))
   }
 }

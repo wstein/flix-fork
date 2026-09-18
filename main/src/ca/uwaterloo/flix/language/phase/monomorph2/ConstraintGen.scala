@@ -690,6 +690,8 @@ private[monomorph2] object ConstraintGen {
       sctx.addFlowConstraint(FlowConstraint(Instantiation(List(typeToMonoArg(Types.Fixpoint.Boxed))), MonoVar.Def(Defs.Vector.Get)))
       sctx.addFlowConstraint(FlowConstraint(Instantiation(List(typeToMonoArg(extVarType))), MonoVar.Def(Defs.Fixpoint.Solver.ProvenanceOf)))
 
+    case Expr.CoverageHit(_, _, _) => ()
+
     case Expr.Error(_, _, _) => ()
   }
 
