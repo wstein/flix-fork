@@ -80,13 +80,114 @@ class TestCoverageRuntime extends AnyFunSuite {
       try {
         loaded.main.getOrElse(fail("Expected main entry point"))(Array.empty)
 
-        val byName = session.probes.map(_.qualifiedName).zip(coverage.snapshot()).toMap
+        val byName = session.probes.zip(coverage.snapshot()).collect {
+          case (probe, count) if probe.kind == CoverageProbeKind.Function => probe.qualifiedName -> count
+        }.toMap
         assert(session.probes.map(_.qualifiedName).toSet == Set("answer", "main"))
         assert(byName("answer") == 1L)
         assert(byName("main") == 1L)
       } finally {
         coverage.close()
       }
+    }
+  }
+
+  test("compiled line probes execute and are unique per definition source line") {
+    for (newMonomorphizer <- List(false, true)) {
+      val flix = new Flix().setOptions(Options.DefaultTest.copy(coverage = true, xnewmono = newMonomorphizer))
+      flix.addSource(CompilerConstants.VirtualTestFile,
+        """import java.lang.System
+          |
+          |def sample(): Int64 \ IO =
+          |    let a = System.currentTimeMillis();
+          |    let b = System.nanoTime();
+          |    a + b
+          |
+          |pub def main(): Unit \ IO =
+          |    let _ = sample();
+          |    ()
+          |""".stripMargin,
+        SecurityContext.Unrestricted)
+
+      val compilation = flix.compile() match {
+        case Result.Ok(result) => result
+        case Result.Err(errors) => fail(errors.map(_.summary).mkString("; "))
+      }
+      val session = compilation.getCoverageSession.getOrElse(fail("Expected coverage metadata"))
+      val lineProbes = session.probes.filter(_.kind == CoverageProbeKind.Line)
+      assert(lineProbes.nonEmpty)
+      assert(lineProbes.map(p => (p.qualifiedName, p.source, p.line)).distinct.size == lineProbes.size)
+
+      val loaded = JvmLoader.load(compilation)
+      val coverage = loaded.coverage.getOrElse(fail("Expected loaded coverage session"))
+      try {
+        loaded.main.getOrElse(fail("Expected main entry point"))(Array.empty)
+        val counts = coverage.snapshot()
+        assert(lineProbes.forall(probe => counts(probe.id) > 0L))
+      } finally {
+        coverage.close()
+      }
+    }
+  }
+
+  test("same-line executable expressions share one line probe") {
+    val flix = new Flix().setOptions(Options.DefaultTest.copy(coverage = true))
+    flix.addSource(CompilerConstants.VirtualTestFile,
+      """import java.lang.System
+        |
+        |def sample(): Int64 \ IO =
+        |    let a = System.currentTimeMillis(); let b = System.nanoTime(); a + b
+        |
+        |pub def main(): Unit \ IO =
+        |    let _ = sample();
+        |    ()
+        |""".stripMargin,
+      SecurityContext.Unrestricted)
+
+    val compilation = flix.compile() match {
+      case Result.Ok(result) => result
+      case Result.Err(errors) => fail(errors.map(_.summary).mkString("; "))
+    }
+    val probes = compilation.getCoverageSession.getOrElse(fail("Expected coverage metadata")).probes
+      .filter(p => p.kind == CoverageProbeKind.Line && p.qualifiedName == "sample")
+    assert(probes.map(p => (p.source, p.line)).distinct.size == probes.size)
+    assert(probes.count(_.line == 4) == 1)
+  }
+
+  test("an unselected branch leaves its executable line uncovered") {
+    val flix = new Flix().setOptions(Options.DefaultTest.copy(coverage = true))
+    flix.addSource(CompilerConstants.VirtualTestFile,
+      """import java.lang.System
+        |
+        |def chooseValue(): Int64 \ IO =
+        |    if (System.currentTimeMillis() >= 0i64)
+        |        System.nanoTime()
+        |    else
+        |        System.currentTimeMillis()
+        |
+        |pub def main(): Unit \ IO =
+        |    let _ = chooseValue();
+        |    ()
+        |""".stripMargin,
+      SecurityContext.Unrestricted)
+
+    val compilation = flix.compile() match {
+      case Result.Ok(result) => result
+      case Result.Err(errors) => fail(errors.map(_.summary).mkString("; "))
+    }
+    val session = compilation.getCoverageSession.getOrElse(fail("Expected coverage metadata"))
+    val loaded = JvmLoader.load(compilation)
+    val coverage = loaded.coverage.getOrElse(fail("Expected loaded coverage session"))
+    try {
+      loaded.main.getOrElse(fail("Expected main entry point"))(Array.empty)
+      val counts = coverage.snapshot()
+      val byLine = session.probes.collect {
+        case p if p.kind == CoverageProbeKind.Line && p.qualifiedName == "chooseValue" => p.line -> counts(p.id)
+      }.toMap
+      assert(byLine(5) > 0L)
+      assert(byLine(7) == 0L)
+    } finally {
+      coverage.close()
     }
   }
 

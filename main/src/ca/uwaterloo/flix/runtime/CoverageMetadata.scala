@@ -21,6 +21,7 @@ sealed trait CoverageProbeKind
 
 object CoverageProbeKind {
   case object Function extends CoverageProbeKind
+  case object Line extends CoverageProbeKind
 }
 
 case class CoverageProbe(id: Int, source: String, line: Int, kind: CoverageProbeKind, qualifiedName: String)
@@ -30,6 +31,8 @@ case class CoverageSession(sessionId: Long, probes: Vector[CoverageProbe])
 object CoverageSession {
   private val NextId = new AtomicLong(1L)
 
+  private[flix] def freshId(): Long = NextId.getAndIncrement()
+
   def fresh(probes: Vector[CoverageProbe]): CoverageSession =
-    CoverageSession(NextId.getAndIncrement(), probes)
+    CoverageSession(freshId(), probes)
 }

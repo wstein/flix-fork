@@ -16,34 +16,138 @@
 package ca.uwaterloo.flix.language.phase
 
 import ca.uwaterloo.flix.api.Flix
-import ca.uwaterloo.flix.language.ast.{Type, TypedAst}
+import ca.uwaterloo.flix.language.ast.{SourceLocation, TypedAst}
 import ca.uwaterloo.flix.language.dbg.AstPrinter.DebugTypedAst
 import ca.uwaterloo.flix.runtime.{CoverageProbe, CoverageProbeKind, CoverageSession}
+
+import scala.collection.mutable
 
 /** Inserts the source-level probes owned by one compilation session. */
 object CoverageInstrumentation {
 
   def run(root: TypedAst.Root)(implicit flix: Flix): (TypedAst.Root, CoverageSession) = flix.phase("CoverageInstrumentation") {
-    val definitions = root.defs.values.toList
-      .filter(shouldInstrument)
-      .sortBy(defn => (defn.loc.source.name, defn.loc.startLine, defn.sym.toString))
-    val probes = definitions.zipWithIndex.map { case (defn, probeId) =>
-      CoverageProbe(probeId, defn.loc.source.name, defn.loc.startLine, CoverageProbeKind.Function, defn.sym.toString)
-    }.toVector
-    val session = CoverageSession.fresh(probes)
-    val probeIds = definitions.iterator.zipWithIndex.map { case (defn, probeId) => defn.sym -> probeId }.toMap
-    val instrumented = root.defs.map { case (sym, defn) =>
-      probeIds.get(sym) match {
-        case None => sym -> defn
-        case Some(probeId) =>
-          val hit = flix.jvmOrigins.synthetic(defn.exp,
-            TypedAst.Expr.CoverageHit(session.sessionId, probeId, defn.loc), "coverage-function-hit")
-          val body = flix.jvmOrigins.synthetic(defn.exp,
-            TypedAst.Expr.Stm(List(hit), defn.exp, defn.exp.tpe,
-              Type.mkUnion(hit.eff, defn.exp.eff, defn.loc), defn.loc), "coverage-function-body")
-          sym -> defn.copy(exp = body)
-      }
+    val sessionId = CoverageSession.freshId()
+    val probes = mutable.ArrayBuffer.empty[CoverageProbe]
+    val registeredLines = mutable.HashSet.empty[(String, String, Int)]
+
+    def register(kind: CoverageProbeKind, qualifiedName: String, loc: SourceLocation): Int = {
+      val id = probes.size
+      probes += CoverageProbe(id, loc.source.name, loc.startLine, kind, qualifiedName)
+      id
     }
+
+    def hit(from: TypedAst.Expr, probeId: Int, loc: SourceLocation, role: String): TypedAst.Expr =
+      flix.jvmOrigins.synthetic(from, TypedAst.Expr.CoverageHit(sessionId, probeId, loc), role)
+
+    def wrap(from: TypedAst.Expr, exp: TypedAst.Expr, probeId: Int, loc: SourceLocation, role: String): TypedAst.Expr = {
+      val probe = hit(from, probeId, loc, s"$role-hit")
+      flix.jvmOrigins.synthetic(from, TypedAst.Expr.Stm(List(probe), exp, exp.tpe, exp.eff, loc), role)
+    }
+
+    def visitAll(exps: List[TypedAst.Expr], qualifiedName: String): List[TypedAst.Expr] =
+      exps.map(visit(_, qualifiedName))
+
+    def visit(exp0: TypedAst.Expr, qualifiedName: String): TypedAst.Expr = {
+      // Reserve the line before descending. The outermost executable expression on a source line
+      // owns its probe, so an unselected nested branch cannot accidentally own the whole line.
+      val lineProbe = {
+        val key = (qualifiedName, exp0.loc.source.name, exp0.loc.startLine)
+        if (exp0.loc.isReal && registeredLines.add(key)) Some(register(CoverageProbeKind.Line, qualifiedName, exp0.loc))
+        else None
+      }
+
+      val rebuilt: TypedAst.Expr = exp0 match {
+        case _: TypedAst.Expr.Cst | _: TypedAst.Expr.Var | _: TypedAst.Expr.Hole |
+             _: TypedAst.Expr.GetStaticField | _: TypedAst.Expr.FixpointConstraintSet |
+             _: TypedAst.Expr.Error => exp0
+        case e: TypedAst.Expr.CoverageHit => e
+        case e: TypedAst.Expr.HoleWithExp => e.copy(exp = visit(e.exp, qualifiedName))
+        case e: TypedAst.Expr.OpenAs => e.copy(exp = visit(e.exp, qualifiedName))
+        case e: TypedAst.Expr.Use => e.copy(exp = visit(e.exp, qualifiedName))
+        case e: TypedAst.Expr.Lambda => e.copy(exp = visit(e.exp, qualifiedName))
+        case e: TypedAst.Expr.ApplyClo => e.copy(exp1 = visit(e.exp1, qualifiedName), exp2 = visit(e.exp2, qualifiedName))
+        case e: TypedAst.Expr.ApplyDef => e.copy(exps = visitAll(e.exps, qualifiedName))
+        case e: TypedAst.Expr.ApplyLocalDef => e.copy(exps = visitAll(e.exps, qualifiedName))
+        case e: TypedAst.Expr.ApplyOp => e.copy(exps = visitAll(e.exps, qualifiedName))
+        case e: TypedAst.Expr.ApplySig => e.copy(exps = visitAll(e.exps, qualifiedName))
+        case e: TypedAst.Expr.Unary => e.copy(exp = visit(e.exp, qualifiedName))
+        case e: TypedAst.Expr.Binary => e.copy(exp1 = visit(e.exp1, qualifiedName), exp2 = visit(e.exp2, qualifiedName))
+        case e: TypedAst.Expr.Let => e.copy(exp1 = visit(e.exp1, qualifiedName), exp2 = visit(e.exp2, qualifiedName))
+        case e: TypedAst.Expr.LocalDef => e.copy(exp1 = visit(e.exp1, qualifiedName), exp2 = visit(e.exp2, qualifiedName))
+        case e: TypedAst.Expr.Region => e.copy(exp = visit(e.exp, qualifiedName))
+        case e: TypedAst.Expr.IfThenElse => e.copy(exp1 = visit(e.exp1, qualifiedName), exp2 = visit(e.exp2, qualifiedName), exp3 = visit(e.exp3, qualifiedName))
+        case e: TypedAst.Expr.Stm => e.copy(exps = visitAll(e.exps, qualifiedName), exp = visit(e.exp, qualifiedName))
+        case e: TypedAst.Expr.Discard => e.copy(exp = visit(e.exp, qualifiedName))
+        case e: TypedAst.Expr.Match => e.copy(exp = visit(e.exp, qualifiedName), rules = e.rules.map(r => r.copy(guard = r.guard.map(visit(_, qualifiedName)), exp = visit(r.exp, qualifiedName))))
+        case e: TypedAst.Expr.RestrictableChoose => e.copy(exp = visit(e.exp, qualifiedName), rules = e.rules.map(r => r.copy(exp = visit(r.exp, qualifiedName))))
+        case e: TypedAst.Expr.ExtMatch => e.copy(exp = visit(e.exp, qualifiedName), rules = e.rules.map(r => r.copy(exp = visit(r.exp, qualifiedName))))
+        case e: TypedAst.Expr.Tag => e.copy(exps = visitAll(e.exps, qualifiedName))
+        case e: TypedAst.Expr.RestrictableTag => e.copy(exps = visitAll(e.exps, qualifiedName))
+        case e: TypedAst.Expr.ExtTag => e.copy(exps = visitAll(e.exps, qualifiedName))
+        case e: TypedAst.Expr.Tuple => e.copy(exps = visitAll(e.exps, qualifiedName))
+        case e: TypedAst.Expr.RecordSelect => e.copy(exp = visit(e.exp, qualifiedName))
+        case e: TypedAst.Expr.RecordExtend => e.copy(exp1 = visit(e.exp1, qualifiedName), exp2 = visit(e.exp2, qualifiedName))
+        case e: TypedAst.Expr.RecordRestrict => e.copy(exp = visit(e.exp, qualifiedName))
+        case e: TypedAst.Expr.ArrayLit => e.copy(exps = visitAll(e.exps, qualifiedName), exp = visit(e.exp, qualifiedName))
+        case e: TypedAst.Expr.ArrayNew => e.copy(exp1 = visit(e.exp1, qualifiedName), exp2 = visit(e.exp2, qualifiedName), exp3 = visit(e.exp3, qualifiedName))
+        case e: TypedAst.Expr.ArrayLoad => e.copy(exp1 = visit(e.exp1, qualifiedName), exp2 = visit(e.exp2, qualifiedName))
+        case e: TypedAst.Expr.ArrayLength => e.copy(exp = visit(e.exp, qualifiedName))
+        case e: TypedAst.Expr.ArrayStore => e.copy(exp1 = visit(e.exp1, qualifiedName), exp2 = visit(e.exp2, qualifiedName), exp3 = visit(e.exp3, qualifiedName))
+        case e: TypedAst.Expr.StructNew => e.copy(fields = e.fields.map { case (sym, exp) => sym -> visit(exp, qualifiedName) }, region = e.region.map(visit(_, qualifiedName)))
+        case e: TypedAst.Expr.StructGet => e.copy(exp = visit(e.exp, qualifiedName))
+        case e: TypedAst.Expr.StructPut => e.copy(exp1 = visit(e.exp1, qualifiedName), exp2 = visit(e.exp2, qualifiedName))
+        case e: TypedAst.Expr.VectorLit => e.copy(exps = visitAll(e.exps, qualifiedName))
+        case e: TypedAst.Expr.VectorLoad => e.copy(exp1 = visit(e.exp1, qualifiedName), exp2 = visit(e.exp2, qualifiedName))
+        case e: TypedAst.Expr.VectorLength => e.copy(exp = visit(e.exp, qualifiedName))
+        case e: TypedAst.Expr.Ascribe => e.copy(exp = visit(e.exp, qualifiedName))
+        case e: TypedAst.Expr.InstanceOf => e.copy(exp = visit(e.exp, qualifiedName))
+        case e: TypedAst.Expr.CheckedCast => e.copy(exp = visit(e.exp, qualifiedName))
+        case e: TypedAst.Expr.UncheckedCast => e.copy(exp = visit(e.exp, qualifiedName))
+        case e: TypedAst.Expr.Unsafe => e.copy(exp = visit(e.exp, qualifiedName))
+        case e: TypedAst.Expr.TryCatch => e.copy(exp = visit(e.exp, qualifiedName), rules = e.rules.map(r => r.copy(exp = visit(r.exp, qualifiedName))))
+        case e: TypedAst.Expr.Throw => e.copy(exp = visit(e.exp, qualifiedName))
+        case e: TypedAst.Expr.Handler => e.copy(rules = e.rules.map(r => r.copy(exp = visit(r.exp, qualifiedName))))
+        case e: TypedAst.Expr.RunWith => e.copy(exp1 = visit(e.exp1, qualifiedName), exp2 = visit(e.exp2, qualifiedName))
+        case e: TypedAst.Expr.InvokeConstructor => e.copy(exps = visitAll(e.exps, qualifiedName))
+        case e: TypedAst.Expr.InvokeSuperConstructor => e.copy(exps = visitAll(e.exps, qualifiedName))
+        case e: TypedAst.Expr.InvokeMethod => e.copy(exp = visit(e.exp, qualifiedName), exps = visitAll(e.exps, qualifiedName))
+        case e: TypedAst.Expr.InvokeSuperMethod => e.copy(exps = visitAll(e.exps, qualifiedName))
+        case e: TypedAst.Expr.InvokeStaticMethod => e.copy(exps = visitAll(e.exps, qualifiedName))
+        case e: TypedAst.Expr.GetField => e.copy(exp = visit(e.exp, qualifiedName))
+        case e: TypedAst.Expr.PutField => e.copy(exp1 = visit(e.exp1, qualifiedName), exp2 = visit(e.exp2, qualifiedName))
+        case e: TypedAst.Expr.PutStaticField => e.copy(exp = visit(e.exp, qualifiedName))
+        case e: TypedAst.Expr.NewObject => e.copy(constructors = e.constructors.map(c => c.copy(exp = visit(c.exp, qualifiedName))), methods = e.methods.map(m => m.copy(exp = visit(m.exp, qualifiedName))))
+        case e: TypedAst.Expr.NewChannel => e.copy(exp = visit(e.exp, qualifiedName))
+        case e: TypedAst.Expr.GetChannel => e.copy(exp = visit(e.exp, qualifiedName))
+        case e: TypedAst.Expr.PutChannel => e.copy(exp1 = visit(e.exp1, qualifiedName), exp2 = visit(e.exp2, qualifiedName))
+        case e: TypedAst.Expr.SelectChannel => e.copy(rules = e.rules.map(r => r.copy(chan = visit(r.chan, qualifiedName), exp = visit(r.exp, qualifiedName))), default = e.default.map(visit(_, qualifiedName)))
+        case e: TypedAst.Expr.Spawn => e.copy(exp1 = visit(e.exp1, qualifiedName), exp2 = visit(e.exp2, qualifiedName))
+        case e: TypedAst.Expr.ParYield => e.copy(frags = e.frags.map(f => f.copy(exp = visit(f.exp, qualifiedName))), exp = visit(e.exp, qualifiedName))
+        case e: TypedAst.Expr.Lazy => e.copy(exp = visit(e.exp, qualifiedName))
+        case e: TypedAst.Expr.Force => e.copy(exp = visit(e.exp, qualifiedName))
+        case e: TypedAst.Expr.FixpointLambda => e.copy(exp = visit(e.exp, qualifiedName))
+        case e: TypedAst.Expr.FixpointMerge => e.copy(exp1 = visit(e.exp1, qualifiedName), exp2 = visit(e.exp2, qualifiedName))
+        case e: TypedAst.Expr.FixpointQueryWithProvenance => e.copy(exps = visitAll(e.exps, qualifiedName))
+        case e: TypedAst.Expr.FixpointQueryWithSelect => e.copy(exps = visitAll(e.exps, qualifiedName), queryExp = visit(e.queryExp, qualifiedName), selects = visitAll(e.selects, qualifiedName), where = visitAll(e.where, qualifiedName))
+        case e: TypedAst.Expr.FixpointSolveWithProject => e.copy(exps = visitAll(e.exps, qualifiedName))
+        case e: TypedAst.Expr.FixpointInjectInto => e.copy(exps = visitAll(e.exps, qualifiedName))
+      }
+
+      val attributed = if (rebuilt eq exp0) rebuilt else flix.jvmOrigins.transfer(exp0, rebuilt, "coverage-line-traversal")
+      lineProbe.fold(attributed)(probeId => wrap(exp0, attributed, probeId, exp0.loc, "coverage-line"))
+    }
+
+    val definitions = root.defs.values.toList.filter(shouldInstrument)
+      .sortBy(defn => (defn.loc.source.name, defn.loc.startLine, defn.sym.toString))
+    val instrumentedBySymbol = definitions.iterator.map { defn =>
+      val qualifiedName = defn.sym.toString
+      val functionProbe = register(CoverageProbeKind.Function, qualifiedName, defn.loc)
+      val instrumentedBody = visit(defn.exp, qualifiedName)
+      val body = wrap(defn.exp, instrumentedBody, functionProbe, defn.loc, "coverage-function")
+      defn.sym -> defn.copy(exp = body)
+    }.toMap
+    val instrumented = root.defs.map { case (sym, defn) => sym -> instrumentedBySymbol.getOrElse(sym, defn) }
+    val session = CoverageSession(sessionId, probes.toVector)
     (root.copy(defs = instrumented), session)
   }
 
