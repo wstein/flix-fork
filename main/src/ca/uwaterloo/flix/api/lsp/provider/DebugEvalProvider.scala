@@ -159,7 +159,33 @@ object DebugEvalProvider {
     * artifact is a second one that also emits, and a watch asks the first on every step. A caller
     * asks for the artifact when the user has asked for a value rather than for a description.
     */
-  def compile(frame: ScopeId, expression: String, policy: Policy, projectRoot: Path, root: Root, withArtifact: Boolean): Answer = {
+  def compile(frame: ScopeId, expression: String, policy: Policy, projectRoot: Path, root: Root, withArtifact: Boolean): Answer =
+    compile(frame, expression, policy, projectRoot, root, withArtifact, launchedBuildId = None)
+
+  /**
+    * As [[compile]], tied to the build whose JVM the debugger actually paused in.
+    *
+    * A rebuild may replace every sidecar while that old JVM remains paused. In that state compiling
+    * against the files on disk would create an artifact for a different program. A client therefore
+    * sends the identity it captured from the manifest at launch, and this refuses the request unless
+    * the current manifest still describes that exact build.
+    */
+  def compile(frame: ScopeId, expression: String, policy: Policy, projectRoot: Path, root: Root,
+              withArtifact: Boolean, launchedBuildId: Option[String]): Answer = {
+    launchedBuildId.foreach { launched =>
+      currentBuildId(projectRoot) match {
+        case Some(current) if current == launched => ()
+        case Some(_) => return Answer.Rejected(
+          "the debug files now describe a different build from the running program. " +
+            "Stop the session and rebuild before evaluating expressions",
+        )
+        case None => return Answer.Rejected(
+          "the running program has a build identity, but the current build manifest does not. " +
+            "Rebuild with --Xdebug before evaluating expressions",
+        )
+      }
+    }
+
     val table = readTable(projectRoot) match {
       case Some(t) => t
       case None => return Answer.Rejected(
@@ -230,6 +256,20 @@ object DebugEvalProvider {
     if (!Files.isRegularFile(manifest)) return ""
     val text = Files.readString(manifest)
     """"sourcesDigest"\s*:\s*"([^"]*)"""".r.findFirstMatchIn(text).map(_.group(1)).getOrElse("")
+  }
+
+  /** The identity stored by the current manifest, if both required halves are present. */
+  private def currentBuildId(projectRoot: Path): Option[String] = {
+    val manifest = projectRoot.resolve("build").resolve("development").resolve(BuildManifest)
+    if (!Files.isRegularFile(manifest)) return None
+    val text = Files.readString(manifest)
+    def field(name: String): Option[String] =
+      ("\"" + java.util.regex.Pattern.quote(name) + "\"\\s*:\\s*\"([^\"]*)\"").r
+        .findFirstMatchIn(text).map(_.group(1))
+    for {
+      fingerprint <- field("fingerprint")
+      sourcesDigest <- field("sourcesDigest")
+    } yield ca.uwaterloo.flix.api.BuildManifest.debugBuildId(fingerprint, sourcesDigest)
   }
 
   /** Types the expression, and produces something runnable when one was asked for. */

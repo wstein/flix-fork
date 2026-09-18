@@ -126,6 +126,29 @@ class TestDebugEvalProvider extends AnyFunSuite {
     }
   }
 
+  test("an evaluation for a different launched build is refused") {
+    val project = build()
+    writeManifestIdentity(project, "current-fingerprint", "current-sources")
+
+    DebugEvalProvider.compile(Describe, "at", Policy.Pure, project, TypedAst.empty,
+      withArtifact = false, launchedBuildId = Some("older-fingerprint:older-sources")) match {
+      case Answer.Rejected(reason) =>
+        assert(reason.contains("running program"), s"the refusal does not name the mismatch: $reason")
+        assert(reason.contains("rebuild"), s"the refusal does not say how to recover: $reason")
+      case other => fail(s"an expression was compiled against a different build: $other")
+    }
+  }
+
+  test("an evaluation for the current launched build is accepted") {
+    val project = build()
+    writeManifestIdentity(project, "current-fingerprint", "current-sources")
+
+    val answer = DebugEvalProvider.compile(Describe, "at", Policy.Pure, project, TypedAst.empty,
+      withArtifact = false, launchedBuildId = Some("current-fingerprint:current-sources"))
+
+    assertOk(answer, "Option[String]", "Pure")
+  }
+
   test("the build sidecar is authoritative when the server AST has been refreshed") {
     val project = build()
 
@@ -192,6 +215,12 @@ class TestDebugEvalProvider extends AnyFunSuite {
                         frame: ScopeId = Describe,
                       ): Answer =
     DebugEvalProvider.compile(frame, expression, policy, project, snapshot(project))
+
+  private def writeManifestIdentity(project: Path, fingerprint: String, sourcesDigest: String): Unit = {
+    val path = project.resolve("build/development/build.json")
+    Files.writeString(path,
+      s"""{"formatVersion":4,"fingerprint":"$fingerprint","sourcesDigest":"$sourcesDigest","products":["Main.class"]}""")
+  }
 
   private def assertOk(answer: Answer, tpe: String, eff: String): Unit = answer match {
     case Answer.Ok(actualType, actualEff, _) =>

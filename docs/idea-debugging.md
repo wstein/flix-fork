@@ -106,12 +106,15 @@ debug build, declares only the referenced debugger-visible bindings in an in-mem
 wrapper, and returns the compiler's type, effect, or diagnostics. It writes no project
 artifact during this typing pass.
 
-The build sidecar is authoritative for frame types. This keeps a paused process joined
-to the build it is actually running even if the language server has subsequently
-refreshed its typed AST. Class names are accepted in both JDI binary form and JVM
-internal form. Repeated names with conflicting source types are omitted from the
-sidecar rather than resolved arbitrarily; an expression that needs one receives an
-ordinary unknown-name diagnostic.
+The build sidecar is authoritative for frame types. At launch the debugger records a
+build ID made from both the manifest fingerprint (compiler options and dependencies)
+and `sourcesDigest` (source contents), and sends it with every evaluation request. The
+language server rejects the request if the on-disk manifest now names another build.
+Thus rebuilding while an older JVM is paused cannot compile an expression against the
+new sidecars and inject it into the old program. Class names are accepted in both JDI
+binary form and JVM internal form. Repeated names with conflicting source types are
+omitted from the sidecar rather than resolved arbitrarily; an expression that needs one
+receives an ordinary unknown-name diagnostic.
 
 Pure evaluation is the default policy. `allowEffects` permits compilation only; the
 debugger still applies its explicit user setting before it executes effectful code.

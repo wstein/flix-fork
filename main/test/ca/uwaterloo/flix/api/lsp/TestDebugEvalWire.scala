@@ -103,4 +103,11 @@ class TestDebugEvalWire extends AnyFunSuite {
     // debuggee's own code.
     assert(new DebugEvalParams().getPolicy() == "pure")
   }
+
+  test("a request carries the identity of the program that is actually paused") {
+    val request = new DebugEvalParams()
+    request.setBuildId("fingerprint:sources")
+
+    assert(request.getBuildId() == "fingerprint:sources")
+  }
 }

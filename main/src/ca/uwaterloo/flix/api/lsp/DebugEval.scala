@@ -48,6 +48,9 @@ import scala.beans.BeanProperty
 class DebugEvalParams {
   @BeanProperty var className: String = _
 
+  /** The exact build whose JVM is paused, as recorded by its launch manifest. */
+  @BeanProperty var buildId: String = _
+
   /**
     * Whether to produce the classes that would *run* the expression, not only type it.
     *

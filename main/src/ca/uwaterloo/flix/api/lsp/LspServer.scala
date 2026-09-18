@@ -146,10 +146,14 @@ object LspServer {
         try {
           DebugEvalProvider.Policy.parse(params.policy) match {
             case None => DebugEvalResult.rejected(s"unknown policy `${params.policy}`; expected `pure` or `allowEffects`")
+            case Some(_) if params.buildId == null || params.buildId.isBlank =>
+              DebugEvalResult.rejected(
+                "the debugger did not identify the build of the running program; restart the debug session",
+              )
             case Some(policy) =>
               val frame = DebugEvalProvider.ScopeId(params.className, params.methodName)
               DebugEvalResult.of(DebugEvalProvider.compile(frame, params.expression, policy,
-                project.projectPath, root, params.withArtifact))
+                project.projectPath, root, params.withArtifact, Option(params.buildId)))
           }
         } catch {
           case t: Throwable => DebugEvalResult.failure(t)
