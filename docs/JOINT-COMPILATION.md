@@ -21,8 +21,11 @@ Neither language can be compiled first. The supported build schedule is:
 2. Compile the Java sources against those stubs.
 3. Package the Java classes as a jar and compile Flix with `build --lib <java.jar>` (and include
    the facade stubs when Java signatures name them).
-4. Compile Java against the real Flix output.
-5. Put only the real Java and Flix classes on the runtime classpath.
+4. Put the Java classes from step 2 and the real Flix classes on the runtime classpath.
+
+Java does not need a second compilation: the stub and real facade have the same binary signature.
+The regression fixture proves this by executing the original Java class against the real facade
+after removing every stub class from the runtime classpath.
 
 The generated stubs always throw. They are compile-time scaffolding and must never be packaged or
 placed on a runtime classpath.
@@ -81,6 +84,8 @@ location instead of surviving until runtime.
 - Generated primitive signatures match the real emitted facade descriptors.
 - Deep namespaces use the exact sibling facade binary name.
 - Generated sources compile with `javac`.
+- A regression fixture compiles Java against a stub, compiles Flix against that Java jar, removes
+  the stub from the runtime classpath, and invokes Java through the real emitted facade.
 - Unsupported boundary types are reported and no partial stub set is published.
 - The CLI and Java client negotiate their contract version before a build tool invokes commands.
 

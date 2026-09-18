@@ -13,6 +13,8 @@ import org.objectweb.asm.{ClassReader, ClassVisitor, MethodVisitor, Opcodes}
 import org.scalatest.funsuite.AnyFunSuite
 
 import java.nio.file.{Files, Path}
+import java.net.URLClassLoader
+import java.util.jar.{JarEntry, JarOutputStream}
 import javax.tools.ToolProvider
 
 class TestExportStubs extends AnyFunSuite {
@@ -115,6 +117,69 @@ class TestExportStubs extends AnyFunSuite {
       val updated = Files.readString(file)
       assert(updated.contains(" fresh("))
       assert(!updated.contains(" old("))
+    } finally deleteRecursively(root)
+  }
+
+  test("staged compilation links Java against the real Flix facade") {
+    val src =
+      """mod Acme.Api {
+        |    import com.example.Helper
+        |    @Export pub def twice(x: Int32): Int32 = x + x
+        |    pub def viaJava(x: Int32): Int32 \ IO = Helper.inc(x)
+        |}
+        |""".stripMargin
+    val root = Files.createTempDirectory("flix-joint-compilation")
+    try {
+      val stubRoot = root.resolve("stubs")
+      val javaClasses = root.resolve("java-classes")
+      val flixClasses = root.resolve("flix-classes")
+      val helperJar = root.resolve("helper.jar")
+      val helperSource = root.resolve("com/example/Helper.java")
+
+      val (facades, unsupported) = stubs(src)
+      assert(unsupported.isEmpty)
+      ExportStubs.write(facades, stubRoot)
+      Files.createDirectories(helperSource.getParent)
+      Files.writeString(helperSource,
+        """package com.example;
+          |public final class Helper {
+          |    public static int inc(int x) { return Acme.Api.twice(x) + 1; }
+          |}
+          |""".stripMargin)
+      Files.createDirectories(javaClasses)
+      val compiler = ToolProvider.getSystemJavaCompiler
+      assume(compiler != null, "test requires a JDK")
+      assert(compiler.run(null, null, null,
+        "-d", javaClasses.toString,
+        helperSource.toString,
+        stubRoot.resolve("Acme/Api.java").toString) == 0)
+
+      val jar = new JarOutputStream(Files.newOutputStream(helperJar))
+      try {
+        jar.putNextEntry(new JarEntry("com/example/Helper.class"))
+        jar.write(Files.readAllBytes(javaClasses.resolve("com/example/Helper.class")))
+        jar.closeEntry()
+      } finally jar.close()
+
+      val flix = new Flix(jars = List(helperJar)).setOptions(Options.DefaultTest)
+      flix.addSource(sourcePath, src, sctx)
+      val result = flix.compile() match {
+        case Result.Ok(r) => r
+        case Result.Err(errors) => fail(s"Flix must compile against the Java half: $errors")
+      }
+      Files.createDirectories(flixClasses)
+      for ((desc, clazz) <- result.getClasses) {
+        val relative = desc.descriptorString().stripPrefix("L").stripSuffix(";") + ".class"
+        val target = flixClasses.resolve(relative)
+        Files.createDirectories(target.getParent)
+        Files.write(target, clazz.bytecode)
+      }
+
+      val loader = new URLClassLoader(Array(flixClasses.toUri.toURL, helperJar.toUri.toURL), getClass.getClassLoader)
+      try {
+        val helper = loader.loadClass("com.example.Helper")
+        assert(helper.getMethod("inc", Integer.TYPE).invoke(null, Int.box(20)) == Int.box(41))
+      } finally loader.close()
     } finally deleteRecursively(root)
   }
 
