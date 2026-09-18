@@ -16,7 +16,8 @@
 package ca.uwaterloo.flix.language.phase
 
 import ca.uwaterloo.flix.api.Flix
-import ca.uwaterloo.flix.language.ast.{SourceLocation, TypedAst}
+import ca.uwaterloo.flix.language.ast.shared.Constant
+import ca.uwaterloo.flix.language.ast.{SourceLocation, Type, TypedAst}
 import ca.uwaterloo.flix.language.dbg.AstPrinter.DebugTypedAst
 import ca.uwaterloo.flix.runtime.{CoverageProbe, CoverageProbeKind, CoverageSession}
 
@@ -56,6 +57,30 @@ object CoverageInstrumentation {
         else None
       }
 
+      def visitBranch(exp: TypedAst.Expr, kind: CoverageProbeKind, role: String): TypedAst.Expr = {
+        val instrumented = visit(exp, qualifiedName)
+        if (exp.loc.isReal) wrap(exp, instrumented, register(kind, qualifiedName, exp.loc), exp.loc, role)
+        else instrumented
+      }
+
+      def visitGuard(exp: TypedAst.Expr): TypedAst.Expr = {
+        val instrumented = visit(exp, qualifiedName)
+        if (!exp.loc.isReal) instrumented
+        else {
+          val trueProbe = register(CoverageProbeKind.BranchTrue, qualifiedName, exp.loc)
+          val falseProbe = register(CoverageProbeKind.BranchFalse, qualifiedName, exp.loc)
+          val trueValue = flix.jvmOrigins.synthetic(exp,
+            TypedAst.Expr.Cst(Constant.Bool(true), Type.Bool, exp.loc), "coverage-guard-true-value")
+          val falseValue = flix.jvmOrigins.synthetic(exp,
+            TypedAst.Expr.Cst(Constant.Bool(false), Type.Bool, exp.loc), "coverage-guard-false-value")
+          val trueBranch = wrap(exp, trueValue, trueProbe, exp.loc, "coverage-guard-true")
+          val falseBranch = wrap(exp, falseValue, falseProbe, exp.loc, "coverage-guard-false")
+          flix.jvmOrigins.synthetic(exp,
+            TypedAst.Expr.IfThenElse(instrumented, trueBranch, falseBranch, Type.Bool, instrumented.eff, exp.loc),
+            "coverage-guard-branch")
+        }
+      }
+
       val rebuilt: TypedAst.Expr = exp0 match {
         case _: TypedAst.Expr.Cst | _: TypedAst.Expr.Var | _: TypedAst.Expr.Hole |
              _: TypedAst.Expr.GetStaticField | _: TypedAst.Expr.FixpointConstraintSet |
@@ -75,12 +100,23 @@ object CoverageInstrumentation {
         case e: TypedAst.Expr.Let => e.copy(exp1 = visit(e.exp1, qualifiedName), exp2 = visit(e.exp2, qualifiedName))
         case e: TypedAst.Expr.LocalDef => e.copy(exp1 = visit(e.exp1, qualifiedName), exp2 = visit(e.exp2, qualifiedName))
         case e: TypedAst.Expr.Region => e.copy(exp = visit(e.exp, qualifiedName))
-        case e: TypedAst.Expr.IfThenElse => e.copy(exp1 = visit(e.exp1, qualifiedName), exp2 = visit(e.exp2, qualifiedName), exp3 = visit(e.exp3, qualifiedName))
+        case e: TypedAst.Expr.IfThenElse => e.copy(
+          exp1 = visit(e.exp1, qualifiedName),
+          exp2 = visitBranch(e.exp2, CoverageProbeKind.BranchTrue, "coverage-if-true"),
+          exp3 = visitBranch(e.exp3, CoverageProbeKind.BranchFalse, "coverage-if-false"))
         case e: TypedAst.Expr.Stm => e.copy(exps = visitAll(e.exps, qualifiedName), exp = visit(e.exp, qualifiedName))
         case e: TypedAst.Expr.Discard => e.copy(exp = visit(e.exp, qualifiedName))
-        case e: TypedAst.Expr.Match => e.copy(exp = visit(e.exp, qualifiedName), rules = e.rules.map(r => r.copy(guard = r.guard.map(visit(_, qualifiedName)), exp = visit(r.exp, qualifiedName))))
-        case e: TypedAst.Expr.RestrictableChoose => e.copy(exp = visit(e.exp, qualifiedName), rules = e.rules.map(r => r.copy(exp = visit(r.exp, qualifiedName))))
-        case e: TypedAst.Expr.ExtMatch => e.copy(exp = visit(e.exp, qualifiedName), rules = e.rules.map(r => r.copy(exp = visit(r.exp, qualifiedName))))
+        case e: TypedAst.Expr.Match => e.copy(
+          exp = visit(e.exp, qualifiedName),
+          rules = e.rules.map(r => r.copy(
+            guard = r.guard.map(visitGuard),
+            exp = visitBranch(r.exp, CoverageProbeKind.BranchRule, "coverage-match-rule"))))
+        case e: TypedAst.Expr.RestrictableChoose => e.copy(
+          exp = visit(e.exp, qualifiedName),
+          rules = e.rules.map(r => r.copy(exp = visitBranch(r.exp, CoverageProbeKind.BranchRule, "coverage-choose-rule"))))
+        case e: TypedAst.Expr.ExtMatch => e.copy(
+          exp = visit(e.exp, qualifiedName),
+          rules = e.rules.map(r => r.copy(exp = visitBranch(r.exp, CoverageProbeKind.BranchRule, "coverage-ext-match-rule"))))
         case e: TypedAst.Expr.Tag => e.copy(exps = visitAll(e.exps, qualifiedName))
         case e: TypedAst.Expr.RestrictableTag => e.copy(exps = visitAll(e.exps, qualifiedName))
         case e: TypedAst.Expr.ExtTag => e.copy(exps = visitAll(e.exps, qualifiedName))
@@ -104,9 +140,12 @@ object CoverageInstrumentation {
         case e: TypedAst.Expr.CheckedCast => e.copy(exp = visit(e.exp, qualifiedName))
         case e: TypedAst.Expr.UncheckedCast => e.copy(exp = visit(e.exp, qualifiedName))
         case e: TypedAst.Expr.Unsafe => e.copy(exp = visit(e.exp, qualifiedName))
-        case e: TypedAst.Expr.TryCatch => e.copy(exp = visit(e.exp, qualifiedName), rules = e.rules.map(r => r.copy(exp = visit(r.exp, qualifiedName))))
+        case e: TypedAst.Expr.TryCatch => e.copy(
+          exp = visit(e.exp, qualifiedName),
+          rules = e.rules.map(r => r.copy(exp = visitBranch(r.exp, CoverageProbeKind.BranchRule, "coverage-catch-rule"))))
         case e: TypedAst.Expr.Throw => e.copy(exp = visit(e.exp, qualifiedName))
-        case e: TypedAst.Expr.Handler => e.copy(rules = e.rules.map(r => r.copy(exp = visit(r.exp, qualifiedName))))
+        case e: TypedAst.Expr.Handler => e.copy(
+          rules = e.rules.map(r => r.copy(exp = visitBranch(r.exp, CoverageProbeKind.BranchRule, "coverage-handler-rule"))))
         case e: TypedAst.Expr.RunWith => e.copy(exp1 = visit(e.exp1, qualifiedName), exp2 = visit(e.exp2, qualifiedName))
         case e: TypedAst.Expr.InvokeConstructor => e.copy(exps = visitAll(e.exps, qualifiedName))
         case e: TypedAst.Expr.InvokeSuperConstructor => e.copy(exps = visitAll(e.exps, qualifiedName))

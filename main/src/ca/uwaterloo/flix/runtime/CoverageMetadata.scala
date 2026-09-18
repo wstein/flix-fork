@@ -22,6 +22,9 @@ sealed trait CoverageProbeKind
 object CoverageProbeKind {
   case object Function extends CoverageProbeKind
   case object Line extends CoverageProbeKind
+  case object BranchTrue extends CoverageProbeKind
+  case object BranchFalse extends CoverageProbeKind
+  case object BranchRule extends CoverageProbeKind
 }
 
 case class CoverageProbe(id: Int, source: String, line: Int, kind: CoverageProbeKind, qualifiedName: String)

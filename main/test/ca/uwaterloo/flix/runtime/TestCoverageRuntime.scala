@@ -186,6 +186,85 @@ class TestCoverageRuntime extends AnyFunSuite {
       }.toMap
       assert(byLine(5) > 0L)
       assert(byLine(7) == 0L)
+      val branches = session.probes.collect {
+        case p if p.qualifiedName == "chooseValue" && (p.kind == CoverageProbeKind.BranchTrue || p.kind == CoverageProbeKind.BranchFalse) =>
+          p.kind -> counts(p.id)
+      }.toMap
+      assert(branches(CoverageProbeKind.BranchTrue) > 0L)
+      assert(branches(CoverageProbeKind.BranchFalse) == 0L)
+    } finally {
+      coverage.close()
+    }
+  }
+
+  test("match rule probes count only the selected rule") {
+    val flix = new Flix().setOptions(Options.DefaultTest.copy(coverage = true))
+    flix.addSource(CompilerConstants.VirtualTestFile,
+      """import java.lang.System
+        |
+        |def classify(): Int64 \ IO = match System.currentTimeMillis() >= 0i64 {
+        |    case true => System.nanoTime()
+        |    case false => System.currentTimeMillis()
+        |}
+        |
+        |pub def main(): Unit \ IO =
+        |    let _ = classify();
+        |    ()
+        |""".stripMargin,
+      SecurityContext.Unrestricted)
+
+    val compilation = flix.compile() match {
+      case Result.Ok(result) => result
+      case Result.Err(errors) => fail(errors.map(_.summary).mkString("; "))
+    }
+    val session = compilation.getCoverageSession.getOrElse(fail("Expected coverage metadata"))
+    val loaded = JvmLoader.load(compilation)
+    val coverage = loaded.coverage.getOrElse(fail("Expected loaded coverage session"))
+    try {
+      loaded.main.getOrElse(fail("Expected main entry point"))(Array.empty)
+      val counts = coverage.snapshot()
+      val rules = session.probes.collect {
+        case p if p.kind == CoverageProbeKind.BranchRule && p.qualifiedName == "classify" => p.line -> counts(p.id)
+      }.toMap
+      assert(rules(4) > 0L)
+      assert(rules(5) == 0L)
+    } finally {
+      coverage.close()
+    }
+  }
+
+  test("match guard probes record the boolean outcome") {
+    val flix = new Flix().setOptions(Options.DefaultTest.copy(coverage = true, xnewmono = true))
+    flix.addSource(CompilerConstants.VirtualTestFile,
+      """import java.lang.System
+        |
+        |def guarded(): Int64 \ IO = match System.currentTimeMillis() {
+        |    case n if n >= 0i64 => System.nanoTime()
+        |    case _ => System.currentTimeMillis()
+        |}
+        |
+        |pub def main(): Unit \ IO =
+        |    let _ = guarded();
+        |    ()
+        |""".stripMargin,
+      SecurityContext.Unrestricted)
+
+    val compilation = flix.compile() match {
+      case Result.Ok(result) => result
+      case Result.Err(errors) => fail(errors.map(_.summary).mkString("; "))
+    }
+    val session = compilation.getCoverageSession.getOrElse(fail("Expected coverage metadata"))
+    val loaded = JvmLoader.load(compilation)
+    val coverage = loaded.coverage.getOrElse(fail("Expected loaded coverage session"))
+    try {
+      loaded.main.getOrElse(fail("Expected main entry point"))(Array.empty)
+      val counts = coverage.snapshot()
+      val outcomes = session.probes.collect {
+        case p if p.qualifiedName == "guarded" && (p.kind == CoverageProbeKind.BranchTrue || p.kind == CoverageProbeKind.BranchFalse) =>
+          p.kind -> counts(p.id)
+      }.toMap
+      assert(outcomes(CoverageProbeKind.BranchTrue) > 0L)
+      assert(outcomes(CoverageProbeKind.BranchFalse) == 0L)
     } finally {
       coverage.close()
     }

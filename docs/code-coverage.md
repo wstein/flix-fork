@@ -31,9 +31,14 @@ instrumentation traverses lambda bodies, local definitions, match and handler ru
 collections, channels, parallel expressions, and fixpoint expressions. Every rebuilt or inserted AST
 node receives JVM provenance so coverage builds preserve debugger source attribution.
 
+Control-flow probes distinguish true and false `if` outcomes, true and false match-guard
+outcomes, and selected rule bodies in matches, restrictable choices, extensible matches, exception
+handlers, and effect handlers. A rule or branch probe executes inside the selected body; it cannot be
+inferred from a surrounding line probe.
+
 Both monomorphizers lower the probe to the same JVM operation. Loading the compilation installs the
 session in the generated program's isolated class loader and returns a handle for taking snapshots
 and releasing its counters.
 
-The migration still deliberately provides no `--coverage` CLI flag. Branch probes, report formats,
-filtered-run semantics, cancellation, and LSP events remain separate later slices.
+The migration still deliberately provides no `--coverage` CLI flag. Report formats, filtered-run
+semantics, cancellation, and LSP events remain separate later slices.
