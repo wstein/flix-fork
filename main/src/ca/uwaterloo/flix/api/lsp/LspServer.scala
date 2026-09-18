@@ -196,7 +196,10 @@ object LspServer {
         return CompletableFuture.completedFuture(TestRunResult.rejected(runId, "runId must contain between 1 and 128 characters"))
       }
       val filters = try {
-        Option(params.filters).toList.flatMap(_.asScala).map(new Regex(_))
+        Option(params.filters).toList.flatMap(_.asScala).map { filter =>
+          if (filter == null) throw new PatternSyntaxException("filter must not be null", "", -1)
+          new Regex(filter)
+        }
       } catch {
         case ex: PatternSyntaxException =>
           return CompletableFuture.completedFuture(TestRunResult.rejected(runId, s"invalid test filter: ${ex.getDescription}"))
@@ -216,12 +219,16 @@ object LspServer {
         return CompletableFuture.completedFuture(TestRunResult.rejected(params.runId,
           s"unsupported test protocol ${params.protocolVersion}; this server requires ${TestRunProtocol.Version}"))
       }
-      val cancellation = testRuns.get(params.runId)
+      val runId = Option(params.runId).map(_.trim).getOrElse("")
+      if (runId.isEmpty || runId.length > 128) {
+        return CompletableFuture.completedFuture(TestRunResult.rejected(runId, "runId must contain between 1 and 128 characters"))
+      }
+      val cancellation = testRuns.get(runId)
       if (cancellation == null) {
-        CompletableFuture.completedFuture(TestRunResult.rejected(params.runId, "no active test run has this runId"))
+        CompletableFuture.completedFuture(TestRunResult.rejected(runId, "no active test run has this runId"))
       } else {
         cancellation.set(true)
-        CompletableFuture.completedFuture(TestRunResult.cancelled(params.runId))
+        CompletableFuture.completedFuture(TestRunResult.cancelled(runId))
       }
     }
 

@@ -101,7 +101,9 @@ class LspProject(o: Options) {
     * the editor without racing a concurrent check.
     */
   def testCompiler(): Flix = synchronized {
-    if (stale) reload().foreach(err => throw new IllegalStateException(err.message(NoFormatter)))
+    if (stale) {
+      throw new IllegalStateException("the project has changed and must be checked before tests can run")
+    }
     val result = bootstrap match {
       case Some(b) => b.mkFlix(o.copy(inMemory = true), NoFormatter)
       case None => new Flix().setFormatter(NoFormatter).setOptions(o.copy(inMemory = true))
@@ -158,7 +160,7 @@ class LspProject(o: Options) {
   /**
     * Adds the document `src` under `name`, shadowing the file of the same name on disk.
     */
-  def addSource(name: SourceName, src: String): Unit = {
+  def addSource(name: SourceName, src: String): Unit = synchronized {
     buffers += (name -> src)
     ClientUri.addSource(flix, name, src)
   }
@@ -174,7 +176,7 @@ class LspProject(o: Options) {
     * A document that is a source file of the project goes back to its contents on disk: the client
     * no longer owns it, but it is still part of the project.
     */
-  def remSource(name: SourceName): Unit = {
+  def remSource(name: SourceName): Unit = synchronized {
     buffers -= name
     name match {
       case SourceName.PathName(path) if isProjectSource(path) && Files.isRegularFile(path) =>
@@ -187,7 +189,7 @@ class LspProject(o: Options) {
   /**
     * Type checks the project, loading it again first if its packages or JARs changed.
     */
-  def check(): (Option[Root], List[CompilationMessage]) = {
+  def check(): (Option[Root], List[CompilationMessage]) = synchronized {
     if (stale) {
       // The project is loaded at most once per check: a project that cannot be loaded is reported
       // once, and the previous one keeps being compiled until the client asks for a restart.
