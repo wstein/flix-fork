@@ -94,7 +94,7 @@ class TestJvmSourceOrigins extends AnyFunSuite {
   test("lexical capture retains source parameter and let names before lowering") {
     implicit val security: SecurityContext = SecurityContext.Unrestricted
     val flix = new Flix().setOptions(Options.TestWithLibMin)
-    flix.addVirtualPath(CompilerConstants.VirtualTestFile,
+    flix.addSource(CompilerConstants.VirtualTestFile, sctx = security, text =
       """pub def example(value: Int32): Int32 = {
         |  let named = value + 1;
         |  named

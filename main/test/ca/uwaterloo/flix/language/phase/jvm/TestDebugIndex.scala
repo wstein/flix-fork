@@ -69,7 +69,7 @@ class TestDebugIndex extends AnyFunSuite {
   private def compile(xdebug: Boolean): Iterable[JvmClass] = {
     val opts = Options.DefaultTest.copy(xdebug = xdebug)
     val flix = new Flix().setOptions(opts)
-    flix.addVirtualPath(CompilerConstants.VirtualTestFile, Program)
+    flix.addSource(CompilerConstants.VirtualTestFile, sctx = sctx, text = Program)
     flix.compile() match {
       case Result.Ok(result) => result.getClasses.values
       case Result.Err(errors) => fail(s"the test program must compile, but got: $errors")

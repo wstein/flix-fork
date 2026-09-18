@@ -49,7 +49,7 @@ class TestDebugLineNumbers extends AnyFunSuite {
     val options = Options.DefaultTest.copy(entryPoint = Some(Symbol.mkDefnSym("main")), xdebug = xdebug)
     val flix = new Flix().setOptions(options)
     implicit val sctx: SecurityContext = SecurityContext.Unrestricted
-    flix.addVirtualPath(CompilerConstants.VirtualTestFile, program)
+    flix.addSource(CompilerConstants.VirtualTestFile, sctx = sctx, text = program)
 
     val result = flix.compile() match {
       case Result.Ok(value) => value

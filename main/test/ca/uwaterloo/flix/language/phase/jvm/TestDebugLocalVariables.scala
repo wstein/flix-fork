@@ -109,7 +109,7 @@ class TestDebugLocalVariables extends AnyFunSuite {
   private def compile(xdebug: Boolean, program: String = Program) = {
     val flix = new Flix().setOptions(Options.DefaultTest.copy(entryPoint = Some(Symbol.mkDefnSym("main")), xdebug = xdebug))
     implicit val sctx: SecurityContext = SecurityContext.Unrestricted
-    flix.addVirtualPath(CompilerConstants.VirtualTestFile, program)
+    flix.addSource(CompilerConstants.VirtualTestFile, sctx = sctx, text = program)
     flix.compile() match {
       case Result.Ok(value) => value
       case Result.Err(errors) => fail(s"Expected a successful compilation, got: $errors")
