@@ -93,6 +93,45 @@ class TestMain extends AnyFunSuite {
     assert(opts.command == Main.Command.Test)
   }
 
+  test("test --filter") {
+    val args = Array("test", "--filter", "Main\\.selected", "--filter", "Other\\..*")
+    val opts = Main.parseCmdOpts(args).get
+    assert(opts.command == Main.Command.Test)
+    assert(opts.testFilters == List("Main\\.selected", "Other\\..*"))
+  }
+
+  test("test rejects an invalid filter") {
+    val args = Array("test", "--filter", "[")
+    assert(Main.parseCmdOpts(args).isEmpty)
+  }
+
+  test("--filter belongs to test") {
+    assert(Main.parseCmdOpts(Array("run", "--filter", "Main\\..*")).isEmpty)
+  }
+
+  test("test --events-json") {
+    val opts = Main.parseCmdOpts(Array("test", "--events-json")).get
+    assert(opts.command == Main.Command.Test)
+    assert(opts.testEventsJson)
+  }
+
+  test("run and test accept coverage report options") {
+    for (command <- List("run", "test")) {
+      val opts = Main.parseCmdOpts(Array(command, "--coverage", "--coverage-output", "custom/report.json", "--coverage-lcov-output", "custom/report.info")).get
+      assert(opts.coverage)
+      assert(opts.coverageOutput == "custom/report.json")
+      assert(opts.coverageLcovOutput == "custom/report.info")
+    }
+  }
+
+  test("coverage belongs to executable commands") {
+    assert(Main.parseCmdOpts(Array("build", "--coverage")).isEmpty)
+  }
+
+  test("--events-json belongs to test") {
+    assert(Main.parseCmdOpts(Array("run", "--events-json")).isEmpty)
+  }
+
   test("repl") {
     val args = Array("repl")
     val opts = Main.parseCmdOpts(args).get

@@ -28,7 +28,7 @@ import ca.uwaterloo.flix.language.phase.monomorph2.Monomorpher2
 import ca.uwaterloo.flix.language.phase.optimizer.{LambdaDrop, Optimizer}
 import ca.uwaterloo.flix.language.verifier.TokenVerifier
 import ca.uwaterloo.flix.language.{CompilationMessage, GenSym}
-import ca.uwaterloo.flix.runtime.CompilationResult
+import ca.uwaterloo.flix.runtime.{CompilationResult, CoverageSession}
 import ca.uwaterloo.flix.tools.compilertop.{CompilerTop, Profiler}
 import ca.uwaterloo.flix.util.*
 import ca.uwaterloo.flix.util.Formatter.NoFormatter
@@ -641,6 +641,14 @@ class Flix(pkgs: List[InstalledPackage] = Nil, jars: List[Path] = Nil) extends A
     jvmOrigins.retainSource(treeShaker1Ast)
     // Note: Do not null typedAst. It is used later.
 
+    val coverageSession: Option[CoverageSession] = if (options.coverage) {
+      val (instrumented, session) = CoverageInstrumentation.run(treeShaker1Ast)
+      treeShaker1Ast = instrumented
+      Some(session)
+    } else {
+      None
+    }
+
     var monomorpherAst =
       if (options.xnewmono) Monomorpher2.run(treeShaker1Ast)
       else Specialization.run(treeShaker1Ast)
@@ -696,7 +704,7 @@ class Flix(pkgs: List[InstalledPackage] = Nil, jars: List[Path] = Nil) extends A
     // that is the caller's responsibility (see [[ca.uwaterloo.flix.runtime.JvmLoader]]).
     val totalSize = bytecodeAst.classes.values.map(_.bytecode.length).sum
     val result = new CompilationResult(bytecodeAst, totalTime, totalSize, this,
-      jvmOrigins.finalizedDebugDefinitions, jvmOrigins.finalizedDebugCalls)
+      jvmOrigins.finalizedDebugDefinitions, jvmOrigins.finalizedDebugCalls, coverageSession)
 
     // Shutdown the thread pool.
     shutdownThreadPool()

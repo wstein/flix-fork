@@ -17,11 +17,12 @@ package ca.uwaterloo.flix.tools
 
 import ca.uwaterloo.flix.api.Flix
 import ca.uwaterloo.flix.language.ast.Symbol
-import ca.uwaterloo.flix.runtime.{LoadedProgram, TestFn}
+import ca.uwaterloo.flix.runtime.{CoverageSession, CoverageSnapshot, LoadedProgram, TestFn}
 import ca.uwaterloo.flix.util.{Duration, Result}
 import org.jline.terminal.{Terminal, TerminalBuilder}
 
 import java.io.{ByteArrayOutputStream, OutputStream, PrintStream, PrintWriter, StringWriter}
+import java.nio.charset.StandardCharsets
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.logging.{Level, Logger}
 import scala.util.matching.Regex
@@ -32,26 +33,83 @@ import scala.util.matching.Regex
 object Tester {
 
   /**
-    * Runs all tests.
+    * Runs all tests, printing the results to the terminal.
     */
-  def run(filters: List[Regex], program: LoadedProgram)(implicit flix: Flix): Result[Unit, Int] = {
+  def run(filters: List[Regex], program: LoadedProgram)(implicit flix: Flix): Result[Unit, Int] =
+    run(filters, program, consoleSink)
+
+  /**
+    * Returns a fresh terminal renderer for a test run.
+    */
+  def consoleSink: TestEventSink = new ConsoleSink
+
+  /**
+    * Runs all tests, reporting their events to `sink`.
+    */
+  def run(filters: List[Regex], program: LoadedProgram, sink: TestEventSink)(implicit flix: Flix): Result[Unit, Int] = {
+    run(filters, program, sink, CancellationToken.Never)
+  }
+
+  /**
+    * Runs all tests, stopping before the next test when `cancellation` is requested.
+    *
+    * A running test is deliberately not interrupted: arbitrary Flix/Java code may not be
+    * interruption-safe. Cancellation therefore has a precise boundary between test cases.
+    */
+  def run(filters: List[Regex], program: LoadedProgram, sink: TestEventSink, cancellation: CancellationToken)(implicit flix: Flix): Result[Unit, Int] = {
+    run(filters, program, sink, cancellation, None)
+  }
+
+  /** Runs tests and emits one coverage event before the final event when a session is supplied. */
+  def run(filters: List[Regex],
+          program: LoadedProgram,
+          sink: TestEventSink,
+          cancellation: CancellationToken,
+          coverageSession: Option[CoverageSession])(implicit flix: Flix): Result[Unit, Int] = {
     //
     // Find all test cases (both active and ignored).
     //
     val tests = getTestCases(filters, program)
 
+    // An explicit filter that selects nothing is almost always stale configuration or a typo.
+    // Treating it as a successful run produces a false green result in IDEs and CI.
+    if (filters.nonEmpty && tests.isEmpty) {
+      return Result.Err(1)
+    }
+
     // Start the TestRunner and TestReporter.
-    val queue = new ConcurrentLinkedQueue[TestEvent]()
-    val reporter = new TestReporter(queue, tests)
-    val runner = new TestRunner(queue, tests)
-    reporter.start()
-    runner.start()
+    val queue = new ConcurrentLinkedQueue[Option[TestEvent]]()
+    val reporter = new TestReporter(queue, sink)
+    val runner = new TestRunner(queue, tests, cancellation)
 
-    // Wait for everything to complete.
-    reporter.join()
-    runner.join()
+    // A structured sink owns stdout while tests run. ConsoleRedirection tees each test's output to
+    // this stream, which turns it into protocol events instead of corrupting the JSONL stream.
+    val oldOut = System.out
+    // Do not auto-flush after every byte-array write. PrintStream may encode the text and newline as
+    // separate arrays; flushing the text array would publish a partial line, then publish the newline
+    // as a second empty output event.
+    val redirectedOut = sink.outputStream.map(out => new PrintStream(out, false, StandardCharsets.UTF_8))
+    redirectedOut.foreach(System.setOut)
+    try {
+      sink.start(tests)
+      reporter.start()
+      runner.start()
 
-    if (reporter.isSuccess()) {
+      // Wait for everything to complete.
+      reporter.join()
+      runner.join()
+      for {
+        session <- coverageSession
+        handle <- program.coverage
+      } sink.accept(TestEvent.Coverage(CoverageReporter.snapshot(
+        session, handle, partial = cancellation.isCancelled, filters.map(_.regex))))
+      sink.accept(TestEvent.Finished(runner.elapsed))
+    } finally {
+      redirectedOut.foreach(_.flush())
+      System.setOut(oldOut)
+    }
+
+    if (reporter.isSuccess() && !cancellation.isCancelled) {
       Result.Ok(())
     } else {
       // Set exit code of program to 1.
@@ -60,9 +118,36 @@ object Tester {
   }
 
   /**
+    * A rendering of the events produced by the single test runner.
+    */
+  trait TestEventSink {
+    /** Called once before any test event, with the complete selected test set. */
+    def start(tests: Vector[TestCase])(implicit flix: Flix): Unit
+
+    /** Called for each event in runner order. */
+    def accept(event: TestEvent)(implicit flix: Flix): Unit
+
+    /**
+      * A stream that should replace stdout while tests run, if this rendering carries program output.
+      */
+    def outputStream: Option[OutputStream] = None
+  }
+
+  /** A cooperatively observed request to stop before starting another test. */
+  trait CancellationToken {
+    def isCancelled: Boolean
+  }
+
+  object CancellationToken {
+    val Never: CancellationToken = new CancellationToken {
+      override def isCancelled: Boolean = false
+    }
+  }
+
+  /**
     * A class that reports the results of test events as they come in.
     */
-  private class TestReporter(queue: ConcurrentLinkedQueue[TestEvent], tests: Vector[TestCase])(implicit flix: Flix) extends Thread {
+  private class TestReporter(queue: ConcurrentLinkedQueue[Option[TestEvent]], sink: TestEventSink)(implicit flix: Flix) extends Thread {
 
     private val success = new java.util.concurrent.atomic.AtomicBoolean(true)
 
@@ -71,84 +156,17 @@ object Tester {
     }
 
     override def run(): Unit = {
-      // Silence JLine warnings about terminal type.
-      Logger.getLogger("org.jline").setLevel(Level.OFF)
-
-      // Import formatter.
-      val formatter = flix.getFormatter
-      import formatter.*
-
-      // Initialize the terminal.
-      implicit val terminal: Terminal = TerminalBuilder
-        .builder()
-        .system(true)
-        .build()
-      val writer = terminal.writer()
-
-      // Print headline.
-      writer.println(s"Running ${tests.length} tests...")
-      writer.println()
-      writer.flush()
-
-      // Main event loop.
-      var passed = 0
-      var skipped = 0
-      var failed: List[(Symbol.DefnSym, List[String])] = Nil
-
       var finished = false
       while (!finished) {
         queue.poll() match {
-          case TestEvent.Before(sym) =>
-            // Note: Print \r to reset the caret.
-            writer.print(s"  ${bgYellow(" TEST ")} $sym\r")
-            terminal.flush()
-
-          case TestEvent.Success(sym, elapsed) =>
-            passed = passed + 1
-            writer.println(s"  ${bgGreen(" PASS ")} $sym ${elapsed.fmt}")
-            terminal.flush()
-
-          case TestEvent.Failure(sym, output, elapsed) =>
-            failed = (sym, output) :: failed
-            val line = output.headOption.map(s => s"(${red(s)})").getOrElse("")
-            writer.println(s"  ${bgRed(" FAIL ")} $sym $line")
-            terminal.flush()
-            success.set(false)
-
-          case TestEvent.Skip(sym) =>
-            skipped = skipped + 1
-            writer.println(s"  ${bgYellow(" SKIP ")} $sym (${yellow("SKIPPED")})")
-            terminal.flush()
-
-          case TestEvent.Finished(elapsed) =>
-            // Print the std out / std err of every failed test.
-            if (failed.nonEmpty) {
-              writer.println()
-              writer.println("-" * 80)
-              writer.println()
-              for ((sym, output) <- failed; if output.nonEmpty) {
-                writer.println(s"  ${bgRed(" FAIL ")} $sym")
-                writer.println(s"         ${sym.loc.source.name}:${sym.loc.startLine}")
-                for (line <- output) {
-                  writer.println(s"    $line")
-                }
-                writer.println()
-              }
-              writer.println("-" * 80)
-            }
-
-            // Print the summary.
-            writer.println()
-            writer.println(
-              s"Passed: ${green(passed.toString)}, " +
-                s"Failed: ${red(failed.length.toString)}. " +
-                s"Skipped: ${yellow(skipped.toString)}. " +
-                s"Elapsed: ${elapsed.fmt}."
-            )
-            terminal.flush()
-            finished = true
-
           case null => () // tester have not started yet, retry
+          case None => finished = true
+          case Some(event) =>
+            event match {
+              case TestEvent.Failure(_, _, _) => success.set(false)
+              case _ => ()
+            }
+            sink.accept(event)
         }
       }
     }
@@ -156,19 +174,91 @@ object Tester {
   }
 
   /**
+    * The traditional terminal rendering of `flix test`.
+    */
+  private class ConsoleSink extends TestEventSink {
+    private var terminal: Terminal = _
+    private var writer: PrintWriter = _
+    private var passed = 0
+    private var skipped = 0
+    private var failed: List[(Symbol.DefnSym, List[String])] = Nil
+
+    override def start(tests: Vector[TestCase])(implicit flix: Flix): Unit = {
+      Logger.getLogger("org.jline").setLevel(Level.OFF)
+      terminal = TerminalBuilder.builder().system(true).build()
+      writer = terminal.writer()
+      writer.println(s"Running ${tests.length} tests...")
+      writer.println()
+      writer.flush()
+    }
+
+    override def accept(event: TestEvent)(implicit flix: Flix): Unit = {
+      val formatter = flix.getFormatter
+      import formatter.*
+
+      event match {
+        case TestEvent.Before(sym) =>
+          writer.print(s"  ${bgYellow(" TEST ")} $sym\r")
+          terminal.flush()
+        case TestEvent.Success(sym, elapsed) =>
+          passed = passed + 1
+          writer.println(s"  ${bgGreen(" PASS ")} $sym ${elapsed.fmt}")
+          terminal.flush()
+        case TestEvent.Failure(sym, output, _) =>
+          failed = (sym, output) :: failed
+          val line = output.headOption.map(s => s"(${red(s)})").getOrElse("")
+          writer.println(s"  ${bgRed(" FAIL ")} $sym $line")
+          terminal.flush()
+        case TestEvent.Skip(sym) =>
+          skipped = skipped + 1
+          writer.println(s"  ${bgYellow(" SKIP ")} $sym (${yellow("SKIPPED")})")
+          terminal.flush()
+        case TestEvent.Coverage(snapshot) =>
+          writer.println(CoverageReporter.formatSummary(snapshot))
+          terminal.flush()
+        case TestEvent.Finished(elapsed) =>
+          if (failed.nonEmpty) {
+            writer.println()
+            writer.println("-" * 80)
+            writer.println()
+            for ((sym, output) <- failed; if output.nonEmpty) {
+              writer.println(s"  ${bgRed(" FAIL ")} $sym")
+              writer.println(s"         ${sym.loc.source.name}:${sym.loc.startLine}")
+              output.foreach(line => writer.println(s"    $line"))
+              writer.println()
+            }
+            writer.println("-" * 80)
+          }
+          writer.println()
+          writer.println(
+            s"Passed: ${green(passed.toString)}, " +
+              s"Failed: ${red(failed.length.toString)}. " +
+              s"Skipped: ${yellow(skipped.toString)}. " +
+              s"Elapsed: ${elapsed.fmt}."
+          )
+          terminal.flush()
+      }
+    }
+  }
+
+  /**
     * A class that runs all the given tests emitting test events.
     */
-  private class TestRunner(queue: ConcurrentLinkedQueue[TestEvent], tests: Vector[TestCase])(implicit flix: Flix) extends Thread {
+  private class TestRunner(queue: ConcurrentLinkedQueue[Option[TestEvent]], tests: Vector[TestCase], cancellation: CancellationToken)(implicit flix: Flix) extends Thread {
+    @volatile private var elapsedTime: Duration = Duration(0L)
+
+    def elapsed: Duration = elapsedTime
+
     /**
       * Runs all the given tests.
       */
     override def run(): Unit = {
       val start = System.nanoTime()
-      for (testCase <- tests) {
+      for (testCase <- tests if !cancellation.isCancelled) {
         runTest(testCase)
       }
-      val elapsed = System.nanoTime() - start
-      queue.add(TestEvent.Finished(Duration(elapsed)))
+      elapsedTime = Duration(System.nanoTime() - start)
+      queue.add(None)
     }
 
     /**
@@ -178,12 +268,12 @@ object Tester {
       case TestCase(sym, skip, run) =>
         // Check if the test case should be ignored.
         if (skip) {
-          queue.add(TestEvent.Skip(sym))
+          queue.add(Some(TestEvent.Skip(sym)))
           return
         }
 
         // We are about to run the test case.
-        queue.add(TestEvent.Before(sym))
+        queue.add(Some(TestEvent.Before(sym)))
 
         // Redirect std out and std err.
         val redirect = new ConsoleRedirection
@@ -205,15 +295,15 @@ object Tester {
           result match {
             case java.lang.Boolean.FALSE =>
               // Case 1: Assertion Error.
-              queue.add(TestEvent.Failure(sym, "Assertion Error" :: redirect.stdOut ++ redirect.stdErr, Duration(elapsed)))
+              queue.add(Some(TestEvent.Failure(sym, "Assertion Error" :: redirect.stdOut ++ redirect.stdErr, Duration(elapsed))))
 
             case _ =>
               if (redirect.stdErr.isEmpty) {
                 // Case 2: Non-False result and no stderr output.
-                queue.add(TestEvent.Success(sym, Duration(elapsed)))
+                queue.add(Some(TestEvent.Success(sym, Duration(elapsed))))
               } else {
                 // Case 3: Non-False result, but with stderr output.
-                queue.add(TestEvent.Failure(sym, "Std Err Output" :: redirect.stdOut ++ redirect.stdErr, Duration(elapsed)))
+                queue.add(Some(TestEvent.Failure(sym, "Std Err Output" :: redirect.stdOut ++ redirect.stdErr, Duration(elapsed))))
               }
 
           }
@@ -224,7 +314,7 @@ object Tester {
 
             // Compute elapsed time.
             val elapsed = System.nanoTime() - start
-            queue.add(TestEvent.Failure(sym, redirect.stdOut ++ redirect.stdErr ++ fmtStackTrace(ex), Duration(elapsed)))
+            queue.add(Some(TestEvent.Failure(sym, redirect.stdOut ++ redirect.stdErr ++ fmtStackTrace(ex), Duration(elapsed))))
         }
     }
   }
@@ -380,6 +470,9 @@ object Tester {
       * A test event emitted to indicate that a test was ignored.
       */
     case class Skip(sym: Symbol.DefnSym) extends TestEvent
+
+    /** A coherent coverage snapshot emitted after test execution and before Finished. */
+    case class Coverage(snapshot: CoverageSnapshot) extends TestEvent
 
     /**
       * A test event emitted to indicates that testing has completed.

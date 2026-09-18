@@ -666,6 +666,9 @@ private[monomorph2] object SpecializeAndLower {
     case TypedAst.Expr.FixpointInjectInto(exps, predsAndArities, _, _, loc) =>
       lowerInjectInto(exps, predsAndArities, loc, env0, subst)
 
+    case TypedAst.Expr.CoverageHit(sessionId, probeId, loc) =>
+      MonoAst.Expr.ApplyAtomic(AtomicOp.CoverageHit(sessionId, probeId), Nil, Type.Unit, Type.Pure, loc)
+
     case TypedAst.Expr.ApplySig(symUse, exps, _, _, itpe0, tpe, eff, _, loc) =>
       val groundArrowTpe = subst(itpe0)
       val newSym = resolveSigSym(symUse.sym, groundArrowTpe)

@@ -35,6 +35,7 @@ import java.io.{File, PrintStream}
 import java.net.BindException
 import java.nio.file.{Path, Paths}
 import scala.collection.mutable
+import scala.util.matching.Regex
 
 object Main {
 
@@ -91,6 +92,7 @@ object Main {
       installDeps = cmdOpts.installDeps,
       threads = cmdOpts.threads.getOrElse(Options.Default.threads),
       compilerTop = cmdOpts.top,
+      coverage = cmdOpts.coverage,
       assumeYes = cmdOpts.assumeYes,
       xprintphases = cmdOpts.xprintphases,
       xnodeprecated = cmdOpts.xnodeprecated,
@@ -360,27 +362,35 @@ object Main {
             System.exit(1)
           }
           featureNotSupportedInNativeImage()
+          val coverageOutput = mkCoverageOutput(cwd, cmdOpts)
           exitOnResult {
             Bootstrap.bootstrap(cwd, options.githubToken).flatMap { bootstrap =>
               val flix = bootstrap.mkFlix(options, formatter)
-              bootstrap.run(flix, cmdOpts.args.toArray)
+              bootstrap.run(flix, cmdOpts.args.toArray, coverageOutput)
             }
           }
 
         case Command.Test =>
           featureNotSupportedInNativeImage()
+          val filters = cmdOpts.testFilters.map(new Regex(_))
+          val sink = if (cmdOpts.testEventsJson) new JsonTestSink(System.out) else Tester.consoleSink
+          val coverageOutput = mkCoverageOutput(cwd, cmdOpts)
           if (cmdOpts.files.isEmpty) {
             exitOnResult {
               Bootstrap.bootstrap(cwd, options.githubToken).flatMap { bootstrap =>
                 val flix = bootstrap.mkFlix(options.copy(progress = false), formatter)
-                bootstrap.test(flix)
+                bootstrap.test(flix, filters, sink, coverageOutput)
               }
             }
           } else {
             val flix = mkFlixWithFiles(cmdOpts.files, options.copy(progress = false))
             flix.compile() match {
               case Result.Ok(compilationResult) =>
-                Tester.run(Nil, JvmLoader.load(compilationResult))(flix) match {
+                val loaded = JvmLoader.load(compilationResult)
+                val publishingSink = CoverageReporter.publishingSink(sink, coverageOutput)
+                val result = try Tester.run(filters, loaded, publishingSink, Tester.CancellationToken.Never, compilationResult.getCoverageSession)(flix)
+                finally loaded.coverage.foreach(_.close())
+                result match {
                   case Result.Ok(_) => System.exit(0)
                   case Result.Err(_) => System.exit(1)
                 }
@@ -516,12 +526,22 @@ object Main {
     }
   }
 
+  private def mkCoverageOutput(cwd: Path, cmdOpts: CmdOpts): Option[(Path, Path)] =
+    Option.when(cmdOpts.coverage)(
+      cwd.resolve(cmdOpts.coverageOutput).normalize() -> cwd.resolve(cmdOpts.coverageLcovOutput).normalize()
+    )
+
   /**
     * A case class representing the parsed command line options.
     */
   case class CmdOpts(
     command: Command = Command.None,
     args: List[String] = Nil,
+    testFilters: List[String] = Nil,
+    testEventsJson: Boolean = false,
+    coverage: Boolean = false,
+    coverageOutput: String = "build/coverage.json",
+    coverageLcovOutput: String = "build/coverage.info",
     entryPoint: Option[String] = None,
     installDeps: Boolean = true,
     githubToken: Option[String] = None,
@@ -662,9 +682,33 @@ object Main {
 
       cmd("format").action((_, c) => c.copy(command = Command.Format)).text("  formats Flix source code files.")
 
-      cmd("run").action((_, c) => c.copy(command = Command.Run)).text("  runs main for the current project.")
+      cmd("run").action((_, c) => c.copy(command = Command.Run)).text("  runs main for the current project.").children(
+        opt[Unit]("coverage").action((_, c) => c.copy(coverage = true)).text("collects source coverage."),
+        opt[String]("coverage-output").action((path, c) => c.copy(coverageOutput = path)).valueName("<path>").text("writes the JSON coverage report to the path."),
+        opt[String]("coverage-lcov-output").action((path, c) => c.copy(coverageLcovOutput = path)).valueName("<path>").text("writes the LCOV coverage report to the path.")
+      )
 
-      cmd("test").action((_, c) => c.copy(command = Command.Test)).text("  runs the tests for the current project.")
+      cmd("test").action((_, c) => c.copy(command = Command.Test)).text("  runs the tests for the current project.").children(
+        opt[String]("filter")
+          .unbounded()
+          .validate { pattern =>
+            try {
+              new Regex(pattern)
+              success
+            } catch {
+              case ex: java.util.regex.PatternSyntaxException => failure(s"invalid test filter: ${ex.getDescription}")
+            }
+          }
+          .action((pattern, c) => c.copy(testFilters = c.testFilters :+ pattern))
+          .valueName("<regex>")
+          .text("runs tests whose fully-qualified name matches the regular expression; may be repeated."),
+        opt[Unit]("events-json")
+          .action((_, c) => c.copy(testEventsJson = true))
+          .text("writes test events as newline-delimited JSON."),
+        opt[Unit]("coverage").action((_, c) => c.copy(coverage = true)).text("collects source coverage."),
+        opt[String]("coverage-output").action((path, c) => c.copy(coverageOutput = path)).valueName("<path>").text("writes the JSON coverage report to the path."),
+        opt[String]("coverage-lcov-output").action((path, c) => c.copy(coverageLcovOutput = path)).valueName("<path>").text("writes the LCOV coverage report to the path.")
+      )
 
       cmd("repl").action((_, c) => c.copy(command = Command.Repl)).text("  starts a repl for the current project, or provided Flix source files.")
 

@@ -1012,6 +1012,9 @@ object Specialization {
       val t = subst(tpe)
       Expr.FixpointInjectInto(exps, predsAndArities, t, subst(eff), loc)
 
+    case Expr.CoverageHit(sessionId, probeId, loc) =>
+      Expr.CoverageHit(sessionId, probeId, loc)
+
     case Expr.Error(m, _, _) =>
       throw InternalCompilerException(s"Unexpected error expression near", m.loc)
 

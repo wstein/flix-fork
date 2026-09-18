@@ -112,6 +112,9 @@ object AtomicOp {
 
   case class HoleError(sym: Symbol.HoleSym) extends AtomicOp
 
+  /** A compiler-owned side effect that remains source-level pure. */
+  case class CoverageHit(sessionId: Long, probeId: Int) extends AtomicOp
+
   case object MatchError extends AtomicOp
 
   case class CastError(from: String, to: String) extends AtomicOp

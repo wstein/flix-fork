@@ -26,9 +26,9 @@ import ca.uwaterloo.flix.language.phase.HtmlDocumentor
 import ca.uwaterloo.flix.language.phase.jvm.{DebugCalls, DebugIndex, DebugScopes, JvmClass}
 
 import java.lang.constant.ClassDesc
-import ca.uwaterloo.flix.runtime.{CompilationResult, JvmLoader}
+import ca.uwaterloo.flix.runtime.{CompilationResult, JvmLoader, LoadedProgram}
 import ca.uwaterloo.flix.runtime.shell.FileWatcher
-import ca.uwaterloo.flix.tools.{Stat, Tester}
+import ca.uwaterloo.flix.tools.{CoverageReporter, Stat, Tester}
 import ca.uwaterloo.flix.tools.pkg.github.GitHub
 import ca.uwaterloo.flix.tools.pkg.{FlixPackageManager, JarPackageManager, Manifest, ManifestParser, MavenPackageManager, PackageError, PackageModules, PackageName, ReleaseError, SemVer}
 import ca.uwaterloo.flix.util.Result.{Err, Ok}
@@ -42,6 +42,7 @@ import scala.collection.mutable
 import scala.io.StdIn.readLine
 import scala.jdk.CollectionConverters.IterableHasAsScala
 import scala.util.{Failure, Success, Using}
+import scala.util.matching.Regex
 
 
 object Bootstrap {
@@ -1213,28 +1214,57 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
   /**
     * Runs the main function in flix package for the project.
     */
-  def run(flix: Flix, args: Array[String]): Result[Unit, BootstrapError] = {
+  def run(flix: Flix, args: Array[String], coverageOutput: Option[(Path, Path)] = None): Result[Unit, BootstrapError] = {
     for {
       compilationResult <- compileProject(flix, Build.Development)
     } yield {
-      JvmLoader.load(compilationResult).main match {
-        case None => ()
-        case Some(main) => main(args)
+      val loaded = JvmLoader.load(compilationResult)
+      try {
+        loaded.main match {
+          case None => ()
+          case Some(main) => main(args)
+        }
+      } finally {
+        finishCoverage(compilationResult, loaded, coverageOutput, Nil)
       }
     }
   }
 
   /**
-    * Runs all tests in the flix package for the project.
+    * Runs project tests whose fully-qualified symbols match at least one filter.
+    * Runs all tests when `filters` is empty.
     */
-  def test(flix: Flix): Result[Unit, BootstrapError] = {
-    for {
-      compilationResult <- compileProject(flix, Build.Development)
-      res <- Tester.run(Nil, JvmLoader.load(compilationResult))(flix).mapErr(_ => BootstrapError.GeneralError("Tester Error"))
-    } yield {
-      res
+  def test(flix: Flix,
+           filters: List[Regex] = Nil,
+           sink: Tester.TestEventSink = Tester.consoleSink,
+           coverageOutput: Option[(Path, Path)] = None): Result[Unit, BootstrapError] = {
+    compileProject(flix, Build.Development).flatMap { compilationResult =>
+      val loaded = JvmLoader.load(compilationResult)
+      val publishingSink = CoverageReporter.publishingSink(sink, coverageOutput)
+      val result = try Tester.run(filters, loaded, publishingSink, Tester.CancellationToken.Never, compilationResult.getCoverageSession)(flix)
+      finally loaded.coverage.foreach(_.close())
+      result.mapErr(_ => BootstrapError.GeneralError("Tester Error"))
     }
   }
+
+  private def finishCoverage(compilation: CompilationResult,
+                             loaded: LoadedProgram,
+                             output: Option[(Path, Path)],
+                             testFilters: List[String]): Unit =
+    loaded.coverage.foreach { handle =>
+      try {
+        for {
+          session <- compilation.getCoverageSession
+          (jsonPath, lcovPath) <- output
+        } {
+          val snapshot = CoverageReporter.snapshot(session, handle, partial = false, testFilters)
+          CoverageReporter.write(snapshot, jsonPath, lcovPath)
+          System.err.println(CoverageReporter.formatSummary(snapshot))
+        }
+      } finally {
+        handle.close()
+      }
+    }
 
   // -- Tooling Section --
 

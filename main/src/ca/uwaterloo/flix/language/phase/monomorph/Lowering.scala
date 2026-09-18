@@ -657,6 +657,9 @@ object Lowering {
     case TypedAst.Expr.FixpointInjectInto(exps, predsAndArities, _, _, loc) =>
       lowerInjectInto(exps, predsAndArities, loc)
 
+    case TypedAst.Expr.CoverageHit(sessionId, probeId, loc) =>
+      MonoAst.Expr.ApplyAtomic(AtomicOp.CoverageHit(sessionId, probeId), Nil, Type.Unit, Type.Pure, loc)
+
     case TypedAst.Expr.ApplySig(_, _, _, _, _, _, _, _, _) =>
       throw InternalCompilerException(s"Unexpected ApplySig", exp0.loc)
 

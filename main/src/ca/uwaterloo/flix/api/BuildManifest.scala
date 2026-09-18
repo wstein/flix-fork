@@ -110,6 +110,7 @@ object BuildManifest {
       s"inMemory=${options.inMemory}",
       s"newmono=${options.xnewmono}",
       s"debug=${options.xdebug}",
+      s"coverage=${options.coverage}",
       s"datalogExecution=${options.xdatalogExecution}",
       s"collectionExecution=${options.xcollectionExecution}",
       s"assumeSingleThreaded=${options.xassumeSingleThreaded}"

@@ -94,6 +94,27 @@ class LspProject(o: Options) {
   }
 
   /**
+    * Returns a fresh compiler for an asynchronous test run.
+    *
+    * The long-lived incremental compiler continues serving editor requests while tests execute.
+    * Open buffers are copied into this compiler, so the run observes the same source snapshot as
+    * the editor without racing a concurrent check.
+    */
+  def testCompiler(coverage: Boolean = false): Flix = synchronized {
+    if (stale) {
+      throw new IllegalStateException("the project has changed and must be checked before tests can run")
+    }
+    val result = bootstrap match {
+      case Some(b) => b.mkFlix(o.copy(inMemory = true, coverage = coverage), NoFormatter)
+      case None => new Flix().setFormatter(NoFormatter).setOptions(o.copy(inMemory = true, coverage = coverage))
+    }
+    for ((name, src) <- buffers) {
+      ClientUri.addSource(result, name, src)
+    }
+    result
+  }
+
+  /**
     * Returns the path of the project: the workspace root the client has added, or the working
     * directory of the server if it has added none.
     */
@@ -139,7 +160,7 @@ class LspProject(o: Options) {
   /**
     * Adds the document `src` under `name`, shadowing the file of the same name on disk.
     */
-  def addSource(name: SourceName, src: String): Unit = {
+  def addSource(name: SourceName, src: String): Unit = synchronized {
     buffers += (name -> src)
     ClientUri.addSource(flix, name, src)
   }
@@ -155,7 +176,7 @@ class LspProject(o: Options) {
     * A document that is a source file of the project goes back to its contents on disk: the client
     * no longer owns it, but it is still part of the project.
     */
-  def remSource(name: SourceName): Unit = {
+  def remSource(name: SourceName): Unit = synchronized {
     buffers -= name
     name match {
       case SourceName.PathName(path) if isProjectSource(path) && Files.isRegularFile(path) =>
@@ -168,7 +189,7 @@ class LspProject(o: Options) {
   /**
     * Type checks the project, loading it again first if its packages or JARs changed.
     */
-  def check(): (Option[Root], List[CompilationMessage]) = {
+  def check(): (Option[Root], List[CompilationMessage]) = synchronized {
     if (stale) {
       // The project is loaded at most once per check: a project that cannot be loaded is reported
       // once, and the previous one keeps being compiled until the client asks for a restart.

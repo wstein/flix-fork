@@ -124,6 +124,7 @@ object CodeGen {
     val effectClasses = GenEffectClasses.gen(root.effects.values)
     val resumptionWrappers = TypeDescs.erasedTypes.map(tpe => JvmClass(GenResumptionWrapper.desc(tpe), GenResumptionWrapper.genByteCode(tpe)))
     val debugEvalRuntime = if (flix.options.xdebug) DebugEvalRuntime.classes else Nil
+    val coverageRuntime = if (flix.options.coverage) CoverageRuntime.classes else Nil
 
     val allClasses = List(
       mainClass,
@@ -168,7 +169,8 @@ object CodeGen {
       effectCallClass,
       effectClasses,
       resumptionWrappers,
-      debugEvalRuntime
+      debugEvalRuntime,
+      coverageRuntime
     ).flatten
 
     // Check for duplicate JVM class names.
