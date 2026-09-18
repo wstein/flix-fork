@@ -192,6 +192,14 @@ class TestDebugEvalHost extends AnyFunSuite {
     assert(thrown.getMessage.contains("Def$nothing"), s"the refusal is unspecific: ${thrown.getMessage}")
   }
 
+  test("an evaluation artifact has a bounded wire payload") {
+    val classes = List("TooLarge" -> new Array[Byte](DebugEvalProvider.MaxArtifactBytes + 1))
+
+    val reason = DebugEvalProvider.artifactSizeError(classes)
+
+    assert(reason.exists(_.contains("too large")), s"an oversized artifact was accepted: $reason")
+  }
+
   /** Compiles [[Program]] with `--Xdebug` and returns the project root. */
   private def build(): Path = {
     val project = Files.createTempDirectory("flix-debug-host-test")

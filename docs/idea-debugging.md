@@ -133,7 +133,9 @@ pass with the inferred return type. It returns only classes absent from the deve
 build manifest, so the debuggee continues to resolve program classes from the running
 build. A missing, malformed, or non-format-4 manifest is refused; the class directory is
 never used as a fallback because it may contain a newer or partial build. No temporary
-class directory or project output is modified.
+class directory or project output is modified. Raw artifact class bytes are capped at
+16 MiB before Base64 expansion, preventing an expression from creating an unbounded
+JSON-RPC/JDI payload; a larger specialization set is rejected with a specific remedy.
 
 Debug builds include `dev.flix.runtime.DebugEvalHost` and its private child loader as
 ordinary compilation products; release builds omit them. Generated `Main` loads the host

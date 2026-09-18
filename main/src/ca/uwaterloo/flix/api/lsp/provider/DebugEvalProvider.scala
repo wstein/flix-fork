@@ -73,6 +73,9 @@ import java.nio.file.{Files, Path, Paths}
   */
 object DebugEvalProvider {
 
+  /** Maximum raw class bytes returned in one evaluation artifact (before Base64 expansion). */
+  private[provider] val MaxArtifactBytes: Int = 16 * 1024 * 1024
+
   /** What an evaluation is allowed to do, decided by the caller and enforced here. */
   sealed trait Policy
 
@@ -377,16 +380,28 @@ object DebugEvalProvider {
         }
         val fresh = produced.filterNot { case (relative, _) => existing.contains(relative) }
         val classes = fresh.map { case (relative, bytes) => binaryNameOf(relative) -> bytes }
-        classes.map(_._1).find(_.contains(WrapperName)) match {
-          case None =>
-            Left(
-              "the expression compiled but produced no class of its own, which means the running " +
-                "program already has every class it needs and this one too -- a name collision",
-            )
-          case Some(entry) =>
-            Right(Artifact(classes, entry, ClassMaker.StaticApplyMethodName, valueFieldFor(tpe), params.map(nameOf)))
+        artifactSizeError(classes) match {
+          case Some(reason) => Left(reason)
+          case None => classes.map(_._1).find(_.contains(WrapperName)) match {
+            case None =>
+              Left(
+                "the expression compiled but produced no class of its own, which means the running " +
+                  "program already has every class it needs and this one too -- a name collision",
+              )
+            case Some(entry) =>
+              Right(Artifact(classes, entry, ClassMaker.StaticApplyMethodName, valueFieldFor(tpe), params.map(nameOf)))
+          }
         }
     }
+  }
+
+  /** Why `classes` cannot safely cross JSON-RPC/JDI as one Base64 string, if it cannot. */
+  private[provider] def artifactSizeError(classes: List[(String, Array[Byte])]): Option[String] = {
+    val bytes = classes.foldLeft(0L) { case (sum, (_, bytecode)) => sum + bytecode.length }
+    Option.when(bytes > MaxArtifactBytes)(
+      s"the evaluation artifact is too large ($bytes bytes; limit $MaxArtifactBytes). " +
+        "Simplify the expression or make the required specialization part of the program build",
+    )
   }
 
   /**
