@@ -199,8 +199,8 @@ final class JvmCompilationOrigins(val symbols: JvmProvenance) {
 }
 
 object JvmCompilationOrigins {
-  def capture(root: TypedAst.Root): JvmCompilationOrigins = {
-    val source = JvmSourceOrigins.capture(root)
+  def capture(root: TypedAst.Root, captureDebugBindings: Boolean = true): JvmCompilationOrigins = {
+    val source = JvmSourceOrigins.capture(root, captureDebugBindings)
     val origins = new JvmCompilationOrigins(source.provenance)
     source.foreachExpression(origins.record)
     source.foreachBinding { case (sym, binding) =>

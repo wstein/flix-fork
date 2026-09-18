@@ -74,6 +74,9 @@ The compiler also captures source binding identity, name, location, and pre-eras
 before lowering, joining them to the emitted class and method for the `debug-scopes`
 sidecar. That method-wide snapshot is not a list of variables live at a particular
 instruction: clients must use JDI/LVT visibility when selecting evaluation parameters.
+Binding capture and source-type formatting run only under `--Xdebug`. Ordinary builds
+still create expression/declaration provenance because stable JVM naming requires it,
+but they neither retain debugger bindings nor pay their formatting cost.
 
 Regression coverage includes both monomorphizers, non-overlapping two-slot `Int64`
 locals, release-mode omission, sequential-mode pruning, and a real JDWP/JDI breakpoint

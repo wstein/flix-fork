@@ -40,8 +40,9 @@ object JvmLexicalOrigins {
   case class Binding(identity: String, name: String, loc: SourceLocation, kind: String, tpe: String)
 
   def capture(exp: Expr, owner: GeneratedJvmKey, fparams: List[FormalParam],
-              encodeType: TypeEncoder, sourceOrigin: Symbol => GeneratedJvmKey): JvmLexicalOrigins = {
-    new Capture(encodeType, sourceOrigin).run(exp, owner, fparams)
+              encodeType: TypeEncoder, sourceOrigin: Symbol => GeneratedJvmKey,
+              captureDebugBindings: Boolean = true): JvmLexicalOrigins = {
+    new Capture(encodeType, sourceOrigin, captureDebugBindings).run(exp, owner, fparams)
   }
 
   private case class Env(values: Map[Symbol.VarSym, String], localOrigins: Map[Symbol, GeneratedJvmKey]) {
@@ -66,7 +67,8 @@ object JvmLexicalOrigins {
   private def fail(message: String, exp: Expr): Nothing =
     throw InternalCompilerException(message, exp.loc)
 
-  private final class Capture(encodeType: TypeEncoder, sourceOrigin: Symbol => GeneratedJvmKey) {
+  private final class Capture(encodeType: TypeEncoder, sourceOrigin: Symbol => GeneratedJvmKey,
+                              captureDebugBindings: Boolean) {
     private val origins = new IdentityHashMap[Expr, GeneratedJvmKey]()
     private val ordered = mutable.ListBuffer.empty[(Expr, GeneratedJvmKey)]
     private val all = mutable.ListBuffer.empty[(Expr, GeneratedJvmKey)]
@@ -80,7 +82,7 @@ object JvmLexicalOrigins {
         param.bnd.sym -> frame("parameter", List(index.toString))
       }.toMap, Map.empty)
       fparams.zipWithIndex.foreach { case (param, index) =>
-        if (!param.bnd.sym.isWild) bindings += Binding(frame("parameter", List(index.toString)), param.bnd.sym.text, param.bnd.sym.loc, "parameter", debugType(param.tpe))
+        if (captureDebugBindings && !param.bnd.sym.isWild) bindings += Binding(frame("parameter", List(index.toString)), param.bnd.sym.text, param.bnd.sym.loc, "parameter", debugType(param.tpe))
       }
       visit(exp, env, frame(owner.family, owner.fields), "body", isRoot = true)
       new JvmLexicalOrigins(origins, ordered.toList, all.toList, bindings.toList, fingerprintEvaluations)
@@ -173,7 +175,7 @@ object JvmLexicalOrigins {
         case lambda: Expr.Lambda =>
           val site = record(exp, scope, role, "lambda", fingerprint(exp, env, 0))
           mapLambdaBody(lambda, env, SiteBinding(site)) { (param, body, inner) =>
-            if (!param.bnd.sym.isWild) {
+            if (captureDebugBindings && !param.bnd.sym.isWild) {
               bindings += Binding(frame("lambda-parameter", List(site)), param.bnd.sym.text,
                 param.bnd.sym.loc, "lambda-parameter", debugType(param.tpe))
             }
@@ -187,7 +189,7 @@ object JvmLexicalOrigins {
           ()
         case Expr.Let(binder, value, rest, _, _, _) =>
           val binding = identity(scope, "let:" + role, fingerprint(value, env, 0))
-          if (!binder.sym.isWild) bindings += Binding(binding, binder.sym.text, binder.sym.loc, "let", debugType(binder.tpe))
+          if (captureDebugBindings && !binder.sym.isWild) bindings += Binding(binding, binder.sym.text, binder.sym.loc, "let", debugType(binder.tpe))
           val site = if (isRoot) frame("root", List(scope, role)) else frame("let-expression", List(binding))
           val key = GeneratedJvmKey("lexical-expression", List(site))
           if (origins.containsKey(exp)) fail("Repeated AST identity in lexical capture.", exp)
@@ -281,7 +283,7 @@ object JvmLexicalOrigins {
     /** Records debugger-visible pattern binders during the single source-capture traversal. */
     private def recordPatternBindings(pat: TypedAst.Pattern, scope: String): Unit = pat match {
       case TypedAst.Pattern.Var(binder, tpe, _) =>
-        if (!binder.sym.isWild) bindings += Binding(scope, binder.sym.text, binder.sym.loc, "pattern", debugType(tpe))
+        if (captureDebugBindings && !binder.sym.isWild) bindings += Binding(scope, binder.sym.text, binder.sym.loc, "pattern", debugType(tpe))
       case TypedAst.Pattern.Tag(_, pats, _, _) =>
         pats.zipWithIndex.foreach { case (p, i) => recordPatternBindings(p, frame("tag-binding", List(scope, i.toString))) }
       case TypedAst.Pattern.Tuple(pats, _, _) =>

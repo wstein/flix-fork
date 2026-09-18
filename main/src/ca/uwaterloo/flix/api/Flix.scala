@@ -84,7 +84,7 @@ class Flix(pkgs: List[InstalledPackage] = Nil, jars: List[Path] = Nil) extends A
     if (activeJvmOrigins.nonEmpty) {
       throw InternalCompilerException("Nested code generation cannot share JVM provenance.", SourceLocation.Unknown)
     }
-    val origins = JvmCompilationOrigins.capture(root)
+    val origins = JvmCompilationOrigins.capture(root, captureDebugBindings = options.xdebug)
     activeJvmOrigins = Some(origins)
     try body finally {
       activeJvmOrigins = None
