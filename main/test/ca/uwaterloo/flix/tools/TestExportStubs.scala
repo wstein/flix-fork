@@ -107,17 +107,30 @@ class TestExportStubs extends AnyFunSuite {
     val second = stubs("mod Acme.Api { @Export pub def fresh(x: Int32): Int32 = x }")._1
     val root = Files.createTempDirectory("flix-export-stub-write")
     try {
-      ExportStubs.write(first, root)
+      ExportStubs.write(first, root).unsafeGet
       val file = root.resolve("Acme/Api.java")
       assert(Files.readString(file).contains(" old("))
       Files.writeString(root.resolve("stale.java"), "stale")
 
-      ExportStubs.write(second, root)
+      ExportStubs.write(second, root).unsafeGet
       assert(!Files.exists(root.resolve("stale.java")))
       val updated = Files.readString(file)
       assert(updated.contains(" fresh("))
       assert(!updated.contains(" old("))
     } finally deleteRecursively(root)
+  }
+
+  test("writing stubs refuses a destination that is a file") {
+    val destination = Files.createTempFile("flix-export-stub-file", ".txt")
+    Files.writeString(destination, "keep me")
+
+    ExportStubs.write(Nil, destination) match {
+      case Result.Err(error) =>
+        assert(error.path == destination)
+        assert(error.message.contains("not a directory"))
+      case Result.Ok(_) => fail("a file cannot be used as a stub output directory")
+    }
+    assert(Files.readString(destination) == "keep me")
   }
 
   test("staged compilation links Java against the real Flix facade") {
@@ -138,7 +151,7 @@ class TestExportStubs extends AnyFunSuite {
 
       val (facades, unsupported) = stubs(src)
       assert(unsupported.isEmpty)
-      ExportStubs.write(facades, stubRoot)
+      ExportStubs.write(facades, stubRoot).unsafeGet
       Files.createDirectories(helperSource.getParent)
       Files.writeString(helperSource,
         """package com.example;

@@ -78,6 +78,9 @@ The stub writer owns its destination directory. Each run replaces the generated 
 export removes its stub before Java compilation. This makes stale Java calls fail at their source
 location instead of surviving until runtime.
 
+The destination itself must be a directory (or not exist yet). If it is an ordinary file, `stubs`
+refuses the operation with a concise diagnostic and leaves that file untouched.
+
 ## Acceptance criteria
 
 - Stub generation succeeds when unresolved Java references in non-exported Flix bodies prevent a

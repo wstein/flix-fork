@@ -20,6 +20,7 @@ import ca.uwaterloo.flix.language.ast.shared.Source
 import ca.uwaterloo.flix.language.ast.{ChangeSet, Name, ReadAst, SourceLocation, SyntaxTree, WeededAst}
 import ca.uwaterloo.flix.language.phase.jvm.Mangle
 import ca.uwaterloo.flix.language.phase.{Lexer, Parser2, Weeder2}
+import ca.uwaterloo.flix.util.Result
 
 import java.lang.constant.ClassDesc
 
@@ -77,6 +78,9 @@ object ExportStubs {
   /** A def that could not be described, and why. */
   case class Unsupported(name: String, reason: String, loc: SourceLocation)
 
+  /** A refusal to replace an invalid stub output destination. */
+  case class WriteError(path: Path, message: String)
+
   /** Opens every generated file, so a build tool can delete its own stale output and nothing else. */
   val Marker: String = "// flix-stub: generated, compile-only. Do not edit, do not ship."
 
@@ -110,7 +114,10 @@ object ExportStubs {
     * behind for a def that no longer exists lets Java keep compiling against it, and the mistake
     * then arrives as a `NoSuchMethodError` in whoever runs it.
     */
-  def write(facades: List[Facade], destination: Path): Unit = {
+  def write(facades: List[Facade], destination: Path): Result[Unit, WriteError] = {
+    if (Files.exists(destination) && !Files.isDirectory(destination))
+      return Result.Err(WriteError(destination, s"Stub output path is not a directory: $destination"))
+
     if (Files.isDirectory(destination)) deleteRecursively(destination)
     Files.createDirectories(destination)
     for (facade <- facades) {
@@ -120,6 +127,7 @@ object ExportStubs {
       Files.createDirectories(file.getParent)
       Files.writeString(file, javaSource(facade))
     }
+    Result.Ok(())
   }
 
   /** Deletes `path` and everything below it. */

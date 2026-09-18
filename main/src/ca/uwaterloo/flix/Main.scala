@@ -269,9 +269,14 @@ object Main {
             System.exit(1)
           }
 
-          ExportStubs.write(facades, destination)
-          println(s"Wrote ${facades.length} stub(s) to $destination")
-          System.exit(0)
+          ExportStubs.write(facades, destination) match {
+            case Result.Ok(_) =>
+              println(s"Wrote ${facades.length} stub(s) to $destination")
+              System.exit(0)
+            case Result.Err(error) =>
+              Console.err.println(error.message)
+              System.exit(1)
+          }
 
         case Command.Check =>
           if (cmdOpts.files.nonEmpty && cmdOpts.jsonDiagnostics) {
