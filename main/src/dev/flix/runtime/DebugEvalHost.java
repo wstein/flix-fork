@@ -59,6 +59,18 @@ import java.util.Map;
  */
 public final class DebugEvalHost {
 
+    /** The JVM property the debugger launcher uses to pin this process to its build manifest. */
+    public static final String BUILD_ID_PROPERTY = "flix.debug.buildId";
+
+    /**
+     * The identity captured when this class is loaded.
+     *
+     * <p>Public so JDI can read it as a static field without invoking code in a paused program.
+     * It is deliberately immutable: replacing {@code build.json} on disk cannot change which
+     * classes this JVM already loaded.
+     */
+    public static final String BUILD_ID = System.getProperty(BUILD_ID_PROPERTY, "");
+
     private DebugEvalHost() {
     }
 

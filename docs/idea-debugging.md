@@ -111,7 +111,10 @@ build ID made from both the manifest fingerprint (compiler options and dependenc
 and `sourcesDigest` (source contents), and sends it with every evaluation request. The
 language server rejects the request if the on-disk manifest now names another build.
 Thus rebuilding while an older JVM is paused cannot compile an expression against the
-new sidecars and inject it into the old program. Class names are accepted in both JDI
+new sidecars and inject it into the old program. The launcher passes the ID as
+`-Dflix.debug.buildId`; `DebugEvalHost.BUILD_ID` snapshots it at class load and exposes
+it as a read-only static field, so JDI can read the identity without invoking code in
+the paused process. Class names are accepted in both JDI
 binary form and JVM internal form. Repeated names with conflicting source types are
 omitted from the sidecar rather than resolved arbitrarily; an expression that needs one
 receives an ordinary unknown-name diagnostic.

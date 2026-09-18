@@ -47,6 +47,14 @@ import java.util.Base64
   */
 class TestDebugEvalHost extends AnyFunSuite {
 
+  test("the host exposes the launched build identity without an invocation") {
+    val property = classOf[DebugEvalHost].getField("BUILD_ID_PROPERTY").get(null)
+    val identity = classOf[DebugEvalHost].getField("BUILD_ID").get(null)
+
+    assert(property == "flix.debug.buildId")
+    assert(identity == System.getProperty("flix.debug.buildId", ""))
+  }
+
   private implicit val sctx: SecurityContext = SecurityContext.Unrestricted
 
   private val Program: String =
