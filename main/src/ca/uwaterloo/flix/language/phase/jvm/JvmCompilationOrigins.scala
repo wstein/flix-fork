@@ -203,9 +203,11 @@ object JvmCompilationOrigins {
     val source = JvmSourceOrigins.capture(root, captureDebugBindings)
     val origins = new JvmCompilationOrigins(source.provenance)
     source.foreachExpression(origins.record)
+    val bindingsByDefinition = mutable.Map.empty[Symbol.DefnSym, mutable.ListBuffer[JvmLexicalOrigins.Binding]]
     source.foreachBinding { case (sym, binding) =>
-      origins.debugBindings = origins.debugBindings.updated(sym, origins.debugBindings.getOrElse(sym, Nil) :+ binding)
+      bindingsByDefinition.getOrElseUpdate(sym, mutable.ListBuffer.empty) += binding
     }
+    origins.debugBindings = bindingsByDefinition.iterator.map { case (sym, bindings) => sym -> bindings.toList }.toMap
     source.releaseBodies()
     origins
   }

@@ -77,6 +77,8 @@ instruction: clients must use JDI/LVT visibility when selecting evaluation param
 Binding capture and source-type formatting run only under `--Xdebug`. Ordinary builds
 still create expression/declaration provenance because stable JVM naming requires it,
 but they neither retain debugger bindings nor pay their formatting cost.
+Within a debug build, bindings are accumulated in mutable per-definition buffers and
+materialized once, preserving lexical order without repeated immutable-list appends.
 
 Regression coverage includes both monomorphizers, non-overlapping two-slot `Int64`
 locals, release-mode omission, sequential-mode pruning, and a real JDWP/JDI breakpoint

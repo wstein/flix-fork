@@ -161,7 +161,7 @@ class TestJvmCompilationOrigins extends AnyFunSuite {
     val sym = root.defs.values.find(_.sym.text == "example").get.sym
 
     flix.withJvmOrigins(root) {
-      assert(flix.jvmOrigins.sourceBindings(sym).map(_.name).toSet == Set("x", "y"))
+      assert(flix.jvmOrigins.sourceBindings(sym).map(_.name) == List("x", "y"))
     }
   }
 
