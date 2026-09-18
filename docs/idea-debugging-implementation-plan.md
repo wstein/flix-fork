@@ -18,6 +18,22 @@ Where an initial design below differs, the implemented choices are authoritative
 - the debuggee host has no session registry or retained loaders, so returning from an
   invocation is the reset/release boundary;
 - IntelliJ uses its existing native JVM debugger and two-phase CLI launcher, without BSP.
+
+Automated qualification (2026-09-17) used compiler revision
+`96c6b5f479137b2062ef22977fc0f7334c06935c6` and plugin revision
+`6b0f8ea7d2896925efe7b0845f1f802f5324a8df`. The compiler's 18 focused debug
+suites passed 158 tests, including real JDI stops, evaluation-host execution, both
+monomorphizers, and sequential mode; `flix.assembly` also passed. The plugin's complete
+Gradle test graph passed against that assembly, including all 14 live JDWP session cases.
+Plugin Verifier reported the packaged plugin compatible with IU 261, 262, and 263; its
+remaining findings were six deprecated-API and 29 experimental-API usages, not binary
+incompatibilities. The parser/spec pin was deliberately left at its upstream revision;
+the conformance test used its documented local-checkout mismatch override because this
+qualification pairs the plugin with an unmerged compiler feature revision.
+
+This evidence closes the automated M10 gate for the compiler/native-IDEA increment.
+The gutter/tool-window/Split Mode click-through remains manual, as stated above, and BSP
+qualification remains outside this increment.
 Prepared: 2026-09-16.
 
 Updated for the merge of stable JVM naming into `dev0.76.0` and a source review of
