@@ -12,7 +12,7 @@ import scala.collection.mutable
 final class JvmCompilationOrigins(val symbols: JvmProvenance) {
   private var expressions = new IdentityHashMap[AnyRef, GeneratedJvmKey]()
   private var debugBindings = Map.empty[Symbol.DefnSym, List[JvmLexicalOrigins.Binding]]
-  private var debugDefinitions = Map.empty[String, List[JvmLexicalOrigins.Binding]]
+  private var debugDefinitions = Map.empty[String, Map[String, List[JvmLexicalOrigins.Binding]]]
   private var closed = false
   private var freezeStarted = false
   private var frozenNames: Option[JvmNameTable] = None
@@ -32,11 +32,11 @@ final class JvmCompilationOrigins(val symbols: JvmProvenance) {
     if (frozenNames.isEmpty) fail("Debug definitions require frozen JVM names.")
     debugDefinitions = defs.iterator.flatMap { defn =>
       val desc = if (defn.cparams.nonEmpty) GenFunAndClosureClasses.closureDesc(defn.sym) else GenFunAndClosureClasses.defnDesc(defn.sym)
-      sourceBindings(defn.sym).headOption.map(_ => ClassDescs.internalNameOf(desc) -> sourceBindings(defn.sym))
-    }.toMap
+      sourceBindings(defn.sym).headOption.map(_ => ClassDescs.internalNameOf(desc) -> (GenFunAndClosureClasses.methodNameOf(defn) -> sourceBindings(defn.sym)))
+    }.toList.groupMap(_._1)(_._2).view.mapValues(_.toMap).toMap
   }
 
-  def finalizedDebugDefinitions: Map[String, List[JvmLexicalOrigins.Binding]] = synchronized {
+  def finalizedDebugDefinitions: Map[String, Map[String, List[JvmLexicalOrigins.Binding]]] = synchronized {
     debugDefinitions
   }
 

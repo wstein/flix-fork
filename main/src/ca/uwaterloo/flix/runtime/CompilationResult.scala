@@ -37,7 +37,7 @@ class CompilationResult(val root: BytecodeAst.Root,
                         val totalTime: Long,
                         val codeSize: Int,
                         val flix: Flix,
-                        val debugDefinitions: Map[String, List[JvmLexicalOrigins.Binding]] = Map.empty
+                        val debugDefinitions: Map[String, Map[String, List[JvmLexicalOrigins.Binding]]] = Map.empty
                        ) {
 
   /** Returns the generated JVM classes. */
@@ -45,7 +45,7 @@ class CompilationResult(val root: BytecodeAst.Root,
     root.classes
 
   /** Returns source bindings keyed by stable generated class name for a debug compilation. */
-  def getDebugDefinitions: Map[String, List[JvmLexicalOrigins.Binding]] =
+  def getDebugDefinitions: Map[String, Map[String, List[JvmLexicalOrigins.Binding]]] =
     debugDefinitions
 
   /** Optionally returns the main entry point. */

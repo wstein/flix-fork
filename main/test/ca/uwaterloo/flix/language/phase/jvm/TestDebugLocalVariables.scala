@@ -49,6 +49,7 @@ class TestDebugLocalVariables extends AnyFunSuite {
 
   test("debug compilation finalizes source bindings under a stable class name") {
     val bindings = compile(xdebug = true).getDebugDefinitions.getOrElse("Def$compute", fail("Missing debug definition for compute."))
+      .getOrElse(ClassMaker.StaticApplyMethodName, fail("Missing staticApply debug bindings."))
     assert(bindings.map(_.name).toSet == Set("a", "b", "x", "y"))
     assert(compile(xdebug = false).getDebugDefinitions.isEmpty)
   }

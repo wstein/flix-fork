@@ -93,6 +93,10 @@ object GenFunAndClosureClasses {
 
   private def isControlPure(defn: Def): Boolean = Purity.isControlPure(defn.expr.purity)
 
+  /** The emitted method that owns a definition's debugger-visible locals. */
+  def methodNameOf(defn: Def): String =
+    if (isFunction(defn) && isControlPure(defn)) ClassMaker.StaticApplyMethodName else GenFrame.ApplyMethod.name
+
   /**
     * Generates the following code for control-pure functions.
     *
