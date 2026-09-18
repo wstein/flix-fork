@@ -60,9 +60,9 @@ sealed trait ClassMaker {
     case StaticField(_, name, tpe) => makeField(name, tpe, v, f, vol, IsStatic)
   }
 
-  protected def makeMethod(ann: List[JvmAnnotation], i: Option[MethodVisitor => Unit], methodName: String, d: MethodTypeDesc, v: Visibility, f: Final, s: Static, a: Abstract): Unit = {
+  protected def makeMethod(ann: List[JvmAnnotation], i: Option[MethodVisitor => Unit], methodName: String, d: MethodTypeDesc, v: Visibility, f: Final, s: Static, a: Abstract, signature: Option[String] = None): Unit = {
     val m = v.toInt + f.toInt + s.toInt + a.toInt
-    val mv = visitor.visitMethod(m, methodName, d.descriptorString(), null, null)
+    val mv = visitor.visitMethod(m, methodName, d.descriptorString(), signature.orNull, null)
     for (a <- ann) {
       val av = mv.visitAnnotation(a.clazz.descriptorString(), a.isRuntimeVisible)
       av.visitEnd()
@@ -96,8 +96,8 @@ object ClassMaker {
   class InstanceClassMaker(cw: ClassWriter) extends ClassMaker {
     protected val visitor: ClassWriter = cw
 
-    def mkStaticMethod(m: StaticMethod, v: Visibility, f: Final, ins: MethodVisitor => Unit): Unit = {
-      makeMethod(Nil, Some(ins), m.name, m.d, v, f, IsStatic, NotAbstract)
+    def mkStaticMethod(m: StaticMethod, v: Visibility, f: Final, ins: MethodVisitor => Unit, signature: Option[String] = None): Unit = {
+      makeMethod(Nil, Some(ins), m.name, m.d, v, f, IsStatic, NotAbstract, signature)
     }
 
     def mkConstructor(c: ConstructorMethod, v: Visibility, ins: MethodVisitor => Unit): Unit = {

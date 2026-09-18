@@ -16,7 +16,7 @@ class TestJvmNamespaceNames extends AnyFunSuite {
     val sym = new Symbol.DefnSym(id, namespace, "entryPoint", loc)
     val annotations = if (exported) Annotations(List(Annotation.Export(loc))) else Annotations.Empty
     JvmAst.Def(annotations, Modifiers.Empty, sym, Nil, Nil, Nil, 0,
-      JvmAst.Expr.Cst(Constant.Int32(42), loc), SimpleType.Int32, JvmAst.UnboxedType(SimpleType.Int32), loc)
+      JvmAst.Expr.Cst(Constant.Int32(42), loc), SimpleType.Int32, JvmAst.UnboxedType(SimpleType.Int32), None, loc)
   }
 
   private def shimName(id: Option[Int], exported: Boolean): String = {

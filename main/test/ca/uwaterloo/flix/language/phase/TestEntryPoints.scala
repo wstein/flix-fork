@@ -810,7 +810,7 @@ class TestEntryPoints extends AnyFunSuite with TestUtils {
     expectError[EntryPointError.IllegalEntryPointEffect](result)
   }
 
-  test("Test.IllegalExportFunction.05") {
+  test("Test.ValidExportFunction.OptionResult.01") {
     val input =
       """
         |enum Option[t] {
@@ -820,7 +820,7 @@ class TestEntryPoints extends AnyFunSuite with TestUtils {
         |mod Mod { @Export pub def id(x: Int32): Option[Int32] = Some(x) }
         |""".stripMargin
     val result = check(input, Options.TestWithLibNix)
-    expectError[EntryPointError.IllegalExportType](result)
+    expectSuccess(result)
   }
 
   test("Test.IllegalExportFunction.06") {

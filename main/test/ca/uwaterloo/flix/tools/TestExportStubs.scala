@@ -84,6 +84,22 @@ class TestExportStubs extends AnyFunSuite {
     assert(unsupported.map(_.name) == List("list"))
   }
 
+  test("Option results are typed while Option parameters remain refused") {
+    val src =
+      """mod Acme.Api {
+        |    @Export pub def maybe(_x: Int32): Option[String] = None
+        |    @Export pub def consume(_x: Option[String]): Int32 = 0
+        |}
+        |""".stripMargin
+
+    val (facades, unsupported) = stubs(src)
+    val methods = facades.flatMap(_.methods)
+    assert(methods.map(_.name) == List("maybe"))
+    assert(methods.head.result.sourceName == "java.util.Optional<java.lang.String>")
+    assert(unsupported.map(_.name) == List("consume"))
+    assert(ExportStubs.javaSource(facades.head).contains("java.util.Optional<java.lang.String> maybe(int arg0)"))
+  }
+
   test("generated sources use the sibling facade name and compile with javac") {
     val src = "mod Acme.Api.Deep { @Export pub def id(x: Int32): Int32 = x }"
     val (facades, unsupported) = stubs(src)

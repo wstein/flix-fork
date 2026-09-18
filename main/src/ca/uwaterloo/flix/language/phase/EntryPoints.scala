@@ -430,7 +430,15 @@ object EntryPoints {
 
   /** Returns an error for each type in `defn` that is not valid in Java. */
   private def checkJavaTypes(defn: TypedAst.Def)(implicit flix: Flix): List[EntryPointError] = {
-    val types = defn.spec.retTpe :: defn.spec.fparams.toList.map(_.tpe)
+    val paramTypes = defn.spec.fparams.toList.map(_.tpe) match {
+      case List(tpe) if isUnitType(tpe) == Result.Ok(true) => Nil
+      case tpes => tpes
+    }
+    val retTpe = defn.spec.retTpe
+    val returnTypes =
+      if (isUnitType(retTpe) == Result.Ok(true)) Nil
+      else List(unapplyOption(retTpe).getOrElse(retTpe))
+    val types = returnTypes ::: paramTypes
     types.flatMap(tpe => {
       isExportableType(tpe) match {
         case Result.Ok(true) =>
@@ -442,6 +450,15 @@ object EntryPoints {
           None
       }
     })
+  }
+
+  /** Returns the element of the standard library's `Option`, which is converted on return. */
+  @tailrec
+  private def unapplyOption(tpe: Type): Option[Type] = tpe match {
+    case Type.Apply(Type.Cst(TypeConstructor.Enum(sym, _), _), elm, _)
+      if sym.namespace.isEmpty && sym.text == "Option" => Some(elm)
+    case Type.Alias(_, _, inner, _) => unapplyOption(inner)
+    case _ => None
   }
 
   /**

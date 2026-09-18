@@ -37,13 +37,13 @@ object GenNamespace {
   def desc(ns: List[String]): ClassDesc =
     Mangle.namespaceFacadeDesc(ns)
 
-  def genByteCode(ns: List[String], defs: List[JvmAst.Def])(implicit flix: Flix): Array[Byte] = {
+  def genByteCode(ns: List[String], defs: List[JvmAst.Def])(implicit root: JvmAst.Root, flix: Flix): Array[Byte] = {
     val cm = ClassMaker.mkClass(desc(ns), IsFinal)
 
     cm.mkConstructor(Constructor(ns), IsPublic, nullarySuperConstructor(ClassConstants.Object.Constructor)(_))
 
     for (defn <- defs) {
-      cm.mkStaticMethod(ShimMethod(ns, defn), IsPublic, IsFinal, shimIns(defn)(_, flix))
+      cm.mkStaticMethod(ShimMethod(ns, defn), IsPublic, IsFinal, shimIns(defn)(_, root, flix), methodSignature(defn))
     }
 
     cm.closeClassMaker()
@@ -53,20 +53,22 @@ object GenNamespace {
 
   def ShimMethod(ns: List[String], defn: JvmAst.Def)(implicit flix: Flix): StaticMethod = {
     val erasedArgs = defn.fparams.map(_.tpe).map(boundaryType(defn.ann.isExport, _))
-    val erasedResult = boundaryType(defn.ann.isExport, defn.unboxedType.tpe)
+    val erasedResult =
+      if (defn.ann.isExport) defn.exportedReturnType.flatMap(ExportPlan.signatureOf).map(_.javaType).getOrElse(TypeDescs.toErasedClassDesc(defn.unboxedType.tpe))
+      else TypeDescs.toErasedClassDesc(defn.unboxedType.tpe)
     // Exported names are checked in Safety, so no mangling is needed.
     val defnName = JvmNames.defnName(defn.sym)
     val name = if (defn.ann.isExport) defn.sym.text else "m_" + Mangle.mangle(defnName)
     StaticMethod(desc(ns), name, mkDescriptor(erasedArgs *)(erasedResult))
   }
 
-  private def shimIns(defn: JvmAst.Def)(implicit mv: MethodVisitor, flix: Flix): Unit = {
+  private def shimIns(defn: JvmAst.Def)(implicit mv: MethodVisitor, root: JvmAst.Root, flix: Flix): Unit = {
     val defnDesc = GenFunAndClosureClasses.defnDesc(defn.sym)
     val facadeParamTypes = defn.fparams.map(fp => boundaryType(defn.ann.isExport, fp.tpe))
     val fieldTypes = defn.fparams.map(fp => TypeDescs.toErasedClassDesc(fp.tpe))
     withNames(0, facadeParamTypes) {
       case (_, args) =>
-        val resultPlan = if (defn.ann.isExport) ExportPlan.exact(defn.unboxedType.tpe) else None
+        val resultPlan = ExportPlan.ofDef(defn)
         val flixResult = resultPlan.map(_.flixType).getOrElse(TypeDescs.toErasedClassDesc(defn.unboxedType.tpe))
         val javaResult = resultPlan.map(_.javaType).getOrElse(flixResult)
         NEW(defnDesc)
@@ -87,5 +89,17 @@ object GenNamespace {
   private def boundaryType(isExport: Boolean, tpe: ca.uwaterloo.flix.language.ast.SimpleType): ClassDesc =
     if (isExport) ExportPlan.exact(tpe).map(_.javaType).getOrElse(TypeDescs.toErasedClassDesc(tpe))
     else TypeDescs.toErasedClassDesc(tpe)
+
+  /** Returns the generic method signature when the exported result carries type arguments. */
+  private def methodSignature(defn: JvmAst.Def): Option[String] = {
+    if (!defn.ann.isExport) None
+    else defn.exportedReturnType.flatMap(ExportPlan.signatureOf).flatMap { result =>
+      if (result.typeArgument == result.javaType.descriptorString()) None
+      else {
+        val params = defn.fparams.map(fp => boundaryType(isExport = true, fp.tpe).descriptorString()).mkString
+        Some(s"($params)${result.typeArgument}")
+      }
+    }
+  }
 
 }

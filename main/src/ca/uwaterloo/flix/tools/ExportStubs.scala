@@ -206,10 +206,10 @@ object ExportStubs {
     if (declared.lengthCompare(defn.fparams.length) != 0)
       refuse("a parameter has no declared type")
     else
-      traverse(declared)(signatureOf(_, imps)) match {
+      traverse(declared)(parameterSignatureOf(_, imps)) match {
         case None => refuse("a parameter type cannot be described in Java")
         case Some(ps) =>
-          signatureOf(defn.tpe, imps) match {
+          resultSignatureOf(defn.tpe, imps) match {
             case None => refuse("the return type cannot be described in Java")
             case Some(r) => Right((ns, Method(defn.ident.name, r, ps)))
           }
@@ -224,28 +224,52 @@ object ExportStubs {
     * in `TestExportStubs`; that test is what makes this safe to rely on, because nothing in the
     * types stops them drifting.
     */
-  private def signatureOf(tpe: WeededAst.Type, imps: Map[String, String]): Option[ExportSignature] = tpe match {
+  private def signatureOf(tpe: WeededAst.Type, imps: Map[String, String], allowOption: Boolean): Option[ExportSignature] = tpe match {
     case WeededAst.Type.Var(_, _) => None
 
-    case WeededAst.Type.Ambiguous(qname, _) => named(qname, Nil, imps)
+    case WeededAst.Type.Ambiguous(qname, _) => named(qname, Nil, imps, allowOption)
 
     case WeededAst.Type.Apply(_, _, _) =>
       val (head, args) = flatten(tpe)
       head match {
-        case WeededAst.Type.Ambiguous(qname, _) => named(qname, args, imps)
+        case WeededAst.Type.Ambiguous(qname, _) => named(qname, args, imps, allowOption)
         case _ => None
       }
 
     case _ => None
   }
 
+  /** Parameters are passed through unchanged, so converted containers are not accepted here. */
+  private def parameterSignatureOf(tpe: WeededAst.Type, imps: Map[String, String]): Option[ExportSignature] =
+    signatureOf(tpe, imps, allowOption = false)
+
+  /** Results may use conversions implemented by the namespace shim. */
+  private def resultSignatureOf(tpe: WeededAst.Type, imps: Map[String, String]): Option[ExportSignature] =
+    signatureOf(tpe, imps, allowOption = true)
+
   /** Returns how the type named `qname` and applied to `args` crosses the boundary. */
-  private def named(qname: Name.QName, args: List[WeededAst.Type], imps: Map[String, String]): Option[ExportSignature] = {
+  private def named(qname: Name.QName, args: List[WeededAst.Type], imps: Map[String, String], allowOption: Boolean): Option[ExportSignature] = {
     (simpleName(qname, imps), args) match {
       case (Some(name), Nil) => builtin(name).orElse(importedObject(name, imps))
+      case (Some("Option"), List(element)) if allowOption =>
+        typeArgumentSignatureOf(element, imps).map(sig => ExportSignature.Applied(ClassDesc.ofInternalName("java/util/Optional"), List(sig)))
       case _ => None
     }
   }
+
+  /** Returns the signature of a value used as a Java generic type argument, boxing primitives. */
+  private def typeArgumentSignatureOf(tpe: WeededAst.Type, imps: Map[String, String]): Option[ExportSignature] =
+    parameterSignatureOf(tpe, imps).map {
+      case ExportSignature.Exact(tpe0) if tpe0 == CD_boolean => ExportSignature.Boxed(tpe0, ClassDesc.ofInternalName("java/lang/Boolean"))
+      case ExportSignature.Exact(tpe0) if tpe0 == CD_char => ExportSignature.Boxed(tpe0, ClassDesc.ofInternalName("java/lang/Character"))
+      case ExportSignature.Exact(tpe0) if tpe0 == CD_byte => ExportSignature.Boxed(tpe0, ClassDesc.ofInternalName("java/lang/Byte"))
+      case ExportSignature.Exact(tpe0) if tpe0 == CD_short => ExportSignature.Boxed(tpe0, ClassDesc.ofInternalName("java/lang/Short"))
+      case ExportSignature.Exact(tpe0) if tpe0 == CD_int => ExportSignature.Boxed(tpe0, ClassDesc.ofInternalName("java/lang/Integer"))
+      case ExportSignature.Exact(tpe0) if tpe0 == CD_long => ExportSignature.Boxed(tpe0, ClassDesc.ofInternalName("java/lang/Long"))
+      case ExportSignature.Exact(tpe0) if tpe0 == CD_float => ExportSignature.Boxed(tpe0, ClassDesc.ofInternalName("java/lang/Float"))
+      case ExportSignature.Exact(tpe0) if tpe0 == CD_double => ExportSignature.Boxed(tpe0, ClassDesc.ofInternalName("java/lang/Double"))
+      case sig => sig
+    }
 
   /**
     * Returns the name `qname` denotes, if this can be established without resolving it.

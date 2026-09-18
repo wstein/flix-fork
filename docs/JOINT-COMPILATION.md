@@ -50,12 +50,17 @@ development lineages. It currently supports:
 
 - `Bool`, `Char`, `Int8`, `Int16`, `Int32`, `Int64`, `Float32`, and `Float64`.
 - `String`, whose exported descriptor is `java.lang.String` rather than erased `Object`.
+- `Option[t]` results as `java.util.Optional<T>` when `t` is otherwise exportable; primitive
+  elements are boxed and the emitted facade retains `T` in its generic signature.
 - An explicitly imported `java.lang.Object`.
 
-It refuses Flix algebraic data types, generic Java types, containers, functions, and other
-reference types because `EntryPoints` refuses those exports on this branch. Refusal is intentional:
+It refuses other Flix algebraic data types, generic Java types, other containers, functions, and
+other reference types because `EntryPoints` refuses those exports on this branch. Refusal is intentional:
 a missing stub fails the build at generation time, while an incorrect stub compiles and later fails
 with a linkage error in innocent calling code.
+
+`Option[t]` is result-only. Parameters remain refused because the shim currently passes parameters
+straight into Flix and therefore has no reverse `Optional<T>`-to-`Option[t]` conversion.
 
 The tests compare generated stub declarations with the method descriptors on the facade bytecode.
 This pins the source-facing stub contract to the backend contract and catches drift between them.

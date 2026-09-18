@@ -57,7 +57,8 @@ object Eraser {
       // An exported result retains its exact representation for the namespace shim. Ordinary Flix
       // calls still use `tpe` above, and non-exported entry points keep their historical erasure.
       val unboxedType = if (ann.isExport) visitType(originalTpe.tpe) else erase(originalTpe.tpe)
-      ErasedAst.Def(ann, mod, sym, cparams.map(visitParam), fparams.map(visitParam), e, box(tpe), ErasedAst.UnboxedType(unboxedType), loc)
+      val exportedReturnType = if (ann.isExport) Some(originalTpe.tpe) else None
+      ErasedAst.Def(ann, mod, sym, cparams.map(visitParam), fparams.map(visitParam), e, box(tpe), ErasedAst.UnboxedType(unboxedType), exportedReturnType, loc)
   }
 
   private def specializeEnums(specializations: List[(Symbol.EnumSym, List[SimpleType], Symbol.EnumSym)])(implicit root: ReducedAst.Root, flix: Flix): Map[Symbol.EnumSym, ErasedAst.Enum] = {
