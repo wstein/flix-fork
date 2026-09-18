@@ -24,6 +24,7 @@ import ca.uwaterloo.flix.util.Formatter.NoFormatter
 import ca.uwaterloo.flix.util.{Options, Result}
 
 import java.io.PrintStream
+import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path, Paths}
 import scala.collection.mutable
 
@@ -181,6 +182,21 @@ class LspProject(o: Options) {
     * documents the client has open.
     */
   def sourceNames: Set[SourceName] = projectSources.map(SourceName.PathName.apply).toSet ++ buffers.keySet
+
+  /**
+    * Whether every document snapshot owned by the client is identical to its file on disk.
+    *
+    * Debug evaluation starts a fresh compiler from the build's files. If the long-lived language
+    * server has an unsaved buffer, its typed AST and that fresh compiler describe different
+    * programs; neither is a safe account of the paused JVM. A buffer without a file is different
+    * too: it cannot have contributed to the launched build.
+    */
+  def debugBuffersMatchDisk: Boolean = buffers.forall {
+    case (SourceName.PathName(path), src) =>
+      try Files.isRegularFile(path) && Files.readString(path, StandardCharsets.UTF_8) == src
+      catch { case _: Exception => false }
+    case _ => false
+  }
 
   /**
     * Releases the resources held by the Flix instance.

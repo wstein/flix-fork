@@ -10,7 +10,7 @@ import ca.uwaterloo.flix.api.{BuildManifest, Flix, LaunchSpec}
 import ca.uwaterloo.flix.api.lsp.LspProject
 import ca.uwaterloo.flix.api.lsp.provider.DebugEvalProvider.{Answer, Policy, ScopeId}
 import ca.uwaterloo.flix.language.ast.TypedAst
-import ca.uwaterloo.flix.language.ast.shared.SecurityContext
+import ca.uwaterloo.flix.language.ast.shared.{SecurityContext, SourceName}
 import ca.uwaterloo.flix.language.jvm.ClassDescs
 import ca.uwaterloo.flix.language.phase.jvm.DebugScopes
 import ca.uwaterloo.flix.util.{Options, Result}
@@ -111,6 +111,35 @@ class TestDebugEvalSidecar extends AnyFunSuite {
     lspProject.close()
 
     assert(!DebugEvalSidecar.isCaching(cachedProject))
+  }
+
+  test("an open document matching disk is a valid debug snapshot") {
+    val source = Files.createTempFile("flix-debug-buffer", ".flix")
+    Files.writeString(source, Program)
+    val project = new LspProject(Options.DefaultTest)
+    project.addSource(SourceName.PathName(source), Program)
+
+    assert(project.debugBuffersMatchDisk)
+    project.close()
+  }
+
+  test("an unsaved open document is not a valid debug snapshot") {
+    val source = Files.createTempFile("flix-debug-buffer", ".flix")
+    Files.writeString(source, Program)
+    val project = new LspProject(Options.DefaultTest)
+    project.addSource(SourceName.PathName(source), Program.replace("describe(1)", "describe(2)"))
+
+    assert(!project.debugBuffersMatchDisk)
+    project.close()
+  }
+
+  test("an open document without a file is not a valid debug snapshot") {
+    val project = new LspProject(Options.DefaultTest)
+    val missing = Files.createTempDirectory("flix-debug-buffer").resolve("New.flix")
+    project.addSource(SourceName.PathName(missing), Program)
+
+    assert(!project.debugBuffersMatchDisk)
+    project.close()
   }
 
   private def artifactFor(project: Path, expression: String): DebugEvalProvider.Artifact =
