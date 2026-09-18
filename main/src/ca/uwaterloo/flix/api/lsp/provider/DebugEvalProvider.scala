@@ -196,12 +196,51 @@ object DebugEvalProvider {
     // whose symbol is not in the snapshot, and a specialised copy carries a hash the snapshot does
     // not have. A filter here would be a second statement of that, and one no fixture could reach:
     // measured by removing it, whereupon every test still passed.
-    implicit val flix: Flix = new Flix().setOptions(Options.DefaultTest)
-    val params = scope.methods(frame.methodName)
-      .filter(p => mentions(expression, p.name))
-      .map(p => s"${p.name}: ${p.tpe}")
+    val sources = sourcesUnder(projectRoot)
+    val sourcesDigest = sourcesDigestOf(projectRoot)
+    val scopeId = s"${frame.className}#${frame.methodName}"
+    DebugEvalSidecar.cached(
+      projectRoot, sources, sourcesDigest, scopeId, expression, policy.toString, withArtifact,
+    ) {
+      DebugEvalSidecar.withCompiler(projectRoot, sources, sourcesDigest) { compiler =>
+        implicit val flix: Flix = compiler
+        val params = scope.methods(frame.methodName)
+          .filter(p => mentions(expression, p.name))
+          .map(p => s"${p.name}: ${p.tpe}")
 
-    typeCheck(params, expression, policy, projectRoot) match {
+        answerFor(params, expression, policy, projectRoot, withArtifact)
+      }
+    }
+  }
+
+  /**
+    * What identifies the sources the debuggee was built from.
+    *
+    * `sourcesDigest`, and **not** `fingerprint`, which is the trap here: the manifest carries both,
+    * the names suggest the opposite, and only the first changes when a source file changes.
+    * Measured -- two builds of a program whose only definition was edited kept the same
+    * `fingerprint` and differed in `sourcesDigest`. Keying a cache on the other one would answer a
+    * watch from before a rebuild, handing the debuggee classes that call into code it no longer has.
+    *
+    * An absent manifest yields the empty string, which matches only other absent manifests: correct,
+    * because there is then nothing recorded to have changed.
+    */
+  private def sourcesDigestOf(projectRoot: Path): String = {
+    val manifest = projectRoot.resolve("build").resolve("development").resolve(BuildManifest)
+    if (!Files.isRegularFile(manifest)) return ""
+    val text = Files.readString(manifest)
+    """"sourcesDigest"\s*:\s*"([^"]*)"""".r.findFirstMatchIn(text).map(_.group(1)).getOrElse("")
+  }
+
+  /** Types the expression, and produces something runnable when one was asked for. */
+  private def answerFor(
+                         params: List[String],
+                         expression: String,
+                         policy: Policy,
+                         projectRoot: Path,
+                         withArtifact: Boolean,
+                       )(implicit flix: Flix): Answer = {
+    typeCheck(params, expression, policy) match {
       case Answer.Ok(tpe, eff, _) if withArtifact =>
         // Only now, with the type in hand. The wrapper that *runs* an expression has to declare what
         // it returns, and that is exactly what the first pass was asked to work out -- so the second
@@ -223,11 +262,11 @@ object DebugEvalProvider {
     * return type has to be written down and the type was the question. With the answer in hand the
     * second wrapper declares it, so the generated method returns the value instead of discarding it.
     *
-    * ==Why the output goes to a temporary directory==
+    * ==Why generation stays in memory==
     *
-    * The obvious place is the project's own build directory, and it is the one place this must never
-    * write: that directory *is* the running program. Overwriting a class there would leave the
-    * debuggee running one version and the next session loading another, and nothing would report it.
+    * The project's build directory is the running program and must never be modified by a watch.
+    * The compiler returns its generated class map directly; filtering therefore needs neither a
+    * temporary output tree nor stale-file cleanup.
     *
     * ==Why only some classes are kept==
     *
@@ -242,7 +281,7 @@ object DebugEvalProvider {
                     tpe: String,
                     eff: String,
                     projectRoot: Path,
-                  ): Either[String, Artifact] = {
+                  )(implicit flix: Flix): Either[String, Artifact] = {
     val existing = productsOf(projectRoot)
     if (existing.isEmpty) {
       return Left(
@@ -252,10 +291,6 @@ object DebugEvalProvider {
     }
 
     implicit val sctx: SecurityContext = SecurityContext.Unrestricted
-    implicit val flix: Flix = new Flix().setOptions(Options.DefaultTest.copy(xdebug = true, inMemory = true))
-    for (source <- sourcesUnder(projectRoot)) {
-      flix.addFile(source, sctx)
-    }
     flix.addSource(Paths.get(WrapperFile), returningWrapper(params, expression, tpe, eff), sctx)
 
     // Checked and generated separately, rather than through `compile`, for one reason: nothing calls
@@ -389,12 +424,9 @@ object DebugEvalProvider {
     * declare -- a definition, an enum case, a trait instance. Compiling the wrapper alone would
     * reject every expression that is not built out of the standard library.
     */
-  private def typeCheck(params: List[String], expression: String, policy: Policy, projectRoot: Path)(implicit flix: Flix): Answer = {
+  private def typeCheck(params: List[String], expression: String, policy: Policy)(implicit flix: Flix): Answer = {
     implicit val sctx: SecurityContext = SecurityContext.Unrestricted
 
-    for (source <- sourcesUnder(projectRoot)) {
-      flix.addFile(source, sctx)
-    }
     flix.addSource(Paths.get(WrapperFile), wrapper(params, expression), sctx)
 
     val (rootOpt, errors) = flix.check()

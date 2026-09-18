@@ -129,6 +129,12 @@ while preserving object identity for values owned by the running program. The ho
 the Flix trampoline, returns the compiler-selected `Value` field, and refuses suspended
 effects rather than attempting to resume the program's handlers while it is paused.
 
+The language server keeps one in-memory evaluation compiler for the active project and
+caches answers by build source digest, frame, expression, policy, and artifact request.
+Repeated watches therefore reuse both the compiler and the emitted artifact. A changed
+source set, a new build digest, or a different project closes and replaces the compiler;
+no cache entry is allowed to cross the identity of the launched build.
+
 The debug policy does not promise a bindable location for every lexical line, preserve
 unused definitions removed by reachability analysis, or preserve local/lambda bodies.
 Line-table attribution and the source/class and binding-type sidecars are available,
