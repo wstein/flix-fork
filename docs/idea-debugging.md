@@ -145,7 +145,9 @@ effects rather than attempting to resume the program's handlers while it is paus
 
 The language server keeps one in-memory evaluation compiler for the active project and
 caches answers by build source digest, frame, expression, policy, and artifact request.
-Repeated watches therefore reuse both the compiler and the emitted artifact. A changed
+Repeated watches therefore reuse both the compiler and the emitted artifact. At most 32
+answers are retained for the active session, with the least recently used discarded
+first. A changed
 source set, a new build digest, or a different project closes and replaces the compiler;
 no cache entry is allowed to cross the identity of the launched build.
 

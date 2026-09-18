@@ -60,13 +60,16 @@ import scala.collection.mutable
   */
 object DebugEvalSidecar {
 
+  /** Maximum compiled/type answers retained for the active debug session. */
+  private[provider] val MaxAnswers: Int = 32
+
   /** One build's compiler and the answers already computed with it. */
   private case class Entry(
                             projectRoot: Path,
                             sources: Set[Path],
                             sourcesDigest: String,
                             flix: Flix,
-                            answers: mutable.Map[Key, Any] = mutable.Map.empty,
+                            answers: mutable.LinkedHashMap[Key, Any] = mutable.LinkedHashMap.empty,
                           )
 
   /**
@@ -135,13 +138,21 @@ object DebugEvalSidecar {
                 expression: String, policy: String, withArtifact: Boolean,
                 freshCompiler: () => Flix)(compute: => A): A = synchronized {
     val key = Key(sourcesDigest, scope, expression, policy, withArtifact)
-    current(projectRoot, sources, sourcesDigest, freshCompiler).answers.get(key) match {
-      case Some(answer) => answer.asInstanceOf[A]
+    val answers = current(projectRoot, sources, sourcesDigest, freshCompiler).answers
+    answers.remove(key) match {
+      case Some(answer) =>
+        // Reinsert on a hit: LinkedHashMap order is then least-recently-used first.
+        answers.put(key, answer)
+        answer.asInstanceOf[A]
       case None =>
         val answer = compute
         // Re-read rather than reused: `compute` may have replaced the entry, and remembering an
         // answer against a compiler that has been dropped would outlive what it was computed from.
-        current(projectRoot, sources, sourcesDigest, freshCompiler).answers.put(key, answer)
+        val currentAnswers = current(projectRoot, sources, sourcesDigest, freshCompiler).answers
+        currentAnswers.put(key, answer)
+        while (currentAnswers.size > MaxAnswers) {
+          currentAnswers.remove(currentAnswers.head._1)
+        }
         answer
     }
   }

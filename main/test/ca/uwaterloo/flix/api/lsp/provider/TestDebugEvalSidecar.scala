@@ -79,6 +79,19 @@ class TestDebugEvalSidecar extends AnyFunSuite {
     assert(!(compiler(project) eq firstCompiler))
   }
 
+  test("the oldest answers are evicted when the session cache reaches its bound") {
+    DebugEvalSidecar.evict()
+    val project = Files.createTempDirectory("flix-debug-cache-bound")
+    val sources = List.empty[Path]
+
+    for (i <- 0 until DebugEvalSidecar.MaxAnswers + 7) {
+      DebugEvalSidecar.cached(project, sources, "digest", "scope", s"expression-$i", "Pure",
+        withArtifact = false)(i)
+    }
+
+    assert(DebugEvalSidecar.cachedAnswers(project) == DebugEvalSidecar.MaxAnswers)
+  }
+
   private def artifactFor(project: Path, expression: String): DebugEvalProvider.Artifact =
     DebugEvalProvider.compile(Describe, expression, Policy.AllowEffects, project, TypedAst.empty,
       withArtifact = true) match {
