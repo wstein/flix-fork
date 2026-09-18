@@ -278,9 +278,10 @@ default. Evaluation also requires a name to be visible in JDI at the paused inst
 the method-wide scope sidecar never overrides JVM liveness.
 
 Automated compiler, bytecode, JDI, launch-contract, reader, and plugin tests cover this
-foundation. The final click-through IDEA UI matrix (gutter gesture, rendered tool-window
-state, Split Mode, and optional-language plugin combinations) remains a manual release
-qualification gate rather than an unimplemented compiler/debugger feature.
+foundation. The core IDEA click-through passed on 2026-09-18: Run and Debug gestures,
+breakpoints, stepping and logical Step Out, reconstructed async frames and Variables,
+live-frame evaluation, and termination. Split Mode and optional-language plugin
+combinations remain release-matrix variants rather than unimplemented debugger features.
 
 BSP import/server work is outside this increment. The supported IDEA path is the
 existing two-phase CLI build (`build --Xdebug`) followed by the format-4 manifest launch.
