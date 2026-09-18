@@ -137,7 +137,9 @@ Referenced bindings are selected lexically rather than by substring: a frame var
 named `at` is not declared for the literal `"at"` (which would make the generated wrapper
 fail its unused-parameter check), but is declared for interpolation code such as
 `"${at}"`. Comments, character literals, nested braces, and escaped string content are
-skipped by the same scan; parsing and name resolution remain the compiler's authority.
+handled by the compiler's real lexer rather than a debugger-specific scanner. This also
+keeps legal name punctuation such as `!` and `$` aligned with the language. Parsing and
+name resolution remain the compiler's authority.
 
 The build sidecar is authoritative for frame types. At launch the debugger records a
 build ID made from both the manifest fingerprint (compiler options and dependencies)

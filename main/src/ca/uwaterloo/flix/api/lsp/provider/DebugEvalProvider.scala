@@ -17,9 +17,11 @@ package ca.uwaterloo.flix.api.lsp.provider
 
 import ca.uwaterloo.flix.api.Flix
 import ca.uwaterloo.flix.language.ast.TypedAst.{Expr, Root}
-import ca.uwaterloo.flix.language.ast.shared.SecurityContext
+import ca.uwaterloo.flix.language.ast.TokenKind
+import ca.uwaterloo.flix.language.ast.shared.{Origin, SecurityContext, Source, SourceName}
 import ca.uwaterloo.flix.language.fmt.FormatType
 import ca.uwaterloo.flix.language.jvm.ClassDescs
+import ca.uwaterloo.flix.language.phase.Lexer
 import ca.uwaterloo.flix.language.phase.jvm.{ClassMaker, DebugScopes}
 import ca.uwaterloo.flix.util.Options
 
@@ -555,82 +557,15 @@ object DebugEvalProvider {
     *
     * Scope parameters must be restricted to referenced names because an unused formal parameter is
     * a Flix error. A word regex is insufficient: `"at"` is text and must not declare `at`, while
-    * `"${at}"` is interpolation code and must. This deliberately small scanner handles precisely
-    * that lexical distinction, including nested braces, strings, characters, and comments; the
-    * compiler remains authoritative about whether the resulting code parses or resolves.
+    * `"${at}"` is interpolation code and must. Use the compiler lexer so name punctuation,
+    * escaping, nested interpolation, characters, and comments cannot drift from the language.
+    * The later compiler pass remains authoritative about whether the code parses or resolves.
     */
   private def identifiersIn(expression: String): Set[String] = {
-    val names = scala.collection.mutable.Set.empty[String]
-    val n = expression.length
-
-    def identifierStart(c: Char): Boolean = c == '_' || Character.isLetter(c)
-    def identifierPart(c: Char): Boolean = c == '_' || c == '\'' || Character.isLetterOrDigit(c)
-
-    def skipLineComment(from: Int): Int = {
-      var i = from
-      while (i < n && expression.charAt(i) != '\n') i += 1
-      i
-    }
-
-    def skipBlockComment(from: Int): Int = {
-      var i = from
-      var depth = 1
-      while (i < n && depth > 0) {
-        if (i + 1 < n && expression.startsWith("/*", i)) { depth += 1; i += 2 }
-        else if (i + 1 < n && expression.startsWith("*/", i)) { depth -= 1; i += 2 }
-        else i += 1
-      }
-      i
-    }
-
-    def skipChar(from: Int): Int = {
-      var i = from
-      var escaped = false
-      while (i < n) {
-        val c = expression.charAt(i)
-        i += 1
-        if (escaped) escaped = false
-        else if (c == '\\') escaped = true
-        else if (c == '\'') return i
-      }
-      i
-    }
-
-    def scanString(from: Int): Int = {
-      var i = from
-      while (i < n) {
-        expression.charAt(i) match {
-          case '\\' => i = math.min(i + 2, n)
-          case '"' => return i + 1
-          case '$' if i + 1 < n && expression.charAt(i + 1) == '{' => i = scanCode(i + 2, stopAtBrace = true)
-          case _ => i += 1
-        }
-      }
-      i
-    }
-
-    def scanCode(from: Int, stopAtBrace: Boolean): Int = {
-      var i = from
-      while (i < n) {
-        val c = expression.charAt(i)
-        if (stopAtBrace && c == '}') return i + 1
-        else if (i + 1 < n && expression.startsWith("//", i)) i = skipLineComment(i + 2)
-        else if (i + 1 < n && expression.startsWith("/*", i)) i = skipBlockComment(i + 2)
-        else if (c == '"') i = scanString(i + 1)
-        else if (c == '\'') i = skipChar(i + 1)
-        else if (c == '{') i = scanCode(i + 1, stopAtBrace = true)
-        else if (identifierStart(c)) {
-          val start = i
-          i += 1
-          while (i < n && identifierPart(expression.charAt(i))) i += 1
-          names += expression.substring(start, i)
-        } else i += 1
-      }
-      i
-    }
-
-    scanCode(0, stopAtBrace = false)
-    names.toSet
+    val source = Source.fromString(SourceName.PathName(Paths.get(WrapperFile)), Origin.User,
+      SecurityContext.Unrestricted, expression)
+    val (tokens, _) = Lexer.lex(source)
+    tokens.iterator.collect { case token if token.kind == TokenKind.NameLowercase => token.text }.toSet
   }
 
   /** Every `.flix` file under `projectRoot`, excluding what a build wrote. */

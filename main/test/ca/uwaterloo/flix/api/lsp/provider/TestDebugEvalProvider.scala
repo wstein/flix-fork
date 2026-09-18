@@ -50,8 +50,10 @@ class TestDebugEvalProvider extends AnyFunSuite {
        |        case None    => "${n}"
        |    }
        |
+       |def punctuated(value!: Int32): Int32 = value!
+       |
        |def main(): Unit \ IO =
-       |    println(describe(Some("x"), 1, true))
+       |    println(describe(Some("x"), punctuated(1), true))
        |""".stripMargin
 
   /** The frame a debugger would be paused in inside `describe`. */
@@ -69,6 +71,12 @@ class TestDebugEvalProvider extends AnyFunSuite {
     val project = build()
 
     assertOk(evaluate(project, "if (Option.isEmpty(at)) n else 0"), "Int32", "Pure")
+  }
+
+  test("a referenced binding may contain lexer-supported name punctuation") {
+    val project = build()
+
+    assertOk(evaluate(project, "value!", frame = ScopeId("Def$punctuated", "staticApply")), "Int32", "Pure")
   }
 
   test("a frame name in ordinary string text is not declared as an unused parameter") {
