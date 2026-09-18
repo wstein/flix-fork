@@ -79,6 +79,12 @@ Regression coverage includes both monomorphizers, non-overlapping two-slot `Int6
 locals, release-mode omission, sequential-mode pruning, and a real JDWP/JDI breakpoint
 that reads locals after a handler resumes a suspended function.
 
+When optimization places code from more than one source in a generated class, the
+compiler emits a JSR-45 `SourceDebugExtension` with a `Flix` stratum. Primary-source
+lines keep their original numbers; foreign lines receive stable synthetic JVM line
+numbers and map back to their real source path and line. Single-source classes omit the
+SMAP and use their ordinary `SourceFile` attribute. IntelliJ supports both forms.
+
 ## Build sidecars
 
 A successful `flix build --Xdebug` writes two deterministic sidecars beside

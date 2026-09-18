@@ -676,10 +676,10 @@ object Instructions {
   //
 
   /** Associates subsequent bytecode with the start line of `loc`. */
-  def addLoc(loc: SourceLocation)(implicit mv: MethodVisitor): Unit = {
+  def addLoc(loc: SourceLocation, smap: Smap)(implicit mv: MethodVisitor): Unit = {
     val label = new Label()
     mv.visitLabel(label)
-    mv.visitLineNumber(loc.startLine, label)
+    mv.visitLineNumber(smap.register(loc), label)
   }
 
   /** Emits no bytecode. */

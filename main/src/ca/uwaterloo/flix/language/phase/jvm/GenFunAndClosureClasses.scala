@@ -123,13 +123,15 @@ object GenFunAndClosureClasses {
     val functionInterface = GenArrow.descOfArrowType(defn.arrowType)
     visitor.visit(CompilerConstants.JvmTargetVersion, Opcodes.ACC_PUBLIC + Opcodes.ACC_FINAL, ClassDescs.internalNameOf(className), null,
       ClassDescs.internalNameOf(functionInterface), null)
-    visitor.visitSource(defn.loc.source.name, null)
+    implicit val smap: Smap = new Smap(defn.loc.source)
 
     compileConstructor(functionInterface, visitor)
 
     // Methods
     compileStaticInvokeMethod(visitor, className, defn)
     compileStaticApplyMethod(visitor, className, defn)
+
+    visitor.visitSource(defn.loc.source.name, smap.build(className).orNull)
 
     visitor.visitEnd()
     visitor.toByteArray
@@ -184,7 +186,7 @@ object GenFunAndClosureClasses {
     val frameInterface = GenFrame
     visitor.visit(CompilerConstants.JvmTargetVersion, Opcodes.ACC_PUBLIC + Opcodes.ACC_FINAL, ClassDescs.internalNameOf(className), null,
       ClassDescs.internalNameOf(functionInterface), Array(ClassDescs.internalNameOf(frameInterface.Desc)))
-    visitor.visitSource(defn.loc.source.name, null)
+    implicit val smap: Smap = new Smap(defn.loc.source)
 
     // Fields — lparams use erased types (like fparams) so setPc can store without casting
     for ((x, i) <- defn.lparams.zipWithIndex) {
@@ -198,6 +200,8 @@ object GenFunAndClosureClasses {
     compileInvokeMethod(visitor, className)
     compileFrameMethod(visitor, className, defn)
     compileCopyMethod(visitor, className, defn)
+
+    visitor.visitSource(defn.loc.source.name, smap.build(className).orNull)
 
     visitor.visitEnd()
     visitor.toByteArray
@@ -266,7 +270,7 @@ object GenFunAndClosureClasses {
     val frameInterface = GenFrame
     visitor.visit(CompilerConstants.JvmTargetVersion, Opcodes.ACC_PUBLIC + Opcodes.ACC_FINAL, ClassDescs.internalNameOf(className), null,
       ClassDescs.internalNameOf(functionInterface), Array(ClassDescs.internalNameOf(frameInterface.Desc)))
-    visitor.visitSource(defn.loc.source.name, null)
+    implicit val smap: Smap = new Smap(defn.loc.source)
 
     // Fields
     val closureArgTypes = defn.cparams.map(_.tpe)
@@ -289,6 +293,8 @@ object GenFunAndClosureClasses {
     compileCopyMethod(visitor, className, defn)
     compileGetUniqueThreadClosureMethod(visitor, className, defn)
 
+    visitor.visitSource(defn.loc.source.name, smap.build(className).orNull)
+
     visitor.visitEnd()
     visitor.toByteArray
   }
@@ -308,13 +314,13 @@ object GenFunAndClosureClasses {
   private def staticApplyMethod(className: ClassDesc, defn: Def)(implicit root: Root): StaticMethod =
     StaticMethod(className, ClassMaker.StaticApplyMethodName, MethodTypeDescs.mkDescriptor(defn.fparams.map(fp => TypeDescs.toClassDesc(fp.tpe)) *)(GenResult.Desc))
 
-  private def compileStaticApplyMethod(visitor: ClassWriter, className: ClassDesc, defn: Def)(implicit root: Root, flix: Flix): Unit = {
+  private def compileStaticApplyMethod(visitor: ClassWriter, className: ClassDesc, defn: Def)(implicit root: Root, flix: Flix, smap: Smap): Unit = {
     // Method header
     val method = staticApplyMethod(className, defn)
     val modifiers = Opcodes.ACC_PUBLIC + Opcodes.ACC_FINAL + Opcodes.ACC_STATIC
     implicit val m: MethodVisitor = visitor.visitMethod(modifiers, method.name, method.d.descriptorString(), null, null)
     m.visitCode()
-    addLoc(defn.loc)
+    addLoc(defn.loc, smap)
 
     // used for self-recursive tail calls
     val enterLabel = new Label()
@@ -323,7 +329,7 @@ object GenFunAndClosureClasses {
     // Generate the expression
     val localOffset = 0
     val labelEnv = Map.empty[Symbol.LabelSym, Label]
-    val ctx = GenExpression.DirectStaticContext(enterLabel, labelEnv, localOffset)
+    val ctx = GenExpression.DirectStaticContext(enterLabel, labelEnv, localOffset, smap)
     GenExpression.compileExpr(defn.expr)(m, ctx, root, flix)
 
     xReturn(GenResult.Desc)
@@ -413,7 +419,7 @@ object GenFunAndClosureClasses {
 
   private def compileFrameMethod(visitor: ClassWriter,
                                  className: ClassDesc,
-                                 defn: Def)(implicit root: Root, flix: Flix): Unit = {
+                                 defn: Def)(implicit root: Root, flix: Flix, smap: Smap): Unit = {
     // Method header
     val classInternalName = ClassDescs.internalNameOf(className)
     val applyMethod = GenFrame.ApplyMethod
@@ -429,7 +435,7 @@ object GenFunAndClosureClasses {
     }
 
     m.visitCode()
-    addLoc(defn.loc)
+    addLoc(defn.loc, smap)
     loadParamsOf(lparams)
 
     // used for self-recursive tail calls
@@ -443,7 +449,7 @@ object GenFunAndClosureClasses {
     m.visitLabel(parametersReady)
 
     if (Purity.isControlPure(defn.expr.purity)) {
-      val ctx = GenExpression.DirectInstanceContext(enterLabel, Map.empty, localOffset)
+      val ctx = GenExpression.DirectInstanceContext(enterLabel, Map.empty, localOffset, smap)
       GenExpression.compileExpr(defn.expr)(m, ctx, root, flix)
     } else {
       val pcLabels: Vector[Label] = Vector.range(0, defn.pcPoints).map(_ => new Label())
@@ -496,7 +502,7 @@ object GenFunAndClosureClasses {
         }
       }
 
-      val ctx = GenExpression.EffectContext(enterLabel, Map.empty, newFrame, setPc, narrowLocals, localOffset, pcLabels.prepended(null), Array(0))
+      val ctx = GenExpression.EffectContext(enterLabel, Map.empty, newFrame, setPc, narrowLocals, localOffset, pcLabels.prepended(null), Array(0), smap)
       GenExpression.compileExpr(defn.expr)(m, ctx, root, flix)
       assert(ctx.pcCounter(0) == pcLabels.size, s"${(className, ctx.pcCounter(0), pcLabels.size)}")
     }

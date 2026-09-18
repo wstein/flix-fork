@@ -51,6 +51,8 @@ object GenExpression {
 
     def localOffset: Int
 
+    def smap: Smap
+
     /** Returns the absolute index of the local variable `varOffset` by adding this context's local offset. */
     def getIndex(varOffset: Int): Int = varOffset + localOffset
 
@@ -81,7 +83,8 @@ object GenExpression {
     narrowLocals: MethodVisitor => Unit, // re-cast locals to their declared types after resume
     localOffset: Int,
     pcLabels: Vector[Label],
-    pcCounter: Ref[Int]
+    pcCounter: Ref[Int],
+    smap: Smap,
   ) extends MethodContext
 
   /**
@@ -94,6 +97,7 @@ object GenExpression {
     entryPoint: Label,
     lenv: Map[Symbol.LabelSym, Label],
     localOffset: Int,
+    smap: Smap,
   ) extends MethodContext
 
   /**
@@ -106,6 +110,7 @@ object GenExpression {
     entryPoint: Label,
     lenv: Map[Symbol.LabelSym, Label],
     localOffset: Int,
+    smap: Smap,
   ) extends MethodContext
 
   /**
@@ -120,6 +125,10 @@ object GenExpression {
     }
     compileExprInner(exp0)
   }
+
+  /** Emits a location through the source map owned by the current generated class. */
+  private def addLoc(loc: SourceLocation)(implicit mv: MethodVisitor, ctx: MethodContext): Unit =
+    Instructions.addLoc(loc, ctx.smap)
 
   private def compileExprInner(exp0: Expr)(implicit mv: MethodVisitor, ctx: MethodContext, root: Root, flix: Flix): Unit = exp0 match {
     case Expr.Cst(cst, loc) => cst match {
@@ -1121,7 +1130,7 @@ object GenExpression {
             GenResult.unwindSuspensionFreeThunk("in pure closure call", loc)
           } else {
             ctx match {
-              case EffectContext(_, _, newFrame, setPc, narrowLocals, _, pcLabels, pcCounter) =>
+              case EffectContext(_, _, newFrame, setPc, narrowLocals, _, pcLabels, pcCounter, _) =>
                 val pcPoint = pcCounter(0) + 1
                 val pcPointLabel = pcLabels(pcPoint)
                 val afterUnboxing = new Label()
@@ -1136,7 +1145,7 @@ object GenExpression {
 
                 mv.visitLabel(afterUnboxing)
 
-              case DirectInstanceContext(_, _, _) | DirectStaticContext(_, _, _) =>
+              case DirectInstanceContext(_, _, _, _) | DirectStaticContext(_, _, _, _) =>
                 throw InternalCompilerException("Unexpected direct method context in control impure function", loc)
             }
           }
@@ -1198,7 +1207,7 @@ object GenExpression {
           }
           // Calling unwind and unboxing
           ctx match {
-            case EffectContext(_, _, newFrame, setPc, narrowLocals, _, pcLabels, pcCounter) =>
+            case EffectContext(_, _, newFrame, setPc, narrowLocals, _, pcLabels, pcCounter, _) =>
               val defn = root.defs(sym)
               if (Purity.isControlPure(defn.expr.purity)) {
                 GenResult.unwindSuspensionFreeThunk("in pure function call", loc)
@@ -1216,17 +1225,17 @@ object GenExpression {
 
                 mv.visitLabel(afterUnboxing)
               }
-            case DirectInstanceContext(_, _, _) | DirectStaticContext(_, _, _) =>
+            case DirectInstanceContext(_, _, _, _) | DirectStaticContext(_, _, _, _) =>
               GenResult.unwindSuspensionFreeThunk("in pure function call", loc)
           }
         }
     }
 
     case Expr.ApplyOp(sym, exps, tpe, _, loc) => ctx match {
-      case DirectInstanceContext(_, _, _) | DirectStaticContext(_, _, _) =>
+      case DirectInstanceContext(_, _, _, _) | DirectStaticContext(_, _, _, _) =>
         GenResult.crashIfSuspension("Unexpected do-expression in direct method context", loc)
 
-      case EffectContext(_, _, newFrame, setPc, narrowLocals, _, pcLabels, pcCounter) =>
+      case EffectContext(_, _, newFrame, setPc, narrowLocals, _, pcLabels, pcCounter, _) =>
         val pcPoint = pcCounter(0) + 1
         val pcPointLabel = pcLabels(pcPoint)
         val afterUnboxing = new Label()
@@ -1280,7 +1289,7 @@ object GenExpression {
     }
 
     case Expr.ApplySelfTail(sym, exps, _, _, _) => ctx match {
-      case EffectContext(_, _, _, setPc, _, _, _, _) =>
+      case EffectContext(_, _, _, setPc, _, _, _, _, _) =>
         // The function abstract class name
         val (fnArgs, fnResult) = GenArrow.erasedArgsAndResult(root.defs(sym).arrowType)
         // Evaluate each argument and put the result on the Fn class.
@@ -1296,7 +1305,7 @@ object GenExpression {
         // Jump to the entry point of the method.
         mv.visitJumpInsn(Opcodes.GOTO, ctx.entryPoint)
 
-      case DirectInstanceContext(_, _, _) =>
+      case DirectInstanceContext(_, _, _, _) =>
         // The function abstract class name
         val (fnArgs, fnResult) = GenArrow.erasedArgsAndResult(root.defs(sym).arrowType)
         // Evaluate each argument and put the result on the Fn class.
@@ -1309,7 +1318,7 @@ object GenExpression {
         // Jump to the entry point of the method.
         mv.visitJumpInsn(Opcodes.GOTO, ctx.entryPoint)
 
-      case DirectStaticContext(_, _, _) =>
+      case DirectStaticContext(_, _, _, _) =>
         val defn = root.defs(sym)
         for (arg <- exps) {
           // Evaluate the argument and push the result on the stack.
@@ -1575,10 +1584,10 @@ object GenExpression {
       // handle value/suspend/thunk if in non-tail position
       if (ct == ExpPosition.NonTail) {
         ctx match {
-          case DirectInstanceContext(_, _, _) | DirectStaticContext(_, _, _) =>
+          case DirectInstanceContext(_, _, _, _) | DirectStaticContext(_, _, _, _) =>
             GenResult.unwindSuspensionFreeThunk("in pure run-with call", loc)
 
-          case EffectContext(_, _, newFrame, setPc, narrowLocals, _, pcLabels, pcCounter) =>
+          case EffectContext(_, _, newFrame, setPc, narrowLocals, _, pcLabels, pcCounter, _) =>
             val pcPoint = pcCounter(0) + 1
             val pcPointLabel = pcLabels(pcPoint)
             val afterUnboxing = new Label()
