@@ -67,6 +67,21 @@ class TestBootstrap extends AnyFunSuite {
     assert(manifest.launch.runtimeClasspath.head == devClassDir.toAbsolutePath.normalize().toString)
   }
 
+  test("development manifest launches the emitted program in a fresh JVM") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out).unsafeGet
+    val b = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
+    b.build(PkgTestUtils.mkFlix(b)).unsafeGet
+
+    val manifest = BuildManifest.read(Bootstrap.getBuildManifestFile(p, Build.Development)).getOrElse(fail("Missing build manifest."))
+    val main = manifest.launch.mainClass.getOrElse(fail("Expected a main class."))
+    val process = new ProcessBuilder(manifest.launch.java, "-cp", manifest.launch.runtimeClasspath.mkString(java.io.File.pathSeparator), main)
+      .directory(p.toFile)
+      .redirectErrorStream(true)
+      .start()
+    assert(process.waitFor() == 0, s"External JVM failed: ${new String(process.getInputStream.readAllBytes())}")
+  }
+
   test("build with inMemory option writes nothing to disk") {
     val p = Files.createTempDirectory(ProjectPrefix)
     Bootstrap.init(p)(System.out).unsafeGet
@@ -127,6 +142,26 @@ class TestBootstrap extends AnyFunSuite {
 
     val second = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
     assert(second.buildIfNeeded(PkgTestUtils.mkFlix(second)).unsafeGet, "a stray class file must not be reported as current")
+  }
+
+  test("debug build publishes source-to-class index and a normal rebuild removes it") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out).unsafeGet
+    val b = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
+    val debug = PkgTestUtils.mkFlix(b)
+    debug.setOptions(debug.options.copy(xdebug = true))
+    val index = Bootstrap.getDevelopmentDirectory(p).resolve("debug-index.json")
+    val scopes = Bootstrap.getDevelopmentDirectory(p).resolve("debug-scopes.json")
+
+    b.build(debug).unsafeGet
+    assert(Files.exists(index))
+    assert(Files.exists(scopes))
+    assert(Files.readString(index).contains("\"formatVersion\":1"))
+    assert(Files.readString(scopes).contains("\"formatVersion\":2"))
+
+    b.build(PkgTestUtils.mkFlix(b)).unsafeGet
+    assert(!Files.exists(index))
+    assert(!Files.exists(scopes))
   }
 
   test("build reconciles obsolete class files in build/development") {

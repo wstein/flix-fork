@@ -15,11 +15,15 @@ final class JvmSourceOrigins private (val provenance: JvmProvenance,
 
   def foreachExpression(consume: (TypedAst.Expr, GeneratedJvmKey) => Unit): Unit =
     bodies.values.foreach(_.allEntries.foreach { case (exp, key) => consume(exp, key) })
+
+  /** Returns immutable source bindings before their typed bodies are released. */
+  def foreachBinding(consume: (Symbol.DefnSym, JvmLexicalOrigins.Binding) => Unit): Unit =
+    bodies.foreach { case (sym, lexical) => lexical.bindings.foreach(binding => consume(sym, binding)) }
 }
 
 object JvmSourceOrigins {
 
-  def capture(root: TypedAst.Root): JvmSourceOrigins = {
+  def capture(root: TypedAst.Root, captureDebugBindings: Boolean = true): JvmSourceOrigins = {
     val provenance = JvmDeclarationOrigins.capture(root)
     val definitions = root.defs.values.map(defn => (defn, defn.spec.declaredScheme.quantifiers))
     val members = root.instances.values.flatMap { instance =>
@@ -35,7 +39,8 @@ object JvmSourceOrigins {
     val bodies = (definitions ++ members ++ defaults).map { case (defn, parameters) =>
       val lexical = JvmLexicalOrigins.capture(defn.exp, provenance.origin(defn.sym), defn.spec.fparams.toList,
         (tpe, localOrigins) => JvmTypeKey.encodeLexical(tpe, parameters,
-          sym => localOrigins.getOrElse(sym, provenance.origin(sym))), provenance.origin)
+          sym => localOrigins.getOrElse(sym, provenance.origin(sym))), provenance.origin,
+        captureDebugBindings)
       lexical.entries.foreach {
         case (TypedAst.Expr.NewObject(sym, _, _, _, _, _, _), key) => provenance.register(sym, key)
         case _ => ()

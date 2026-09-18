@@ -84,7 +84,7 @@ class Flix(pkgs: List[InstalledPackage] = Nil, jars: List[Path] = Nil) extends A
     if (activeJvmOrigins.nonEmpty) {
       throw InternalCompilerException("Nested code generation cannot share JVM provenance.", SourceLocation.Unknown)
     }
-    val origins = JvmCompilationOrigins.capture(root)
+    val origins = JvmCompilationOrigins.capture(root, captureDebugBindings = options.xdebug)
     activeJvmOrigins = Some(origins)
     try body finally {
       activeJvmOrigins = None
@@ -695,7 +695,7 @@ class Flix(pkgs: List[InstalledPackage] = Nil, jars: List[Path] = Nil) extends A
     // Construct the compilation result. The generated classes are not loaded into the JVM;
     // that is the caller's responsibility (see [[ca.uwaterloo.flix.runtime.JvmLoader]]).
     val totalSize = bytecodeAst.classes.values.map(_.bytecode.length).sum
-    val result = new CompilationResult(bytecodeAst, totalTime, totalSize, this)
+    val result = new CompilationResult(bytecodeAst, totalTime, totalSize, this, jvmOrigins.finalizedDebugDefinitions)
 
     // Shutdown the thread pool.
     shutdownThreadPool()

@@ -140,6 +140,37 @@ object LspServer {
       }
     }
 
+    @jsonrpc.services.JsonRequest("flix/debugEval/compile")
+    def debugEvalCompile(params: DebugEvalParams): CompletableFuture[DebugEvalResult] =
+      CompletableFuture.supplyAsync(() => {
+        try {
+          if (params.protocolVersion != DebugEvalProtocol.Version) {
+            DebugEvalResult.rejected(
+              s"unsupported debug-evaluation protocol ${params.protocolVersion}; " +
+                s"this server requires ${DebugEvalProtocol.Version}. Update the plugin or compiler",
+            )
+          } else DebugEvalProvider.Policy.parse(params.policy) match {
+            case None => DebugEvalResult.rejected(s"unknown policy `${params.policy}`; expected `pure` or `allowEffects`")
+            case Some(_) if params.buildId == null || params.buildId.isBlank =>
+              DebugEvalResult.rejected(
+                "the debugger did not identify the build of the running program; restart the debug session",
+              )
+            case Some(_) if !project.debugBuffersMatchDisk =>
+              DebugEvalResult.rejected(
+                "an open Flix document has unsaved changes, so the language-server snapshot does " +
+                  "not describe the running program. Save, rebuild, and restart the debug session",
+              )
+            case Some(policy) =>
+              val frame = DebugEvalProvider.ScopeId(params.className, params.methodName)
+              DebugEvalResult.of(DebugEvalProvider.compile(frame, params.expression, policy,
+                project.projectPath, root, params.withArtifact, Option(params.buildId),
+                compilerFactory = Some(() => project.debugEvalCompiler())))
+          }
+        } catch {
+          case t: Throwable => DebugEvalResult.failure(t)
+        }
+      })
+
     /**
       * Returns `true` if the client supports dynamic registration of `didChangeWatchedFiles`.
       */

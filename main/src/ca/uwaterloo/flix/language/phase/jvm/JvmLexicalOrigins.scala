@@ -2,6 +2,7 @@ package ca.uwaterloo.flix.language.phase.jvm
 
 import ca.uwaterloo.flix.language.ast.{SemanticOp, SourceLocation, Symbol, Type, TypedAst}
 import ca.uwaterloo.flix.language.ast.TypedAst.{Expr, FormalParam}
+import ca.uwaterloo.flix.language.fmt.{FormatOptions, FormatType}
 import ca.uwaterloo.flix.language.ast.shared.*
 import ca.uwaterloo.flix.util.InternalCompilerException
 
@@ -13,6 +14,7 @@ import scala.collection.mutable
 final class JvmLexicalOrigins private (private val origins: IdentityHashMap[Expr, GeneratedJvmKey],
                                        val entries: List[(Expr, GeneratedJvmKey)],
                                        val allEntries: List[(Expr, GeneratedJvmKey)],
+                                       val bindings: List[JvmLexicalOrigins.Binding],
                                        private[jvm] val fingerprintEvaluations: Long) {
   def get(exp: Expr): Option[GeneratedJvmKey] = Option(origins.get(exp))
 
@@ -28,11 +30,19 @@ final class JvmLexicalOrigins private (private val origins: IdentityHashMap[Expr
   * form includes the compiler's local-scope cache.
   */
 object JvmLexicalOrigins {
+  private def debugType(tpe: Type): String =
+    FormatType.formatTypeWithOptions(tpe, FormatOptions(FormatOptions.VarName.NameBased))
+
   type TypeEncoder = (Type, Map[Symbol, GeneratedJvmKey]) => String
 
+  /** A source binding captured before ANF/lowering replaces its user-facing name. */
+  /** A source binding retained for debug metadata before lowering erases its Flix type. */
+  case class Binding(identity: String, name: String, loc: SourceLocation, kind: String, tpe: String)
+
   def capture(exp: Expr, owner: GeneratedJvmKey, fparams: List[FormalParam],
-              encodeType: TypeEncoder, sourceOrigin: Symbol => GeneratedJvmKey): JvmLexicalOrigins = {
-    new Capture(encodeType, sourceOrigin).run(exp, owner, fparams)
+              encodeType: TypeEncoder, sourceOrigin: Symbol => GeneratedJvmKey,
+              captureDebugBindings: Boolean = true): JvmLexicalOrigins = {
+    new Capture(encodeType, sourceOrigin, captureDebugBindings).run(exp, owner, fparams)
   }
 
   private case class Env(values: Map[Symbol.VarSym, String], localOrigins: Map[Symbol, GeneratedJvmKey]) {
@@ -57,10 +67,12 @@ object JvmLexicalOrigins {
   private def fail(message: String, exp: Expr): Nothing =
     throw InternalCompilerException(message, exp.loc)
 
-  private final class Capture(encodeType: TypeEncoder, sourceOrigin: Symbol => GeneratedJvmKey) {
+  private final class Capture(encodeType: TypeEncoder, sourceOrigin: Symbol => GeneratedJvmKey,
+                              captureDebugBindings: Boolean) {
     private val origins = new IdentityHashMap[Expr, GeneratedJvmKey]()
     private val ordered = mutable.ListBuffer.empty[(Expr, GeneratedJvmKey)]
     private val all = mutable.ListBuffer.empty[(Expr, GeneratedJvmKey)]
+    private val bindings = mutable.ListBuffer.empty[Binding]
     private val groups = mutable.Map.empty[(String, String, String), Int]
     private val fingerprints = new IdentityHashMap[Env, IdentityHashMap[Expr, mutable.Map[Int, String]]]()
     private var fingerprintEvaluations = 0L
@@ -69,8 +81,11 @@ object JvmLexicalOrigins {
       val env = Env(fparams.zipWithIndex.map { case (param, index) =>
         param.bnd.sym -> frame("parameter", List(index.toString))
       }.toMap, Map.empty)
+      fparams.zipWithIndex.foreach { case (param, index) =>
+        if (captureDebugBindings && !param.bnd.sym.isWild) bindings += Binding(frame("parameter", List(index.toString)), param.bnd.sym.text, param.bnd.sym.loc, "parameter", debugType(param.tpe))
+      }
       visit(exp, env, frame(owner.family, owner.fields), "body", isRoot = true)
-      new JvmLexicalOrigins(origins, ordered.toList, all.toList, fingerprintEvaluations)
+      new JvmLexicalOrigins(origins, ordered.toList, all.toList, bindings.toList, fingerprintEvaluations)
     }
 
     private def symbol(sym: Symbol): String = {
@@ -159,7 +174,13 @@ object JvmLexicalOrigins {
       exp match {
         case lambda: Expr.Lambda =>
           val site = record(exp, scope, role, "lambda", fingerprint(exp, env, 0))
-          mapLambdaBody(lambda, env, SiteBinding(site)) { (_, body, inner) => visit(body, inner, site, "body") }
+          mapLambdaBody(lambda, env, SiteBinding(site)) { (param, body, inner) =>
+            if (captureDebugBindings && !param.bnd.sym.isWild) {
+              bindings += Binding(frame("lambda-parameter", List(site)), param.bnd.sym.text,
+                param.bnd.sym.loc, "lambda-parameter", debugType(param.tpe))
+            }
+            visit(body, inner, site, "body")
+          }
         case local: Expr.LocalDef =>
           val site = record(exp, scope, role, "local-def", localFingerprint(local, env, 0))
           mapLocalDefBodies(local, env, SiteBinding(site))(
@@ -168,6 +189,7 @@ object JvmLexicalOrigins {
           ()
         case Expr.Let(binder, value, rest, _, _, _) =>
           val binding = identity(scope, "let:" + role, fingerprint(value, env, 0))
+          if (captureDebugBindings && !binder.sym.isWild) bindings += Binding(binding, binder.sym.text, binder.sym.loc, "let", debugType(binder.tpe))
           val site = if (isRoot) frame("root", List(scope, role)) else frame("let-expression", List(binding))
           val key = GeneratedJvmKey("lexical-expression", List(site))
           if (origins.containsKey(exp)) fail("Repeated AST identity in lexical capture.", exp)
@@ -258,6 +280,21 @@ object JvmLexicalOrigins {
     private def bindSymbols(symbols: List[Symbol.VarSym], env: Env, scope: String): Env =
       env ++ symbols.distinct.zipWithIndex.map { case (sym, index) => sym -> frame("pattern-bound", List(scope, index.toString)) }
 
+    /** Records debugger-visible pattern binders during the single source-capture traversal. */
+    private def recordPatternBindings(pat: TypedAst.Pattern, scope: String): Unit = pat match {
+      case TypedAst.Pattern.Var(binder, tpe, _) =>
+        if (captureDebugBindings && !binder.sym.isWild) bindings += Binding(scope, binder.sym.text, binder.sym.loc, "pattern", debugType(tpe))
+      case TypedAst.Pattern.Tag(_, pats, _, _) =>
+        pats.zipWithIndex.foreach { case (p, i) => recordPatternBindings(p, frame("tag-binding", List(scope, i.toString))) }
+      case TypedAst.Pattern.Tuple(pats, _, _) =>
+        pats.toList.zipWithIndex.foreach { case (p, i) => recordPatternBindings(p, frame("tuple-binding", List(scope, i.toString))) }
+      case TypedAst.Pattern.Record(pats, rest, _, _) =>
+        pats.foreach(p => recordPatternBindings(p.pat, frame("record-binding", List(scope, p.label.name))))
+        recordPatternBindings(rest, frame("record-rest", List(scope)))
+      case _: TypedAst.Pattern.Wild | _: TypedAst.Pattern.Cst => ()
+      case TypedAst.Pattern.Error(_, loc) => throw InternalCompilerException("Erroneous debug pattern.", loc)
+    }
+
     private def scopedShape(exp: Expr, env: Env, depth: Int,
                             bindingScope: Option[String] = None): (String, List[String], List[(String, Expr, Env)]) = {
       val context = bindingScope.getOrElse(frame("alpha-scope", List(depth.toString)))
@@ -283,7 +320,8 @@ object JvmLexicalOrigins {
           val inner = bindSymbols(List(binder.sym), env, context).copy(localOrigins = env.localOrigins + (regionSym -> origin))
           ("region", Nil, List(("body", body, inner)))
         case Expr.Match(scrutinee, rules, _, _, _) =>
-          val children = rules.flatMap { entry =>
+          val children = rules.zipWithIndex.flatMap { case (entry, index) =>
+            bindingScope.foreach(s => recordPatternBindings(entry.pat, frame("match-binding", List(s, index.toString))))
             val (pat, binders) = pattern(entry.pat)
             rule("match", pat, binders, entry.guard.toList.map(guard => "guard" -> guard) ::: List("body" -> entry.exp))
           }
@@ -614,7 +652,6 @@ object JvmLexicalOrigins {
     case SemanticOp.ReflectOp.ReflectValue => "ReflectOp.ReflectValue"
     case SemanticOp.ObjectOp.RefEq => "ObjectOp.RefEq"
     case SemanticOp.ObjectOp.Ordinal => "ObjectOp.Ordinal"
-    case _ => throw InternalCompilerException("Unsupported semantic operator in lexical JVM origin.", SourceLocation.Unknown)
   }
 
   private def constant(cst: Constant): String = cst match {

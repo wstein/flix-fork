@@ -124,6 +124,18 @@ object LambdaLift {
       // Construct a new definition.
       val defTpe = arrowTpe.result
       val defn = LiftedAst.Def(ann, mod, freshSymbol, cs, fs, liftedExp, defTpe, loc)
+      val captures = cs.zip(freeVars).flatMap {
+        case (_, SimplifiedAst.FreeVar(originalSym, _)) =>
+          flix.jvmOrigins.sourceBindings(sym0).find(b => b.name == originalSym.text && b.loc == originalSym.loc)
+      }
+      val parameters = fs.filterNot(_.sym.isWild).flatMap { param =>
+        flix.jvmOrigins.sourceBindings(sym0)
+          .find(b => b.name == param.sym.text && b.loc == param.sym.loc)
+      }
+      val locals = bodyLocalSymbols(liftedExp).flatMap { sym =>
+        flix.jvmOrigins.sourceBindings(sym0).find(b => b.name == sym.text && b.loc == sym.loc)
+      }
+      flix.jvmOrigins.recordDebugBindings(freshSymbol, (captures ::: parameters ::: locals).distinct)
 
       // Add the new definition to the map of lifted definitions.
       sctx.liftedDefs.add(freshSymbol -> defn)
@@ -244,6 +256,31 @@ object LambdaLift {
 
   }
 
+  /** Source locals whose code remains in this lifted body; nested lambdas are already closures. */
+  private def bodyLocalSymbols(exp: LiftedAst.Expr): List[Symbol.VarSym] = exp match {
+    case _: LiftedAst.Expr.Cst | _: LiftedAst.Expr.Var | _: LiftedAst.Expr.JumpTo => Nil
+    case LiftedAst.Expr.ApplyAtomic(_, exps, _, _, _) => exps.flatMap(bodyLocalSymbols)
+    case LiftedAst.Expr.ApplyClo(exp1, exp2, _, _, _) => bodyLocalSymbols(exp1) ::: bodyLocalSymbols(exp2)
+    case LiftedAst.Expr.ApplyDef(_, exps, _, _, _) => exps.flatMap(bodyLocalSymbols)
+    case LiftedAst.Expr.ApplyOp(_, exps, _, _, _) => exps.flatMap(bodyLocalSymbols)
+    case LiftedAst.Expr.IfThenElse(exp1, exp2, exp3, _, _, _) =>
+      bodyLocalSymbols(exp1) ::: bodyLocalSymbols(exp2) ::: bodyLocalSymbols(exp3)
+    case LiftedAst.Expr.Branch(exp0, branches, _, _, _) =>
+      bodyLocalSymbols(exp0) ::: branches.valuesIterator.flatMap(bodyLocalSymbols).toList
+    case LiftedAst.Expr.Switch(exp0, _, cases, defaultExp, _, _, _) =>
+      bodyLocalSymbols(exp0) ::: cases.flatMap(c => bodyLocalSymbols(c._2)) ::: bodyLocalSymbols(defaultExp)
+    case LiftedAst.Expr.Let(sym, exp1, exp2, _, _, _) =>
+      sym :: (bodyLocalSymbols(exp1) ::: bodyLocalSymbols(exp2))
+    case LiftedAst.Expr.Stm(exps, exp0, _, _, _) => exps.flatMap(bodyLocalSymbols) ::: bodyLocalSymbols(exp0)
+    case LiftedAst.Expr.Region(_, exp0, _, _, _) => bodyLocalSymbols(exp0)
+    case LiftedAst.Expr.TryCatch(exp0, rules, _, _, _) =>
+      bodyLocalSymbols(exp0) ::: rules.flatMap(rule => bodyLocalSymbols(rule.exp))
+    case LiftedAst.Expr.RunWith(exp0, _, rules, _, _, _) =>
+      bodyLocalSymbols(exp0) ::: rules.flatMap(rule => bodyLocalSymbols(rule.exp))
+    // Anonymous-class bodies have distinct JVM methods and must not leak into this closure.
+    case _: LiftedAst.Expr.NewObject => Nil
+  }
+
   private def visitJvmConstructor(constructor: SimplifiedAst.JvmConstructor)(implicit sym0: Symbol.DefnSym, liftedLocalDefs: Map[Symbol.VarSym, Symbol.DefnSym], sctx: SharedContext, flix: Flix): LiftedAst.JvmConstructor = constructor match {
     case SimplifiedAst.JvmConstructor(exp, retTpe, purity, loc) =>
       LiftedAst.JvmConstructor(visitExp(exp), retTpe, purity, loc)
@@ -257,7 +294,7 @@ object LambdaLift {
 
 
   private def visitFormalParam(fparam: SimplifiedAst.FormalParam): LiftedAst.FormalParam = fparam match {
-    case SimplifiedAst.FormalParam(sym, tpe, loc) => LiftedAst.FormalParam(sym, tpe, loc)
+    case SimplifiedAst.FormalParam(sym, tpe, loc, sourceName) => LiftedAst.FormalParam(sym, tpe, loc, sourceName)
   }
 
   /**

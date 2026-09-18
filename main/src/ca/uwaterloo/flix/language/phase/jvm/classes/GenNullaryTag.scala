@@ -60,7 +60,7 @@ object GenNullaryTag {
 
     cm.mkStaticConstructor(StaticConstructorMethod(d), singletonStaticConstructor(Constructor(sym), SingletonField(sym))(_))
     cm.mkField(SingletonField(sym), IsPublic, IsFinal, NotVolatile)
-    cm.mkConstructor(Constructor(sym), IsPublic, constructorIns(sym.ordinal)(_))
+    cm.mkConstructor(Constructor(sym), IsPublic, mv => constructorIns(sym)(mv, flix))
 
     cm.closeClassMaker()
   }
@@ -74,12 +74,17 @@ object GenNullaryTag {
     ConstructorMethod(desc(sym), Nil)
 
   /** `[] --> return` */
-  private def constructorIns(ordinal: Int)(implicit mv: MethodVisitor): Unit = {
+  private def constructorIns(sym: Symbol.CaseSym)(implicit mv: MethodVisitor, flix: Flix): Unit = {
     thisLoad()
     INVOKESPECIAL(GenTagged.Constructor)
     thisLoad()
-    pushInt(ordinal)
+    pushInt(sym.ordinal)
     PUTFIELD(GenTagged.OrdinalField)
+    if (flix.options.xdebug) {
+      thisLoad()
+      pushString((sym.enumSym.namespace :+ sym.enumSym.text :+ sym.name).mkString("."))
+      PUTFIELD(GenTagged.NameField)
+    }
     RETURN()
   }
 

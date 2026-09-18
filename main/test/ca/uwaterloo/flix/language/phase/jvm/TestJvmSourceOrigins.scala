@@ -77,7 +77,7 @@ class TestJvmSourceOrigins extends AnyFunSuite {
 
   test("direct lexical capture uses the same registry as source capture") {
     implicit val security: SecurityContext = SecurityContext.Unrestricted
-    val flix = new Flix().setOptions(Options.TestWithLibNix)
+    val flix = new Flix().setOptions(Options.TestWithLibMin)
     flix.addSource(CompilerConstants.VirtualTestFile, sctx = security, text =
       "enum Choice { case Selected(Int32) }\npub def example(): Int32 -> Choice = value -> Choice.Selected(value)")
     val (result, errors) = flix.check()
@@ -89,6 +89,26 @@ class TestJvmSourceOrigins extends AnyFunSuite {
       (tpe, locals) => JvmTypeKey.encodeLexical(tpe, example.spec.declaredScheme.quantifiers,
         sym => locals.getOrElse(sym, captured.provenance.origin(sym))), captured.provenance.origin)
     assert(captured.body(example.sym).entries.map(_._2) == direct.entries.map(_._2))
+  }
+
+  test("lexical capture retains source parameter and let names before lowering") {
+    implicit val security: SecurityContext = SecurityContext.Unrestricted
+    val flix = new Flix().setOptions(Options.TestWithLibMin)
+    flix.addSource(CompilerConstants.VirtualTestFile, sctx = security, text =
+      """pub def example(value: Int32): Int32 = {
+        |  let named = value + 1;
+        |  named
+        |}
+        |""".stripMargin)
+    val (result, errors) = flix.check()
+    assert(errors.isEmpty, errors.mkString("\n"))
+    val root = result.get
+    val example = root.defs.values.find(_.sym.text == "example").get
+    val bindings = JvmSourceOrigins.capture(root).body(example.sym).bindings
+    assert(bindings.map(_.name).toSet == Set("value", "named"))
+    assert(bindings.map(_.kind).toSet == Set("parameter", "let"))
+    assert(bindings.map(_.tpe).toSet == Set("Int32"))
+    assert(bindings.forall(_.loc.isReal))
   }
 
   test("default implementations retain their declaration family during lexical capture") {

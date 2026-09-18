@@ -119,7 +119,7 @@ object ReducedAst {
   case class HandlerRule(op: OpSymUse, fparams: List[FormalParam], exp: Expr)
 
   // Note: We deliberately omit the source location because it (a) is unused and (b) takes memory.
-  case class FormalParam(sym: Symbol.VarSym, tpe: SimpleType)
+  case class FormalParam(sym: Symbol.VarSym, tpe: SimpleType, sourceName: Option[String] = None)
 
   // Note: We deliberately omit the source location because it (a) is unused and (b) takes memory.
   case class TypeParam(name: Name.Ident, sym: Symbol.KindedTypeVarSym)
@@ -128,4 +128,3 @@ object ReducedAst {
   case class LocalParam(sym: Symbol.VarSym, tpe: SimpleType)
 
 }
-

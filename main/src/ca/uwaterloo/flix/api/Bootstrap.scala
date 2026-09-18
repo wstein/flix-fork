@@ -23,7 +23,7 @@ import ca.uwaterloo.flix.language.ast.shared.SecurityContext
 import ca.uwaterloo.flix.language.ast.{Scheme, SourceLocation, Symbol, TypedAst}
 import ca.uwaterloo.flix.language.jvm.ClassDescs
 import ca.uwaterloo.flix.language.phase.HtmlDocumentor
-import ca.uwaterloo.flix.language.phase.jvm.JvmClass
+import ca.uwaterloo.flix.language.phase.jvm.{DebugIndex, DebugScopes, JvmClass}
 
 import java.lang.constant.ClassDesc
 import ca.uwaterloo.flix.runtime.{CompilationResult, JvmLoader}
@@ -1412,7 +1412,6 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
     val docDir = Bootstrap.getDocumentationDirectory(projectPath)
     val devDir = Bootstrap.getDevelopmentDirectory(projectPath)
     val devClassDir = Bootstrap.getDevelopmentClassDirectory(projectPath)
-    val prodDir = Bootstrap.getOutputDirectory(projectPath, Build.Production)
     val prodClassDir = Bootstrap.getClassDirectory(projectPath, Build.Production)
 
     // Ensure `buildDir` is not dangerous
@@ -1427,7 +1426,7 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
       val inClassDir = file.startsWith(classDir) || file.startsWith(devClassDir) || file.startsWith(prodClassDir)
       val isManifest = file == Bootstrap.getBuildManifestFile(projectPath, Build.Development) ||
                        file == Bootstrap.getBuildManifestFile(projectPath, Build.Production)
-      val isDebugSidecar = (file.getParent == devDir || file.getParent == prodDir) &&
+      val isDebugSidecar = file.getParent == devDir &&
                            (file.getFileName.toString == "debug-scopes.json" || file.getFileName.toString == "debug-index.json")
 
       if (inClassDir) {
@@ -1683,7 +1682,9 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
     // The class directory may also contain user-created files. A normal build
     // only owns generated `.class` files; `clean` is the operation that removes
     // the complete build directory.
-    val existingFiles = FileOps.getFilesIn(classDir, Int.MaxValue)
+    val paths = FileOps.getPathsIn(classDir, Int.MaxValue)
+    val existingFiles = paths
+      .filter(Files.isRegularFile(_))
       .filter(FileOps.checkExt(_, "class"))
       .map(_.normalize().toAbsolutePath)
     for (file <- existingFiles) {
@@ -1695,7 +1696,7 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
       }
     }
 
-    val existingDirs = FileOps.getDirectoriesIn(classDir, Int.MaxValue).map(_.normalize().toAbsolutePath)
+    val existingDirs = paths.filter(Files.isDirectory(_)).map(_.normalize().toAbsolutePath)
     for (dir <- existingDirs.reverse) {
       try {
         Files.delete(dir)
@@ -1717,8 +1718,37 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
     for {
       _ <- Result.traverse(classes.values.toList)(writeClass(devClassDir, _)).map(_ => ())
       _ <- reconcileClassDirectory(devClassDir, classes)
+      _ <- writeDebugIndex(flix, result)
+      _ <- writeDebugScopes(flix, result)
       _ <- writeDevelopmentManifest(flix, result)
     } yield ()
+  }
+
+  /** Publishes Flix binding types only for a debug build. */
+  private def writeDebugScopes(flix: Flix, result: CompilationResult): Result[Unit, BootstrapError] = {
+    val path = Bootstrap.getDevelopmentDirectory(projectPath).resolve(DebugScopes.FileName)
+    try {
+      if (flix.options.xdebug) DebugScopes.write(path, result.getDebugDefinitions)
+      else Files.deleteIfExists(path)
+      Ok(())
+    } catch {
+      case e: Exception => Err(BootstrapError.FileError(s"Failed to publish debug scopes: ${e.getMessage}"))
+    }
+  }
+
+  /** Publishes the source-to-emitted-class index only for a debug build. */
+  private def writeDebugIndex(flix: Flix, result: CompilationResult): Result[Unit, BootstrapError] = {
+    val path = Bootstrap.getDevelopmentDirectory(projectPath).resolve(DebugIndex.FileName)
+    try {
+      if (flix.options.xdebug) {
+        DebugIndex.write(path, DebugIndex.of(result.getClasses.values))
+      } else {
+        Files.deleteIfExists(path)
+      }
+      Ok(())
+    } catch {
+      case e: Exception => Err(BootstrapError.FileError(s"Failed to publish debug index: ${e.getMessage}"))
+    }
   }
 
   private def writeDevelopmentManifest(flix: Flix, result: CompilationResult): Result[Unit, BootstrapError] = {

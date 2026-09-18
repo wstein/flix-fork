@@ -27,6 +27,7 @@ import ca.uwaterloo.flix.language.phase.jvm.{ClassConstants, ClassMaker, Mangle}
 import org.objectweb.asm.MethodVisitor
 
 import java.lang.constant.ClassDesc
+import java.lang.constant.ConstantDescs.CD_String
 
 /** The class of a Flix struct, with one field per erased element type. */
 object GenStruct {
@@ -39,12 +40,16 @@ object GenStruct {
     val cm = ClassMaker.mkClass(desc(elms), IsFinal)
 
     elms.indices.foreach(i => cm.mkField(IndexField(elms, i), IsPublic, NotFinal, NotVolatile))
+    if (flix.options.xdebug) cm.mkField(NameField(elms), IsPublic, NotFinal, NotVolatile)
     cm.mkConstructor(Constructor(elms), IsPublic, constructorIns(elms)(_))
 
     cm.closeClassMaker()
   }
 
   def IndexField(elms: List[ClassDesc], i: Int): InstanceField = InstanceField(desc(elms), s"field$i", elms(i))
+
+  /** Per-value source struct and ordered field names, present only in debug builds. */
+  def NameField(elms: List[ClassDesc]): InstanceField = InstanceField(desc(elms), "struct", CD_String)
 
   def Constructor(elms: List[ClassDesc]): ConstructorMethod = ConstructorMethod(desc(elms), elms)
 

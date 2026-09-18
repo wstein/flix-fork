@@ -135,6 +135,36 @@ class TestJvmCompilationOrigins extends AnyFunSuite {
     intercept[InternalCompilerException] { origins.expression(source) }
   }
 
+  test("release code generation does not capture debugger bindings") {
+    implicit val security: SecurityContext = SecurityContext.Unrestricted
+    val flix = new Flix().setOptions(Options.TestWithLibNix.copy(xdebug = false))
+    flix.addSource(CompilerConstants.VirtualTestFile, sctx = security, text =
+      "def example(x: Int32): Int32 = let y = x; y")
+    val (result, errors) = flix.check()
+    assert(errors.isEmpty, errors.mkString("\n"))
+    val root = result.get
+    val sym = root.defs.values.find(_.sym.text == "example").get.sym
+
+    flix.withJvmOrigins(root) {
+      assert(flix.jvmOrigins.sourceBindings(sym).isEmpty)
+    }
+  }
+
+  test("debug code generation captures debugger bindings") {
+    implicit val security: SecurityContext = SecurityContext.Unrestricted
+    val flix = new Flix().setOptions(Options.TestWithLibNix.copy(xdebug = true))
+    flix.addSource(CompilerConstants.VirtualTestFile, sctx = security, text =
+      "def example(x: Int32): Int32 = let y = x; y")
+    val (result, errors) = flix.check()
+    assert(errors.isEmpty, errors.mkString("\n"))
+    val root = result.get
+    val sym = root.defs.values.find(_.sym.text == "example").get.sym
+
+    flix.withJvmOrigins(root) {
+      assert(flix.jvmOrigins.sourceBindings(sym).map(_.name) == List("x", "y"))
+    }
+  }
+
   test("source pruning removes unreachable bodies without losing default implementation origins") {
     implicit val security: SecurityContext = SecurityContext.Unrestricted
     val flix = new Flix().setOptions(Options.TestWithLibNix)

@@ -239,7 +239,7 @@ object Reducer {
   /** Assigns the next offset to `fp`, mutating `lctx`. */
   private def visitOffsetFormalParam(fp: ErasedAst.FormalParam)(implicit lctx: LocalContext): JvmAst.OffsetFormalParam = {
     val offset = lctx.assignOffset(fp.sym, fp.tpe)
-    JvmAst.OffsetFormalParam(fp.sym, offset, fp.tpe)
+    JvmAst.OffsetFormalParam(fp.sym, offset, fp.tpe, fp.sourceName)
   }
 
   private def visitFormalParam(fp: ErasedAst.FormalParam): JvmAst.FormalParam =

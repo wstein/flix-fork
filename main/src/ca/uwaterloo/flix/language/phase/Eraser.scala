@@ -97,8 +97,8 @@ object Eraser {
   }
 
   private def visitParam(fp: ReducedAst.FormalParam)(implicit ctx: SharedContext, flix: Flix): ErasedAst.FormalParam = fp match {
-    case ReducedAst.FormalParam(sym, tpe) =>
-      ErasedAst.FormalParam(sym, visitType(tpe))
+    case ReducedAst.FormalParam(sym, tpe, sourceName) =>
+      ErasedAst.FormalParam(sym, visitType(tpe), sourceName)
   }
 
   private def visitBranch(branch: (Symbol.LabelSym, ReducedAst.Expr))(implicit ctx: SharedContext, flix: Flix): (Symbol.LabelSym, ErasedAst.Expr) = branch match {

@@ -73,6 +73,14 @@ class TestBuildManifest extends AnyFunSuite {
     assert(roundTrip(manifest(ordered)).map(_.launch.runtimeClasspath).contains(List("/a", "/b", "/c")))
   }
 
+  test("debugBuildId.includesSourcesAndNonSourceInputs") {
+    val m = manifest()
+
+    assert(m.debugBuildId == "fp:sd")
+    assert(m.copy(fingerprint = "other").debugBuildId != m.debugBuildId)
+    assert(m.copy(sourcesDigest = "other").debugBuildId != m.debugBuildId)
+  }
+
   test("read.rejectsAManifestWithNoLaunch") {
     // Removed from the JSON *structurally*, so the manifest that reaches `read` is well formed and
     // merely missing the field. Deleting the text of the key would leave the file unparseable, and

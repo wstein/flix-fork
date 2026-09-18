@@ -57,6 +57,18 @@ object LibraryOptions {
     */
   private val EnableLockingSym = Symbol.mkDefnSym("Concurrent.Options.enableLocking")
 
+  /**
+    * Returns `true` for a compiler-owned library switch whose body is a compile-time constant.
+    *
+    * Debug builds may inline these definitions so that the ordinary optimizer can still remove
+    * disabled sequential/parallel branches. User definitions are deliberately not included: their
+    * generated classes are the locations to which source breakpoints bind.
+    */
+  def isCompilerSwitch(sym: Symbol.DefnSym): Boolean =
+    sym == EnableParallelExecutionSym ||
+      sym == EnableParallelEvaluationSym ||
+      sym == EnableLockingSym
+
   def run(root: TypedAst.Root)(implicit flix: Flix): TypedAst.Root = flix.phase("LibraryOptions") {
     val disabled = List(
       EnableParallelExecutionSym -> (flix.options.xdatalogExecution == ExecutionMode.Sequential),

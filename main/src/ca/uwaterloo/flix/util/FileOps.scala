@@ -188,6 +188,18 @@ object FileOps {
   }
 
   /**
+    * Returns every path under the given path (including `path`), visited recursively, in one walk
+    * of the tree. Use this instead of separate [[getFilesIn]]/[[getDirectoriesIn]] calls when both
+    * files and directories are needed, to avoid walking the same tree twice.
+    *
+    * The depth parameter is the maximum number of levels of directories to visit.
+    * Use a depth of 0 to only visit the given directory.
+    * Use a depth of 1 to only visit the files in the given directory.
+    * Use a depth of [[Int.MaxValue]] to visit all files in the directory and its subdirectories.
+    */
+  def getPathsIn(path: Path, depth: Int): List[Path] = walkTree(path, depth)
+
+  /**
     * Returns a list of all paths in the given path (including `path`), visited recursively.
     * The depth parameter is the maximum number of levels of directories to visit.
     * Use a depth of 0 to only visit the given directory.

@@ -73,6 +73,16 @@ class TestSequentialReachability extends AnyFunSuite with TestUtils with Bytecod
       |}
     """.stripMargin
 
+  ///
+  /// A single-expression helper is normally folded into its caller. A debug build must keep the
+  /// helper's generated class so that a source breakpoint has a JVM location of its own.
+  private val DebugHelperProgram =
+    """
+      |def tiny(): Int32 = 42
+      |
+      |def main(): Unit \ IO = println(tiny())
+    """.stripMargin
+
   private val Sequential: Options = Options.Default.copy(
     xdatalogExecution = ExecutionMode.Sequential,
     xcollectionExecution = ExecutionMode.Sequential,
@@ -145,6 +155,21 @@ class TestSequentialReachability extends AnyFunSuite with TestUtils with Bytecod
 
     val concurrency = concurrencyCalls(res)
     assert(concurrency.isEmpty, s"Found reachable concurrency support under --Xsequential: $concurrency")
+  }
+
+  test("Reachability.DebugSequential.KeepsHelpersAndRemovesConcurrency") {
+    for (newMono <- List(false, true)) {
+      val res = compileAndScan(DebugHelperProgram, Sequential.copy(xdebug = true, xnewmono = newMono))
+
+      assert(
+        res.classes.contains("Def$tiny"),
+        s"Expected debug build to retain a class for 'tiny' with xnewmono=$newMono, got: ${res.classes.filter(_.contains("tiny"))}"
+      )
+      assert(
+        concurrencyCalls(res).isEmpty,
+        s"Found reachable concurrency support under --Xdebug --Xsequential with xnewmono=$newMono: ${concurrencyCalls(res)}"
+      )
+    }
   }
 
   test("Reachability.Sequential.LocksSurviveWithoutTheUmbrella") {

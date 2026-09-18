@@ -37,6 +37,7 @@ object CodeGen {
       root.enums.values.flatMap(getNullaryTagsOf).map(_.sym.enumSym) ++
       root.anonClasses.map(_.sym)
     flix.jvmOrigins.freeze(namedSymbols)
+    flix.jvmOrigins.finalizeDebugDefinitions(root.defs.values)
     implicit val r: Root = root
 
     // Types/classes required for Flix runtime.
@@ -121,6 +122,7 @@ object CodeGen {
     val effectCallClass = List(JvmClass(GenEffectCall.Desc, GenEffectCall.genByteCode()))
     val effectClasses = GenEffectClasses.gen(root.effects.values)
     val resumptionWrappers = TypeDescs.erasedTypes.map(tpe => JvmClass(GenResumptionWrapper.desc(tpe), GenResumptionWrapper.genByteCode(tpe)))
+    val debugEvalRuntime = if (flix.options.xdebug) DebugEvalRuntime.classes else Nil
 
     val allClasses = List(
       mainClass,
@@ -164,7 +166,8 @@ object CodeGen {
       handlerInterface,
       effectCallClass,
       effectClasses,
-      resumptionWrappers
+      resumptionWrappers,
+      debugEvalRuntime
     ).flatten
 
     // Check for duplicate JVM class names.

@@ -44,7 +44,17 @@ case class BuildManifest(fingerprint: String,
                          sources: List[String],
                          sourcesDigest: String,
                          hasMain: Boolean,
-                         launch: LaunchSpec)
+                         launch: LaunchSpec) {
+
+  /**
+    * Identifies the exact program image a debugger may evaluate against.
+    *
+    * The fingerprint covers compiler options and dependencies, while the source digest covers the
+    * source contents. Neither is sufficient alone: source-only edits preserve the former, and a
+    * dependency or debug-policy change can preserve the latter.
+    */
+  def debugBuildId: String = BuildManifest.debugBuildId(fingerprint, sourcesDigest)
+}
 
 /**
   * How to start the program a build left behind, without asking the compiler again.
@@ -66,6 +76,10 @@ object BuildManifest {
     * Format version 4 carries the `launch` object containing `java`, `mainClass`, and `runtimeClasspath`.
     */
   val FormatVersion: Int = 4
+
+  /** Joins the two independent halves of a debug build's identity. */
+  def debugBuildId(fingerprint: String, sourcesDigest: String): String =
+    s"$fingerprint:$sourcesDigest"
 
   /** Returns the path of the manifest inside the build directory `buildDir`. */
   def fileIn(buildDir: Path): Path = buildDir.resolve(FileName).normalize()
@@ -94,7 +108,11 @@ object BuildManifest {
       s"chaosMonkey=${options.xchaosMonkey}",
       s"noDeprecated=${options.xnodeprecated}",
       s"inMemory=${options.inMemory}",
-      s"newmono=${options.xnewmono}"
+      s"newmono=${options.xnewmono}",
+      s"debug=${options.xdebug}",
+      s"datalogExecution=${options.xdatalogExecution}",
+      s"collectionExecution=${options.xcollectionExecution}",
+      s"assumeSingleThreaded=${options.xassumeSingleThreaded}"
     )
     settings ::: dependencies.map(stampOf).distinct.sorted
   }

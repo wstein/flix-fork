@@ -16,6 +16,7 @@
 package ca.uwaterloo.flix.api.lsp
 
 import ca.uwaterloo.flix.api.{Bootstrap, BootstrapError, Flix}
+import ca.uwaterloo.flix.api.lsp.provider.DebugEvalSidecar
 import ca.uwaterloo.flix.language.CompilationMessage
 import ca.uwaterloo.flix.language.ast.TypedAst.Root
 import ca.uwaterloo.flix.language.ast.shared.{SecurityContext, SourceName}
@@ -23,6 +24,7 @@ import ca.uwaterloo.flix.util.Formatter.NoFormatter
 import ca.uwaterloo.flix.util.{Options, Result}
 
 import java.io.PrintStream
+import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path, Paths}
 import scala.collection.mutable
 
@@ -79,6 +81,17 @@ class LspProject(o: Options) {
     * Returns the Flix instance of the project.
     */
   def compiler: Flix = flix
+
+  /**
+    * Returns a fresh in-memory debug compiler with this project's packages, JARs, and sources.
+    *
+    * Evaluation must compile in the same dependency universe as the paused program. Reconstructing
+    * a bare [[Flix]] from `.flix` files alone makes names supplied by `flix.toml` disappear.
+    */
+  def debugEvalCompiler(): Flix = bootstrap match {
+    case Some(b) => b.mkFlix(o.copy(xdebug = true, inMemory = true), NoFormatter)
+    case None => new Flix().setFormatter(NoFormatter).setOptions(o.copy(xdebug = true, inMemory = true))
+  }
 
   /**
     * Returns the path of the project: the workspace root the client has added, or the working
@@ -171,9 +184,27 @@ class LspProject(o: Options) {
   def sourceNames: Set[SourceName] = projectSources.map(SourceName.PathName.apply).toSet ++ buffers.keySet
 
   /**
+    * Whether every document snapshot owned by the client is identical to its file on disk.
+    *
+    * Debug evaluation starts a fresh compiler from the build's files. If the long-lived language
+    * server has an unsaved buffer, its typed AST and that fresh compiler describe different
+    * programs; neither is a safe account of the paused JVM. A buffer without a file is different
+    * too: it cannot have contributed to the launched build.
+    */
+  def debugBuffersMatchDisk: Boolean = buffers.forall {
+    case (SourceName.PathName(path), src) =>
+      try Files.isRegularFile(path) && Files.readString(path, StandardCharsets.UTF_8) == src
+      catch { case _: Exception => false }
+    case _ => false
+  }
+
+  /**
     * Releases the resources held by the Flix instance.
     */
-  def close(): Unit = flix.close()
+  def close(): Unit = {
+    DebugEvalSidecar.evict()
+    flix.close()
+  }
 
   /**
     * Loads the project and replaces the Flix instance with one for it.

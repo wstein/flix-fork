@@ -947,7 +947,7 @@ private[monomorph2] object SpecializeAndLower {
   private[monomorph2] def lowerStruct(struct0: TypedAst.Struct)(implicit tables: SpecializationTables, root: TypedAst.Root, flix: Flix): MonoAst.Struct = struct0 match {
     case TypedAst.Struct(doc, ann, mod, sym, tparams0, _, fields0, loc) =>
       val tparams = tparams0.map(lowerTypeParam)
-      val sortedFields = fields0.toList.sortBy { case (fieldSym, _) => fieldSym.name }
+      val sortedFields = TypedAst.Struct.sortedFields(fields0)
       val fields = sortedFields.map {
         case (fieldSym, field) => MonoAst.StructField(fieldSym, visitTypeSubstituted(Canonicalization.simplify(field.tpe, isGround = false)), loc)
       }

@@ -122,7 +122,8 @@ object SimplifiedAst {
 
   case class HandlerRule(op: OpSymUse, fparams: List[FormalParam], exp: Expr)
 
-  case class FormalParam(sym: Symbol.VarSym, tpe: SimpleType, loc: SourceLocation)
+  /** sourceName survives closure conversion and optimization for debugger-visible captures. */
+  case class FormalParam(sym: Symbol.VarSym, tpe: SimpleType, loc: SourceLocation, sourceName: Option[String] = None)
 
   case class TypeParam(name: Name.Ident, sym: Symbol.KindedTypeVarSym, loc: SourceLocation)
 

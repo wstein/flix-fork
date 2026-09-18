@@ -17,7 +17,7 @@
 package ca.uwaterloo.flix.language.phase.jvm
 
 import ca.uwaterloo.flix.api.{CompilerConstants, Flix, FlixEvent}
-import ca.uwaterloo.flix.language.ast.JvmAst.{Def, Root}
+import ca.uwaterloo.flix.language.ast.JvmAst.{Def, OffsetFormalParam, Root}
 import ca.uwaterloo.flix.language.ast.{Purity, SimpleType, Symbol}
 import ca.uwaterloo.flix.language.jvm.ClassDescs
 import ca.uwaterloo.flix.language.phase.jvm.ClassMaker.StaticMethod
@@ -27,7 +27,7 @@ import ca.uwaterloo.flix.util.ParOps
 import org.objectweb.asm.{ClassWriter, Label, MethodVisitor, Opcodes}
 
 import java.lang.constant.{ClassDesc, MethodTypeDesc}
-import java.lang.constant.ConstantDescs.CD_int
+import java.lang.constant.ConstantDescs.{CD_String, CD_int}
 
 /**
   * Generates byte code for the function and closure classes.
@@ -93,6 +93,10 @@ object GenFunAndClosureClasses {
 
   private def isControlPure(defn: Def): Boolean = Purity.isControlPure(defn.expr.purity)
 
+  /** The emitted method that owns a definition's debugger-visible locals. */
+  def methodNameOf(defn: Def): String =
+    if (isFunction(defn) && isControlPure(defn)) ClassMaker.StaticApplyMethodName else GenFrame.ApplyMethod.name
+
   /**
     * Generates the following code for control-pure functions.
     *
@@ -119,13 +123,15 @@ object GenFunAndClosureClasses {
     val functionInterface = GenArrow.descOfArrowType(defn.arrowType)
     visitor.visit(CompilerConstants.JvmTargetVersion, Opcodes.ACC_PUBLIC + Opcodes.ACC_FINAL, ClassDescs.internalNameOf(className), null,
       ClassDescs.internalNameOf(functionInterface), null)
-    visitor.visitSource(defn.loc.source.name, null)
+    implicit val smap: Smap = new Smap(defn.loc.source)
 
     compileConstructor(functionInterface, visitor)
 
     // Methods
     compileStaticInvokeMethod(visitor, className, defn)
     compileStaticApplyMethod(visitor, className, defn)
+
+    visitor.visitSource(defn.loc.source.name, smap.build(className).orNull)
 
     visitor.visitEnd()
     visitor.toByteArray
@@ -180,7 +186,7 @@ object GenFunAndClosureClasses {
     val frameInterface = GenFrame
     visitor.visit(CompilerConstants.JvmTargetVersion, Opcodes.ACC_PUBLIC + Opcodes.ACC_FINAL, ClassDescs.internalNameOf(className), null,
       ClassDescs.internalNameOf(functionInterface), Array(ClassDescs.internalNameOf(frameInterface.Desc)))
-    visitor.visitSource(defn.loc.source.name, null)
+    implicit val smap: Smap = new Smap(defn.loc.source)
 
     // Fields — lparams use erased types (like fparams) so setPc can store without casting
     for ((x, i) <- defn.lparams.zipWithIndex) {
@@ -194,6 +200,8 @@ object GenFunAndClosureClasses {
     compileInvokeMethod(visitor, className)
     compileFrameMethod(visitor, className, defn)
     compileCopyMethod(visitor, className, defn)
+
+    visitor.visitSource(defn.loc.source.name, smap.build(className).orNull)
 
     visitor.visitEnd()
     visitor.toByteArray
@@ -262,7 +270,7 @@ object GenFunAndClosureClasses {
     val frameInterface = GenFrame
     visitor.visit(CompilerConstants.JvmTargetVersion, Opcodes.ACC_PUBLIC + Opcodes.ACC_FINAL, ClassDescs.internalNameOf(className), null,
       ClassDescs.internalNameOf(functionInterface), Array(ClassDescs.internalNameOf(frameInterface.Desc)))
-    visitor.visitSource(defn.loc.source.name, null)
+    implicit val smap: Smap = new Smap(defn.loc.source)
 
     // Fields
     val closureArgTypes = defn.cparams.map(_.tpe)
@@ -275,6 +283,7 @@ object GenFunAndClosureClasses {
       visitor.visitField(Opcodes.ACC_PUBLIC, s"l$i", TypeDescs.toErasedClassDesc(x.tpe).descriptorString(), null, null)
     }
     visitor.visitField(Opcodes.ACC_PUBLIC, "pc", CD_int.descriptorString(), null, null)
+    captureNames(visitor, defn)
 
     compileConstructor(functionInterface, visitor)
 
@@ -283,6 +292,8 @@ object GenFunAndClosureClasses {
     compileFrameMethod(visitor, className, defn)
     compileCopyMethod(visitor, className, defn)
     compileGetUniqueThreadClosureMethod(visitor, className, defn)
+
+    visitor.visitSource(defn.loc.source.name, smap.build(className).orNull)
 
     visitor.visitEnd()
     visitor.toByteArray
@@ -303,13 +314,13 @@ object GenFunAndClosureClasses {
   private def staticApplyMethod(className: ClassDesc, defn: Def)(implicit root: Root): StaticMethod =
     StaticMethod(className, ClassMaker.StaticApplyMethodName, MethodTypeDescs.mkDescriptor(defn.fparams.map(fp => TypeDescs.toClassDesc(fp.tpe)) *)(GenResult.Desc))
 
-  private def compileStaticApplyMethod(visitor: ClassWriter, className: ClassDesc, defn: Def)(implicit root: Root, flix: Flix): Unit = {
+  private def compileStaticApplyMethod(visitor: ClassWriter, className: ClassDesc, defn: Def)(implicit root: Root, flix: Flix, smap: Smap): Unit = {
     // Method header
     val method = staticApplyMethod(className, defn)
     val modifiers = Opcodes.ACC_PUBLIC + Opcodes.ACC_FINAL + Opcodes.ACC_STATIC
     implicit val m: MethodVisitor = visitor.visitMethod(modifiers, method.name, method.d.descriptorString(), null, null)
     m.visitCode()
-    addLoc(defn.loc)
+    addLoc(defn.loc, smap)
 
     // used for self-recursive tail calls
     val enterLabel = new Label()
@@ -318,14 +329,35 @@ object GenFunAndClosureClasses {
     // Generate the expression
     val localOffset = 0
     val labelEnv = Map.empty[Symbol.LabelSym, Label]
-    val ctx = GenExpression.DirectStaticContext(enterLabel, labelEnv, localOffset)
+    val ctx = GenExpression.DirectStaticContext(enterLabel, labelEnv, localOffset, smap)
     GenExpression.compileExpr(defn.expr)(m, ctx, root, flix)
 
     xReturn(GenResult.Desc)
 
+    nameParams(m, defn.fparams, enterLabel, localOffset)
+
 
     m.visitMaxs(999, 999)
     m.visitEnd()
+  }
+
+  /**
+    * Records source parameters for a static function method in a debug build.
+    *
+    * The entry label is used as the lower bound so that a parameter remains visible across a
+    * self-recursive tail call. Captured and continuation-frame values use fields rather than these
+    * method slots and are intentionally handled by later debug metadata work.
+    */
+  private def nameParams(m: MethodVisitor, params: List[OffsetFormalParam], start: Label, localOffset: Int)(implicit root: Root, flix: Flix): Unit = {
+    if (!flix.options.xdebug) {
+      return
+    }
+    val end = new Label()
+    m.visitLabel(end)
+    for (param <- params if !param.sym.isWild) {
+      val tpe = TypeDescs.toClassDesc(param.tpe)
+      m.visitLocalVariable(param.sym.text, tpe.descriptorString(), null, start, end, param.offset + localOffset)
+    }
   }
 
   private def compileStaticInvokeMethod(visitor: ClassWriter, className: ClassDesc, defn: Def)(implicit root: Root): Unit = {
@@ -354,6 +386,21 @@ object GenFunAndClosureClasses {
     m.visitEnd()
   }
 
+  /** Records restored frame slots for native debuggers in a debug build. */
+  private def nameFrameSlots(m: MethodVisitor,
+                             cparams: List[OffsetFormalParam],
+                             fparams: List[OffsetFormalParam],
+                             start: Label,
+                             localOffset: Int)(implicit root: Root, flix: Flix): Unit = {
+    if (!flix.options.xdebug) return
+    val end = new Label()
+    m.visitLabel(end)
+    for (param <- cparams ++ fparams if !param.sym.isWild) {
+      val tpe = TypeDescs.toClassDesc(param.tpe)
+      m.visitLocalVariable(param.sourceName.getOrElse(param.sym.text), tpe.descriptorString(), null, start, end, param.offset + localOffset)
+    }
+  }
+
   private def compileInvokeMethod(visitor: ClassWriter, className: ClassDesc): Unit = {
     implicit val m: MethodVisitor = visitor.visitMethod(Opcodes.ACC_PUBLIC + Opcodes.ACC_FINAL, GenThunk.InvokeMethod.name,
       MethodTypeDescs.mkDescriptor()(GenResult.Desc).descriptorString(), null, null)
@@ -372,7 +419,7 @@ object GenFunAndClosureClasses {
 
   private def compileFrameMethod(visitor: ClassWriter,
                                  className: ClassDesc,
-                                 defn: Def)(implicit root: Root, flix: Flix): Unit = {
+                                 defn: Def)(implicit root: Root, flix: Flix, smap: Smap): Unit = {
     // Method header
     val classInternalName = ClassDescs.internalNameOf(className)
     val applyMethod = GenFrame.ApplyMethod
@@ -388,7 +435,7 @@ object GenFunAndClosureClasses {
     }
 
     m.visitCode()
-    addLoc(defn.loc)
+    addLoc(defn.loc, smap)
     loadParamsOf(lparams)
 
     // used for self-recursive tail calls
@@ -398,8 +445,11 @@ object GenFunAndClosureClasses {
     loadParamsOf(cparams)
     loadParamsOf(fparams)
 
+    val parametersReady = new Label()
+    m.visitLabel(parametersReady)
+
     if (Purity.isControlPure(defn.expr.purity)) {
-      val ctx = GenExpression.DirectInstanceContext(enterLabel, Map.empty, localOffset)
+      val ctx = GenExpression.DirectInstanceContext(enterLabel, Map.empty, localOffset, smap)
       GenExpression.compileExpr(defn.expr)(m, ctx, root, flix)
     } else {
       val pcLabels: Vector[Label] = Vector.range(0, defn.pcPoints).map(_ => new Label())
@@ -452,16 +502,59 @@ object GenFunAndClosureClasses {
         }
       }
 
-      val ctx = GenExpression.EffectContext(enterLabel, Map.empty, newFrame, setPc, narrowLocals, localOffset, pcLabels.prepended(null), Array(0))
+      val ctx = GenExpression.EffectContext(enterLabel, Map.empty, newFrame, setPc, narrowLocals, localOffset, pcLabels.prepended(null), Array(0), smap)
       GenExpression.compileExpr(defn.expr)(m, ctx, root, flix)
       assert(ctx.pcCounter(0) == pcLabels.size, s"${(className, ctx.pcCounter(0), pcLabels.size)}")
     }
 
     xReturn(GenResult.Desc)
 
+    nameFrameSlots(m, defn.cparams, defn.fparams, parametersReady, localOffset)
+
     m.visitMaxs(999, 999)
     m.visitEnd()
   }
+
+  /**
+    * Records what a closure's captured values are called, under `--Xdebug`.
+    *
+    * ==What a reader has without it==
+    *
+    * A lambda is lifted into a class of its own holding what it captured in `clo0`, `clo1`, so
+    * `y -> x * y` inside `curriedMultiply` becomes a value whose one field is `clo0 = 6`. The `6` is
+    * the interesting part -- it is what distinguishes one closure of that definition from another --
+    * and `clo0` says only where it sits.
+    *
+    * The names are in the `LocalVariableTable` [[nameFrameSlots]] writes, but not usably: that table
+    * is keyed on JVM *slots*, and pairing a slot back to a field means redoing the offset
+    * arithmetic the frame method does. A reader would be inferring what the compiler already knows.
+    *
+    * ==Why a constant on the class, unlike the tag and struct names==
+    *
+    * Those had to be written into each value because their classes are shared by every value of the
+    * same erased shape. A closure class is not: it belongs to one lifted lambda, so its captures
+    * have one set of names and they can be a `ConstantValue` on a static final field -- no
+    * `<clinit>`, no instruction anywhere, and nothing per instance.
+    *
+    * Wildcards and compiler-introduced captures are recorded as `_`, so the list still lines up with
+    * `clo0`, `clo1` by position; a name that was never written is not invented.
+    */
+  private def captureNames(visitor: ClassWriter, defn: Def)(implicit flix: Flix): Unit = {
+    if (!flix.options.xdebug || defn.cparams.isEmpty) {
+      return
+    }
+    val names = defn.cparams.map(_.sourceName.getOrElse("_"))
+    visitor.visitField(
+      Opcodes.ACC_PUBLIC + Opcodes.ACC_STATIC + Opcodes.ACC_FINAL,
+      CaptureNamesField,
+      CD_String.descriptorString(),
+      null,
+      names.mkString(","),
+    )
+  }
+
+  /** The name of the constant [[captureNames]] writes. */
+  private val CaptureNamesField: String = "cloNames"
 
   private def loadFromField(m: MethodVisitor, className: ClassDesc, name: String, localIndex: Int, fieldType: ClassDesc, castTo: Option[ClassDesc]): Unit = {
     implicit val mm: MethodVisitor = m

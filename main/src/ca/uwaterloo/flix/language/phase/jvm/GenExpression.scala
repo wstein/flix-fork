@@ -51,6 +51,8 @@ object GenExpression {
 
     def localOffset: Int
 
+    def smap: Smap
+
     /** Returns the absolute index of the local variable `varOffset` by adding this context's local offset. */
     def getIndex(varOffset: Int): Int = varOffset + localOffset
 
@@ -81,7 +83,8 @@ object GenExpression {
     narrowLocals: MethodVisitor => Unit, // re-cast locals to their declared types after resume
     localOffset: Int,
     pcLabels: Vector[Label],
-    pcCounter: Ref[Int]
+    pcCounter: Ref[Int],
+    smap: Smap,
   ) extends MethodContext
 
   /**
@@ -94,6 +97,7 @@ object GenExpression {
     entryPoint: Label,
     lenv: Map[Symbol.LabelSym, Label],
     localOffset: Int,
+    smap: Smap,
   ) extends MethodContext
 
   /**
@@ -106,12 +110,27 @@ object GenExpression {
     entryPoint: Label,
     lenv: Map[Symbol.LabelSym, Label],
     localOffset: Int,
+    smap: Smap,
   ) extends MethodContext
 
   /**
     * Emits code for the given expression `exp0` to the given method `visitor` in the `currentClass`.
     */
-  def compileExpr(exp0: Expr)(implicit mv: MethodVisitor, ctx: MethodContext, root: Root, flix: Flix): Unit = exp0 match {
+  def compileExpr(exp0: Expr)(implicit mv: MethodVisitor, ctx: MethodContext, root: Root, flix: Flix): Unit = {
+    // A debug build keeps user definitions as their own JVM methods, so their source locations are
+    // meaningful breakpoint and stepping boundaries. Release builds keep the existing, narrower
+    // locations because optimization may move, merge, or remove an expression entirely.
+    if (flix.options.xdebug && exp0.loc.isReal) {
+      addLoc(exp0.loc)
+    }
+    compileExprInner(exp0)
+  }
+
+  /** Emits a location through the source map owned by the current generated class. */
+  private def addLoc(loc: SourceLocation)(implicit mv: MethodVisitor, ctx: MethodContext): Unit =
+    Instructions.addLoc(loc, ctx.smap)
+
+  private def compileExprInner(exp0: Expr)(implicit mv: MethodVisitor, ctx: MethodContext, root: Root, flix: Flix): Unit = exp0 match {
     case Expr.Cst(cst, loc) => cst match {
       case Constant.Unit =>
         GETSTATIC(GenUnit.SingletonField)
@@ -766,6 +785,20 @@ object GenExpression {
         DUP()
         fieldExps.foreach(compileExpr)
         INVOKESPECIAL(GenStruct.Constructor(structElms))
+        // Which struct this is, and what its fields are called, under `--Xdebug` only. The class is
+        // shared by every struct of the same erased shape and names its fields `field0`, `field1`,
+        // so without this a reader has the values and no idea what any of them is.
+        if (flix.options.xdebug) {
+          val struct = root.structs(sym)
+          val names = struct.fields.map(_.sym.name).mkString(",")
+          // `text` and the namespace rather than `toString`: a specialised struct symbol carries a
+          // fresh id -- `Counter$224018` -- which is compiler bookkeeping and not what the source
+          // calls it. A reader wants the name they wrote.
+          val qualified = (struct.sym.namespace :+ struct.sym.text).mkString(".")
+          DUP()
+          pushString(s"$qualified{$names}")
+          PUTFIELD(GenStruct.NameField(structElms))
+        }
 
       case AtomicOp.StructGet(field) =>
 
@@ -1097,7 +1130,7 @@ object GenExpression {
             GenResult.unwindSuspensionFreeThunk("in pure closure call", loc)
           } else {
             ctx match {
-              case EffectContext(_, _, newFrame, setPc, narrowLocals, _, pcLabels, pcCounter) =>
+              case EffectContext(_, _, newFrame, setPc, narrowLocals, _, pcLabels, pcCounter, _) =>
                 val pcPoint = pcCounter(0) + 1
                 val pcPointLabel = pcLabels(pcPoint)
                 val afterUnboxing = new Label()
@@ -1112,7 +1145,7 @@ object GenExpression {
 
                 mv.visitLabel(afterUnboxing)
 
-              case DirectInstanceContext(_, _, _) | DirectStaticContext(_, _, _) =>
+              case DirectInstanceContext(_, _, _, _) | DirectStaticContext(_, _, _, _) =>
                 throw InternalCompilerException("Unexpected direct method context in control impure function", loc)
             }
           }
@@ -1174,7 +1207,7 @@ object GenExpression {
           }
           // Calling unwind and unboxing
           ctx match {
-            case EffectContext(_, _, newFrame, setPc, narrowLocals, _, pcLabels, pcCounter) =>
+            case EffectContext(_, _, newFrame, setPc, narrowLocals, _, pcLabels, pcCounter, _) =>
               val defn = root.defs(sym)
               if (Purity.isControlPure(defn.expr.purity)) {
                 GenResult.unwindSuspensionFreeThunk("in pure function call", loc)
@@ -1192,17 +1225,17 @@ object GenExpression {
 
                 mv.visitLabel(afterUnboxing)
               }
-            case DirectInstanceContext(_, _, _) | DirectStaticContext(_, _, _) =>
+            case DirectInstanceContext(_, _, _, _) | DirectStaticContext(_, _, _, _) =>
               GenResult.unwindSuspensionFreeThunk("in pure function call", loc)
           }
         }
     }
 
     case Expr.ApplyOp(sym, exps, tpe, _, loc) => ctx match {
-      case DirectInstanceContext(_, _, _) | DirectStaticContext(_, _, _) =>
+      case DirectInstanceContext(_, _, _, _) | DirectStaticContext(_, _, _, _) =>
         GenResult.crashIfSuspension("Unexpected do-expression in direct method context", loc)
 
-      case EffectContext(_, _, newFrame, setPc, narrowLocals, _, pcLabels, pcCounter) =>
+      case EffectContext(_, _, newFrame, setPc, narrowLocals, _, pcLabels, pcCounter, _) =>
         val pcPoint = pcCounter(0) + 1
         val pcPointLabel = pcLabels(pcPoint)
         val afterUnboxing = new Label()
@@ -1256,7 +1289,7 @@ object GenExpression {
     }
 
     case Expr.ApplySelfTail(sym, exps, _, _, _) => ctx match {
-      case EffectContext(_, _, _, setPc, _, _, _, _) =>
+      case EffectContext(_, _, _, setPc, _, _, _, _, _) =>
         // The function abstract class name
         val (fnArgs, fnResult) = GenArrow.erasedArgsAndResult(root.defs(sym).arrowType)
         // Evaluate each argument and put the result on the Fn class.
@@ -1272,7 +1305,7 @@ object GenExpression {
         // Jump to the entry point of the method.
         mv.visitJumpInsn(Opcodes.GOTO, ctx.entryPoint)
 
-      case DirectInstanceContext(_, _, _) =>
+      case DirectInstanceContext(_, _, _, _) =>
         // The function abstract class name
         val (fnArgs, fnResult) = GenArrow.erasedArgsAndResult(root.defs(sym).arrowType)
         // Evaluate each argument and put the result on the Fn class.
@@ -1285,7 +1318,7 @@ object GenExpression {
         // Jump to the entry point of the method.
         mv.visitJumpInsn(Opcodes.GOTO, ctx.entryPoint)
 
-      case DirectStaticContext(_, _, _) =>
+      case DirectStaticContext(_, _, _, _) =>
         val defn = root.defs(sym)
         for (arg <- exps) {
           // Evaluate the argument and push the result on the stack.
@@ -1389,7 +1422,7 @@ object GenExpression {
       // End label
       mv.visitLabel(endLabel)
 
-    case Expr.Let(_, offset, exp1, exp2, _) =>
+    case Expr.Let(sym, offset, exp1, exp2, _) =>
       val bType = TypeDescs.toClassDesc(exp1.tpe)
       compileExpr(exp1)
       // No cast needed in most cases: operations self-cast (Untag, Index, etc.),
@@ -1402,7 +1435,17 @@ object GenExpression {
         case _ => ()
       }
       xStore(bType, ctx.getIndex(offset))
-      compileExpr(exp2)
+      if (flix.options.xdebug && sym.loc.isReal && sym.loc.source.origin.isUser && !sym.isWild) {
+        // A source binding becomes visible only after its initializer has stored the value.
+        val start = new Label()
+        val end = new Label()
+        mv.visitLabel(start)
+        compileExpr(exp2)
+        mv.visitLabel(end)
+        mv.visitLocalVariable(sym.text, bType.descriptorString(), null, start, end, ctx.getIndex(offset))
+      } else {
+        compileExpr(exp2)
+      }
 
     case Expr.Stm(exps, exp, _) =>
       exps.foreach { e =>
@@ -1541,10 +1584,10 @@ object GenExpression {
       // handle value/suspend/thunk if in non-tail position
       if (ct == ExpPosition.NonTail) {
         ctx match {
-          case DirectInstanceContext(_, _, _) | DirectStaticContext(_, _, _) =>
+          case DirectInstanceContext(_, _, _, _) | DirectStaticContext(_, _, _, _) =>
             GenResult.unwindSuspensionFreeThunk("in pure run-with call", loc)
 
-          case EffectContext(_, _, newFrame, setPc, narrowLocals, _, pcLabels, pcCounter) =>
+          case EffectContext(_, _, newFrame, setPc, narrowLocals, _, pcLabels, pcCounter, _) =>
             val pcPoint = pcCounter(0) + 1
             val pcPointLabel = pcLabels(pcPoint)
             val afterUnboxing = new Label()
@@ -1644,6 +1687,14 @@ object GenExpression {
         DUP()
         pushInt(sym.ordinal)
         PUTFIELD(GenTag.OrdinalField)
+        // The name the ordinal stands for, under `--Xdebug` only. `Tag$Obj` is shared by every case
+        // of that erased shape, so without this a debugger can only report `#1(…)`: the enum the
+        // ordinal indexes into is gone by the time the value exists.
+        if (flix.options.xdebug) {
+          DUP()
+          pushString(qualifiedCaseName(sym))
+          PUTFIELD(GenTag.NameField)
+        }
         exps.zipWithIndex.foreach {
           case (e, i) => DUP()
             compileExpr(e)
@@ -1651,6 +1702,10 @@ object GenExpression {
         }
     }
   }
+
+  /** The unmangled source case name, qualified by its enum for shape-safe debugger recognition. */
+  private def qualifiedCaseName(sym: Symbol.CaseSym): String =
+    (sym.enumSym.namespace :+ sym.enumSym.text :+ sym.name).mkString(".")
 
   private def compileUntag(exp: Expr, idx: Int, tpes: List[ClassDesc])(implicit mv: MethodVisitor, ctx: MethodContext, root: Root, flix: Flix): Unit = {
     // GenNullaryTag cannot happen here since terms must be non-empty.

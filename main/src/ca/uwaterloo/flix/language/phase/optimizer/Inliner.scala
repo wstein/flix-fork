@@ -21,6 +21,7 @@ import ca.uwaterloo.flix.api.{Flix, FlixEvent}
 import ca.uwaterloo.flix.language.ast.MonoAst.{Expr, FormalParam, Occur, Pattern}
 import ca.uwaterloo.flix.language.ast.shared.Constant
 import ca.uwaterloo.flix.language.ast.{AtomicOp, MonoAst, SourceLocation, Symbol, Type}
+import ca.uwaterloo.flix.language.phase.LibraryOptions
 import ca.uwaterloo.flix.language.phase.jvm.{GeneratedJvmKey, JvmOriginKey}
 import ca.uwaterloo.flix.util.collection.ListOps
 import ca.uwaterloo.flix.util.collection.Nel
@@ -237,6 +238,17 @@ object Inliner {
     case Expr.ApplyOp(sym, exps, tpe, eff, loc) =>
       val es = exps.map(visitExp(_, ctx0))
       Expr.ApplyOp(sym, es, tpe, eff, loc)
+
+    case Expr.Let(sym, exp1, exp2, tpe, eff, occur, loc)
+      if flix.options.xdebug && sym.loc.isReal && sym.loc.source.origin.isUser && !sym.isWild =>
+      val e1 = visitExp(exp1, ctx0)
+      val freshVarSym = Symbol.freshVarSym(sym)
+      // Unlike an ordinary LetBound, this binding has deliberately not been substituted,
+      // even when occurrence analysis says Once/Pure. Keep that fact explicit so use-site
+      // inlining never interprets it as a suspended expression or a broken invariant.
+      val ctx = ctx0.addVarSubst(sym, freshVarSym).addInScopeVar(freshVarSym, BoundKind.DebugLocal)
+      val e2 = visitExp(exp2, ctx)
+      Expr.Let(freshVarSym, e1, e2, tpe, eff, occur, loc)
 
     case Expr.Let(sym, exp1, exp2, tpe, eff, occur, loc) => (occur, exp1.eff) match {
       case (Occur.Dead, Type.Pure) =>
@@ -862,8 +874,16 @@ object Inliner {
     * @param ctx0 the local context.
     * @return `true` if `defn` should be inlined, `false` otherwise.
     */
-  private def shouldInlineDef(defn: MonoAst.Def, exps: List[Expr], ctx0: LocalContext)(implicit sym0: Symbol.DefnSym): Boolean = {
+  private def shouldInlineDef(defn: MonoAst.Def, exps: List[Expr], ctx0: LocalContext)(implicit sym0: Symbol.DefnSym, flix: Flix): Boolean = {
     if (ctx0.currentlyInlining) {
+      return false
+    }
+
+    // Keep user definitions as distinct JVM bodies in debug builds. The library switches are the
+    // narrow exception: LibraryOptions has already rewritten them to constants, and inlining them
+    // is required for the established constant-folding/tree-shaking pipeline to remove the
+    // disabled sequential/parallel implementation.
+    if (flix.options.xdebug && !LibraryOptions.isCompilerSwitch(defn.sym)) {
       return false
     }
 
@@ -1066,6 +1086,9 @@ object Inliner {
   private sealed trait BoundKind
 
   private object BoundKind {
+
+    /** A materialized source binding retained for inspection, never substituted at a use site. */
+    object DebugLocal extends BoundKind
 
     /** Variable is bound by either a parameter or a pattern. Its value is unknown. */
     object ParameterOrPattern extends BoundKind
