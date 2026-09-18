@@ -333,7 +333,13 @@ object DebugEvalProvider {
                     eff: String,
                     projectRoot: Path,
                   )(implicit flix: Flix): Either[String, Artifact] = {
-    val existing = productsOf(projectRoot)
+    val existing = productsOf(projectRoot) match {
+      case None => return Left(
+        s"no readable format-4 $BuildManifest product list exists, so there is no authoritative " +
+          "record of which classes the running program already has",
+      )
+      case Some(products) => products
+    }
     if (existing.isEmpty) {
       return Left(
         s"$BuildManifest lists no classes, so there is no way to tell which of the expression's " +
@@ -426,40 +432,17 @@ object DebugEvalProvider {
     * build would leave and the manifest is what *this* program was launched from. The two differ
     * exactly when someone has rebuilt while a session is running, which is the case that matters.
     */
-  private def productsOf(projectRoot: Path): Set[String] = {
-    val development = projectRoot.resolve("build").resolve("development")
-    val manifest = development.resolve(BuildManifest)
-    val fromManifest =
-      if (!Files.isRegularFile(manifest)) Set.empty[String]
-      else {
-        val text = Files.readString(manifest)
-        val products = """"products"\s*:\s*\[([^]]*)]""".r
-        val entry = """"([^"]+)"""".r
-        products.findFirstMatchIn(text)
-          .map(m => entry.findAllMatchIn(m.group(1)).map(_.group(1)).toSet)
-          .getOrElse(Set.empty)
-      }
-    // The class directory when there is no manifest to read -- a build made by the compiler API
-    // rather than by the command line writes classes and no manifest. The manifest is preferred
-    // because it says what the debuggee was *launched* with, and the directory only says what the
-    // last build left; the two differ exactly when someone has rebuilt during a session, which is
-    // the case worth being right about.
-    if (fromManifest.nonEmpty) fromManifest
-    else classFilesUnder(development.resolve("class")).map(_._1).toSet
-  }
-
-  /** Every class file under `dir`, by its path relative to it. */
-  private def classFilesUnder(dir: Path): List[(String, Array[Byte])] = {
-    if (!Files.isDirectory(dir)) return Nil
-    val stream = Files.walk(dir)
-    try {
-      stream.toArray.toList.collect {
-        case p: Path if Files.isRegularFile(p) && p.toString.endsWith(".class") =>
-          dir.relativize(p).toString.replace('\\', '/') -> Files.readAllBytes(p)
-      }
-    } finally {
-      stream.close()
-    }
+  private def productsOf(projectRoot: Path): Option[Set[String]] = {
+    val manifest = projectRoot.resolve("build").resolve("development").resolve(BuildManifest)
+    if (!Files.isRegularFile(manifest)) return None
+    val text = Files.readString(manifest)
+    val version = """"formatVersion"\s*:\s*(\d+)""".r
+      .findFirstMatchIn(text).map(_.group(1).toInt)
+    if (!version.contains(ca.uwaterloo.flix.api.BuildManifest.FormatVersion)) return None
+    val products = """"products"\s*:\s*\[([^]]*)]""".r
+    val entry = """"([^"]+)"""".r
+    products.findFirstMatchIn(text)
+      .map(m => entry.findAllMatchIn(m.group(1)).map(_.group(1)).toSet)
   }
 
   private def binaryNameOf(relative: String): String =

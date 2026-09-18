@@ -131,7 +131,9 @@ debugger still applies its explicit user setting before it executes effectful co
 When an artifact is requested, the compiler performs a second, in-memory code-generation
 pass with the inferred return type. It returns only classes absent from the development
 build manifest, so the debuggee continues to resolve program classes from the running
-build. No temporary class directory or project output is modified.
+build. A missing, malformed, or non-format-4 manifest is refused; the class directory is
+never used as a fallback because it may contain a newer or partial build. No temporary
+class directory or project output is modified.
 
 Debug builds include `dev.flix.runtime.DebugEvalHost` and its private child loader as
 ordinary compilation products; release builds omit them. Generated `Main` loads the host

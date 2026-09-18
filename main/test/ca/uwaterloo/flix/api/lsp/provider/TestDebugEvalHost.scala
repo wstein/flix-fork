@@ -134,6 +134,18 @@ class TestDebugEvalHost extends AnyFunSuite {
     )
   }
 
+  test("artifact generation refuses class-directory contents without a manifest") {
+    val project = build()
+    Files.delete(project.resolve("build/development/build.json"))
+
+    DebugEvalProvider.compile(
+      Describe, "n + 1", Policy.AllowEffects, project, snapshot(project), withArtifact = true,
+    ) match {
+      case Answer.Rejected(reason) => assert(reason.contains("build.json"), s"the refusal is unspecific: $reason")
+      case other => fail(s"class files without a manifest were treated as the launched build: $other")
+    }
+  }
+
   test("the entry point is named, and its arguments are named in order") {
     // A debugger reads each argument out of the frame by name and passes them in this order. Getting
     // the order wrong would pass an Int32 where a String was expected, and the failure would surface
@@ -199,7 +211,7 @@ class TestDebugEvalHost extends AnyFunSuite {
         }.sorted
         DebugScopes.write(output.resolve(DebugScopes.FileName), result.getDebugDefinitions)
         val productJson = products.map(p => s"\"$p\"").mkString(",")
-        Files.writeString(output.resolve("build.json"), s"{\"products\":[$productJson]}")
+        Files.writeString(output.resolve("build.json"), s"{\"formatVersion\":4,\"products\":[$productJson]}")
         project
       case Result.Err(errors) => fail(s"the test program must compile, but got: $errors")
     }
