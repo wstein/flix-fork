@@ -67,7 +67,7 @@ object GenNamespace {
     val facadeParamTypes = defn.fparams.map(fp => boundaryType(defn.ann.isExport, fp.tpe))
     val fieldTypes = defn.fparams.map(fp => TypeDescs.toErasedClassDesc(fp.tpe))
     withNames(0, facadeParamTypes) {
-      case (_, args) =>
+      case (nextLocal, args) =>
         val resultPlan = ExportPlan.ofDef(defn)
         val flixResult = resultPlan.map(_.flixType).getOrElse(TypeDescs.toErasedClassDesc(defn.unboxedType.tpe))
         val javaResult = resultPlan.map(_.javaType).getOrElse(flixResult)
@@ -80,7 +80,7 @@ object GenNamespace {
           PUTFIELD(InstanceField(defnDesc, s"arg$index", fieldTypes(index)))
         }
         GenResult.unwindSuspensionFreeThunkToType(flixResult, s"in shim method of ${defn.sym}", defn.loc)
-        resultPlan.foreach(_.emit())
+        resultPlan.foreach(_.emit(nextLocal))
         xReturn(javaResult)
     }
   }

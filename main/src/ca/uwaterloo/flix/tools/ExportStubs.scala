@@ -224,15 +224,15 @@ object ExportStubs {
     * in `TestExportStubs`; that test is what makes this safe to rely on, because nothing in the
     * types stops them drifting.
     */
-  private def signatureOf(tpe: WeededAst.Type, imps: Map[String, String], allowOption: Boolean): Option[ExportSignature] = tpe match {
+  private def signatureOf(tpe: WeededAst.Type, imps: Map[String, String], allowConvertedResult: Boolean): Option[ExportSignature] = tpe match {
     case WeededAst.Type.Var(_, _) => None
 
-    case WeededAst.Type.Ambiguous(qname, _) => named(qname, Nil, imps, allowOption)
+    case WeededAst.Type.Ambiguous(qname, _) => named(qname, Nil, imps, allowConvertedResult)
 
     case WeededAst.Type.Apply(_, _, _) =>
       val (head, args) = flatten(tpe)
       head match {
-        case WeededAst.Type.Ambiguous(qname, _) => named(qname, args, imps, allowOption)
+        case WeededAst.Type.Ambiguous(qname, _) => named(qname, args, imps, allowConvertedResult)
         case _ => None
       }
 
@@ -241,18 +241,20 @@ object ExportStubs {
 
   /** Parameters are passed through unchanged, so converted containers are not accepted here. */
   private def parameterSignatureOf(tpe: WeededAst.Type, imps: Map[String, String]): Option[ExportSignature] =
-    signatureOf(tpe, imps, allowOption = false)
+    signatureOf(tpe, imps, allowConvertedResult = false)
 
   /** Results may use conversions implemented by the namespace shim. */
   private def resultSignatureOf(tpe: WeededAst.Type, imps: Map[String, String]): Option[ExportSignature] =
-    signatureOf(tpe, imps, allowOption = true)
+    signatureOf(tpe, imps, allowConvertedResult = true)
 
   /** Returns how the type named `qname` and applied to `args` crosses the boundary. */
-  private def named(qname: Name.QName, args: List[WeededAst.Type], imps: Map[String, String], allowOption: Boolean): Option[ExportSignature] = {
+  private def named(qname: Name.QName, args: List[WeededAst.Type], imps: Map[String, String], allowConvertedResult: Boolean): Option[ExportSignature] = {
     (simpleName(qname, imps), args) match {
       case (Some(name), Nil) => builtin(name).orElse(importedObject(name, imps))
-      case (Some("Option"), List(element)) if allowOption =>
+      case (Some("Option"), List(element)) if allowConvertedResult =>
         typeArgumentSignatureOf(element, imps).map(sig => ExportSignature.Applied(ClassDesc.ofInternalName("java/util/Optional"), List(sig)))
+      case (Some("List"), List(element)) if allowConvertedResult =>
+        typeArgumentSignatureOf(element, imps).map(sig => ExportSignature.Applied(ClassDesc.ofInternalName("java/util/List"), List(sig)))
       case _ => None
     }
   }

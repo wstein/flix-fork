@@ -100,6 +100,22 @@ class TestExportStubs extends AnyFunSuite {
     assert(ExportStubs.javaSource(facades.head).contains("java.util.Optional<java.lang.String> maybe(int arg0)"))
   }
 
+  test("List results are typed while List parameters remain refused") {
+    val src =
+      """mod Acme.Api {
+        |    @Export pub def values(_x: Int32): List[Int32] = Nil
+        |    @Export pub def consume(_x: List[Int32]): Int32 = 0
+        |}
+        |""".stripMargin
+
+    val (facades, unsupported) = stubs(src)
+    val methods = facades.flatMap(_.methods)
+    assert(methods.map(_.name) == List("values"))
+    assert(methods.head.result.sourceName == "java.util.List<java.lang.Integer>")
+    assert(unsupported.map(_.name) == List("consume"))
+    assert(ExportStubs.javaSource(facades.head).contains("java.util.List<java.lang.Integer> values(int arg0)"))
+  }
+
   test("generated sources use the sibling facade name and compile with javac") {
     val src = "mod Acme.Api.Deep { @Export pub def id(x: Int32): Int32 = x }"
     val (facades, unsupported) = stubs(src)

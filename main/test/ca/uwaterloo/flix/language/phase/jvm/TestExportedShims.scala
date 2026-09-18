@@ -15,6 +15,7 @@ import org.scalatest.funsuite.AnyFunSuite
 import java.net.URLClassLoader
 import java.nio.file.{Files, Path}
 import java.util.Optional
+import scala.jdk.CollectionConverters.*
 
 class TestExportedShims extends AnyFunSuite {
 
@@ -83,6 +84,41 @@ class TestExportedShims extends AnyFunSuite {
         assert(clazz.getMethod("someString", Integer.TYPE).invoke(null, Int.box(0)) == Optional.of("hello"))
         assert(clazz.getMethod("noString", Integer.TYPE).invoke(null, Int.box(0)) == Optional.empty[String]())
         assert(clazz.getMethod("someInt", Integer.TYPE).invoke(null, Int.box(0)) == Optional.of(Int.box(42)))
+      } finally loader.close()
+    } finally deleteRecursively(output)
+  }
+
+  test("List results cross as typed unmodifiable java.util.List values") {
+    val result = compile(
+      """mod Acme.Api {
+        |    @Export pub def strings(_x: Int32): List[String] = "a" :: "b" :: Nil
+        |    @Export pub def ints(_x: Int32): List[Int32] = 1 :: 2 :: Nil
+        |}
+        |""".stripMargin)
+
+    val facade = result.getClasses(Mangle.namespaceFacadeDesc(List("Acme", "Api"))).bytecode
+    val methods = collection.mutable.Map.empty[String, (String, String)]
+    new ClassReader(facade).accept(new ClassVisitor(Opcodes.ASM9) {
+      override def visitMethod(access: Int, name: String, descriptor: String, signature: String, exceptions: Array[String]): MethodVisitor = {
+        if ((access & Opcodes.ACC_PUBLIC) != 0 && (access & Opcodes.ACC_STATIC) != 0)
+          methods(name) = descriptor -> signature
+        null
+      }
+    }, ClassReader.SKIP_CODE)
+    assert(methods("strings") == ("(I)Ljava/util/List;", "(I)Ljava/util/List<Ljava/lang/String;>;"))
+    assert(methods("ints") == ("(I)Ljava/util/List;", "(I)Ljava/util/List<Ljava/lang/Integer;>;"))
+
+    val output = Files.createTempDirectory("flix-export-list")
+    try {
+      writeClasses(result, output)
+      val loader = new URLClassLoader(Array(output.toUri.toURL), getClass.getClassLoader)
+      try {
+        val clazz = loader.loadClass("Acme.Api")
+        val strings = clazz.getMethod("strings", Integer.TYPE).invoke(null, Int.box(0)).asInstanceOf[java.util.List[String]]
+        val ints = clazz.getMethod("ints", Integer.TYPE).invoke(null, Int.box(0)).asInstanceOf[java.util.List[Integer]]
+        assert(strings.asScala.toList == List("a", "b"))
+        assert(ints.asScala.map(_.intValue()).toList == List(1, 2))
+        assertThrows[UnsupportedOperationException](strings.add("c"))
       } finally loader.close()
     } finally deleteRecursively(output)
   }

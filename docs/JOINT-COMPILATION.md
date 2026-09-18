@@ -52,6 +52,8 @@ development lineages. It currently supports:
 - `String`, whose exported descriptor is `java.lang.String` rather than erased `Object`.
 - `Option[t]` results as `java.util.Optional<T>` when `t` is otherwise exportable; primitive
   elements are boxed and the emitted facade retains `T` in its generic signature.
+- `List[t]` results as eager, unmodifiable `java.util.List<T>` copies under the same element and
+  generic-signature rules.
 - An explicitly imported `java.lang.Object`.
 
 It refuses other Flix algebraic data types, generic Java types, other containers, functions, and
@@ -59,8 +61,8 @@ other reference types because `EntryPoints` refuses those exports on this branch
 a missing stub fails the build at generation time, while an incorrect stub compiles and later fails
 with a linkage error in innocent calling code.
 
-`Option[t]` is result-only. Parameters remain refused because the shim currently passes parameters
-straight into Flix and therefore has no reverse `Optional<T>`-to-`Option[t]` conversion.
+Converted containers are result-only. `Option[t]` and `List[t]` parameters remain refused because
+the shim currently passes parameters straight into Flix and therefore has no reverse conversion.
 
 The tests compare generated stub declarations with the method descriptors on the facade bytecode.
 This pins the source-facing stub contract to the backend contract and catches drift between them.

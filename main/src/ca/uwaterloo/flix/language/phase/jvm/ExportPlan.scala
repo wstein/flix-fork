@@ -29,7 +29,7 @@ sealed trait ExportPlan {
   final def javaType: ClassDesc = signature.javaType
 
   /** Converts the Flix value currently on the operand stack to its Java representation. */
-  def emit()(implicit mv: MethodVisitor): Unit
+  def emit(nextLocal: Int)(implicit mv: MethodVisitor): Unit
 }
 
 object ExportPlan {
@@ -51,14 +51,14 @@ object ExportPlan {
   case class Identity(flixType: ClassDesc) extends ExportPlan {
     override def signature: ExportSignature = ExportSignature.Exact(flixType)
 
-    override def emit()(implicit mv: MethodVisitor): Unit = ()
+    override def emit(nextLocal: Int)(implicit mv: MethodVisitor): Unit = ()
   }
 
   /** A primitive element boxed for a reference-only Java container. */
   case class Boxed(flixType: ClassDesc, boxed: ClassDesc) extends ExportPlan {
     override def signature: ExportSignature = ExportSignature.Boxed(flixType, boxed)
 
-    override def emit()(implicit mv: MethodVisitor): Unit =
+    override def emit(nextLocal: Int)(implicit mv: MethodVisitor): Unit =
       INVOKESTATIC(boxed, "valueOf", MethodTypeDescs.mkDescriptor(flixType)(boxed))
   }
 
@@ -68,7 +68,7 @@ object ExportPlan {
 
     override def signature: ExportSignature = ExportSignature.Applied(Optional, List(element.signature))
 
-    override def emit()(implicit mv: MethodVisitor): Unit = {
+    override def emit(nextLocal: Int)(implicit mv: MethodVisitor): Unit = {
       DUP()
       GETFIELD(GenTagged.OrdinalField)
       pushInt(noneOrdinal)
@@ -78,8 +78,51 @@ object ExportPlan {
       } {
         CHECKCAST(GenTag.desc(someFields))
         GETFIELD(GenTag.IndexField(someFields, 0))
-        element.emit()
+        element.emit(nextLocal)
         INVOKESTATIC(Optional, "ofNullable", MethodTypeDescs.mkDescriptor(CD_Object)(Optional))
+      }
+    }
+  }
+
+  /** A Flix `List` result converted to an unmodifiable eager Java list. */
+  case class AsList(element: ExportPlan, nilOrdinal: Int, consFields: List[ClassDesc]) extends ExportPlan {
+    private val ArrayList = ClassDesc.ofInternalName("java/util/ArrayList")
+    private val Collections = ClassDesc.ofInternalName("java/util/Collections")
+    private val JavaList = ClassDesc.ofInternalName("java/util/List")
+
+    override def flixType: ClassDesc = GenTagged.Desc
+
+    override def signature: ExportSignature = ExportSignature.Applied(JavaList, List(element.signature))
+
+    override def emit(nextLocal: Int)(implicit mv: MethodVisitor): Unit = {
+      withName(nextLocal, GenTagged.Desc) { cursor =>
+        withName(nextLocal + 1, ArrayList) { acc =>
+          cursor.store()
+          NEW(ArrayList)
+          DUP()
+          INVOKESPECIAL(ClassMaker.ConstructorMethod(ArrayList, Nil))
+          acc.store()
+          whileLoop(Condition.ICMPNE) {
+            cursor.load()
+            GETFIELD(GenTagged.OrdinalField)
+            pushInt(nilOrdinal)
+          } {
+            acc.load()
+            cursor.load()
+            CHECKCAST(GenTag.desc(consFields))
+            GETFIELD(GenTag.IndexField(consFields, 0))
+            element.emit(nextLocal + 2)
+            INVOKEVIRTUAL(ArrayList, "add", MethodTypeDescs.mkDescriptor(CD_Object)(CD_boolean))
+            POP()
+            cursor.load()
+            CHECKCAST(GenTag.desc(consFields))
+            GETFIELD(GenTag.IndexField(consFields, 1))
+            CHECKCAST(GenTagged.Desc)
+            cursor.store()
+          }
+          acc.load()
+          INVOKESTATIC(Collections, "unmodifiableList", MethodTypeDescs.mkDescriptor(JavaList)(JavaList))
+        }
       }
     }
   }
@@ -104,6 +147,8 @@ object ExportPlan {
   def signatureOf(tpe: SimpleType): Option[ExportSignature] = tpe match {
     case SimpleType.Enum(sym, List(element)) if isOption(sym) =>
       typeArgumentPlan(element).map(sig => ExportSignature.Applied(Optional, List(sig)))
+    case SimpleType.Enum(sym, List(element)) if isList(sym) =>
+      typeArgumentPlan(element).map(sig => ExportSignature.Applied(ClassDesc.ofInternalName("java/util/List"), List(sig)))
     case _ => exact(tpe).map(_.signature)
   }
 
@@ -112,6 +157,7 @@ object ExportPlan {
     if (!defn.ann.isExport) None
     else defn.exportedReturnType.flatMap {
       case SimpleType.Enum(sym, List(element)) if isOption(sym) => optionPlan(element, defn.unboxedType.tpe)
+      case SimpleType.Enum(sym, List(element)) if isList(sym) => listPlan(element, defn.unboxedType.tpe)
       case declared => exact(declared)
     }
 
@@ -127,6 +173,18 @@ object ExportPlan {
     case _ => None
   }
 
+  /** Builds a List conversion from the specialized enum retained by erasure. */
+  private def listPlan(element: SimpleType, erased: SimpleType)(implicit root: ca.uwaterloo.flix.language.ast.JvmAst.Root): Option[ExportPlan] = erased match {
+    case SimpleType.Enum(sym, Nil) =>
+      val cases = root.enums(sym).cases.values
+      for {
+        nil <- cases.find(_.sym.name == "Nil")
+        cons <- cases.find(c => c.sym.name == "Cons" && c.tpes.lengthCompare(2) == 0)
+        elementPlan <- elementPlan(element, TypeDescs.toClassDesc(cons.tpes.head))
+      } yield AsList(elementPlan, nil.sym.ordinal, cons.tpes.map(TypeDescs.toClassDesc))
+    case _ => None
+  }
+
   /** Returns a plan for a value placed in a Java reference-only type argument position. */
   private def elementPlan(declared: SimpleType, erased: ClassDesc): Option[ExportPlan] =
     Wrappers.get(erased).map(Boxed(erased, _)).orElse(exact(declared))
@@ -137,4 +195,7 @@ object ExportPlan {
 
   private def isOption(sym: ca.uwaterloo.flix.language.ast.Symbol.EnumSym): Boolean =
     sym.namespace.isEmpty && sym.text == "Option"
+
+  private def isList(sym: ca.uwaterloo.flix.language.ast.Symbol.EnumSym): Boolean =
+    sym.namespace.isEmpty && sym.text == "List"
 }

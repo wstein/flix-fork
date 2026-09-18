@@ -437,7 +437,7 @@ object EntryPoints {
     val retTpe = defn.spec.retTpe
     val returnTypes =
       if (isUnitType(retTpe) == Result.Ok(true)) Nil
-      else List(unapplyOption(retTpe).getOrElse(retTpe))
+      else List(unapplyOption(retTpe).orElse(unapplyList(retTpe)).getOrElse(retTpe))
     val types = returnTypes ::: paramTypes
     types.flatMap(tpe => {
       isExportableType(tpe) match {
@@ -458,6 +458,15 @@ object EntryPoints {
     case Type.Apply(Type.Cst(TypeConstructor.Enum(sym, _), _), elm, _)
       if sym.namespace.isEmpty && sym.text == "Option" => Some(elm)
     case Type.Alias(_, _, inner, _) => unapplyOption(inner)
+    case _ => None
+  }
+
+  /** Returns the element of the standard library's `List`, which is converted on return. */
+  @tailrec
+  private def unapplyList(tpe: Type): Option[Type] = tpe match {
+    case Type.Apply(Type.Cst(TypeConstructor.Enum(sym, _), _), elm, _)
+      if sym.namespace.isEmpty && sym.text == "List" => Some(elm)
+    case Type.Alias(_, _, inner, _) => unapplyList(inner)
     case _ => None
   }
 
