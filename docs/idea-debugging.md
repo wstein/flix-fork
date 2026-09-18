@@ -92,6 +92,14 @@ without disassembling its `tableswitch`. The field is omitted from ordinary buil
 from classes with no recorded resume point. Tests independently reconstruct each line
 from the switch targets and JVM `LineNumberTable` rather than merely pinning the string.
 
+The same class carries a `public static final String frameSlots` JSON constant when at
+least one source variable is available at a suspension point. Format 1 is keyed by
+continuation `pc`; each entry names the exact generated instance field (`cloN`, `argN`,
+or `lN`), source name, pre-erasure Flix type, and binding kind. Metadata is recorded at
+the suspension while lexical scopes are being generated, so a later or out-of-scope
+local is not exposed merely because its backing field exists on every continuation
+object. Synthetic and wildcard fields are omitted. Ordinary builds emit no constant.
+
 When optimization places code from more than one source in a generated class, the
 compiler emits a JSR-45 `SourceDebugExtension` with a `Flix` stratum. Primary-source
 lines keep their original numbers; foreign lines receive stable synthetic JVM line
