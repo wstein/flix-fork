@@ -73,6 +73,18 @@ object TypedAst {
 
   case class Struct(doc: Doc, ann: Annotations, mod: Modifiers, sym: Symbol.StructSym, tparams: List[TypeParam], sc: Scheme, fields: Map[Symbol.StructFieldSym, StructField], loc: SourceLocation) extends Decl
 
+  object Struct {
+    /**
+      * Returns `fields` in the canonical field order: sorted by field name.
+      *
+      * Both monomorphization pipelines ([[ca.uwaterloo.flix.language.phase.monomorph.Lowering]] and
+      * [[ca.uwaterloo.flix.language.phase.monomorph2.SpecializeAndLower]]) must agree on this order,
+      * since it fixes the JVM field layout of a lowered struct.
+      */
+    def sortedFields(fields: Map[Symbol.StructFieldSym, StructField]): List[(Symbol.StructFieldSym, StructField)] =
+      fields.toList.sortBy { case (fieldSym, _) => fieldSym.name }
+  }
+
   case class RestrictableEnum(doc: Doc, ann: Annotations, mod: Modifiers, sym: Symbol.RestrictableEnumSym, index: TypeParam, tparams: List[TypeParam], derives: Derivations, cases: Map[Symbol.RestrictableCaseSym, RestrictableCase], loc: SourceLocation) extends Decl
 
   case class TypeAlias(doc: Doc, ann: Annotations, mod: Modifiers, sym: Symbol.TypeAliasSym, tparams: List[TypeParam], tpe: Type, loc: SourceLocation) extends Decl

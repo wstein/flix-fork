@@ -624,7 +624,6 @@ object JvmLexicalOrigins {
     case SemanticOp.ReflectOp.ReflectValue => "ReflectOp.ReflectValue"
     case SemanticOp.ObjectOp.RefEq => "ObjectOp.RefEq"
     case SemanticOp.ObjectOp.Ordinal => "ObjectOp.Ordinal"
-    case _ => throw InternalCompilerException("Unsupported semantic operator in lexical JVM origin.", SourceLocation.Unknown)
   }
 
   private def constant(cst: Constant): String = cst match {

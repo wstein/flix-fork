@@ -125,8 +125,9 @@ object LambdaLift {
       // Construct a new definition.
       val defTpe = arrowTpe.result
       val defn = LiftedAst.Def(ann, mod, freshSymbol, cs, fs, liftedExp, defTpe, loc)
-      val captures = cs.flatMap { param =>
-        param.sourceName.flatMap(name => flix.jvmOrigins.sourceBindings(sym0).find(_.name == name))
+      val captures = cs.zip(freeVars).flatMap {
+        case (_, SimplifiedAst.FreeVar(originalSym, _)) =>
+          flix.jvmOrigins.sourceBindings(sym0).find(b => b.name == originalSym.text && b.loc == originalSym.loc)
       }
       val parameters = fs.zipWithIndex.collect {
         case (param, index) if !param.sym.isWild =>

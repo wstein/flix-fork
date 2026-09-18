@@ -19,15 +19,13 @@ object DebugScopes {
     val classes = definitions.toList.sortBy(_._1).map { case (clazz, methods) =>
       val renderedMethods = methods.toList.sortBy(_._1).map { case (method, bindings) =>
         val renderedBindings = bindings.sortBy(_.identity).map { binding =>
-          s"{\"name\":${quote(binding.name)},\"type\":${quote(binding.tpe)}}"
+          s"{\"name\":${JvmDebugJson.quote(binding.name)},\"type\":${JvmDebugJson.quote(binding.tpe)}}"
         }
-        s"      ${quote(method)}: [${renderedBindings.mkString(",")}]"
+        s"      ${JvmDebugJson.quote(method)}: [${renderedBindings.mkString(",")}]"
       }
-      s"    ${quote(clazz)}: {\n${renderedMethods.mkString(",\n")}\n    }"
+      s"    ${JvmDebugJson.quote(clazz)}: {\n${renderedMethods.mkString(",\n")}\n    }"
     }
     FileOps.writeString(path,
       s"{\n  \"formatVersion\":$FormatVersion,\n  \"classes\":{\n${classes.mkString(",\n")}\n  }\n}\n")
   }
-
-  private def quote(s: String): String = "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
 }

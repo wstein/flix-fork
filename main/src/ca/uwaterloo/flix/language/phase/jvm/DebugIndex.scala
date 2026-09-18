@@ -81,7 +81,7 @@ object DebugIndex {
   /** Writes `index` to `path`, replacing whatever was there. */
   def write(path: Path, index: Map[String, Set[String]]): Unit = {
     val sources = index.toList.sortBy(_._1).map { case (source, classes) =>
-      s"    ${quote(source)}: [${classes.toList.sorted.map(quote).mkString(",")}]"
+      s"    ${JvmDebugJson.quote(source)}: [${classes.toList.sorted.map(JvmDebugJson.quote).mkString(",")}]"
     }
     val json =
       s"""{
@@ -127,6 +127,4 @@ object DebugIndex {
       case List(FileEntry(_), path) if path.endsWith(".flix") => path
     }.toSet
   }
-
-  private def quote(s: String): String = "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
 }

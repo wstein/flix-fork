@@ -1412,7 +1412,6 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
     val docDir = Bootstrap.getDocumentationDirectory(projectPath)
     val devDir = Bootstrap.getDevelopmentDirectory(projectPath)
     val devClassDir = Bootstrap.getDevelopmentClassDirectory(projectPath)
-    val prodDir = Bootstrap.getOutputDirectory(projectPath, Build.Production)
     val prodClassDir = Bootstrap.getClassDirectory(projectPath, Build.Production)
 
     // Ensure `buildDir` is not dangerous
@@ -1427,7 +1426,7 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
       val inClassDir = file.startsWith(classDir) || file.startsWith(devClassDir) || file.startsWith(prodClassDir)
       val isManifest = file == Bootstrap.getBuildManifestFile(projectPath, Build.Development) ||
                        file == Bootstrap.getBuildManifestFile(projectPath, Build.Production)
-      val isDebugSidecar = (file.getParent == devDir || file.getParent == prodDir) &&
+      val isDebugSidecar = file.getParent == devDir &&
                            (file.getFileName.toString == "debug-scopes.json" || file.getFileName.toString == "debug-index.json")
 
       if (inClassDir) {
@@ -1683,7 +1682,9 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
     // The class directory may also contain user-created files. A normal build
     // only owns generated `.class` files; `clean` is the operation that removes
     // the complete build directory.
-    val existingFiles = FileOps.getFilesIn(classDir, Int.MaxValue)
+    val paths = FileOps.getPathsIn(classDir, Int.MaxValue)
+    val existingFiles = paths
+      .filter(Files.isRegularFile(_))
       .filter(FileOps.checkExt(_, "class"))
       .map(_.normalize().toAbsolutePath)
     for (file <- existingFiles) {
@@ -1695,7 +1696,7 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
       }
     }
 
-    val existingDirs = FileOps.getDirectoriesIn(classDir, Int.MaxValue).map(_.normalize().toAbsolutePath)
+    val existingDirs = paths.filter(Files.isDirectory(_)).map(_.normalize().toAbsolutePath)
     for (dir <- existingDirs.reverse) {
       try {
         Files.delete(dir)

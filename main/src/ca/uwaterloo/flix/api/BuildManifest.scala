@@ -94,7 +94,11 @@ object BuildManifest {
       s"chaosMonkey=${options.xchaosMonkey}",
       s"noDeprecated=${options.xnodeprecated}",
       s"inMemory=${options.inMemory}",
-      s"newmono=${options.xnewmono}"
+      s"newmono=${options.xnewmono}",
+      s"debug=${options.xdebug}",
+      s"datalogExecution=${options.xdatalogExecution}",
+      s"collectionExecution=${options.xcollectionExecution}",
+      s"assumeSingleThreaded=${options.xassumeSingleThreaded}"
     )
     settings ::: dependencies.map(stampOf).distinct.sorted
   }
