@@ -77,6 +77,16 @@ class TestJsonTestSink extends AnyFunSuite {
     assert(outputLines(written) == List("héllo wörld — ok"))
   }
 
+  test("an output chunk never splits a UTF-8 code point") {
+    val (sink, written) = mkSink()
+    val out = new PrintStream(sink.outputStream.get, true, StandardCharsets.UTF_8)
+    val text = "a" * (8 * 1024 - 1) + "—"
+
+    out.println(text)
+
+    assert(outputLines(written).mkString == text)
+  }
+
   test("all writers share one line buffer") {
     val (sink, written) = mkSink()
     val first = sink.outputStream.get

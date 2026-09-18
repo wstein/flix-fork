@@ -47,7 +47,9 @@ class JsonTestSink(out: PrintStream) extends Tester.TestEventSink {
       if (b == '\n') emitLine()
       else if (b != '\r') {
         line.write(b)
-        if (line.size() >= MaxLine) emitLine()
+        // A PrintStream writes UTF-8 bytes. Do not decode a chunk until its final code point is
+        // complete: splitting one between chunks would replace both halves with U+FFFD.
+        if (line.size() >= MaxLine && endsAtUtf8Boundary(line.toByteArray)) emitLine()
       }
     }
 
@@ -78,6 +80,22 @@ class JsonTestSink(out: PrintStream) extends Tester.TestEventSink {
   private def emit(json: JObject): Unit = synchronized {
     out.println(JsonMethods.compact(JsonMethods.render(json)))
     out.flush()
+  }
+
+  private def endsAtUtf8Boundary(bytes: Array[Byte]): Boolean = {
+    if (bytes.isEmpty) return true
+    var lead = bytes.length - 1
+    while (lead >= 0 && (bytes(lead) & 0xc0) == 0x80) lead = lead - 1
+    if (lead < 0) return false
+
+    val first = bytes(lead) & 0xff
+    val expected =
+      if ((first & 0x80) == 0) 1
+      else if ((first & 0xe0) == 0xc0) 2
+      else if ((first & 0xf0) == 0xe0) 3
+      else if ((first & 0xf8) == 0xf0) 4
+      else 1 // malformed input: let the decoder replace it instead of growing forever
+    bytes.length - lead >= expected
   }
 
   private val MaxLine: Int = 8 * 1024
