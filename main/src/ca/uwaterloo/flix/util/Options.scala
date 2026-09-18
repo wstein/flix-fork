@@ -49,7 +49,8 @@ object Options {
     xdatalogExecution = ExecutionMode.Parallel,
     xcollectionExecution = ExecutionMode.Parallel,
     xassumeSingleThreaded = false,
-    inMemory = false
+    inMemory = false,
+    xdebug = false
   )
 
   /**
@@ -95,6 +96,8 @@ object Options {
   *                              Only sound together with the two options above set to sequential,
   *                              which is why `--Xsequential` is the only way to set it from the CLI.
   * @param inMemory              runs builds in memory without writing class files to disk.
+  * @param xdebug               enables the compiler's debug-oriented preservation and artifact policy.
+  * @param inMemory             runs builds in memory without writing class files to disk.
   */
 case class Options(lib: LibLevel,
                    build: Build,
@@ -119,7 +122,8 @@ case class Options(lib: LibLevel,
                    xdatalogExecution: ExecutionMode,
                    xcollectionExecution: ExecutionMode,
                    xassumeSingleThreaded: Boolean,
-                   inMemory: Boolean
+                   inMemory: Boolean,
+                   xdebug: Boolean
                   ) {
 
   /**

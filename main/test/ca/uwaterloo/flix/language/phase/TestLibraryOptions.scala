@@ -43,6 +43,11 @@ class TestLibraryOptions extends AnyFunSuite with TestUtils {
     assert(cmdOpts.xsequential)
   }
 
+  test("CLI.Parse.Debug") {
+    assert(!Main.parseCmdOpts(Array("build")).get.xdebug)
+    assert(Main.parseCmdOpts(Array("--Xdebug", "build")).get.xdebug)
+  }
+
   test("CLI.Parse.Sequential.IsTheOnlyKnob") {
     // The library switches are set together or not at all. Exposing an option per switch would make
     // the unsound combination -- locks elided while something still runs in parallel -- reachable,

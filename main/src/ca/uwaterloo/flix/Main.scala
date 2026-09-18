@@ -104,7 +104,8 @@ object Main {
       xdatalogExecution = sequentialMode,
       xcollectionExecution = sequentialMode,
       xassumeSingleThreaded = cmdOpts.xsequential,
-      inMemory = cmdOpts.inMemory
+      inMemory = cmdOpts.inMemory,
+      xdebug = cmdOpts.xdebug
     )
 
     // Don't use progress bar if benchmarking.
@@ -546,6 +547,7 @@ object Main {
     XPerfPar: Boolean = false,
     xsequential: Boolean = false,
     inMemory: Boolean = false,
+    xdebug: Boolean = false,
     files: Seq[File] = Seq()
   )
 
@@ -796,6 +798,10 @@ object Main {
           "the pure operations on Map and Set are evaluated sequentially, the concurrent data " +
           "structures drop their locks, a par yield binds its fragments in order, and a spawn is " +
           "rejected. Asserts that the program is single-threaded.")
+
+      // Xdebug
+      opt[Unit]("Xdebug").action((_, c) => c.copy(xdebug = true)).
+        text("[experimental] selects the compiler's debug build policy.")
 
       // Xnewmono
       opt[Unit]("Xnewmono").action((_, c) => c.copy(xnewmono = true)).
