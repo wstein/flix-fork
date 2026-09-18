@@ -54,6 +54,50 @@ class TestDebugLocalVariables extends AnyFunSuite {
   }
 
   for (newMono <- List(false, true)) {
+    test(s"pattern bindings have source types and JVM locals (mono2=$newMono)") {
+      val program = """def compute(pair: (Int32, Bool)): Int32 = match pair {
+        |    case (number, flag) => if (flag) number + 1 else number - 1
+        |}
+        |def main(): Unit \ IO = println(compute((41, true)))
+        |""".stripMargin
+      val result = compile(xdebug = true, program, newMono)
+      val bindings = result.getDebugDefinitions("Def$compute")("staticApply").map(b => b.name -> b.tpe).toMap
+      assert(bindings.get("number").contains("Int32") && bindings.get("flag").contains("Bool"), bindings.toString)
+      val locals = localEntries(result, "Def$compute", "staticApply").map(_._1).toSet
+      assert(Set("number", "flag").subsetOf(locals), locals.toString)
+    }
+
+    test(s"lifted closures retain their body local types (mono2=$newMono)") {
+      val program = """def make(prefix: Int32): Int32 -> Int32 = value -> {
+        |    let sum = prefix + value;
+        |    sum + 1
+        |}
+        |def main(): Unit \ IO = println(make(40)(1))
+        |""".stripMargin
+      val result = compile(xdebug = true, program, newMono)
+      val closures = result.getDebugDefinitions.filter(_._1.startsWith("Clo$make$"))
+      assert(closures.nonEmpty)
+      closures.foreach { case (clazz, methods) =>
+        val bindings = methods("applyFrame").map(b => b.name -> b.tpe).toMap
+        assert(bindings.get("sum").contains("Int32"), bindings.toString)
+        assert(localEntries(result, clazz, "applyFrame").exists(_._1 == "sum"))
+      }
+    }
+
+    test(s"same-named branch bindings keep distinct identities and JVM ranges (mono2=$newMono)") {
+      val program = """def compute(flag: Bool): Int32 = match flag {
+        |    case true => let value = 41; value
+        |    case false => let value = 42; value
+        |}
+        |def main(): Unit \ IO = println(compute(true))
+        |""".stripMargin
+      val result = compile(xdebug = true, program, newMono)
+      val bindings = result.getDebugDefinitions("Def$compute")("staticApply").filter(_.name == "value")
+      assert(bindings.size == 2 && bindings.map(_.identity).distinct.size == 2, bindings.toString)
+      val locals = localEntries(result, "Def$compute", "staticApply").filter(_._1 == "value")
+      assert(locals.size == 2 && locals.forall(e => e._3 < e._4), locals.toString)
+    }
+
     test(s"specialized definitions retain source binding types (mono2=$newMono)") {
       val program = """def debugIdentity(value: a): a = value
         |def main(): Unit \ IO = println(debugIdentity(42))

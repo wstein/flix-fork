@@ -278,6 +278,21 @@ object JvmLexicalOrigins {
     private def bindSymbols(symbols: List[Symbol.VarSym], env: Env, scope: String): Env =
       env ++ symbols.distinct.zipWithIndex.map { case (sym, index) => sym -> frame("pattern-bound", List(scope, index.toString)) }
 
+    /** Records debugger-visible pattern binders during the single source-capture traversal. */
+    private def recordPatternBindings(pat: TypedAst.Pattern, scope: String): Unit = pat match {
+      case TypedAst.Pattern.Var(binder, tpe, _) =>
+        if (!binder.sym.isWild) bindings += Binding(scope, binder.sym.text, binder.sym.loc, "pattern", debugType(tpe))
+      case TypedAst.Pattern.Tag(_, pats, _, _) =>
+        pats.zipWithIndex.foreach { case (p, i) => recordPatternBindings(p, frame("tag-binding", List(scope, i.toString))) }
+      case TypedAst.Pattern.Tuple(pats, _, _) =>
+        pats.toList.zipWithIndex.foreach { case (p, i) => recordPatternBindings(p, frame("tuple-binding", List(scope, i.toString))) }
+      case TypedAst.Pattern.Record(pats, rest, _, _) =>
+        pats.foreach(p => recordPatternBindings(p.pat, frame("record-binding", List(scope, p.label.name))))
+        recordPatternBindings(rest, frame("record-rest", List(scope)))
+      case _: TypedAst.Pattern.Wild | _: TypedAst.Pattern.Cst => ()
+      case TypedAst.Pattern.Error(_, loc) => throw InternalCompilerException("Erroneous debug pattern.", loc)
+    }
+
     private def scopedShape(exp: Expr, env: Env, depth: Int,
                             bindingScope: Option[String] = None): (String, List[String], List[(String, Expr, Env)]) = {
       val context = bindingScope.getOrElse(frame("alpha-scope", List(depth.toString)))
@@ -303,7 +318,8 @@ object JvmLexicalOrigins {
           val inner = bindSymbols(List(binder.sym), env, context).copy(localOrigins = env.localOrigins + (regionSym -> origin))
           ("region", Nil, List(("body", body, inner)))
         case Expr.Match(scrutinee, rules, _, _, _) =>
-          val children = rules.flatMap { entry =>
+          val children = rules.zipWithIndex.flatMap { case (entry, index) =>
+            bindingScope.foreach(s => recordPatternBindings(entry.pat, frame("match-binding", List(s, index.toString))))
             val (pat, binders) = pattern(entry.pat)
             rule("match", pat, binders, entry.guard.toList.map(guard => "guard" -> guard) ::: List("body" -> entry.exp))
           }

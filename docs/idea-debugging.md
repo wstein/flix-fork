@@ -78,6 +78,13 @@ and declaration location when lifted. Parameterized types such as `Option[Int32]
 therefore retain their Flix spelling; generated parameters with no source binding are
 omitted rather than assigned a guessed type from an erased backend representation.
 
+Pattern variables are captured with their source types and use the same initialized
+JVM ranges as source `let` bindings. When a lambda is lifted, the compiler joins the
+locals that remain in that lambda body to the lifted class; locals in nested lambdas or
+anonymous-class methods stay with their own emitted methods. Bindings with the same
+source name in distinct branches retain distinct lexical identities and local-variable
+ranges. Flix itself rejects lexical shadowing.
+
 Specialized definitions inherit their source binding snapshot in both monomorphizers.
 These are source types, not reconstructed specialization types: a generic parameter
 may still be recorded as `a`. An evaluator must resolve that type in its source context
@@ -101,6 +108,5 @@ let-binding state, whose invariants assume substitution has already happened. Th
 explicit `DebugLocal` state resolves that distinction; it does not pretend an optimized
 expression has a recoverable slot.
 
-Complete lexical scopes (including shadowing and pattern bindings),
-expression evaluation at a breakpoint, and JetBrains IDE qualification remain open.
+Expression evaluation at a breakpoint and final JetBrains IDE qualification remain open.
 Release builds remain subject to the normal optimizer policy.
