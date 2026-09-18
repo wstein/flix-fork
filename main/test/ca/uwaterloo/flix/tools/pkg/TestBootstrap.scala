@@ -112,7 +112,7 @@ class TestBootstrap extends AnyFunSuite {
     val first = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
     first.buildIfNeeded(PkgTestUtils.mkFlix(first)).unsafeGet
 
-    FileOps.writeString(p.resolve("src/Main.flix"), "def main(): Unit = println(\"changed\")")
+    FileOps.writeString(p.resolve("src/Main.flix"), "def main(): Unit \\ IO = println(\"changed\")")
 
     val second = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
     assert(second.buildIfNeeded(PkgTestUtils.mkFlix(second)).unsafeGet, "a changed source must not be reported as current")
@@ -196,7 +196,7 @@ class TestBootstrap extends AnyFunSuite {
     val classDir = Bootstrap.getDevelopmentClassDirectory(p)
 
     b.build(PkgTestUtils.mkFlix(b)).unsafeGet
-    val obsolete = classDir.resolve("Def$obsolete.class")
+    val obsolete = classDir.resolve("dev/flix/gen/Def$obsolete.class")
     assert(Files.exists(obsolete), s"Expected the first build to emit $obsolete")
 
     FileOps.writeString(main, "def main(): Unit \\ IO = println(1)\n")
