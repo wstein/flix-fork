@@ -47,6 +47,12 @@ shares `Struct$…` classes between source structs with the same erased field sh
 per-value string lets IDEA pair `field0`, `field1`, and so on with the correct source
 names without guessing from layout. Release classes and values carry no such field.
 
+For the same shared-layout reason, every debug enum value carries an enum-qualified
+`tag` such as `List.Cons` or `Option.Some`. Both payload and nullary cases use the same
+contract. The qualifier lets renderers recognize standard-library values without
+mistaking an unrelated case of the same erased shape for a list, map, or solver value;
+display labels may then omit it. Release builds retain only the runtime ordinal.
+
 User-source `let` bindings are materialized in debug builds. The inliner registers them
 as `DebugLocal`, an explicit non-substitutable binding state, even when occurrence
 analysis says a pure binding is used once. This preserves the inliner's substitution

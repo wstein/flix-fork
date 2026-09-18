@@ -54,6 +54,8 @@ object GenTag {
 
   def OrdinalField: InstanceField = GenTagged.OrdinalField
 
+  def NameField: InstanceField = GenTagged.NameField
+
   def IndexField(elms: List[ClassDesc], i: Int): InstanceField = InstanceField(desc(elms), s"v$i", elms(i))
 
   def Constructor(elms: List[ClassDesc]): ConstructorMethod = ConstructorMethod(desc(elms), Nil)

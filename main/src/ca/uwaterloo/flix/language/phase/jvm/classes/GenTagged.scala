@@ -27,7 +27,7 @@ import ca.uwaterloo.flix.language.phase.jvm.{ClassConstants, ClassMaker, Mangle}
 import org.objectweb.asm.MethodVisitor
 
 import java.lang.constant.ClassDesc
-import java.lang.constant.ConstantDescs.CD_int
+import java.lang.constant.ConstantDescs.{CD_String, CD_int}
 
 /** The abstract base class of every enum case class, carrying the case's ordinal. */
 object GenTagged {
@@ -41,11 +41,15 @@ object GenTagged {
     cm.mkConstructor(Constructor, IsPublic, nullarySuperConstructor(ClassConstants.Object.Constructor)(_))
 
     cm.mkField(OrdinalField, IsPublic, NotFinal, NotVolatile)
+    if (flix.options.xdebug) cm.mkField(NameField, IsPublic, NotFinal, NotVolatile)
 
     cm.closeClassMaker()
   }
 
   def OrdinalField: InstanceField = InstanceField(this.Desc, "ordinal", CD_int)
+
+  /** Enum-qualified source case name, present only in debug builds. */
+  def NameField: InstanceField = InstanceField(this.Desc, "tag", CD_String)
 
   def Constructor: ConstructorMethod = ConstructorMethod(this.Desc, Nil)
 

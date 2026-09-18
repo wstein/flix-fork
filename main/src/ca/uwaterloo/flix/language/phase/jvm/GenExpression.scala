@@ -1678,6 +1678,14 @@ object GenExpression {
         DUP()
         pushInt(sym.ordinal)
         PUTFIELD(GenTag.OrdinalField)
+        // The name the ordinal stands for, under `--Xdebug` only. `Tag$Obj` is shared by every case
+        // of that erased shape, so without this a debugger can only report `#1(…)`: the enum the
+        // ordinal indexes into is gone by the time the value exists.
+        if (flix.options.xdebug) {
+          DUP()
+          pushString(qualifiedCaseName(sym))
+          PUTFIELD(GenTag.NameField)
+        }
         exps.zipWithIndex.foreach {
           case (e, i) => DUP()
             compileExpr(e)
@@ -1685,6 +1693,10 @@ object GenExpression {
         }
     }
   }
+
+  /** The unmangled source case name, qualified by its enum for shape-safe debugger recognition. */
+  private def qualifiedCaseName(sym: Symbol.CaseSym): String =
+    (sym.enumSym.namespace :+ sym.enumSym.text :+ sym.name).mkString(".")
 
   private def compileUntag(exp: Expr, idx: Int, tpes: List[ClassDesc])(implicit mv: MethodVisitor, ctx: MethodContext, root: Root, flix: Flix): Unit = {
     // GenNullaryTag cannot happen here since terms must be non-empty.
