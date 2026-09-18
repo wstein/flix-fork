@@ -61,6 +61,14 @@ class TestTesterSink extends AnyFunSuite {
     assert(sink.events.collect { case Tester.TestEvent.Before(sym) => sym.toString } == List("Sink.Fixture.testPasses"))
   }
 
+  test("an explicit filter that selects no tests fails") {
+    val (result, sink) = run(List("Missing\\..*".r))
+
+    assert(result == Result.Err(1))
+    assert(sink.announced.isEmpty)
+    assert(sink.events.isEmpty)
+  }
+
   private def run(filters: List[scala.util.matching.Regex]): (Result[Unit, Int], RecordingSink) = {
     implicit val flix: Flix = new Flix().setOptions(Options.DefaultTest)
     implicit val sctx: SecurityContext = SecurityContext.Unrestricted

@@ -52,6 +52,12 @@ object Tester {
     //
     val tests = getTestCases(filters, program)
 
+    // An explicit filter that selects nothing is almost always stale configuration or a typo.
+    // Treating it as a successful run produces a false green result in IDEs and CI.
+    if (filters.nonEmpty && tests.isEmpty) {
+      return Result.Err(1)
+    }
+
     // Start the TestRunner and TestReporter.
     val queue = new ConcurrentLinkedQueue[TestEvent]()
     val reporter = new TestReporter(queue, sink)

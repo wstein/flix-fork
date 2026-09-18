@@ -471,7 +471,7 @@ class TestBootstrap extends AnyFunSuite {
     val excluded = b.test(PkgTestUtils.mkFlix(b), List("Suite\\.excluded".r))
     assert(excluded.toOption.isEmpty, excluded.toString)
     val unmatched = b.test(PkgTestUtils.mkFlix(b), List("Missing\\..*".r))
-    assert(unmatched.toOption.nonEmpty, unmatched.toString)
+    assert(unmatched.toOption.isEmpty, unmatched.toString)
   }
 
   test("clean-command-should-remove-class-files-and-directories-if-compiled-previously") {
