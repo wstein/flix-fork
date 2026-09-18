@@ -54,26 +54,41 @@ class TestDebugLocalVariables extends AnyFunSuite {
     assert(compile(xdebug = false).getDebugDefinitions.isEmpty)
   }
 
+  test("debug build records closure captures in applyFrame") {
+    val program = """def make(prefix: Int32): Int32 -> Unit \ IO = value -> println(prefix + value)
+      |
+      |def main(): Unit \ IO = make(41)(1)
+      |""".stripMargin
+    val debug = compile(xdebug = true, program)
+    val names = localNames(debug, "Clo$", "applyFrame")
+    assert(names.contains("prefix"), s"Expected captured source name, got: $names")
+    assert(localNames(compile(xdebug = false, program), "Clo$", "applyFrame").isEmpty)
+  }
+
   private def localNamesOfCompute(xdebug: Boolean): Set[String] = {
     val result = compile(xdebug)
     val clazz = result.getClasses.values.find(_.name.displayName() == "Def$compute")
       .getOrElse(fail(s"Expected a generated compute class, got: ${result.getClasses.keys}"))
+    localNames(result, "Def$compute", ClassMaker.StaticApplyMethodName)
+  }
+
+  private def localNames(result: ca.uwaterloo.flix.runtime.CompilationResult, classPrefix: String, method: String): Set[String] = {
     val names = mutable.Set.empty[String]
-    new ClassReader(clazz.bytecode).accept(new ClassVisitor(Opcodes.ASM9) {
+    result.getClasses.values.filter(_.name.displayName().contains(classPrefix)).foreach { clazz => new ClassReader(clazz.bytecode).accept(new ClassVisitor(Opcodes.ASM9) {
       override def visitMethod(access: Int, name: String, descriptor: String, signature: String, exceptions: Array[String]): MethodVisitor = {
-        if (name != ClassMaker.StaticApplyMethodName) return null
+        if (name != method) return null
         new MethodVisitor(Opcodes.ASM9) {
           override def visitLocalVariable(name: String, descriptor: String, signature: String, start: Label, end: Label, index: Int): Unit = names += name
         }
       }
-    }, 0)
+    }, 0) }
     names.toSet
   }
 
-  private def compile(xdebug: Boolean) = {
+  private def compile(xdebug: Boolean, program: String = Program) = {
     val flix = new Flix().setOptions(Options.DefaultTest.copy(entryPoint = Some(Symbol.mkDefnSym("main")), xdebug = xdebug))
     implicit val sctx: SecurityContext = SecurityContext.Unrestricted
-    flix.addVirtualPath(CompilerConstants.VirtualTestFile, Program)
+    flix.addVirtualPath(CompilerConstants.VirtualTestFile, program)
     flix.compile() match {
       case Result.Ok(value) => value
       case Result.Err(errors) => fail(s"Expected a successful compilation, got: $errors")

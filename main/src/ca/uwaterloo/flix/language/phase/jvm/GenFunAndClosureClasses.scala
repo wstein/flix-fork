@@ -17,7 +17,7 @@
 package ca.uwaterloo.flix.language.phase.jvm
 
 import ca.uwaterloo.flix.api.{CompilerConstants, Flix, FlixEvent}
-import ca.uwaterloo.flix.language.ast.JvmAst.{Def, OffsetFormalParam, Root}
+import ca.uwaterloo.flix.language.ast.JvmAst.{Def, LocalParam, OffsetFormalParam, Root}
 import ca.uwaterloo.flix.language.ast.{Purity, SimpleType, Symbol}
 import ca.uwaterloo.flix.language.jvm.ClassDescs
 import ca.uwaterloo.flix.language.phase.jvm.ClassMaker.StaticMethod
@@ -379,6 +379,26 @@ object GenFunAndClosureClasses {
     m.visitEnd()
   }
 
+  /** Records restored frame slots for native debuggers in a debug build. */
+  private def nameFrameSlots(m: MethodVisitor,
+                             cparams: List[OffsetFormalParam],
+                             fparams: List[OffsetFormalParam],
+                             lparams: List[LocalParam],
+                             start: Label,
+                             localOffset: Int)(implicit root: Root, flix: Flix): Unit = {
+    if (!flix.options.xdebug) return
+    val end = new Label()
+    m.visitLabel(end)
+    for (param <- cparams ++ fparams if !param.sym.isWild) {
+      val tpe = TypeDescs.toClassDesc(param.tpe)
+      m.visitLocalVariable(param.sourceName.getOrElse(param.sym.text), tpe.descriptorString(), null, start, end, param.offset + localOffset)
+    }
+    for (param <- lparams if !param.sym.isWild) {
+      val tpe = TypeDescs.toClassDesc(param.tpe)
+      m.visitLocalVariable(param.sym.text, tpe.descriptorString(), null, start, end, param.offset + localOffset)
+    }
+  }
+
   private def compileInvokeMethod(visitor: ClassWriter, className: ClassDesc): Unit = {
     implicit val m: MethodVisitor = visitor.visitMethod(Opcodes.ACC_PUBLIC + Opcodes.ACC_FINAL, GenThunk.InvokeMethod.name,
       MethodTypeDescs.mkDescriptor()(GenResult.Desc).descriptorString(), null, null)
@@ -483,6 +503,8 @@ object GenFunAndClosureClasses {
     }
 
     xReturn(GenResult.Desc)
+
+    nameFrameSlots(m, defn.cparams, defn.fparams, defn.lparams, enterLabel, localOffset)
 
     m.visitMaxs(999, 999)
     m.visitEnd()

@@ -196,7 +196,7 @@ object ClosureConv {
       case FreeVar(oldSym, ptpe) =>
         val newSym = Symbol.freshVarSym(oldSym)
         subst += (oldSym -> newSym)
-        FormalParam(newSym, ptpe, loc)
+        FormalParam(newSym, ptpe, loc, Some(oldSym.text))
     }
     (fparams, subst.toMap)
   }
@@ -434,10 +434,10 @@ object ClosureConv {
     }
 
     def visitFormalParam(fparam: FormalParam): FormalParam = fparam match {
-      case FormalParam(sym, tpe, loc) =>
+      case FormalParam(sym, tpe, loc, sourceName) =>
         subst.get(sym) match {
-          case None => FormalParam(sym, tpe, loc)
-          case Some(newSym) => FormalParam(newSym, tpe, loc)
+          case None => FormalParam(sym, tpe, loc, sourceName)
+          case Some(newSym) => FormalParam(newSym, tpe, loc, sourceName)
         }
     }
 

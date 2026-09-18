@@ -113,8 +113,8 @@ object EffectBinder {
   }
 
   private def visitParam(p: LiftedAst.FormalParam): ReducedAst.FormalParam = p match {
-    case LiftedAst.FormalParam(sym, tpe, _) =>
-      ReducedAst.FormalParam(sym, tpe)
+    case LiftedAst.FormalParam(sym, tpe, _, sourceName) =>
+      ReducedAst.FormalParam(sym, tpe, sourceName)
   }
 
   private def visitJvmConstructor(constructor: LiftedAst.JvmConstructor)(implicit flix: Flix): ReducedAst.JvmConstructor = constructor match {

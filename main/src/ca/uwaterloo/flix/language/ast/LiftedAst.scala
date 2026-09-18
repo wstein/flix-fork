@@ -106,9 +106,9 @@ object LiftedAst {
 
   case class HandlerRule(symUse: OpSymUse, fparams: List[FormalParam], exp: Expr)
 
-  case class FormalParam(sym: Symbol.VarSym, tpe: SimpleType, loc: SourceLocation)
+  /** `sourceName` is retained for debugger metadata when closure conversion replaces a captured symbol. */
+  case class FormalParam(sym: Symbol.VarSym, tpe: SimpleType, loc: SourceLocation, sourceName: Option[String] = None)
 
   case class TypeParam(name: Name.Ident, sym: Symbol.KindedTypeVarSym, loc: SourceLocation)
 
 }
-

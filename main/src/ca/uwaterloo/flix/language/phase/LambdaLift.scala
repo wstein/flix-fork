@@ -257,7 +257,7 @@ object LambdaLift {
 
 
   private def visitFormalParam(fparam: SimplifiedAst.FormalParam): LiftedAst.FormalParam = fparam match {
-    case SimplifiedAst.FormalParam(sym, tpe, loc) => LiftedAst.FormalParam(sym, tpe, loc)
+    case SimplifiedAst.FormalParam(sym, tpe, loc, sourceName) => LiftedAst.FormalParam(sym, tpe, loc, sourceName)
   }
 
   /**

@@ -78,7 +78,7 @@ object JvmAstPrinter {
 
   /** Returns the [[DocAst.Expr.AscriptionTpe]] representation of `fp`. */
   private def printOffsetFormalParam(fp: JvmAst.OffsetFormalParam): DocAst.Expr.AscriptionTpe = {
-    val JvmAst.OffsetFormalParam(sym, _, tpe) = fp
+    val JvmAst.OffsetFormalParam(sym, _, tpe, _) = fp
     DocAst.Expr.AscriptionTpe(printVarSym(sym), SimpleTypePrinter.print(tpe))
   }
 

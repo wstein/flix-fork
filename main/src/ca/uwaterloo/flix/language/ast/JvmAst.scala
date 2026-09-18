@@ -131,11 +131,10 @@ object JvmAst {
 
   case class FormalParam(sym: Symbol.VarSym, tpe: SimpleType)
 
-  case class OffsetFormalParam(sym: Symbol.VarSym, offset: Int, tpe: SimpleType)
+  case class OffsetFormalParam(sym: Symbol.VarSym, offset: Int, tpe: SimpleType, sourceName: Option[String] = None)
 
   case class LocalParam(sym: Symbol.VarSym, offset: Int, tpe: SimpleType)
 
   case class TypeParam(name: Name.Ident, sym: Symbol.KindedTypeVarSym)
 
 }
-

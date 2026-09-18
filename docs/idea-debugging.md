@@ -30,10 +30,12 @@ narrower line-table policy because optimization can move, merge, or remove expre
 ## Variables
 
 For control-pure static methods, debug builds emit standard JVM local-variable entries
-for source formal parameters. This makes their names and JVM descriptors available to a
-native JVM debugger without exposing compiler-generated temporaries. Source `let`
-bindings, captures, and continuation-frame values require the separate pre-erasure
-debug-provenance snapshot; they are intentionally not guessed from lowered ANF names.
+for source formal parameters. Effectful frames also expose their restored formal
+parameters, continuation locals, and closure captures. Closure conversion retains a
+capture's source name through lowering, so a debugger sees `prefix`, not a generated
+`arg0$…` temporary. This metadata is omitted from release builds. Source `let`
+bindings still require the separate pre-erasure debug-provenance snapshot; they are
+intentionally not guessed from lowered ANF names.
 
 The compiler now captures source parameter and `let` binding identities, names, and
 locations in that compilation-local snapshot before typed bodies are released. This is
@@ -62,6 +64,6 @@ their ordinary debugger fallback.
 The debug policy does not promise a bindable location for every lexical line, preserve
 unused definitions removed by reachability analysis, or preserve local/lambda bodies.
 Line-table attribution and the initial source/class and binding-type sidecars are
-available. Captures, continuation fields, complete lexical scopes, evaluation, and
-JetBrains IDE integration remain later milestones. Release builds remain subject to
-the normal optimizer policy.
+available. Continuation fields, complete lexical scopes, evaluation, and JetBrains IDE
+integration remain later milestones. Release builds remain subject to the normal
+optimizer policy.
