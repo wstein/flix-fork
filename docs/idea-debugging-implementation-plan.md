@@ -1,6 +1,23 @@
 # Flix JVM debugging and IntelliJ IDEA implementation plan
 
-Status: proposed implementation; no compiler or IDE changes are made by this document.
+Status: implemented for the compiler and native IntelliJ debugger increment (M1–M4,
+M7–M9). BSP milestones M5–M6 were explicitly excluded from this increment. M10's
+automated gates are implemented; its click-through IDEA matrix remains a manual release
+qualification activity.
+
+Implementation note (2026-09-17): this document remains the architectural record and
+acceptance checklist. The shipped contract is summarized in `docs/idea-debugging.md`.
+Where an initial design below differs, the implemented choices are authoritative:
+
+- format-1 source index and format-2 pre-erasure scope metadata are published atomically
+  beside the format-4 launch manifest;
+- evaluation supports JDI-visible parameters, captures, source lets, and pattern locals;
+- the launch/evaluation build ID combines the manifest fingerprint and source digest;
+- evaluation uses the LSP project's Bootstrap dependencies, keeps one incremental
+  compiler, retains at most 32 LRU answers, and caps raw artifact classes at 16 MiB;
+- the debuggee host has no session registry or retained loaders, so returning from an
+  invocation is the reset/release boundary;
+- IntelliJ uses its existing native JVM debugger and two-phase CLI launcher, without BSP.
 Prepared: 2026-09-16.
 
 Updated for the merge of stable JVM naming into `dev0.76.0` and a source review of

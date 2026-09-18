@@ -16,6 +16,7 @@
 package ca.uwaterloo.flix.api.lsp
 
 import ca.uwaterloo.flix.api.{Bootstrap, BootstrapError, Flix}
+import ca.uwaterloo.flix.api.lsp.provider.DebugEvalSidecar
 import ca.uwaterloo.flix.language.CompilationMessage
 import ca.uwaterloo.flix.language.ast.TypedAst.Root
 import ca.uwaterloo.flix.language.ast.shared.{SecurityContext, SourceName}
@@ -184,7 +185,10 @@ class LspProject(o: Options) {
   /**
     * Releases the resources held by the Flix instance.
     */
-  def close(): Unit = flix.close()
+  def close(): Unit = {
+    DebugEvalSidecar.evict()
+    flix.close()
+  }
 
   /**
     * Loads the project and replaces the Flix instance with one for it.

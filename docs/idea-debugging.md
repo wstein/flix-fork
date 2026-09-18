@@ -95,9 +95,7 @@ build removes them, so an IDE cannot accidentally consume metadata from an earli
 debug build. Clients that do not understand a sidecar format must ignore it and use
 their ordinary debugger fallback.
 
-## Current limits
-
-## Expression typing
+## Expression evaluation
 
 The language server implements `flix/debugEval/compile`. A request identifies the
 paused JVM class and method, supplies a Flix expression, and chooses `pure` or
@@ -158,6 +156,8 @@ scanning `.flix` files into a bare compiler. It therefore receives the same pack
 JARs declared by `flix.toml` as the paused program. Evaluation remains in-memory, and a
 dependency change still replaces the language server project before the next request.
 
+## Current limits
+
 The debug policy does not promise a bindable location for every lexical line, preserve
 unused definitions removed by reachability analysis, or preserve local/lambda bodies.
 Line-table attribution and the source/class and binding-type sidecars are available,
@@ -169,5 +169,23 @@ let-binding state, whose invariants assume substitution has already happened. Th
 explicit `DebugLocal` state resolves that distinction; it does not pretend an optimized
 expression has a recoverable slot.
 
-Final JetBrains IDE qualification remains open.
+The evaluation host retains no artifact loader, class, or paused value after a call
+returns: each loader is a method-local object and becomes collectible with its classes.
+There is consequently no host session registry to reset on resume or detach. Class
+unloading remains the JVM garbage collector's decision. The language-server compiler
+and answer cache are project-owned, bounded, and released when that project closes.
+
+An evaluation executes on the debugger's managed invocation thread. There is no claim
+that an arbitrary nonterminating or effectful expression can be timed out, rolled back,
+or safely interrupted. The IDEA setting for effectful evaluation is therefore off by
+default. Evaluation also requires a name to be visible in JDI at the paused instruction;
+the method-wide scope sidecar never overrides JVM liveness.
+
+Automated compiler, bytecode, JDI, launch-contract, reader, and plugin tests cover this
+foundation. The final click-through IDEA UI matrix (gutter gesture, rendered tool-window
+state, Split Mode, and optional-language plugin combinations) remains a manual release
+qualification gate rather than an unimplemented compiler/debugger feature.
+
+BSP import/server work is outside this increment. The supported IDEA path is the
+existing two-phase CLI build (`build --Xdebug`) followed by the format-4 manifest launch.
 Release builds remain subject to the normal optimizer policy.

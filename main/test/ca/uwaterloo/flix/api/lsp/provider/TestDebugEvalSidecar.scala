@@ -7,6 +7,7 @@
 package ca.uwaterloo.flix.api.lsp.provider
 
 import ca.uwaterloo.flix.api.Flix
+import ca.uwaterloo.flix.api.lsp.LspProject
 import ca.uwaterloo.flix.api.lsp.provider.DebugEvalProvider.{Answer, Policy, ScopeId}
 import ca.uwaterloo.flix.language.ast.TypedAst
 import ca.uwaterloo.flix.language.ast.shared.SecurityContext
@@ -101,6 +102,17 @@ class TestDebugEvalSidecar extends AnyFunSuite {
     }
 
     assert(DebugEvalSidecar.cachedAnswers(project) == DebugEvalSidecar.MaxAnswers)
+  }
+
+  test("closing the language-server project releases the evaluation compiler") {
+    DebugEvalSidecar.evict()
+    val cachedProject = Files.createTempDirectory("flix-debug-cache-close")
+    DebugEvalSidecar.withCompiler(cachedProject, Nil, "build")(identity)
+    val lspProject = new LspProject(Options.DefaultTest)
+
+    lspProject.close()
+
+    assert(!DebugEvalSidecar.isCaching(cachedProject))
   }
 
   private def artifactFor(project: Path, expression: String): DebugEvalProvider.Artifact =
