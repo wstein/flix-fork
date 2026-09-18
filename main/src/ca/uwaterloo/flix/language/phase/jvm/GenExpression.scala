@@ -1399,7 +1399,7 @@ object GenExpression {
       // End label
       mv.visitLabel(endLabel)
 
-    case Expr.Let(_, offset, exp1, exp2, _) =>
+    case Expr.Let(sym, offset, exp1, exp2, _) =>
       val bType = TypeDescs.toClassDesc(exp1.tpe)
       compileExpr(exp1)
       // No cast needed in most cases: operations self-cast (Untag, Index, etc.),
@@ -1412,7 +1412,17 @@ object GenExpression {
         case _ => ()
       }
       xStore(bType, ctx.getIndex(offset))
-      compileExpr(exp2)
+      if (flix.options.xdebug && sym.loc.isReal && sym.loc.source.origin.isUser && !sym.isWild) {
+        // A source binding becomes visible only after its initializer has stored the value.
+        val start = new Label()
+        val end = new Label()
+        mv.visitLabel(start)
+        compileExpr(exp2)
+        mv.visitLabel(end)
+        mv.visitLocalVariable(sym.text, bType.descriptorString(), null, start, end, ctx.getIndex(offset))
+      } else {
+        compileExpr(exp2)
+      }
 
     case Expr.Stm(exps, exp, _) =>
       exps.foreach { e =>

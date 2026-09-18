@@ -2,7 +2,7 @@
 
 `flix build --Xdebug` selects the experimental JVM debug-build policy. It is the
 compiler foundation for source-level JVM debugging; it does not by itself provide an
-IDE debugger, debug sidecar metadata, or expression evaluation.
+IDE debugger or expression evaluation. Debug sidecars are published with the build.
 
 ## Function bodies
 
@@ -35,21 +35,27 @@ parameters and closure captures the same way. Closure conversion retains a captu
 source name through lowering, so a debugger sees `prefix`, not a generated `arg0$…`
 temporary. This metadata is omitted from release builds.
 
-Source `let` bindings -- including one bound after a suspension point, inside an
-effectful frame -- are not attempted as real JVM locals this way; they are intentionally
-not guessed from lowered ANF names, since the optimizer is free to inline, substitute, or
-drop them before a frame's fields are assigned. Instead, the compiler captures every
-source parameter and `let` binding's identity, name, and location into a
-compilation-local snapshot before typed bodies are released, keyed only by the
-*declaring def's* own symbol. This snapshot is joined to the def's stable generated class
-name once known and exposed on the in-memory compilation result (and the `debug-scopes`
-sidecar) for debug builds, independent of what the optimizer or ANF lowering did to the
-binding afterward: a `let` after a suspension point is reported exactly as reliably as
-one before it, since neither ever needs to survive as an AST node for its name and
-pre-erasure Flix type to reach the snapshot. It retains that type and the emitted method
-(`staticApply` or `applyFrame`) but does not duplicate JVM slots or liveness ranges --
-this is metadata a tool can look up, not a real local a standard Java debugger's
-`LocalVariableTable` will show while stepping.
+User-source `let` bindings are materialized in debug builds. The inliner registers them
+as `DebugLocal`, an explicit non-substitutable binding state, even when occurrence
+analysis says a pure binding is used once. This preserves the inliner's substitution
+invariants while allowing the existing symbol-renaming pipeline to carry the binding
+into JVM lowering. Library bindings still follow the normal optimizer policy.
+
+The JVM emitter records a local's range only after its initializer stores the value,
+through the emitted continuation of the binding. This also works for locals before and
+after effect suspension: JDI reads the actual restored slot, not a value reconstructed
+from sidecar text. Generated ANF slots are hidden. Frame parameters become visible only
+after their restore instructions. Internal continuation field names remain `l0`, `l1`,
+etc.; debugger variable names come from the LVT.
+
+The compiler also captures source binding identity, name, location, and pre-erasure type
+before lowering, joining them to the emitted class and method for the `debug-scopes`
+sidecar. That method-wide snapshot is not a list of variables live at a particular
+instruction: clients must use JDI/LVT visibility when selecting evaluation parameters.
+
+Regression coverage includes both monomorphizers, non-overlapping two-slot `Int64`
+locals, release-mode omission, sequential-mode pruning, and a real JDWP/JDI breakpoint
+that reads locals after a handler resumes a suspended function.
 
 ## Build sidecars
 
@@ -76,17 +82,11 @@ Line-table attribution and the source/class and binding-type sidecars are availa
 including name and type metadata for a `let` bound anywhere in a def, before or after a
 suspension point.
 
-What that metadata does not yet give is a *real* JVM local: the frame fields a live
-continuation-local is actually stored in (`GenFunAndClosureClasses.nameFrameSlots`'s
-`lparams`) are still named from their ANF-lowered symbol, not their source name, unlike
-the formal-parameter and closure-capture fields beside them. Closing that gap needs the
-binding's identity threaded through every phase that can rename or substitute it --
-`Inliner`, `ClosureConv`/`LambdaLift`, and the ANF pass in `EffectBinder` -- since
-attaching it after the fact is too late, and forcing the binding to survive as an AST
-node fights the inliner's own substitution invariants. Two attempts at this were reverted
-for exactly that second reason; a viable design would propagate a stable key through each
-substitution instead of trying to keep the binding's shape.
+The earlier attempts to retain source locals failed because they reused the ordinary
+let-binding state, whose invariants assume substitution has already happened. The
+explicit `DebugLocal` state resolves that distinction; it does not pretend an optimized
+expression has a recoverable slot.
 
-Complete lexical scopes (live ranges, not just names), expression evaluation at a
-breakpoint, and JetBrains IDE integration remain later milestones. Release builds remain
-subject to the normal optimizer policy.
+Complete lexical scopes (including shadowing through ANF hoisting and pattern bindings),
+expression evaluation at a breakpoint, and JetBrains IDE qualification remain open.
+Release builds remain subject to the normal optimizer policy.

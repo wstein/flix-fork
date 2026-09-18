@@ -20,10 +20,11 @@ import ca.uwaterloo.flix.api.{CompilerConstants, Flix}
 import ca.uwaterloo.flix.language.ast.Symbol
 import ca.uwaterloo.flix.language.ast.shared.SecurityContext
 import ca.uwaterloo.flix.util.{Options, Result}
-import org.objectweb.asm.{ClassReader, ClassVisitor, Label, MethodVisitor, Opcodes}
+import org.objectweb.asm.{ClassReader, ClassVisitor, Label, MethodVisitor, Opcodes, Type}
 import org.scalatest.funsuite.AnyFunSuite
 
 import scala.collection.mutable
+import scala.jdk.CollectionConverters.*
 
 class TestDebugLocalVariables extends AnyFunSuite {
 
@@ -45,6 +46,118 @@ class TestDebugLocalVariables extends AnyFunSuite {
 
   test("release build does not gain local-variable metadata") {
     assert(localNamesOfCompute(xdebug = false).isEmpty)
+  }
+
+  test("debug build exposes source lets as initialized JVM locals") {
+    val names = localNamesOfCompute(xdebug = true)
+    assert(Set("x", "y").subsetOf(names), s"Expected source locals, got: $names")
+  }
+
+  for (newMono <- List(false, true)) {
+    test(s"debug locals survive suspension with disjoint wide slots (mono2=$newMono)") {
+      val program = """eff Pause { def pause(): Unit }
+        |def compute(seed: Int64): Int64 \ Pause = {
+        |    let before = seed + 1i64;
+        |    Pause.pause();
+        |    let after = before + 2i64;
+        |    after + before
+        |}
+        |def main(): Unit \ IO = run {
+        |    println(compute(40i64))
+        |} with handler Pause { def pause(k) = k() }
+        |""".stripMargin
+      val result = compile(xdebug = true, program, newMono)
+      val locals = localEntries(result, "Def$compute", "applyFrame")
+      assert(Set("seed", "before", "after").subsetOf(locals.map(_._1).toSet), locals.toString)
+      assert(!locals.exists(_._1 == "anf"))
+      val before = locals.find(_._1 == "before").get
+      val after = locals.find(_._1 == "after").get
+      assert(before._3 < after._3, "A post-suspension local must not be visible before its initializer.")
+      assert(before._2 == "J" && after._2 == "J")
+      for (a <- locals; b <- locals if a != b && a._3 < b._4 && b._3 < a._4) {
+        val occupied = a._5 until (a._5 + Type.getType(a._2).getSize)
+        val other = b._5 until (b._5 + Type.getType(b._2).getSize)
+        assert(occupied.intersect(other).isEmpty, s"Overlapping live slots: $a and $b")
+      }
+      ca.uwaterloo.flix.runtime.JvmLoader.load(result).main.get(Array.empty)
+    }
+  }
+
+  test("JDI reads continuation locals after resuming an effect") {
+    val program = """eff Pause { def pause(): Unit }
+      |def compute(seed: Int64): Int64 \ Pause = {
+      |    let before = seed + 1i64;
+      |    Pause.pause();
+      |    let after = before + 2i64;
+      |    after + before
+      |}
+      |def main(): Unit \ IO = run {
+      |    println(compute(40i64))
+      |} with handler Pause { def pause(k) = k() }
+      |""".stripMargin
+    val result = compile(xdebug = true, program)
+    val directory = java.nio.file.Files.createTempDirectory("flix-debug-locals-")
+    for (clazz <- result.getClasses.values) {
+      val path = directory.resolve(ca.uwaterloo.flix.language.jvm.ClassDescs.classFileNameOf(clazz.name))
+      java.nio.file.Files.createDirectories(path.getParent)
+      java.nio.file.Files.write(path, clazz.bytecode)
+    }
+    val connector = com.sun.jdi.Bootstrap.virtualMachineManager().defaultConnector()
+    val args = connector.defaultArguments()
+    args.get("main").setValue("Main")
+    args.get("options").setValue(s"-cp \"$directory\"")
+    args.get("suspend").setValue("true")
+    val vm = connector.launch(args)
+    try {
+      val prepare = vm.eventRequestManager().createClassPrepareRequest()
+      prepare.addClassFilter("Def$compute")
+      prepare.enable()
+      vm.resume()
+      val observed = mutable.Set.empty[Int]
+      val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(30)
+      while (!observed.contains(6) && System.nanoTime() < deadline) {
+        val events = vm.eventQueue().remove(1000)
+        if (events != null) {
+          for (event <- events.asScala) event match {
+            case prepared: com.sun.jdi.event.ClassPrepareEvent =>
+              for (line <- List(3, 4, 6)) {
+                val locations = prepared.referenceType().locationsOfLine(line).asScala
+                  .filter(_.method().name() == "applyFrame")
+                assert(locations.nonEmpty, s"Missing breakpoint at line $line")
+                vm.eventRequestManager().createBreakpointRequest(locations.head).enable()
+              }
+            case breakpoint: com.sun.jdi.event.BreakpointEvent =>
+              val frame = breakpoint.thread().frame(0)
+              def value(name: String): Long = {
+                val variable = frame.visibleVariableByName(name)
+                assert(variable != null, s"$name is not visible at the suspended frame")
+                frame.getValue(variable).asInstanceOf[com.sun.jdi.LongValue].value()
+              }
+              assert(value("seed") == 40L)
+              val line = breakpoint.location().lineNumber()
+              if (line == 3) {
+                assert(frame.visibleVariableByName("before") == null)
+                assert(frame.visibleVariableByName("after") == null)
+              } else if (line == 4) {
+                assert(value("before") == 41L)
+                assert(frame.visibleVariableByName("after") == null)
+              } else {
+                assert(value("before") == 41L)
+                assert(value("after") == 43L)
+              }
+              observed += line
+            case _: com.sun.jdi.event.VMDeathEvent | _: com.sun.jdi.event.VMDisconnectEvent =>
+              fail("Debuggee exited without reaching the breakpoint")
+            case _ => ()
+          }
+          events.resume()
+        }
+      }
+      assert(observed == Set(3, 4, 6), s"Missing continuation breakpoints: $observed")
+    } finally {
+      try vm.dispose() catch { case _: com.sun.jdi.VMDisconnectedException => () }
+      vm.process().destroyForcibly()
+    }
   }
 
   test("debug compilation finalizes source bindings under a stable class name") {
@@ -134,8 +247,35 @@ class TestDebugLocalVariables extends AnyFunSuite {
     names.toSet
   }
 
-  private def compile(xdebug: Boolean, program: String = Program) = {
-    val flix = new Flix().setOptions(Options.DefaultTest.copy(entryPoint = Some(Symbol.mkDefnSym("main")), xdebug = xdebug))
+  private def localEntries(result: ca.uwaterloo.flix.runtime.CompilationResult, className: String, method: String): List[(String, String, Int, Int, Int)] = {
+    val clazz = result.getClasses.values.find(_.name.displayName() == className).getOrElse(fail(s"Missing $className"))
+    val offsets = new java.util.IdentityHashMap[Label, Integer]()
+    val entries = mutable.ListBuffer.empty[(String, String, Int, Int, Int)]
+    val reader = new ClassReader(clazz.bytecode) {
+      override protected def readLabel(offset: Int, labels: Array[Label]): Label = {
+        val label = super.readLabel(offset, labels)
+        offsets.put(label, offset)
+        label
+      }
+    }
+    reader.accept(new ClassVisitor(Opcodes.ASM9) {
+      override def visitMethod(access: Int, name: String, descriptor: String, signature: String, exceptions: Array[String]): MethodVisitor = {
+        if (name != method) return null
+        new MethodVisitor(Opcodes.ASM9) {
+          override def visitLocalVariable(name: String, descriptor: String, signature: String, start: Label, end: Label, index: Int): Unit = {
+            val lo = offsets.get(start).intValue()
+            val hi = offsets.get(end).intValue()
+            assert(lo < hi, s"Empty local range for $name")
+            entries += ((name, descriptor, lo, hi, index))
+          }
+        }
+      }
+    }, 0)
+    entries.toList
+  }
+
+  private def compile(xdebug: Boolean, program: String = Program, newMono: Boolean = Options.DefaultTest.xnewmono) = {
+    val flix = new Flix().setOptions(Options.DefaultTest.copy(entryPoint = Some(Symbol.mkDefnSym("main")), xdebug = xdebug, xnewmono = newMono))
     implicit val sctx: SecurityContext = SecurityContext.Unrestricted
     flix.addSource(CompilerConstants.VirtualTestFile, sctx = sctx, text = program)
     flix.compile() match {

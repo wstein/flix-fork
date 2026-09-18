@@ -239,6 +239,17 @@ object Inliner {
       val es = exps.map(visitExp(_, ctx0))
       Expr.ApplyOp(sym, es, tpe, eff, loc)
 
+    case Expr.Let(sym, exp1, exp2, tpe, eff, occur, loc)
+      if flix.options.xdebug && sym.loc.isReal && sym.loc.source.origin.isUser && !sym.isWild =>
+      val e1 = visitExp(exp1, ctx0)
+      val freshVarSym = Symbol.freshVarSym(sym)
+      // Unlike an ordinary LetBound, this binding has deliberately not been substituted,
+      // even when occurrence analysis says Once/Pure. Keep that fact explicit so use-site
+      // inlining never interprets it as a suspended expression or a broken invariant.
+      val ctx = ctx0.addVarSubst(sym, freshVarSym).addInScopeVar(freshVarSym, BoundKind.DebugLocal)
+      val e2 = visitExp(exp2, ctx)
+      Expr.Let(freshVarSym, e1, e2, tpe, eff, occur, loc)
+
     case Expr.Let(sym, exp1, exp2, tpe, eff, occur, loc) => (occur, exp1.eff) match {
       case (Occur.Dead, Type.Pure) =>
         // Eliminate dead binder
@@ -1075,6 +1086,9 @@ object Inliner {
   private sealed trait BoundKind
 
   private object BoundKind {
+
+    /** A materialized source binding retained for inspection, never substituted at a use site. */
+    object DebugLocal extends BoundKind
 
     /** Variable is bound by either a parameter or a pattern. Its value is unknown. */
     object ParameterOrPattern extends BoundKind
