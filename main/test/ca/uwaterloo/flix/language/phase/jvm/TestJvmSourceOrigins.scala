@@ -107,6 +107,7 @@ class TestJvmSourceOrigins extends AnyFunSuite {
     val bindings = JvmSourceOrigins.capture(root).body(example.sym).bindings
     assert(bindings.map(_.name).toSet == Set("value", "named"))
     assert(bindings.map(_.kind).toSet == Set("parameter", "let"))
+    assert(bindings.map(_.tpe).toSet == Set("Int32"))
     assert(bindings.forall(_.loc.isReal))
   }
 

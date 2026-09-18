@@ -32,7 +32,8 @@ object JvmLexicalOrigins {
   type TypeEncoder = (Type, Map[Symbol, GeneratedJvmKey]) => String
 
   /** A source binding captured before ANF/lowering replaces its user-facing name. */
-  case class Binding(identity: String, name: String, loc: SourceLocation, kind: String)
+  /** A source binding retained for debug metadata before lowering erases its Flix type. */
+  case class Binding(identity: String, name: String, loc: SourceLocation, kind: String, tpe: String)
 
   def capture(exp: Expr, owner: GeneratedJvmKey, fparams: List[FormalParam],
               encodeType: TypeEncoder, sourceOrigin: Symbol => GeneratedJvmKey): JvmLexicalOrigins = {
@@ -75,7 +76,7 @@ object JvmLexicalOrigins {
         param.bnd.sym -> frame("parameter", List(index.toString))
       }.toMap, Map.empty)
       fparams.zipWithIndex.foreach { case (param, index) =>
-        if (!param.bnd.sym.isWild) bindings += Binding(frame("parameter", List(index.toString)), param.bnd.sym.text, param.bnd.sym.loc, "parameter")
+        if (!param.bnd.sym.isWild) bindings += Binding(frame("parameter", List(index.toString)), param.bnd.sym.text, param.bnd.sym.loc, "parameter", param.tpe.toString)
       }
       visit(exp, env, frame(owner.family, owner.fields), "body", isRoot = true)
       new JvmLexicalOrigins(origins, ordered.toList, all.toList, bindings.toList, fingerprintEvaluations)
@@ -176,7 +177,7 @@ object JvmLexicalOrigins {
           ()
         case Expr.Let(binder, value, rest, _, _, _) =>
           val binding = identity(scope, "let:" + role, fingerprint(value, env, 0))
-          if (!binder.sym.isWild) bindings += Binding(binding, binder.sym.text, binder.sym.loc, "let")
+          if (!binder.sym.isWild) bindings += Binding(binding, binder.sym.text, binder.sym.loc, "let", binder.tpe.toString)
           val site = if (isRoot) frame("root", List(scope, role)) else frame("let-expression", List(binding))
           val key = GeneratedJvmKey("lexical-expression", List(site))
           if (origins.containsKey(exp)) fail("Repeated AST identity in lexical capture.", exp)
