@@ -22,6 +22,7 @@ import ca.uwaterloo.flix.util.{Options, Result}
 import org.scalatest.funsuite.AnyFunSuite
 
 import scala.collection.mutable
+import java.util.concurrent.atomic.AtomicInteger
 
 class TestTesterSink extends AnyFunSuite {
 
@@ -67,6 +68,27 @@ class TestTesterSink extends AnyFunSuite {
     assert(result == Result.Err(1))
     assert(sink.announced.isEmpty)
     assert(sink.events.isEmpty)
+  }
+
+  test("cancellation stops before the next test") {
+    implicit val flix: Flix = new Flix().setOptions(Options.DefaultTest)
+    implicit val sctx: SecurityContext = SecurityContext.Unrestricted
+    flix.addSource(CompilerConstants.VirtualTestFile, MixedTests, sctx)
+    val compilationResult = flix.compile() match {
+      case Result.Ok(result) => result
+      case Result.Err(errors) => fail(errors.map(_.summary).mkString(", "))
+    }
+    val checks = new AtomicInteger(0)
+    val sink = new RecordingSink
+    val token: Tester.CancellationToken = new Tester.CancellationToken {
+      override def isCancelled: Boolean = checks.incrementAndGet() > 1
+    }
+
+    val result = Tester.run(Nil, JvmLoader.load(compilationResult), sink, token)
+
+    assert(result == Result.Err(1))
+    assert(sink.events.count(_.isInstanceOf[Tester.TestEvent.Before]) == 1)
+    assert(sink.events.last.isInstanceOf[Tester.TestEvent.Finished])
   }
 
   private def run(filters: List[scala.util.matching.Regex]): (Result[Unit, Int], RecordingSink) = {

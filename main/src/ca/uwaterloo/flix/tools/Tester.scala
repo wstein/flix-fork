@@ -47,6 +47,16 @@ object Tester {
     * Runs all tests, reporting their events to `sink`.
     */
   def run(filters: List[Regex], program: LoadedProgram, sink: TestEventSink)(implicit flix: Flix): Result[Unit, Int] = {
+    run(filters, program, sink, CancellationToken.Never)
+  }
+
+  /**
+    * Runs all tests, stopping before the next test when `cancellation` is requested.
+    *
+    * A running test is deliberately not interrupted: arbitrary Flix/Java code may not be
+    * interruption-safe. Cancellation therefore has a precise boundary between test cases.
+    */
+  def run(filters: List[Regex], program: LoadedProgram, sink: TestEventSink, cancellation: CancellationToken)(implicit flix: Flix): Result[Unit, Int] = {
     //
     // Find all test cases (both active and ignored).
     //
@@ -61,7 +71,7 @@ object Tester {
     // Start the TestRunner and TestReporter.
     val queue = new ConcurrentLinkedQueue[TestEvent]()
     val reporter = new TestReporter(queue, sink)
-    val runner = new TestRunner(queue, tests)
+    val runner = new TestRunner(queue, tests, cancellation)
 
     // A structured sink owns stdout while tests run. ConsoleRedirection tees each test's output to
     // this stream, which turns it into protocol events instead of corrupting the JSONL stream.
@@ -84,7 +94,7 @@ object Tester {
       System.setOut(oldOut)
     }
 
-    if (reporter.isSuccess()) {
+    if (reporter.isSuccess() && !cancellation.isCancelled) {
       Result.Ok(())
     } else {
       // Set exit code of program to 1.
@@ -106,6 +116,17 @@ object Tester {
       * A stream that should replace stdout while tests run, if this rendering carries program output.
       */
     def outputStream: Option[OutputStream] = None
+  }
+
+  /** A cooperatively observed request to stop before starting another test. */
+  trait CancellationToken {
+    def isCancelled: Boolean
+  }
+
+  object CancellationToken {
+    val Never: CancellationToken = new CancellationToken {
+      override def isCancelled: Boolean = false
+    }
   }
 
   /**
@@ -205,13 +226,13 @@ object Tester {
   /**
     * A class that runs all the given tests emitting test events.
     */
-  private class TestRunner(queue: ConcurrentLinkedQueue[TestEvent], tests: Vector[TestCase])(implicit flix: Flix) extends Thread {
+  private class TestRunner(queue: ConcurrentLinkedQueue[TestEvent], tests: Vector[TestCase], cancellation: CancellationToken)(implicit flix: Flix) extends Thread {
     /**
       * Runs all the given tests.
       */
     override def run(): Unit = {
       val start = System.nanoTime()
-      for (testCase <- tests) {
+      for (testCase <- tests if !cancellation.isCancelled) {
         runTest(testCase)
       }
       val elapsed = System.nanoTime() - start
