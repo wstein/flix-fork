@@ -78,6 +78,11 @@ and declaration location when lifted. Parameterized types such as `Option[Int32]
 therefore retain their Flix spelling; generated parameters with no source binding are
 omitted rather than assigned a guessed type from an erased backend representation.
 
+Specialized definitions inherit their source binding snapshot in both monomorphizers.
+These are source types, not reconstructed specialization types: a generic parameter
+may still be recorded as `a`. An evaluator must resolve that type in its source context
+or reject it; it must not silently treat it as a JVM `Object` or an unrelated type.
+
 The sidecars are produced only after class emission succeeds. A following non-debug
 build removes them, so an IDE cannot accidentally consume metadata from an earlier
 debug build. Clients that do not understand a sidecar format must ignore it and use

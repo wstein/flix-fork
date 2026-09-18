@@ -2,6 +2,7 @@ package ca.uwaterloo.flix.language.phase.jvm
 
 import ca.uwaterloo.flix.language.ast.{SemanticOp, SourceLocation, Symbol, Type, TypedAst}
 import ca.uwaterloo.flix.language.ast.TypedAst.{Expr, FormalParam}
+import ca.uwaterloo.flix.language.fmt.{FormatOptions, FormatType}
 import ca.uwaterloo.flix.language.ast.shared.*
 import ca.uwaterloo.flix.util.InternalCompilerException
 
@@ -29,6 +30,9 @@ final class JvmLexicalOrigins private (private val origins: IdentityHashMap[Expr
   * form includes the compiler's local-scope cache.
   */
 object JvmLexicalOrigins {
+  private def debugType(tpe: Type): String =
+    FormatType.formatTypeWithOptions(tpe, FormatOptions(FormatOptions.VarName.NameBased))
+
   type TypeEncoder = (Type, Map[Symbol, GeneratedJvmKey]) => String
 
   /** A source binding captured before ANF/lowering replaces its user-facing name. */
@@ -76,7 +80,7 @@ object JvmLexicalOrigins {
         param.bnd.sym -> frame("parameter", List(index.toString))
       }.toMap, Map.empty)
       fparams.zipWithIndex.foreach { case (param, index) =>
-        if (!param.bnd.sym.isWild) bindings += Binding(frame("parameter", List(index.toString)), param.bnd.sym.text, param.bnd.sym.loc, "parameter", param.tpe.toString)
+        if (!param.bnd.sym.isWild) bindings += Binding(frame("parameter", List(index.toString)), param.bnd.sym.text, param.bnd.sym.loc, "parameter", debugType(param.tpe))
       }
       visit(exp, env, frame(owner.family, owner.fields), "body", isRoot = true)
       new JvmLexicalOrigins(origins, ordered.toList, all.toList, bindings.toList, fingerprintEvaluations)
@@ -171,7 +175,7 @@ object JvmLexicalOrigins {
           mapLambdaBody(lambda, env, SiteBinding(site)) { (param, body, inner) =>
             if (!param.bnd.sym.isWild) {
               bindings += Binding(frame("lambda-parameter", List(site)), param.bnd.sym.text,
-                param.bnd.sym.loc, "lambda-parameter", param.tpe.toString)
+                param.bnd.sym.loc, "lambda-parameter", debugType(param.tpe))
             }
             visit(body, inner, site, "body")
           }
@@ -183,7 +187,7 @@ object JvmLexicalOrigins {
           ()
         case Expr.Let(binder, value, rest, _, _, _) =>
           val binding = identity(scope, "let:" + role, fingerprint(value, env, 0))
-          if (!binder.sym.isWild) bindings += Binding(binding, binder.sym.text, binder.sym.loc, "let", binder.tpe.toString)
+          if (!binder.sym.isWild) bindings += Binding(binding, binder.sym.text, binder.sym.loc, "let", debugType(binder.tpe))
           val site = if (isRoot) frame("root", List(scope, role)) else frame("let-expression", List(binding))
           val key = GeneratedJvmKey("lexical-expression", List(site))
           if (origins.containsKey(exp)) fail("Repeated AST identity in lexical capture.", exp)

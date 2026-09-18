@@ -54,6 +54,16 @@ class TestDebugLocalVariables extends AnyFunSuite {
   }
 
   for (newMono <- List(false, true)) {
+    test(s"specialized definitions retain source binding types (mono2=$newMono)") {
+      val program = """def debugIdentity(value: a): a = value
+        |def main(): Unit \ IO = println(debugIdentity(42))
+        |""".stripMargin
+      val result = compile(xdebug = true, program, newMono)
+      val definitions = result.getDebugDefinitions.filter(_._1.startsWith("Def$debugIdentity"))
+      assert(definitions.nonEmpty, result.getDebugDefinitions.keys.mkString(", "))
+      assert(definitions.values.forall(_.values.flatten.exists(b => b.name == "value" && b.tpe == "a")), definitions.toString)
+    }
+
     test(s"debug local ranges end at nested initializer scope (mono2=$newMono)") {
       val program = """def compute(seed: Int64): Int64 = {
         |    let outer = seed + 1i64;
@@ -214,7 +224,7 @@ class TestDebugLocalVariables extends AnyFunSuite {
     val names = localNames(debug, "Clo$", "applyFrame")
     assert(names.contains("prefix"), s"Expected captured source name, got: $names")
     val bindings = debug.getDebugDefinitions.collectFirst {
-      case (clazz, methods) if clazz.contains("Clo$") => methods("applyFrame").map(_.name).toSet
+      case (clazz, methods) if clazz.startsWith("Clo$make$") => methods("applyFrame").map(_.name).toSet
     }.getOrElse(fail("Expected debug scopes for an emitted closure, got: " + debug.getDebugDefinitions.keys))
     assert(bindings == Set("prefix", "value"), s"Expected closure scope names, got: $bindings")
     assert(localNames(compile(xdebug = false, program), "Clo$", "applyFrame").isEmpty)
