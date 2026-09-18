@@ -147,8 +147,9 @@ overlap does not demonstrate semantic compatibility. Merge conflicts involving e
 monomorphizer, lowering, source locations, or optimizer traversal require targeted
 provenance and runtime validation even when Git can merge them automatically.
 
-Creating new implementation branches and publishing remain future steps; the baseline
-merge was performed by the user and verified in Git during this planning task.
+Implementation proceeded on `feat/idea-debugging-foundation`, paired with the plugin's
+`feat/debug-foundation-compat` branch. Publication and merge remain repository-owner
+release actions; the implementation and automated qualification do not perform them.
 
 ## 5. Component contracts
 
@@ -432,8 +433,9 @@ launch/evaluation must not silently use incompatible artifacts.
 ## 6. Milestones and acceptance gates
 
 Effort sizes are relative: S is a localized task; M spans several components; L requires
-compiler/runtime or IDE integration. They are not elapsed-time commitments. All gates
-below are pending until accompanied by recorded results.
+compiler/runtime or IDE integration. They are not elapsed-time commitments. The sections
+below retain the original execution checklist; the status header and shipped-contract
+document record the implemented result, while M10's IDEA click-through rows remain manual.
 
 ### M0 — Paired baseline, fixtures, and plugin contract audit (M)
 
@@ -688,11 +690,11 @@ Initial support contract:
 
 | Frame/value | Initial evaluation behavior |
 | --- | --- |
-| Source definition with representable parameter types | Evaluate using referenced, available definition parameters |
-| Specialized definition | Resolve source owner and concrete type substitution; reject unrepresentable cases |
-| Let-bound locals | Inspection supported where available; evaluation deferred |
-| Lifted lambda/local definition | Explicit unsupported-frame response |
-| Handler/continuation frame | Inspection as supported by metadata; evaluation deferred |
+| Source definition with representable parameter types | Evaluate using referenced, JDI-visible parameters |
+| Specialized definition | Evaluate when source types remain representable; otherwise return a structured rejection |
+| Let-bound locals | Evaluate when the local is live in the JVM `LocalVariableTable` |
+| Lifted lambda/local definition | Evaluate visible parameters, captures, and source locals in `applyFrame` |
+| Handler/continuation frame | Evaluate restored values after their JVM slots become live; reject unavailable state |
 | Stale build/source snapshot or unavailable argument | Reject with rebuild/relaunch or availability diagnostic |
 
 This table bounds compiler-backed evaluation, not the plugin's existing read-only
