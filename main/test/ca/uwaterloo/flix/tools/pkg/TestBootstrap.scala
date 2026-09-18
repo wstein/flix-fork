@@ -474,6 +474,65 @@ class TestBootstrap extends AnyFunSuite {
     assert(unmatched.toOption.isEmpty, unmatched.toString)
   }
 
+  test("filtered test coverage publishes JSON and LCOV reports") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out).unsafeGet
+    FileOps.writeString(
+      p.resolve("src/Main.flix"),
+      """pub def covered(x: Int32): Int32 = x + 1
+        |def main(): Unit = ()
+        |""".stripMargin,
+    )
+    FileOps.writeString(
+      p.resolve("test/TestMain.flix"),
+      """mod Suite {
+        |    @Test
+        |    def selected(): Unit \ Assert = Assert.assertEq(expected=42, covered(41))
+        |
+        |    @Test
+        |    def excluded(): Unit \ Assert = Assert.fail("must not run")
+        |}
+        |""".stripMargin,
+    )
+    val b = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
+    val flix = PkgTestUtils.mkFlix(b)
+    flix.setOptions(flix.options.copy(coverage = true))
+    val json = p.resolve("custom/coverage.json")
+    val lcov = p.resolve("custom/coverage.info")
+
+    b.test(flix, List("Suite\\.selected".r), coverageOutput = Some(json -> lcov)).unsafeGet
+
+    assert(Files.exists(json))
+    assert(Files.exists(lcov))
+    val jsonText = Files.readString(json)
+    assert(jsonText.contains("\"testFilters\":[\"Suite\\\\.selected\"]"))
+    assert(jsonText.contains("\"partial\":false"))
+    assert(Files.readString(lcov).contains("SF:"))
+  }
+
+  test("failed tests still publish coverage reports") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out).unsafeGet
+    FileOps.writeString(p.resolve("src/Main.flix"), "pub def main(): Unit = ()")
+    FileOps.writeString(
+      p.resolve("test/TestMain.flix"),
+      """@Test
+        |def failing(): Unit \ Assert = Assert.fail("expected failure")
+        |""".stripMargin,
+    )
+    val b = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
+    val flix = PkgTestUtils.mkFlix(b)
+    flix.setOptions(flix.options.copy(coverage = true))
+    val json = p.resolve("build/coverage.json")
+    val lcov = p.resolve("build/coverage.info")
+
+    val result = b.test(flix, coverageOutput = Some(json -> lcov))
+
+    assert(result.toOption.isEmpty)
+    assert(Files.exists(json))
+    assert(Files.exists(lcov))
+  }
+
   test("clean-command-should-remove-class-files-and-directories-if-compiled-previously") {
     val p = Files.createTempDirectory(ProjectPrefix)
     Bootstrap.init(p)(System.out).unsafeGet

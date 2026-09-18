@@ -115,6 +115,19 @@ class TestMain extends AnyFunSuite {
     assert(opts.testEventsJson)
   }
 
+  test("run and test accept coverage report options") {
+    for (command <- List("run", "test")) {
+      val opts = Main.parseCmdOpts(Array(command, "--coverage", "--coverage-output", "custom/report.json", "--coverage-lcov-output", "custom/report.info")).get
+      assert(opts.coverage)
+      assert(opts.coverageOutput == "custom/report.json")
+      assert(opts.coverageLcovOutput == "custom/report.info")
+    }
+  }
+
+  test("coverage belongs to executable commands") {
+    assert(Main.parseCmdOpts(Array("build", "--coverage")).isEmpty)
+  }
+
   test("--events-json belongs to test") {
     assert(Main.parseCmdOpts(Array("run", "--events-json")).isEmpty)
   }

@@ -48,11 +48,25 @@ than discarding the counters collected before cancellation.
 JSON format 1 groups functions, executable lines, and individual branch outcomes beneath each
 source path, with paths and entries emitted deterministically. LCOV includes zero-hit functions,
 lines, and branches and uses `-` for an untaken branch. The serializers are pure; command-specific
-file publication is intentionally a separate integration step.
+publication writes each file through a temporary sibling followed by atomic replacement when the
+filesystem supports it.
+
+## CLI
+
+`flix run --coverage` and `flix test --coverage` publish `build/coverage.json` and
+`build/coverage.info` after execution. `--coverage-output <path>` and
+`--coverage-lcov-output <path>` override those locations; relative paths are resolved against the
+project directory. Reports are also published when tests fail, and the original test result remains
+the command result. Loose-file `flix test` uses the same behavior. The loaded program's isolated
+coverage session is always closed after the final snapshot.
+
+`flix test --filter <regex> --coverage` runs only matching tests and records every supplied regex in
+the JSON report and terminal summary. Its counters describe that selected run, not the complete test
+suite. Coverage options deliberately belong only to `run` and `test`; compilation-only commands do
+not execute probes.
 
 Both monomorphizers lower the probe to the same JVM operation. Loading the compilation installs the
 session in the generated program's isolated class loader and returns a handle for taking snapshots
 and releasing its counters.
 
-The migration still deliberately provides no `--coverage` CLI flag. CLI publication, cancellation
-plumbing, TestEventSink integration, and LSP events remain separate later slices.
+Cancellation plumbing, TestEventSink integration, and LSP events remain separate later slices.

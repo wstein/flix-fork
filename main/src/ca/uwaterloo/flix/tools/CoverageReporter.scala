@@ -15,13 +15,22 @@
  */
 package ca.uwaterloo.flix.tools
 
-import ca.uwaterloo.flix.runtime.{CoverageProbe, CoverageProbeKind, CoverageSnapshot}
+import ca.uwaterloo.flix.runtime.{CoverageHandle, CoverageProbe, CoverageProbeKind, CoverageSession, CoverageSnapshot}
 import org.json4s.JsonDSL.*
 import org.json4s.JValue
 import org.json4s.native.JsonMethods.{compact, render}
 
+import java.nio.charset.StandardCharsets
+import java.nio.file.{AtomicMoveNotSupportedException, Files, Path, StandardCopyOption}
+
 /** Deterministic serializers for one immutable coverage snapshot. */
 object CoverageReporter {
+
+  def snapshot(session: CoverageSession,
+               handle: CoverageHandle,
+               partial: Boolean = false,
+               testFilters: List[String] = Nil): CoverageSnapshot =
+    CoverageSnapshot(session, handle.snapshot().toVector, partial, testFilters)
 
   def renderJson(snapshot: CoverageSnapshot): String = compact(render(buildJson(snapshot)))
 
@@ -79,6 +88,12 @@ object CoverageReporter {
       s"Lines: ${percentage(lines, snapshot)}, Branches: ${percentage(branches, snapshot)}"
   }
 
+  /** Publishes both report formats from the same immutable snapshot. */
+  def write(snapshot: CoverageSnapshot, jsonPath: Path, lcovPath: Path): Unit = {
+    writeAtomically(jsonPath, renderJson(snapshot))
+    writeAtomically(lcovPath, renderLcov(snapshot))
+  }
+
   private def buildJson(snapshot: CoverageSnapshot): JValue = {
     val probes = snapshot.session.probes
     val functions = probes.filter(_.kind == CoverageProbeKind.Function)
@@ -123,5 +138,22 @@ object CoverageReporter {
     val covered = probes.count(snapshot.count(_) > 0L)
     val percent = if (probes.isEmpty) 0.0 else covered.toDouble * 100.0 / probes.size
     f"$percent%.1f%% ($covered/${probes.size})"
+  }
+
+  private def writeAtomically(path: Path, content: String): Unit = {
+    val absolute = path.toAbsolutePath.normalize()
+    val parent = Option(absolute.getParent).getOrElse(Path.of(".").toAbsolutePath.normalize())
+    Files.createDirectories(parent)
+    val temp = Files.createTempFile(parent, s".${absolute.getFileName.toString}.", ".tmp")
+    try {
+      Files.writeString(temp, content, StandardCharsets.UTF_8)
+      try Files.move(temp, absolute, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+      catch {
+        case _: AtomicMoveNotSupportedException =>
+          Files.move(temp, absolute, StandardCopyOption.REPLACE_EXISTING)
+      }
+    } finally {
+      Files.deleteIfExists(temp)
+    }
   }
 }

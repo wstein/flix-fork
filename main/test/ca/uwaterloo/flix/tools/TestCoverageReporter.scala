@@ -20,6 +20,8 @@ import org.json4s.{DefaultFormats, jvalue2extractable, jvalue2monadic}
 import org.json4s.native.JsonMethods.parse
 import org.scalatest.funsuite.AnyFunSuite
 
+import java.nio.file.Files
+
 class TestCoverageReporter extends AnyFunSuite {
 
   private implicit val formats: DefaultFormats.type = DefaultFormats
@@ -74,6 +76,22 @@ class TestCoverageReporter extends AnyFunSuite {
     assert(summary.contains("Functions: 50.0% (1/2)"))
     assert(summary.contains("Lines: 50.0% (1/2)"))
     assert(summary.contains("Branches: 50.0% (1/2)"))
+  }
+
+  test("publishes JSON and LCOV into newly-created directories") {
+    val root = Files.createTempDirectory("flix-coverage-report-")
+    val json = root.resolve("nested/coverage.json")
+    val lcov = root.resolve("nested/coverage.info")
+    try {
+      CoverageReporter.write(snapshot, json, lcov)
+      assert(Files.readString(json) == CoverageReporter.renderJson(snapshot))
+      assert(Files.readString(lcov) == CoverageReporter.renderLcov(snapshot))
+    } finally {
+      Files.deleteIfExists(json)
+      Files.deleteIfExists(lcov)
+      Files.deleteIfExists(json.getParent)
+      Files.deleteIfExists(root)
+    }
   }
 
 }
