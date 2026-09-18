@@ -264,6 +264,12 @@ expressions are rejected during argument parsing.
 The same contract applies to a project and to loose source files passed to `flix test`.
 Arguments after `--` remain program arguments and are not interpreted as filters.
 
+Each per-test `@Test` CodeLens sends the fully-qualified test symbol as the sole
+`flix.cmdTests` command argument. Editor clients should pass that value to `flix test`
+through `--filter`; a test CodeLens is therefore scoped to the definition
+where it appears instead of silently running the complete suite. Run-all actions remain
+argument-free.
+
 `flix test --events-json` selects a structured rendering of the same test runner. It
 writes one compact JSON object per line: `start`, `before`, `passed`, `failed`,
 `skipped`, and `finished` describe the run, while `output` carries a line written by

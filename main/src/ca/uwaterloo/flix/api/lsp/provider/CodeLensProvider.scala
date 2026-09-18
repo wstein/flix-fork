@@ -51,7 +51,8 @@ object CodeLensProvider {
   private def getTestCodeLenses(name: SourceName)(implicit root: Root): List[CodeLens] = {
     getTests(name)(root).map {
       case sym =>
-        val command = Command("▶ Run Tests", "flix.cmdTests", Nil)
+        val args = List(JString(sym.toString))
+        val command = Command("▶ Run Tests", "flix.cmdTests", args)
         val range = Range.from(sym.loc)
         CodeLens(range, Some(command))
     }
