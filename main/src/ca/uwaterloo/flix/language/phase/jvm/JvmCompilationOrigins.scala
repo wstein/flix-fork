@@ -1,6 +1,8 @@
 package ca.uwaterloo.flix.language.phase.jvm
 
-import ca.uwaterloo.flix.language.ast.{MonoAst, SimpleType, SimplifiedAst, SourceLocation, Symbol, Type, TypedAst}
+import ca.uwaterloo.flix.api.Flix
+import ca.uwaterloo.flix.language.ast.{JvmAst, MonoAst, SimpleType, SimplifiedAst, SourceLocation, Symbol, Type, TypedAst}
+import ca.uwaterloo.flix.language.jvm.ClassDescs
 import ca.uwaterloo.flix.language.ast.shared.Source
 import ca.uwaterloo.flix.util.InternalCompilerException
 
@@ -10,6 +12,7 @@ import scala.collection.mutable
 final class JvmCompilationOrigins(val symbols: JvmProvenance) {
   private var expressions = new IdentityHashMap[AnyRef, GeneratedJvmKey]()
   private var debugBindings = Map.empty[Symbol.DefnSym, List[JvmLexicalOrigins.Binding]]
+  private var debugDefinitions = Map.empty[String, List[JvmLexicalOrigins.Binding]]
   private var closed = false
   private var freezeStarted = false
   private var frozenNames: Option[JvmNameTable] = None
@@ -21,6 +24,20 @@ final class JvmCompilationOrigins(val symbols: JvmProvenance) {
   /** Source bindings captured before lowering; unavailable after the compilation closes. */
   def sourceBindings(sym: Symbol.DefnSym): List[JvmLexicalOrigins.Binding] = synchronized {
     debugBindings.getOrElse(sym, Nil)
+  }
+
+  /** Finalizes retained source bindings against the stable binary names of emitted definitions. */
+  def finalizeDebugDefinitions(defs: Iterable[JvmAst.Def])(implicit flix: Flix): Unit = synchronized {
+    if (!flix.options.xdebug) return
+    if (frozenNames.isEmpty) fail("Debug definitions require frozen JVM names.")
+    debugDefinitions = defs.iterator.flatMap { defn =>
+      val desc = if (defn.cparams.nonEmpty) GenFunAndClosureClasses.closureDesc(defn.sym) else GenFunAndClosureClasses.defnDesc(defn.sym)
+      sourceBindings(defn.sym).headOption.map(_ => ClassDescs.internalNameOf(desc) -> sourceBindings(defn.sym))
+    }.toMap
+  }
+
+  def finalizedDebugDefinitions: Map[String, List[JvmLexicalOrigins.Binding]] = synchronized {
+    debugDefinitions
   }
 
   def freeze(required: Iterable[Symbol]): Unit = synchronized {
@@ -122,6 +139,7 @@ final class JvmCompilationOrigins(val symbols: JvmProvenance) {
   def close(): Unit = synchronized {
     expressions = new IdentityHashMap[AnyRef, GeneratedJvmKey]()
     debugBindings = Map.empty
+    debugDefinitions = Map.empty
     frozenNames = None
     symbols.close()
     closed = true

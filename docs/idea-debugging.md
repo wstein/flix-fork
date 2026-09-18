@@ -37,7 +37,8 @@ debug-provenance snapshot; they are intentionally not guessed from lowered ANF n
 
 The compiler now captures source parameter and `let` binding identities, names, and
 locations in that compilation-local snapshot before typed bodies are released. This is
-an internal foundation only: it is not yet emitted as a debug sidecar or joined to JVM
+finalized against stable generated class names and exposed on the in-memory compilation
+result for debug builds. It is not yet emitted as a debug sidecar or joined to JVM
 slots, captures, or continuation fields.
 
 ## Current limits

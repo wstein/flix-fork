@@ -47,14 +47,14 @@ class TestDebugLocalVariables extends AnyFunSuite {
     assert(localNamesOfCompute(xdebug = false).isEmpty)
   }
 
+  test("debug compilation finalizes source bindings under a stable class name") {
+    val bindings = compile(xdebug = true).getDebugDefinitions.getOrElse("Def$compute", fail("Missing debug definition for compute."))
+    assert(bindings.map(_.name).toSet == Set("a", "b", "x", "y"))
+    assert(compile(xdebug = false).getDebugDefinitions.isEmpty)
+  }
+
   private def localNamesOfCompute(xdebug: Boolean): Set[String] = {
-    val flix = new Flix().setOptions(Options.DefaultTest.copy(entryPoint = Some(Symbol.mkDefnSym("main")), xdebug = xdebug))
-    implicit val sctx: SecurityContext = SecurityContext.Unrestricted
-    flix.addVirtualPath(CompilerConstants.VirtualTestFile, Program)
-    val result = flix.compile() match {
-      case Result.Ok(value) => value
-      case Result.Err(errors) => fail(s"Expected a successful compilation, got: $errors")
-    }
+    val result = compile(xdebug)
     val clazz = result.getClasses.values.find(_.name.displayName() == "Def$compute")
       .getOrElse(fail(s"Expected a generated compute class, got: ${result.getClasses.keys}"))
     val names = mutable.Set.empty[String]
@@ -67,5 +67,15 @@ class TestDebugLocalVariables extends AnyFunSuite {
       }
     }, 0)
     names.toSet
+  }
+
+  private def compile(xdebug: Boolean) = {
+    val flix = new Flix().setOptions(Options.DefaultTest.copy(entryPoint = Some(Symbol.mkDefnSym("main")), xdebug = xdebug))
+    implicit val sctx: SecurityContext = SecurityContext.Unrestricted
+    flix.addVirtualPath(CompilerConstants.VirtualTestFile, Program)
+    flix.compile() match {
+      case Result.Ok(value) => value
+      case Result.Err(errors) => fail(s"Expected a successful compilation, got: $errors")
+    }
   }
 }

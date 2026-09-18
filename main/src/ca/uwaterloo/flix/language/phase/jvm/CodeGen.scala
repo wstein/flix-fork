@@ -37,6 +37,7 @@ object CodeGen {
       root.enums.values.flatMap(getNullaryTagsOf).map(_.sym.enumSym) ++
       root.anonClasses.map(_.sym)
     flix.jvmOrigins.freeze(namedSymbols)
+    flix.jvmOrigins.finalizeDebugDefinitions(root.defs.values)
     implicit val r: Root = root
 
     // Types/classes required for Flix runtime.
