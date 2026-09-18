@@ -27,7 +27,8 @@ object DebugScopes {
         val unambiguous = bindings.groupBy(_.name).values.collect {
           case sameName if sameName.map(_.tpe).distinct.sizeIs == 1 => sameName.minBy(_.identity)
         }.toList
-        val renderedBindings = unambiguous.sortBy(_.identity).map { binding =>
+        val renderedBindings = unambiguous.sortBy(b =>
+          (b.loc.source.name, b.loc.startLine, b.loc.startCol, b.identity)).map { binding =>
           s"{\"name\":${JvmDebugJson.quote(binding.name)},\"type\":${JvmDebugJson.quote(binding.tpe)}}"
         }
         s"      ${JvmDebugJson.quote(method)}: [${renderedBindings.mkString(",")}]"

@@ -17,6 +17,8 @@ package ca.uwaterloo.flix.api.lsp
 
 import ca.uwaterloo.flix.api.lsp.provider.DebugEvalProvider.Answer
 
+import java.util.Base64
+
 import scala.beans.BeanProperty
 
 /**
@@ -45,6 +47,14 @@ import scala.beans.BeanProperty
   */
 class DebugEvalParams {
   @BeanProperty var className: String = _
+
+  /**
+    * Whether to produce the classes that would *run* the expression, not only type it.
+    *
+    * Off by default: typing is one compilation and producing an artifact is a second one that also
+    * emits, and a watch asks the first on every step.
+    */
+  @BeanProperty var withArtifact: Boolean = false
   @BeanProperty var methodName: String = _
   @BeanProperty var expression: String = _
   @BeanProperty var policy: String = "pure"
@@ -81,16 +91,50 @@ class DebugEvalResult {
 
   /** What would have to change, when `rejected`. */
   @BeanProperty var reason: String = _
+
+  /**
+    * The classes that would run the expression, as `name=base64` entries separated by `;`.
+    *
+    * Absent unless the client asked for one: typing is the cheaper question and the one a watch asks
+    * on every step. One string rather than a structure because it crosses a debug connection next,
+    * where every argument has to be built inside the debuggee one value at a time.
+    */
+  @BeanProperty var artifact: String = _
+
+  /** The class holding the expression, and the static method to call on it. */
+  @BeanProperty var entryClass: String = _
+
+  @BeanProperty var entryMethod: String = _
+
+  /**
+    * Which field of the runtime's `Value` holds the result.
+    *
+    * It carries one field per erased type and no discriminator, so this is the compiler saying where
+    * to look rather than the reader guessing.
+    */
+  @BeanProperty var valueField: String = _
+
+  /** The frame variables to pass, in the order the entry method takes them. */
+  @BeanProperty var parameters: java.util.List[String] = new java.util.ArrayList[String]()
 }
 
 object DebugEvalResult {
 
   def of(answer: Answer): DebugEvalResult = answer match {
-    case Answer.Ok(tpe, eff) =>
+    case Answer.Ok(tpe, eff, artifact) =>
       val r = new DebugEvalResult
       r.status = "ok"
       r.tpe = tpe
       r.eff = eff
+      artifact.foreach { a =>
+        r.artifact = a.classes
+          .map { case (name, bytes) => s"$name=${Base64.getEncoder.encodeToString(bytes)}" }
+          .mkString(";")
+        r.entryClass = a.entryClass
+        r.entryMethod = a.entryMethod
+        r.valueField = a.valueField
+        a.parameters.foreach(r.parameters.add)
+      }
       r
 
     case Answer.Failed(diagnostics) =>

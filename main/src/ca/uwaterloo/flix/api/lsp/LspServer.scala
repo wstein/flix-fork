@@ -149,7 +149,7 @@ object LspServer {
             case Some(policy) =>
               val frame = DebugEvalProvider.ScopeId(params.className, params.methodName)
               DebugEvalResult.of(DebugEvalProvider.compile(frame, params.expression, policy,
-                project.projectPath, root))
+                project.projectPath, root, params.withArtifact))
           }
         } catch {
           case t: Throwable => DebugEvalResult.failure(t)

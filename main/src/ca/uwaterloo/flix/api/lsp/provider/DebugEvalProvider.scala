@@ -19,7 +19,8 @@ import ca.uwaterloo.flix.api.Flix
 import ca.uwaterloo.flix.language.ast.TypedAst.{Expr, Root}
 import ca.uwaterloo.flix.language.ast.shared.SecurityContext
 import ca.uwaterloo.flix.language.fmt.FormatType
-import ca.uwaterloo.flix.language.phase.jvm.DebugScopes
+import ca.uwaterloo.flix.language.jvm.ClassDescs
+import ca.uwaterloo.flix.language.phase.jvm.{ClassMaker, DebugScopes}
 import ca.uwaterloo.flix.util.Options
 
 import java.nio.file.{Files, Path, Paths}
@@ -99,7 +100,15 @@ object DebugEvalProvider {
   sealed trait Answer
 
   object Answer {
-    case class Ok(tpe: String, eff: String) extends Answer
+    /**
+      * The expression typed, and — when it was asked for — the classes that would run it.
+      *
+      * `artifact` is absent when only typing was asked for, which is the cheaper question and the
+      * one a watch asks first. It is a string rather than a structure because it crosses a debug
+      * connection next, where every argument is built inside the debuggee one value at a time: one
+      * string is one value to construct, and a map of byte arrays is thousands.
+      */
+    case class Ok(tpe: String, eff: String, artifact: Option[Artifact] = None) extends Answer
 
     case class Failed(diagnostics: List[String]) extends Answer
 
@@ -110,12 +119,47 @@ object DebugEvalProvider {
   case class ScopeId(className: String, methodName: String)
 
   /**
+    * Everything the debuggee needs in order to run the expression.
+    *
+    * `classes` holds only what the running program does not already have: the expression's own
+    * class, and any specialisation the program never needed. Which those are is not guessed — the
+    * build manifest lists exactly the class files the debuggee was started with, so the difference
+    * is a set subtraction rather than a model of another process's loader.
+    *
+    * `parameters` is the order the entry method takes its arguments in, by the names the frame
+    * holds them under. A debugger reads each from the frame and passes them in this order; getting
+    * it wrong would pass an `Int32` where a `String` was expected, and the failure would surface
+    * inside generated code.
+    *
+    * `valueField` is which field of the runtime's `Value` holds the answer. It carries one field per
+    * erased type and no discriminator, so this is the compiler telling the reader where to look
+    * rather than the reader guessing.
+    */
+  case class Artifact(
+                       classes: List[(String, Array[Byte])],
+                       entryClass: String,
+                       entryMethod: String,
+                       valueField: String,
+                       parameters: List[String],
+                     )
+
+  /**
     * Types `expression` against the scope of `frame`, using the scope table under `projectRoot`.
     *
     * `root` is the server's own typed AST, and it is where every parameter type comes from. The
     * table only says which definition to look at.
     */
-  def compile(frame: ScopeId, expression: String, policy: Policy, projectRoot: Path, root: Root): Answer = {
+  def compile(frame: ScopeId, expression: String, policy: Policy, projectRoot: Path, root: Root): Answer =
+    compile(frame, expression, policy, projectRoot, root, withArtifact = false)
+
+  /**
+    * As [[compile]], and when `withArtifact` is set, also the classes that would run the expression.
+    *
+    * Separate because the two questions cost differently. Typing is one compilation; producing an
+    * artifact is a second one that also emits, and a watch asks the first on every step. A caller
+    * asks for the artifact when the user has asked for a value rather than for a description.
+    */
+  def compile(frame: ScopeId, expression: String, policy: Policy, projectRoot: Path, root: Root, withArtifact: Boolean): Answer = {
     val table = readTable(projectRoot) match {
       case Some(t) => t
       case None => return Answer.Rejected(
@@ -157,8 +201,186 @@ object DebugEvalProvider {
       .filter(p => mentions(expression, p.name))
       .map(p => s"${p.name}: ${p.tpe}")
 
-    typeCheck(params, expression, policy, projectRoot)
+    typeCheck(params, expression, policy, projectRoot) match {
+      case Answer.Ok(tpe, eff, _) if withArtifact =>
+        // Only now, with the type in hand. The wrapper that *runs* an expression has to declare what
+        // it returns, and that is exactly what the first pass was asked to work out -- so the second
+        // pass writes down the answer of the first.
+        emit(params, expression, tpe, eff, projectRoot) match {
+          case Left(reason) => Answer.Rejected(reason)
+          case Right(artifact) => Answer.Ok(tpe, eff, Some(artifact))
+        }
+      case other => other
+    }
   }
+
+  /**
+    * Compiles a wrapper that *returns* the expression, and collects what the debuggee lacks.
+    *
+    * ==Why a second compilation==
+    *
+    * The first wrapper binds the expression to a name and returns unit, because a definition's
+    * return type has to be written down and the type was the question. With the answer in hand the
+    * second wrapper declares it, so the generated method returns the value instead of discarding it.
+    *
+    * ==Why the output goes to a temporary directory==
+    *
+    * The obvious place is the project's own build directory, and it is the one place this must never
+    * write: that directory *is* the running program. Overwriting a class there would leave the
+    * debuggee running one version and the next session loading another, and nothing would report it.
+    *
+    * ==Why only some classes are kept==
+    *
+    * The build manifest lists every class file the debuggee was started with. Anything this
+    * compilation produced that is not in that list is new -- the expression's own class, and any
+    * specialisation the program never needed -- and anything that *is* in it must be left alone, so
+    * that a call resolves to the code the program is actually running.
+    */
+  private def emit(
+                    params: List[String],
+                    expression: String,
+                    tpe: String,
+                    eff: String,
+                    projectRoot: Path,
+                  ): Either[String, Artifact] = {
+    val existing = productsOf(projectRoot)
+    if (existing.isEmpty) {
+      return Left(
+        s"$BuildManifest lists no classes, so there is no way to tell which of the expression's " +
+          "classes the running program already has",
+      )
+    }
+
+    implicit val sctx: SecurityContext = SecurityContext.Unrestricted
+    implicit val flix: Flix = new Flix().setOptions(Options.DefaultTest.copy(xdebug = true, inMemory = true))
+    for (source <- sourcesUnder(projectRoot)) {
+      flix.addFile(source, sctx)
+    }
+    flix.addSource(Paths.get(WrapperFile), returningWrapper(params, expression, tpe, eff), sctx)
+
+    // Checked and generated separately, rather than through `compile`, for one reason: nothing calls
+    // the wrapper, so tree shaking removes it before code generation and the build produces every
+    // class except the one that was asked for. Naming it an entry point is what "keep this" means to
+    // the compiler, and the provider is the caller that knows to ask.
+    val (checked, errors) = flix.check()
+    val generated = checked match {
+      case Some(root) if errors.isEmpty =>
+        val wrapper = root.defs.keys.filter(_.text == WrapperName).toSet
+        if (wrapper.isEmpty) {
+          return Left("the wrapper did not survive type-checking, which is a defect in this provider")
+        }
+        Right(flix.codeGen(root.copy(entryPoints = root.entryPoints ++ wrapper)))
+      case _ => Left(errors)
+    }
+
+    generated match {
+      case Left(errors) =>
+        // The first pass typed it, so a failure here is about the wrapper rather than the
+        // expression -- most likely an effect that cannot be written in a signature.
+        Left(s"the expression typed as `$tpe \\ $eff` but could not be compiled: ${errors.map(_.summary).mkString("; ")}")
+
+      case Right(result) =>
+        val produced = result.getClasses.values.toList.map { clazz =>
+          ClassDescs.classFileNameOf(clazz.name) -> clazz.bytecode
+        }
+        val fresh = produced.filterNot { case (relative, _) => existing.contains(relative) }
+        val classes = fresh.map { case (relative, bytes) => binaryNameOf(relative) -> bytes }
+        classes.map(_._1).find(_.contains(WrapperName)) match {
+          case None =>
+            Left(
+              "the expression compiled but produced no class of its own, which means the running " +
+                "program already has every class it needs and this one too -- a name collision",
+            )
+          case Some(entry) =>
+            Right(Artifact(classes, entry, ClassMaker.StaticApplyMethodName, valueFieldFor(tpe), params.map(nameOf)))
+        }
+    }
+  }
+
+  /**
+    * The wrapper that returns the expression's value.
+    *
+    * Written only after the type is known, because a definition has to declare what it returns and
+    * that was the question. The effect is declared the same way, and omitted when the expression is
+    * pure -- an unused effect is an error in Flix, not a warning, so a blanket `\ IO` would fail on
+    * every pure expression.
+    */
+  private def returningWrapper(params: List[String], expression: String, tpe: String, eff: String): String = {
+    val effect = if (eff == "Pure") "" else s" \\ $eff"
+    s"""def $WrapperName(${params.mkString(", ")}): $tpe$effect =
+       |    $expression
+       |""".stripMargin
+  }
+
+  /** `at: Option[String]` as `at`. */
+  private def nameOf(param: String): String = param.takeWhile(_ != ':').trim
+
+  /**
+    * Which field of the runtime's `Value` holds a result of type `tpe`.
+    *
+    * `Value` carries one field per erased type and no discriminator, so a reader has to be told.
+    * Everything that is not a primitive is an object, which is what erasure leaves.
+    */
+  private def valueFieldFor(tpe: String): String = tpe match {
+    case "Bool" => "b"
+    case "Char" => "c"
+    case "Int8" => "i8"
+    case "Int16" => "i16"
+    case "Int32" => "i32"
+    case "Int64" => "i64"
+    case "Float32" => "f32"
+    case "Float64" => "f64"
+    case _ => "o"
+  }
+
+  /**
+    * The class files the debuggee was started with, by their path under the class directory.
+    *
+    * From the build manifest rather than from the directory, because the directory is what a *new*
+    * build would leave and the manifest is what *this* program was launched from. The two differ
+    * exactly when someone has rebuilt while a session is running, which is the case that matters.
+    */
+  private def productsOf(projectRoot: Path): Set[String] = {
+    val development = projectRoot.resolve("build").resolve("development")
+    val manifest = development.resolve(BuildManifest)
+    val fromManifest =
+      if (!Files.isRegularFile(manifest)) Set.empty[String]
+      else {
+        val text = Files.readString(manifest)
+        val products = """"products"\s*:\s*\[([^]]*)]""".r
+        val entry = """"([^"]+)"""".r
+        products.findFirstMatchIn(text)
+          .map(m => entry.findAllMatchIn(m.group(1)).map(_.group(1)).toSet)
+          .getOrElse(Set.empty)
+      }
+    // The class directory when there is no manifest to read -- a build made by the compiler API
+    // rather than by the command line writes classes and no manifest. The manifest is preferred
+    // because it says what the debuggee was *launched* with, and the directory only says what the
+    // last build left; the two differ exactly when someone has rebuilt during a session, which is
+    // the case worth being right about.
+    if (fromManifest.nonEmpty) fromManifest
+    else classFilesUnder(development.resolve("class")).map(_._1).toSet
+  }
+
+  /** Every class file under `dir`, by its path relative to it. */
+  private def classFilesUnder(dir: Path): List[(String, Array[Byte])] = {
+    if (!Files.isDirectory(dir)) return Nil
+    val stream = Files.walk(dir)
+    try {
+      stream.toArray.toList.collect {
+        case p: Path if Files.isRegularFile(p) && p.toString.endsWith(".class") =>
+          dir.relativize(p).toString.replace('\\', '/') -> Files.readAllBytes(p)
+      }
+    } finally {
+      stream.close()
+    }
+  }
+
+  private def binaryNameOf(relative: String): String =
+    relative.stripSuffix(".class").replace('/', '.')
+
+  /** The build manifest, which names the classes the debuggee was launched with. */
+  private val BuildManifest: String = "build.json"
 
   /**
     * Compiles the wrapper alongside the project's sources and reads the binding back.
@@ -188,8 +410,8 @@ object DebugEvalProvider {
         val tpe = FormatType.formatType(exp.tpe)
         val eff = FormatType.formatType(exp.eff)
         policy match {
-          case Policy.AllowEffects => Answer.Ok(tpe, eff)
-          case Policy.Pure if isPure(exp) => Answer.Ok(tpe, eff)
+          case Policy.AllowEffects => Answer.Ok(tpe, eff, None)
+          case Policy.Pure if isPure(exp) => Answer.Ok(tpe, eff, None)
           case Policy.Pure => Answer.Rejected(
             s"the expression has effect $eff, and the policy allows only a pure one. Running it " +
               "would run the debuggee's own code, which has to be asked for.",

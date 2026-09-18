@@ -92,7 +92,7 @@ class TestDebugEvalProvider extends AnyFunSuite {
       case other => fail(s"an effectful expression was not refused: $other")
     }
     evaluate(project, "println(at)", Policy.AllowEffects) match {
-      case Answer.Ok(_, eff) => assert(eff.contains("IO"), s"the effect was lost: $eff")
+      case Answer.Ok(_, eff, _) => assert(eff.contains("IO"), s"the effect was lost: $eff")
       case other => fail(s"allowEffects refused an effectful expression: $other")
     }
   }
@@ -130,7 +130,7 @@ class TestDebugEvalProvider extends AnyFunSuite {
     val project = build()
 
     DebugEvalProvider.compile(Describe, "at", Policy.Pure, project, TypedAst.empty) match {
-      case Answer.Ok(tpe, eff) => assert(tpe == "Option[String]" && eff == "Pure")
+      case Answer.Ok(tpe, eff, _) => assert(tpe == "Option[String]" && eff == "Pure")
       case other => fail(s"the published debug scope was not used: $other")
     }
   }
@@ -155,7 +155,7 @@ class TestDebugEvalProvider extends AnyFunSuite {
     // it must fail rather than pick up a parameter of the same name from elsewhere.
     val project = build()
 
-    evaluate(project, "at", frame = ScopeId("dev.flix.gen.Def$main", "staticApply")) match {
+    evaluate(project, "at", frame = ScopeId("Def$main", "staticApply")) match {
       case Answer.Rejected(_) | Answer.Failed(_) => ()
       case other => fail(s"a name outside the frame resolved: $other")
     }
@@ -194,7 +194,7 @@ class TestDebugEvalProvider extends AnyFunSuite {
     DebugEvalProvider.compile(frame, expression, policy, project, snapshot(project))
 
   private def assertOk(answer: Answer, tpe: String, eff: String): Unit = answer match {
-    case Answer.Ok(actualType, actualEff) =>
+    case Answer.Ok(actualType, actualEff, _) =>
       assert(actualType == tpe, s"the type is $actualType, expected $tpe")
       assert(actualEff == eff, s"the effect is $actualEff, expected $eff")
     case other => fail(s"expected $tpe \\ $eff, got $other")

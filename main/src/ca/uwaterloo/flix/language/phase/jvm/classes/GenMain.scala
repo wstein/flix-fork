@@ -25,7 +25,7 @@ import ca.uwaterloo.flix.language.phase.jvm.ClassMaker.{ConstructorMethodName, I
 import ca.uwaterloo.flix.language.phase.jvm.Instructions.*
 import ca.uwaterloo.flix.language.phase.jvm.Mangle.{RootPackage, mkDesc}
 import ca.uwaterloo.flix.language.phase.jvm.MethodTypeDescs.mkVoidDescriptor
-import ca.uwaterloo.flix.language.phase.jvm.{ClassMaker, GenFunAndClosureClasses, MethodTypeDescs}
+import ca.uwaterloo.flix.language.phase.jvm.{ClassMaker, DebugEvalRuntime, GenFunAndClosureClasses, MethodTypeDescs}
 import org.objectweb.asm.MethodVisitor
 
 import java.lang.constant.ClassDesc
@@ -52,6 +52,7 @@ object GenMain {
   private def mainIns(sym: Symbol.DefnSym)(implicit mv: MethodVisitor, flix: Flix): Unit = {
     val defName = GenFunAndClosureClasses.defnDesc(sym)
     withName(0, JavaClasses.String.arrayType())(args => {
+      if (flix.options.xdebug) INVOKESTATIC(DebugEvalRuntime.InstallMethod)
       args.load()
       INVOKESTATIC(GenGlobal.SetArgsMethod)
       NEW(defName)

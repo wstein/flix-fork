@@ -116,6 +116,19 @@ ordinary unknown-name diagnostic.
 Pure evaluation is the default policy. `allowEffects` permits compilation only; the
 debugger still applies its explicit user setting before it executes effectful code.
 
+When an artifact is requested, the compiler performs a second, in-memory code-generation
+pass with the inferred return type. It returns only classes absent from the development
+build manifest, so the debuggee continues to resolve program classes from the running
+build. No temporary class directory or project output is modified.
+
+Debug builds include `dev.flix.runtime.DebugEvalHost` and its private child loader as
+ordinary compilation products; release builds omit them. Generated `Main` loads the host
+before executing user code so JDI can invoke it at the first source breakpoint. Each
+evaluation uses a fresh parent-first loader, allowing old artifacts to become collectible
+while preserving object identity for values owned by the running program. The host runs
+the Flix trampoline, returns the compiler-selected `Value` field, and refuses suspended
+effects rather than attempting to resume the program's handlers while it is paused.
+
 The debug policy does not promise a bindable location for every lexical line, preserve
 unused definitions removed by reachability analysis, or preserve local/lambda bodies.
 Line-table attribution and the source/class and binding-type sidecars are available,
@@ -127,6 +140,5 @@ let-binding state, whose invariants assume substitution has already happened. Th
 explicit `DebugLocal` state resolves that distinction; it does not pretend an optimized
 expression has a recoverable slot.
 
-Executing a compiled expression in the paused process and final JetBrains IDE
-qualification remain open.
+Final JetBrains IDE qualification remains open.
 Release builds remain subject to the normal optimizer policy.

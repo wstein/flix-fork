@@ -62,7 +62,7 @@ class TestDebugEvalWire extends AnyFunSuite {
   }
 
   test("a typed expression crosses as its type and effect") {
-    val result = DebugEvalResult.of(Answer.Ok("Option[String]", "Pure"))
+    val result = DebugEvalResult.of(Answer.Ok("Option[String]", "Pure", None))
 
     assert(result.status == "ok")
     assert(result.tpe == "Option[String]")
