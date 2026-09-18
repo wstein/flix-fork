@@ -767,6 +767,67 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
   }
 
   /**
+    * Brings the development build up to date, compiling only if it is not already current.
+    *
+    * A whole-program compile is seconds even for a small project, most of it a back end that
+    * regenerates the same classes it wrote last time. Producing output that is already on disk
+    * is the most common thing a build command is asked to do, so [[isDevelopmentBuildCurrent]]
+    * answers without compiling whenever it can: the recorded fingerprint, the digest of every
+    * source's contents, and the class directory's product set must all still match what the last
+    * successful [[build]] wrote.
+    *
+    * Unlike [[build]], this returns no [[CompilationResult]]: a caller that needs one -- to run
+    * `main`, to reflect and call tests -- cannot be given a build that did not happen, and must
+    * use [[build]] instead.
+    *
+    * @return `true` if the project was compiled, `false` if the existing build was already current.
+    */
+  def buildIfNeeded(flix: Flix): Result[Boolean, BootstrapError] = {
+    if (!flix.options.inMemory && isDevelopmentBuildCurrent(flix)) {
+      Ok(false)
+    } else {
+      build(flix).map(_ => true)
+    }
+  }
+
+  /**
+    * Returns `true` if `build/development/build.json` still describes what `build` would produce.
+    *
+    * A clock is not trusted for this: `sourcesDigest` is a content hash, so a file that is
+    * touched but not changed -- a checkout, a reformat to the same text, an editor saving an
+    * unchanged buffer -- still counts as current. A missing manifest, a fingerprint that no
+    * longer matches the options and dependencies just compiled with, a source set whose content
+    * digest has moved, or a class directory that does not hold exactly the recorded products
+    * (one is missing, or something else put a stray one there) all answer `false`: each is a way
+    * the recorded build could be wrong about the output, and only a fresh compile closes it.
+    */
+  private def isDevelopmentBuildCurrent(flix: Flix): Boolean = {
+    val manifestFile = Bootstrap.getBuildManifestFile(projectPath, Build.Development)
+    BuildManifest.read(manifestFile) match {
+      case None => false
+      case Some(recorded) =>
+        val dependencies = files.jars
+        val fingerprint = BuildManifest.fingerprintOf(flix.options, dependencies)
+        if (recorded.fingerprint != fingerprint) {
+          false
+        } else {
+          val regularSources = files.sources.filter(Files.isRegularFile(_))
+          val sourcesDigest = BuildManifest.digestOfSources(projectPath, regularSources)
+          if (recorded.sourcesDigest != sourcesDigest) {
+            false
+          } else {
+            val devClassDir = Bootstrap.getDevelopmentClassDirectory(projectPath)
+            val existingProducts = FileOps.getFilesIn(devClassDir, Int.MaxValue)
+              .filter(FileOps.checkExt(_, "class"))
+              .map(f => devClassDir.relativize(f).toString.replace('\\', '/'))
+              .toSet
+            existingProducts == recorded.products.toSet
+          }
+        }
+    }
+  }
+
+  /**
     * Compiles the source files for the project.
     *
     * The generated classes are not loaded into the JVM (see [[JvmLoader.load]]).

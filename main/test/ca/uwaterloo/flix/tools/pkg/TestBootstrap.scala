@@ -79,6 +79,56 @@ class TestBootstrap extends AnyFunSuite {
     assert(!Files.exists(buildDir))
   }
 
+  test("buildIfNeeded compiles the first time and skips an unchanged rebuild") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out).unsafeGet
+
+    val first = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
+    assert(first.buildIfNeeded(PkgTestUtils.mkFlix(first)).unsafeGet, "the first build has nothing recorded yet")
+
+    val second = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
+    assert(!second.buildIfNeeded(PkgTestUtils.mkFlix(second)).unsafeGet, "the sources and options did not change")
+  }
+
+  test("buildIfNeeded recompiles after a source changes") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out).unsafeGet
+
+    val first = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
+    first.buildIfNeeded(PkgTestUtils.mkFlix(first)).unsafeGet
+
+    FileOps.writeString(p.resolve("src/Main.flix"), "def main(): Unit = println(\"changed\")")
+
+    val second = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
+    assert(second.buildIfNeeded(PkgTestUtils.mkFlix(second)).unsafeGet, "a changed source must not be reported as current")
+  }
+
+  test("buildIfNeeded recompiles when a recorded product is missing") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out).unsafeGet
+
+    val first = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
+    first.buildIfNeeded(PkgTestUtils.mkFlix(first)).unsafeGet
+
+    Files.delete(Bootstrap.getDevelopmentClassDirectory(p).resolve("Main.class"))
+
+    val second = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
+    assert(second.buildIfNeeded(PkgTestUtils.mkFlix(second)).unsafeGet, "a missing product must not be reported as current")
+  }
+
+  test("buildIfNeeded recompiles when a stray class file appears") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out).unsafeGet
+
+    val first = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
+    first.buildIfNeeded(PkgTestUtils.mkFlix(first)).unsafeGet
+
+    Files.write(Bootstrap.getDevelopmentClassDirectory(p).resolve("Stray.class"), Array[Byte](0xca.toByte, 0xfe.toByte, 0xba.toByte, 0xbe.toByte))
+
+    val second = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
+    assert(second.buildIfNeeded(PkgTestUtils.mkFlix(second)).unsafeGet, "a stray class file must not be reported as current")
+  }
+
   test("build reconciles obsolete class files in build/development") {
     val p = Files.createTempDirectory(ProjectPrefix)
     Bootstrap.init(p)(System.out).unsafeGet
