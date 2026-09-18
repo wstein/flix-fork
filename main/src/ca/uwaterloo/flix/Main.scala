@@ -35,6 +35,7 @@ import java.io.{File, PrintStream}
 import java.net.BindException
 import java.nio.file.{Path, Paths}
 import scala.collection.mutable
+import scala.util.matching.Regex
 
 object Main {
 
@@ -369,18 +370,19 @@ object Main {
 
         case Command.Test =>
           featureNotSupportedInNativeImage()
+          val filters = cmdOpts.testFilters.map(new Regex(_))
           if (cmdOpts.files.isEmpty) {
             exitOnResult {
               Bootstrap.bootstrap(cwd, options.githubToken).flatMap { bootstrap =>
                 val flix = bootstrap.mkFlix(options.copy(progress = false), formatter)
-                bootstrap.test(flix)
+                bootstrap.test(flix, filters)
               }
             }
           } else {
             val flix = mkFlixWithFiles(cmdOpts.files, options.copy(progress = false))
             flix.compile() match {
               case Result.Ok(compilationResult) =>
-                Tester.run(Nil, JvmLoader.load(compilationResult))(flix) match {
+                Tester.run(filters, JvmLoader.load(compilationResult))(flix) match {
                   case Result.Ok(_) => System.exit(0)
                   case Result.Err(_) => System.exit(1)
                 }
@@ -522,6 +524,7 @@ object Main {
   case class CmdOpts(
     command: Command = Command.None,
     args: List[String] = Nil,
+    testFilters: List[String] = Nil,
     entryPoint: Option[String] = None,
     installDeps: Boolean = true,
     githubToken: Option[String] = None,
@@ -664,7 +667,21 @@ object Main {
 
       cmd("run").action((_, c) => c.copy(command = Command.Run)).text("  runs main for the current project.")
 
-      cmd("test").action((_, c) => c.copy(command = Command.Test)).text("  runs the tests for the current project.")
+      cmd("test").action((_, c) => c.copy(command = Command.Test)).text("  runs the tests for the current project.").children(
+        opt[String]("filter")
+          .unbounded()
+          .validate { pattern =>
+            try {
+              new Regex(pattern)
+              success
+            } catch {
+              case ex: java.util.regex.PatternSyntaxException => failure(s"invalid test filter: ${ex.getDescription}")
+            }
+          }
+          .action((pattern, c) => c.copy(testFilters = c.testFilters :+ pattern))
+          .valueName("<regex>")
+          .text("runs tests whose fully-qualified name matches the regular expression; may be repeated.")
+      )
 
       cmd("repl").action((_, c) => c.copy(command = Command.Repl)).text("  starts a repl for the current project, or provided Flix source files.")
 

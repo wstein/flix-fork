@@ -252,6 +252,20 @@ scanning `.flix` files into a bare compiler. It therefore receives the same pack
 JARs declared by `flix.toml` as the paused program. Evaluation remains in-memory, and a
 dependency change still replaces the language server project before the next request.
 
+## Test selection
+
+`flix test --filter '<regex>'` runs tests whose fully-qualified symbol is matched by
+the regular expression. Matching uses the whole symbol rather than substring search;
+for example, `Suite\.selected` selects exactly `Suite.selected`. The option may be
+repeated, with OR semantics. No filters retains the existing run-all behavior, and a
+valid filter matching no tests runs zero tests successfully. Invalid regular
+expressions are rejected during argument parsing.
+
+The same contract applies to a project and to loose source files passed to `flix test`.
+Arguments after `--` remain program arguments and are not interpreted as filters.
+Structured test-event output is a separate CLI contract; `--filter` neither introduces
+nor implies an `--events-json` option.
+
 ## Current limits
 
 The debug policy does not promise a bindable location for every lexical line, preserve

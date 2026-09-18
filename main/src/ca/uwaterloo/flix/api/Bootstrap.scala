@@ -42,6 +42,7 @@ import scala.collection.mutable
 import scala.io.StdIn.readLine
 import scala.jdk.CollectionConverters.IterableHasAsScala
 import scala.util.{Failure, Success, Using}
+import scala.util.matching.Regex
 
 
 object Bootstrap {
@@ -1225,12 +1226,13 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
   }
 
   /**
-    * Runs all tests in the flix package for the project.
+    * Runs project tests whose fully-qualified symbols match at least one filter.
+    * Runs all tests when `filters` is empty.
     */
-  def test(flix: Flix): Result[Unit, BootstrapError] = {
+  def test(flix: Flix, filters: List[Regex] = Nil): Result[Unit, BootstrapError] = {
     for {
       compilationResult <- compileProject(flix, Build.Development)
-      res <- Tester.run(Nil, JvmLoader.load(compilationResult))(flix).mapErr(_ => BootstrapError.GeneralError("Tester Error"))
+      res <- Tester.run(filters, JvmLoader.load(compilationResult))(flix).mapErr(_ => BootstrapError.GeneralError("Tester Error"))
     } yield {
       res
     }

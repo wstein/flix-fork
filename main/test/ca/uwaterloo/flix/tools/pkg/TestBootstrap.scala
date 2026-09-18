@@ -448,6 +448,32 @@ class TestBootstrap extends AnyFunSuite {
     b.test(PkgTestUtils.mkFlix(b))
   }
 
+  test("test filters fully-qualified symbols") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out).unsafeGet
+    FileOps.writeString(
+      p.resolve("src/Main.flix"),
+      """mod Suite {
+        |    use Assert.fail
+        |
+        |    @Test
+        |    def selected(): Unit = ()
+        |
+        |    @Test
+        |    def excluded(): Unit \ Assert = fail("excluded")
+        |}
+        |""".stripMargin,
+    )
+    val b = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
+
+    val selected = b.test(PkgTestUtils.mkFlix(b), List("Suite\\.selected".r))
+    assert(selected.toOption.nonEmpty, selected.toString)
+    val excluded = b.test(PkgTestUtils.mkFlix(b), List("Suite\\.excluded".r))
+    assert(excluded.toOption.isEmpty, excluded.toString)
+    val unmatched = b.test(PkgTestUtils.mkFlix(b), List("Missing\\..*".r))
+    assert(unmatched.toOption.nonEmpty, unmatched.toString)
+  }
+
   test("clean-command-should-remove-class-files-and-directories-if-compiled-previously") {
     val p = Files.createTempDirectory(ProjectPrefix)
     Bootstrap.init(p)(System.out).unsafeGet

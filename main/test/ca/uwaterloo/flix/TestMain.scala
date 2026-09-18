@@ -93,6 +93,22 @@ class TestMain extends AnyFunSuite {
     assert(opts.command == Main.Command.Test)
   }
 
+  test("test --filter") {
+    val args = Array("test", "--filter", "Main\\.selected", "--filter", "Other\\..*")
+    val opts = Main.parseCmdOpts(args).get
+    assert(opts.command == Main.Command.Test)
+    assert(opts.testFilters == List("Main\\.selected", "Other\\..*"))
+  }
+
+  test("test rejects an invalid filter") {
+    val args = Array("test", "--filter", "[")
+    assert(Main.parseCmdOpts(args).isEmpty)
+  }
+
+  test("--filter belongs to test") {
+    assert(Main.parseCmdOpts(Array("run", "--filter", "Main\\..*")).isEmpty)
+  }
+
   test("repl") {
     val args = Array("repl")
     val opts = Main.parseCmdOpts(args).get
