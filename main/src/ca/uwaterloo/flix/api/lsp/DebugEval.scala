@@ -21,6 +21,11 @@ import java.util.Base64
 
 import scala.beans.BeanProperty
 
+/** Version of the custom debug-evaluation JSON-RPC contract. */
+object DebugEvalProtocol {
+  val Version: Int = 1
+}
+
 /**
   * The request of `flix/debugEval/compile`.
   *
@@ -46,6 +51,9 @@ import scala.beans.BeanProperty
   * is read before the framework has finished populating it.
   */
 class DebugEvalParams {
+  /** Must equal [[DebugEvalProtocol.Version]]. Zero identifies a pre-versioned client. */
+  @BeanProperty var protocolVersion: Int = 0
+
   @BeanProperty var className: String = _
 
   /** The exact build whose JVM is paused, as recorded by its launch manifest. */
@@ -80,6 +88,9 @@ class DebugEvalParams {
   * channel as "the server crashed", and a client cannot tell them apart or act on the first.
   */
 class DebugEvalResult {
+  /** The contract used to encode this answer, including rejections. */
+  @BeanProperty var protocolVersion: Int = DebugEvalProtocol.Version
+
   /** One of `ok`, `failed`, `rejected`. */
   @BeanProperty var status: String = _
 

@@ -64,6 +64,7 @@ class TestDebugEvalWire extends AnyFunSuite {
   test("a typed expression crosses as its type and effect") {
     val result = DebugEvalResult.of(Answer.Ok("Option[String]", "Pure", None))
 
+    assert(result.protocolVersion == DebugEvalProtocol.Version)
     assert(result.status == "ok")
     assert(result.tpe == "Option[String]")
     assert(result.eff == "Pure")
@@ -102,6 +103,14 @@ class TestDebugEvalWire extends AnyFunSuite {
     // A client that omits the field gets the conservative answer rather than permission to run the
     // debuggee's own code.
     assert(new DebugEvalParams().getPolicy() == "pure")
+  }
+
+  test("a request has to opt into the current protocol") {
+    val request = new DebugEvalParams()
+
+    assert(request.getProtocolVersion() == 0)
+    request.setProtocolVersion(DebugEvalProtocol.Version)
+    assert(request.getProtocolVersion() == 1)
   }
 
   test("a request carries the identity of the program that is actually paused") {

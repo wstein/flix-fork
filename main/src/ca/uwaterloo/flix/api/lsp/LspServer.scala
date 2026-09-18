@@ -144,7 +144,12 @@ object LspServer {
     def debugEvalCompile(params: DebugEvalParams): CompletableFuture[DebugEvalResult] =
       CompletableFuture.supplyAsync(() => {
         try {
-          DebugEvalProvider.Policy.parse(params.policy) match {
+          if (params.protocolVersion != DebugEvalProtocol.Version) {
+            DebugEvalResult.rejected(
+              s"unsupported debug-evaluation protocol ${params.protocolVersion}; " +
+                s"this server requires ${DebugEvalProtocol.Version}. Update the plugin or compiler",
+            )
+          } else DebugEvalProvider.Policy.parse(params.policy) match {
             case None => DebugEvalResult.rejected(s"unknown policy `${params.policy}`; expected `pure` or `allowEffects`")
             case Some(_) if params.buildId == null || params.buildId.isBlank =>
               DebugEvalResult.rejected(

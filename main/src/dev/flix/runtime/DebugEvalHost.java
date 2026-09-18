@@ -59,6 +59,9 @@ import java.util.Map;
  */
 public final class DebugEvalHost {
 
+    /** Version of the fields and methods the debugger accesses through JDI. */
+    public static final int ABI_VERSION = 1;
+
     /** The JVM property the debugger launcher uses to pin this process to its build manifest. */
     public static final String BUILD_ID_PROPERTY = "flix.debug.buildId";
 

@@ -55,6 +55,10 @@ class TestDebugEvalHost extends AnyFunSuite {
     assert(identity == System.getProperty("flix.debug.buildId", ""))
   }
 
+  test("the host declares the JDI ABI it implements") {
+    assert(DebugEvalHost.ABI_VERSION == 1)
+  }
+
   private implicit val sctx: SecurityContext = SecurityContext.Unrestricted
 
   private val Program: String =
