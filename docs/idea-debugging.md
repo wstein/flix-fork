@@ -48,6 +48,10 @@ from sidecar text. Generated ANF slots are hidden. Frame parameters become visib
 after their restore instructions. Internal continuation field names remain `l0`, `l1`,
 etc.; debugger variable names come from the LVT.
 
+Nested initializer scopes are kept inside their own ANF initializer in debug builds.
+Their locals stop being visible before the enclosing binding is initialized, instead
+of leaking into the enclosing scope through ANF hoisting. Release lowering is unchanged.
+
 The compiler also captures source binding identity, name, location, and pre-erasure type
 before lowering, joining them to the emitted class and method for the `debug-scopes`
 sidecar. That method-wide snapshot is not a list of variables live at a particular
@@ -87,6 +91,6 @@ let-binding state, whose invariants assume substitution has already happened. Th
 explicit `DebugLocal` state resolves that distinction; it does not pretend an optimized
 expression has a recoverable slot.
 
-Complete lexical scopes (including shadowing through ANF hoisting and pattern bindings),
+Complete lexical scopes (including shadowing and pattern bindings),
 expression evaluation at a breakpoint, and JetBrains IDE qualification remain open.
 Release builds remain subject to the normal optimizer policy.

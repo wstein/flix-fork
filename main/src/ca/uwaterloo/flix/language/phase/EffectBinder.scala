@@ -293,6 +293,13 @@ object EffectBinder {
       val d = visitExpr(defaultExp)
       ReducedAst.Expr.Switch(e, enumSym, cs, d, tpe, purity, loc)
 
+    case scoped@LiftedAst.Expr.Let(sym, _, _, _, _, _)
+      if flix.options.xdebug && sym.loc.isReal && sym.loc.source.origin.isUser && !sym.isWild =>
+      // Keep a nested source scope inside one initializer. Hoisting its binders into
+      // the caller would extend their LVT ranges beyond their lexical scope. The outer
+      // ANF binding still evaluates on an empty stack, including across suspension.
+      letBindExpr(binders)(visitExpr(scoped))
+
     case LiftedAst.Expr.Let(sym, exp1, exp2, _, _, loc) =>
       val e1 = visitExprInnerWithBinders(binders)(exp1)
       binders.addOne(LetBinder(sym, e1, loc))

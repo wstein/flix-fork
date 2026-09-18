@@ -54,6 +54,23 @@ class TestDebugLocalVariables extends AnyFunSuite {
   }
 
   for (newMono <- List(false, true)) {
+    test(s"debug local ranges end at nested initializer scope (mono2=$newMono)") {
+      val program = """def compute(seed: Int64): Int64 = {
+        |    let outer = seed + 1i64;
+        |    let nested = {
+        |        let inner = seed + 2i64;
+        |        inner + 1i64
+        |    };
+        |    outer + nested
+        |}
+        |def main(): Unit \ IO = println(compute(40i64))
+        |""".stripMargin
+      val locals = localEntries(compile(xdebug = true, program, newMono), "Def$compute", "staticApply")
+      val inner = locals.find(_._1 == "inner").getOrElse(fail(s"Missing inner: $locals"))
+      val nested = locals.find(_._1 == "nested").getOrElse(fail(s"Missing nested: $locals"))
+      assert(inner._4 <= nested._3, s"Initializer binding leaked into the enclosing scope: $locals")
+    }
+
     test(s"debug locals survive suspension with disjoint wide slots (mono2=$newMono)") {
       val program = """eff Pause { def pause(): Unit }
         |def compute(seed: Int64): Int64 \ Pause = {
@@ -79,6 +96,27 @@ class TestDebugLocalVariables extends AnyFunSuite {
         val other = b._5 until (b._5 + Type.getType(b._2).getSize)
         assert(occupied.intersect(other).isEmpty, s"Overlapping live slots: $a and $b")
       }
+      ca.uwaterloo.flix.runtime.JvmLoader.load(result).main.get(Array.empty)
+    }
+
+    test(s"debug nested initializer scopes can suspend (mono2=$newMono)") {
+      val program = """eff Pause { def pause(): Unit }
+        |def compute(seed: Int64): Int64 \ Pause = {
+        |    let outer = seed + 1i64;
+        |    let nested = {
+        |        let inner = seed + 2i64;
+        |        Pause.pause();
+        |        inner + 1i64
+        |    };
+        |    outer + nested
+        |}
+        |def main(): Unit \ Assert = run {
+        |    Assert.assertEq(expected = 84i64, compute(40i64))
+        |} with handler Pause { def pause(k) = k() }
+        |""".stripMargin
+      val result = compile(xdebug = true, program, newMono)
+      val locals = localEntries(result, "Def$compute", "applyFrame")
+      assert(locals.find(_._1 == "inner").get._4 <= locals.find(_._1 == "nested").get._3)
       ca.uwaterloo.flix.runtime.JvmLoader.load(result).main.get(Array.empty)
     }
   }
