@@ -94,6 +94,25 @@ class LspProject(o: Options) {
   }
 
   /**
+    * Returns a fresh compiler for an asynchronous test run.
+    *
+    * The long-lived incremental compiler continues serving editor requests while tests execute.
+    * Open buffers are copied into this compiler, so the run observes the same source snapshot as
+    * the editor without racing a concurrent check.
+    */
+  def testCompiler(): Flix = synchronized {
+    if (stale) reload().foreach(err => throw new IllegalStateException(err.message(NoFormatter)))
+    val result = bootstrap match {
+      case Some(b) => b.mkFlix(o.copy(inMemory = true), NoFormatter)
+      case None => new Flix().setFormatter(NoFormatter).setOptions(o.copy(inMemory = true))
+    }
+    for ((name, src) <- buffers) {
+      ClientUri.addSource(result, name, src)
+    }
+    result
+  }
+
+  /**
     * Returns the path of the project: the workspace root the client has added, or the working
     * directory of the server if it has added none.
     */

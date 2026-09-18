@@ -22,7 +22,10 @@ import ca.uwaterloo.flix.language.CompilationMessage
 import ca.uwaterloo.flix.language.ast.TypedAst
 import ca.uwaterloo.flix.language.ast.TypedAst.Root
 import ca.uwaterloo.flix.language.phase.extra.CodeHinter
+import ca.uwaterloo.flix.runtime.JvmLoader
+import ca.uwaterloo.flix.tools.Tester
 import ca.uwaterloo.flix.util.Options
+import ca.uwaterloo.flix.util.Result
 import org.eclipse.lsp4j
 import org.eclipse.lsp4j.*
 import org.eclipse.lsp4j.jsonrpc.messages
@@ -32,8 +35,11 @@ import org.eclipse.lsp4j.services.*
 import java.net.{URI, URISyntaxException}
 import java.nio.file.{Files, Path}
 import java.util
-import java.util.concurrent.CompletableFuture
+import java.util.concurrent.{CompletableFuture, ConcurrentHashMap}
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.regex.PatternSyntaxException
 import scala.jdk.CollectionConverters.*
+import scala.util.matching.Regex
 
 object LspServer {
   def run(opts: Options): Unit = {
@@ -43,7 +49,12 @@ object LspServer {
     val o = opts.copy(progress = false)
 
     val server = new FlixLanguageServer(o)
-    val launcher = LSPLauncher.createServerLauncher(server, System.in, System.out)
+    val launcher = new LSPLauncher.Builder[FlixLanguageClient]()
+      .setLocalService(server)
+      .setRemoteInterface(classOf[FlixLanguageClient])
+      .setInput(System.in)
+      .setOutput(System.out)
+      .create()
     val client = launcher.getRemoteProxy
     server.connect(client)
     launcher.startListening().get()
@@ -89,7 +100,10 @@ object LspServer {
       * The proxy to the language client.
       * Used to send messages to the client.
       */
-    private var flixLanguageClient: LanguageClient = _
+    private var flixLanguageClient: FlixLanguageClient = _
+
+    /** Active test runs and their cooperative cancellation flags, keyed by client-chosen id. */
+    private val testRuns = new ConcurrentHashMap[String, AtomicBoolean]()
 
     /**
       * The client capabilities.
@@ -171,6 +185,68 @@ object LspServer {
         }
       })
 
+    @jsonrpc.services.JsonRequest("flix/test/run")
+    def testRun(params: TestRunParams): CompletableFuture[TestRunResult] = {
+      if (params.protocolVersion != TestRunProtocol.Version) {
+        return CompletableFuture.completedFuture(TestRunResult.rejected(params.runId,
+          s"unsupported test protocol ${params.protocolVersion}; this server requires ${TestRunProtocol.Version}"))
+      }
+      val runId = Option(params.runId).map(_.trim).getOrElse("")
+      if (runId.isEmpty || runId.length > 128) {
+        return CompletableFuture.completedFuture(TestRunResult.rejected(runId, "runId must contain between 1 and 128 characters"))
+      }
+      val filters = try {
+        Option(params.filters).toList.flatMap(_.asScala).map(new Regex(_))
+      } catch {
+        case ex: PatternSyntaxException =>
+          return CompletableFuture.completedFuture(TestRunResult.rejected(runId, s"invalid test filter: ${ex.getDescription}"))
+      }
+      val cancelled = new AtomicBoolean(false)
+      if (testRuns.putIfAbsent(runId, cancelled) != null) {
+        return CompletableFuture.completedFuture(TestRunResult.rejected(runId, "a test run with this runId is already active"))
+      }
+
+      CompletableFuture.runAsync(() => executeTestRun(runId, filters, cancelled))
+      CompletableFuture.completedFuture(TestRunResult.accepted(runId))
+    }
+
+    @jsonrpc.services.JsonRequest("flix/test/cancel")
+    def testCancel(params: TestCancelParams): CompletableFuture[TestRunResult] = {
+      if (params.protocolVersion != TestRunProtocol.Version) {
+        return CompletableFuture.completedFuture(TestRunResult.rejected(params.runId,
+          s"unsupported test protocol ${params.protocolVersion}; this server requires ${TestRunProtocol.Version}"))
+      }
+      val cancellation = testRuns.get(params.runId)
+      if (cancellation == null) {
+        CompletableFuture.completedFuture(TestRunResult.rejected(params.runId, "no active test run has this runId"))
+      } else {
+        cancellation.set(true)
+        CompletableFuture.completedFuture(TestRunResult.cancelled(params.runId))
+      }
+    }
+
+    private def executeTestRun(runId: String, filters: List[Regex], cancelled: AtomicBoolean): Unit = {
+      val sink = new LspTestEventSink(runId, flixLanguageClient, cancelled)
+      var compiler: ca.uwaterloo.flix.api.Flix = null
+      try {
+        compiler = project.testCompiler()
+        compiler.compile() match {
+          case Result.Ok(compilationResult) =>
+            val token = new Tester.CancellationToken {
+              override def isCancelled: Boolean = cancelled.get()
+            }
+            Tester.run(filters, JvmLoader.load(compilationResult), sink, token)(compiler)
+          case Result.Err(errors) =>
+            sink.diagnostics(errors.map(_.summary))
+        }
+      } catch {
+        case t: Throwable => sink.diagnostics(List(s"Test run failed: $t"))
+      } finally {
+        if (compiler != null) compiler.close()
+        testRuns.remove(runId, cancelled)
+      }
+    }
+
     /**
       * Returns `true` if the client supports dynamic registration of `didChangeWatchedFiles`.
       */
@@ -246,6 +322,7 @@ object LspServer {
 
     override def shutdown(): CompletableFuture[AnyRef] = {
       System.err.println("shutdown")
+      testRuns.values().asScala.foreach(_.set(true))
       project.close()
       CompletableFuture.completedFuture(null)
     }
@@ -256,7 +333,7 @@ object LspServer {
 
     override def connect(client: LanguageClient): Unit = {
       System.err.println("connect to the client")
-      flixLanguageClient = client
+      flixLanguageClient = client.asInstanceOf[FlixLanguageClient]
     }
 
     override def getTextDocumentService: TextDocumentService = flixTextDocumentService
