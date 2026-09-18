@@ -16,8 +16,11 @@
 
 package ca.uwaterloo.flix
 
-import ca.uwaterloo.flix.util.LibLevel
+import ca.uwaterloo.flix.api.BootstrapError
+import ca.uwaterloo.flix.util.{Formatter, LibLevel, Options, Result}
 import org.scalatest.funsuite.AnyFunSuite
+
+import java.nio.file.Files
 
 class TestMain extends AnyFunSuite {
 
@@ -149,6 +152,18 @@ class TestMain extends AnyFunSuite {
     val opts = Main.parseCmdOpts(args).get
     assert(opts.command == Main.Command.Check)
     assert(opts.files.length == 2)
+  }
+
+  test("structured check compiles the explicitly named files") {
+    val source = Files.createTempFile("flix-check-json", ".flix")
+    Files.writeString(source, "def main(): Unit = 42")
+
+    Main.checkFiles(Seq(source.toFile), Options.DefaultTest, Nil)(Formatter.NoFormatter) match {
+      case Result.Err(BootstrapError.CompilationErrors(errors, _)) =>
+        assert(errors.nonEmpty)
+        assert(errors.exists(_.loc.source.name == source.toString))
+      case result => fail(s"expected errors from the explicitly named file, got: $result")
+    }
   }
 
   test("test with files") {

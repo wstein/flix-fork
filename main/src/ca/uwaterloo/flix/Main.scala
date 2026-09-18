@@ -274,7 +274,9 @@ object Main {
           System.exit(0)
 
         case Command.Check =>
-          if (cmdOpts.jsonDiagnostics) {
+          if (cmdOpts.files.nonEmpty && cmdOpts.jsonDiagnostics) {
+            exitWithJson(checkFiles(cmdOpts.files, options, libPaths(cmdOpts.libs)))
+          } else if (cmdOpts.jsonDiagnostics) {
             exitWithJson {
               Bootstrap.bootstrap(cwd, options.githubToken).flatMap { bootstrap =>
                 val flix = bootstrap.mkFlix(options, formatter, libPaths(cmdOpts.libs))
@@ -986,6 +988,20 @@ object Main {
     }
     Console.out.println(JsonMethods.pretty(JsonMethods.render(CliContract.result(errors, None))))
     System.exit(if (errors.isEmpty) 0 else 1)
+  }
+
+  /**
+    * Checks exactly `files` and returns structured compiler errors for machine-readable clients.
+    *
+    * This deliberately bypasses project bootstrapping. An explicit file list is the complete input
+    * contract even when the caller asks for JSON diagnostics; otherwise adding an output-format
+    * option would silently change which program is checked.
+    */
+  private[flix] def checkFiles(files: Seq[File], options: Options, jars: List[Path])(implicit formatter: Formatter): Result[Unit, BootstrapError] = {
+    val flix = mkFlixWithFiles(files, options, jars)
+    val (optRoot, errors) = flix.check()
+    if (errors.isEmpty) Result.Ok(())
+    else Result.Err(BootstrapError.CompilationErrors(errors, optRoot))
   }
 
 

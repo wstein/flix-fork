@@ -102,7 +102,9 @@ Build tools should add `--diagnostics-json` to `check` or `build`. The command t
 versioned JSON document to standard output containing success, the compiler version, and structured
 diagnostics. Source ranges use the same zero-based convention as LSP. Compiler errors remain
 structured inside `BootstrapError` until the caller chooses human or machine rendering; they are
-not reconstructed from console text.
+not reconstructed from console text. For `check`, explicitly named `.flix` files remain the complete
+input set when `--diagnostics-json` is present; selecting a machine-readable output format never
+switches the command back to whole-project discovery.
 
 Build plugins can depend on the standalone `flixClient` Java module instead of parsing that JSON
 themselves. `FlixCompiler` exposes only capability negotiation, checking, building, and stub
