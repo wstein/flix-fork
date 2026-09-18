@@ -158,6 +158,10 @@ never used as a fallback because it may contain a newer or partial build. No tem
 class directory or project output is modified. Raw artifact class bytes are capped at
 16 MiB before Base64 expansion, preventing an expression from creating an unbounded
 JSON-RPC/JDI payload; a larger specialization set is rejected with a specific remedy.
+The artifact entry is the exact root definition class `Def$flixDebugEvalWrapper`.
+Lifted lambdas inherit that source name in classes such as
+`Clo$flixDebugEvalWrapper$...`; substring matching is therefore forbidden because it
+could select an `applyFrame` closure as the declared `staticApply` entry point.
 
 Debug builds include `dev.flix.runtime.DebugEvalHost` and its private child loader as
 ordinary compilation products; release builds omit them. Generated `Main` loads the host

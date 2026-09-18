@@ -381,9 +381,13 @@ object DebugEvalProvider {
         }
         val fresh = produced.filterNot { case (relative, _) => existing.contains(relative) }
         val classes = fresh.map { case (relative, bytes) => binaryNameOf(relative) -> bytes }
+        // The generated wrapper is deliberately in the root namespace and has a unique fixed
+        // source name. Match its definition class exactly: lifted closures inherit the enclosing
+        // name (`Clo$flixDebugEvalWrapper$...`) and must never become the static entry point.
+        val entryClass = s"Def$$$WrapperName"
         artifactSizeError(classes) match {
           case Some(reason) => Left(reason)
-          case None => classes.map(_._1).find(_.contains(WrapperName)) match {
+          case None => classes.map(_._1).find(_ == entryClass) match {
             case None =>
               Left(
                 "the expression compiled but produced no class of its own, which means the running " +

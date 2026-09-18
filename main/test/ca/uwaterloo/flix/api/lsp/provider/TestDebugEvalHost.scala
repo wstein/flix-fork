@@ -157,6 +157,23 @@ class TestDebugEvalHost extends AnyFunSuite {
     assert(artifact.parameters == List("at", "n"), s"the parameters are ${artifact.parameters}")
   }
 
+  test("a lifted lambda cannot be mistaken for the evaluation entry class") {
+    // Lambda lifting names the closure after its enclosing definition, so both generated binary
+    // names contain `flixDebugEvalWrapper`. The entry must be the definition that owns
+    // `staticApply`, never the closure's `applyFrame`; map iteration order is not a contract.
+    val project = build()
+    val artifact = artifactFor(project, "List.map(x -> x + 1, n :: Nil)")
+
+    assert(
+      artifact.classes.exists(_._1.contains("Clo$flixDebugEvalWrapper")),
+      s"the fixture produced no lifted closure: ${artifact.classes.map(_._1)}",
+    )
+    assert(
+      artifact.entryClass.contains("Def$flixDebugEvalWrapper"),
+      s"the lifted closure was selected as the entry class: ${artifact.entryClass}",
+    )
+  }
+
   test("the result field is the one for the expression's type, not a guess") {
     // `Value` carries a field per erased type and no discriminator. Reading the wrong one gives the
     // default of that field -- 0, false, null -- which is a plausible answer and a wrong one.
