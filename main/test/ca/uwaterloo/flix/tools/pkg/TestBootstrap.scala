@@ -136,13 +136,17 @@ class TestBootstrap extends AnyFunSuite {
     val debug = PkgTestUtils.mkFlix
     debug.setOptions(debug.options.copy(xdebug = true))
     val index = Bootstrap.getDevelopmentDirectory(p).resolve("debug-index.json")
+    val scopes = Bootstrap.getDevelopmentDirectory(p).resolve("debug-scopes.json")
 
     b.build(debug).unsafeGet
     assert(Files.exists(index))
+    assert(Files.exists(scopes))
     assert(Files.readString(index).contains("\"formatVersion\":1"))
+    assert(Files.readString(scopes).contains("\"formatVersion\":2"))
 
     b.build(PkgTestUtils.mkFlix).unsafeGet
     assert(!Files.exists(index))
+    assert(!Files.exists(scopes))
   }
 
   test("build reconciles obsolete class files in build/development") {

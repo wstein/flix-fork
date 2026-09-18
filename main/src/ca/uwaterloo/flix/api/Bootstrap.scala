@@ -23,7 +23,7 @@ import ca.uwaterloo.flix.language.ast.shared.SecurityContext
 import ca.uwaterloo.flix.language.ast.{Scheme, SourceLocation, Symbol, TypedAst}
 import ca.uwaterloo.flix.language.jvm.ClassDescs
 import ca.uwaterloo.flix.language.phase.HtmlDocumentor
-import ca.uwaterloo.flix.language.phase.jvm.{DebugIndex, JvmClass}
+import ca.uwaterloo.flix.language.phase.jvm.{DebugIndex, DebugScopes, JvmClass}
 
 import java.lang.constant.ClassDesc
 import ca.uwaterloo.flix.runtime.{CompilationResult, JvmLoader}
@@ -1718,8 +1718,21 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
       _ <- Result.traverse(classes.values.toList)(writeClass(devClassDir, _)).map(_ => ())
       _ <- reconcileClassDirectory(devClassDir, classes)
       _ <- writeDebugIndex(flix, result)
+      _ <- writeDebugScopes(flix, result)
       _ <- writeDevelopmentManifest(flix, result)
     } yield ()
+  }
+
+  /** Publishes Flix binding types only for a debug build. */
+  private def writeDebugScopes(flix: Flix, result: CompilationResult): Result[Unit, BootstrapError] = {
+    val path = Bootstrap.getDevelopmentDirectory(projectPath).resolve(DebugScopes.FileName)
+    try {
+      if (flix.options.xdebug) DebugScopes.write(path, result.getDebugDefinitions)
+      else Files.deleteIfExists(path)
+      Ok(())
+    } catch {
+      case e: Exception => Err(BootstrapError.FileError(s"Failed to publish debug scopes: ${e.getMessage}"))
+    }
   }
 
   /** Publishes the source-to-emitted-class index only for a debug build. */
