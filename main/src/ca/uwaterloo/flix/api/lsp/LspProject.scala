@@ -81,6 +81,17 @@ class LspProject(o: Options) {
   def compiler: Flix = flix
 
   /**
+    * Returns a fresh in-memory debug compiler with this project's packages, JARs, and sources.
+    *
+    * Evaluation must compile in the same dependency universe as the paused program. Reconstructing
+    * a bare [[Flix]] from `.flix` files alone makes names supplied by `flix.toml` disappear.
+    */
+  def debugEvalCompiler(): Flix = bootstrap match {
+    case Some(b) => b.mkFlix(o.copy(xdebug = true, inMemory = true), NoFormatter)
+    case None => new Flix().setFormatter(NoFormatter).setOptions(o.copy(xdebug = true, inMemory = true))
+  }
+
+  /**
     * Returns the path of the project: the workspace root the client has added, or the working
     * directory of the server if it has added none.
     */

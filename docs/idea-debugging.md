@@ -141,6 +141,11 @@ Repeated watches therefore reuse both the compiler and the emitted artifact. A c
 source set, a new build digest, or a different project closes and replaces the compiler;
 no cache entry is allowed to cross the identity of the launched build.
 
+That compiler is created by the language server project's existing `Bootstrap`, not by
+scanning `.flix` files into a bare compiler. It therefore receives the same packages and
+JARs declared by `flix.toml` as the paused program. Evaluation remains in-memory, and a
+dependency change still replaces the language server project before the next request.
+
 The debug policy does not promise a bindable location for every lexical line, preserve
 unused definitions removed by reachability analysis, or preserve local/lambda bodies.
 Line-table attribution and the source/class and binding-type sidecars are available,

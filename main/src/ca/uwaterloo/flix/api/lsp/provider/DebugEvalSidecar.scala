@@ -94,16 +94,22 @@ object DebugEvalSidecar {
     * `sources` is passed rather than discovered here so the caller keeps one rule for what a
     * project's sources are.
     */
-  def withCompiler[A](projectRoot: Path, sources: List[Path], sourcesDigest: String)(body: Flix => A): A = synchronized {
-    body(current(projectRoot, sources, sourcesDigest).flix)
+  def withCompiler[A](projectRoot: Path, sources: List[Path], sourcesDigest: String)(body: Flix => A): A =
+    withCompiler(projectRoot, sources, sourcesDigest, () => standaloneCompiler(sources))(body)
+
+  /** As [[withCompiler]], creating the compiler with the project's dependency configuration. */
+  def withCompiler[A](projectRoot: Path, sources: List[Path], sourcesDigest: String,
+                      freshCompiler: () => Flix)(body: Flix => A): A = synchronized {
+    body(current(projectRoot, sources, sourcesDigest, freshCompiler).flix)
   }
 
   /** Replaced when the project, source set, or launched build digest changes. */
-  private def current(projectRoot: Path, sources: List[Path], sourcesDigest: String): Entry = entry match {
+  private def current(projectRoot: Path, sources: List[Path], sourcesDigest: String,
+                      freshCompiler: () => Flix): Entry = entry match {
     case Some(e) if e.projectRoot == projectRoot && e.sources == sources.toSet && e.sourcesDigest == sourcesDigest => e
     case _ =>
       entry.foreach(_.flix.close())
-      val fresh = create(projectRoot, sources, sourcesDigest)
+      val fresh = Entry(projectRoot, sources.toSet, sourcesDigest, freshCompiler())
       entry = Some(fresh)
       fresh
   }
@@ -120,14 +126,22 @@ object DebugEvalSidecar {
     */
   def cached[A](projectRoot: Path, sources: List[Path], sourcesDigest: String, scope: String,
                 expression: String, policy: String, withArtifact: Boolean)(compute: => A): A = synchronized {
+    cached(projectRoot, sources, sourcesDigest, scope, expression, policy, withArtifact,
+      () => standaloneCompiler(sources))(compute)
+  }
+
+  /** As [[cached]], creating a replacement compiler with the project's dependency configuration. */
+  def cached[A](projectRoot: Path, sources: List[Path], sourcesDigest: String, scope: String,
+                expression: String, policy: String, withArtifact: Boolean,
+                freshCompiler: () => Flix)(compute: => A): A = synchronized {
     val key = Key(sourcesDigest, scope, expression, policy, withArtifact)
-    current(projectRoot, sources, sourcesDigest).answers.get(key) match {
+    current(projectRoot, sources, sourcesDigest, freshCompiler).answers.get(key) match {
       case Some(answer) => answer.asInstanceOf[A]
       case None =>
         val answer = compute
         // Re-read rather than reused: `compute` may have replaced the entry, and remembering an
         // answer against a compiler that has been dropped would outlive what it was computed from.
-        current(projectRoot, sources, sourcesDigest).answers.put(key, answer)
+        current(projectRoot, sources, sourcesDigest, freshCompiler).answers.put(key, answer)
         answer
     }
   }
@@ -148,13 +162,14 @@ object DebugEvalSidecar {
     entry = None
   }
 
-  private def create(projectRoot: Path, sources: List[Path], sourcesDigest: String): Entry = {
+  /** A dependency-free compiler used by API callers that do not own a Bootstrap project. */
+  def standaloneCompiler(sources: List[Path]): Flix = {
     implicit val sctx: SecurityContext = SecurityContext.Unrestricted
     val flix = new Flix().setOptions(
       // The same debug policy as the launched build, with disk output explicitly disabled.
       Options.DefaultTest.copy(xdebug = true, inMemory = true),
     )
     sources.foreach(path => flix.addFile(path, sctx))
-    Entry(projectRoot, sources.toSet, sourcesDigest, flix)
+    flix
   }
 }

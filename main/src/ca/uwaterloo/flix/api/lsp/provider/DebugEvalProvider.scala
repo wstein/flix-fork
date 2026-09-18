@@ -67,9 +67,9 @@ import java.nio.file.{Files, Path, Paths}
   *
   * ==What is deliberately absent==
   *
-  * No artifact, no execution, no caching. A fresh [[Flix]] compiles the project's sources plus the
-  * wrapper on every request, which is correct and slow; the persistent instance is a later step, and
-  * the expensive thing here is compilation rather than anything this adds.
+  * Execution remains outside this provider. The project supplies an incremental [[Flix]] carrying
+  * its packages and JARs; the sidecar cache reuses both that compiler and answers for the same build
+  * and question. Artifact generation is in-memory and never modifies the paused program's output.
   */
 object DebugEvalProvider {
 
@@ -172,6 +172,14 @@ object DebugEvalProvider {
     */
   def compile(frame: ScopeId, expression: String, policy: Policy, projectRoot: Path, root: Root,
               withArtifact: Boolean, launchedBuildId: Option[String]): Answer = {
+    compile(frame, expression, policy, projectRoot, root, withArtifact, launchedBuildId,
+      compilerFactory = None)
+  }
+
+  /** As [[compile]], using the project-configured compiler supplied by its language-server owner. */
+  def compile(frame: ScopeId, expression: String, policy: Policy, projectRoot: Path, root: Root,
+              withArtifact: Boolean, launchedBuildId: Option[String],
+              compilerFactory: Option[() => Flix]): Answer = {
     launchedBuildId.foreach { launched =>
       currentBuildId(projectRoot) match {
         case Some(current) if current == launched => ()
@@ -225,10 +233,12 @@ object DebugEvalProvider {
     val sources = sourcesUnder(projectRoot)
     val sourcesDigest = sourcesDigestOf(projectRoot)
     val scopeId = s"${frame.className}#${frame.methodName}"
+    val freshCompiler = compilerFactory.getOrElse(() => DebugEvalSidecar.standaloneCompiler(sources))
     DebugEvalSidecar.cached(
       projectRoot, sources, sourcesDigest, scopeId, expression, policy.toString, withArtifact,
+      freshCompiler,
     ) {
-      DebugEvalSidecar.withCompiler(projectRoot, sources, sourcesDigest) { compiler =>
+      DebugEvalSidecar.withCompiler(projectRoot, sources, sourcesDigest, freshCompiler) { compiler =>
         implicit val flix: Flix = compiler
         val params = scope.methods(frame.methodName)
           .filter(p => mentions(expression, p.name))

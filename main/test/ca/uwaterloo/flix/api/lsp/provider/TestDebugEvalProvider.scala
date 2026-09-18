@@ -149,6 +149,28 @@ class TestDebugEvalProvider extends AnyFunSuite {
     assertOk(answer, "Option[String]", "Pure")
   }
 
+  test("evaluation uses the project's configured compiler dependencies") {
+    val project = build()
+    val dependency = Files.createTempFile("flix-debug-eval-dependency", ".flix")
+    Files.writeString(dependency, "def fromDependency(x: Option[String]): Bool = Option.isEmpty(x)\n")
+    var created = 0
+    val factory = () => {
+      created += 1
+      val flix = new Flix().setOptions(Options.DefaultTest.copy(xdebug = true, inMemory = true))
+      flix.addFile(project.resolve("Main.flix"), sctx)
+      flix.addFile(dependency, sctx)
+      flix
+    }
+    DebugEvalSidecar.evict()
+
+    val answer = DebugEvalProvider.compile(Describe, "fromDependency(at)", Policy.Pure,
+      project, TypedAst.empty, withArtifact = false, launchedBuildId = None,
+      compilerFactory = Some(factory))
+
+    assertOk(answer, "Bool", "Pure")
+    assert(created == 1, s"the configured compiler was created $created times")
+  }
+
   test("the build sidecar is authoritative when the server AST has been refreshed") {
     val project = build()
 
