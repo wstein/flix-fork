@@ -67,6 +67,21 @@ class TestBootstrap extends AnyFunSuite {
     assert(manifest.launch.runtimeClasspath.head == devClassDir.toAbsolutePath.normalize().toString)
   }
 
+  test("development manifest launches the emitted program in a fresh JVM") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out).unsafeGet
+    val b = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
+    b.build(PkgTestUtils.mkFlix).unsafeGet
+
+    val manifest = BuildManifest.read(Bootstrap.getBuildManifestFile(p, Build.Development)).getOrElse(fail("Missing build manifest."))
+    val main = manifest.launch.mainClass.getOrElse(fail("Expected a main class."))
+    val process = new ProcessBuilder(manifest.launch.java, "-cp", manifest.launch.runtimeClasspath.mkString(java.io.File.pathSeparator), main)
+      .directory(p.toFile)
+      .redirectErrorStream(true)
+      .start()
+    assert(process.waitFor() == 0, s"External JVM failed: ${new String(process.getInputStream.readAllBytes())}")
+  }
+
   test("build with inMemory option writes nothing to disk") {
     val p = Files.createTempDirectory(ProjectPrefix)
     Bootstrap.init(p)(System.out).unsafeGet
