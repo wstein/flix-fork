@@ -20,6 +20,13 @@ Consequently, `flix build --Xdebug --Xsequential` retains user function bodies w
 still producing a single-threaded build. This contract is checked under both
 monomorphization pipelines.
 
+## Source locations
+
+Debug builds record locations at real source-expression boundaries. In particular,
+successive `let` bindings and calls in a retained function expose their own JVM line
+numbers for breakpoint binding and stepping. Release builds retain their existing,
+narrower line-table policy because optimization can move, merge, or remove expressions.
+
 ## Current limits
 
 The debug policy does not promise a bindable location for every lexical line, preserve

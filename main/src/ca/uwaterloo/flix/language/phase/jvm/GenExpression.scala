@@ -111,7 +111,17 @@ object GenExpression {
   /**
     * Emits code for the given expression `exp0` to the given method `visitor` in the `currentClass`.
     */
-  def compileExpr(exp0: Expr)(implicit mv: MethodVisitor, ctx: MethodContext, root: Root, flix: Flix): Unit = exp0 match {
+  def compileExpr(exp0: Expr)(implicit mv: MethodVisitor, ctx: MethodContext, root: Root, flix: Flix): Unit = {
+    // A debug build keeps user definitions as their own JVM methods, so their source locations are
+    // meaningful breakpoint and stepping boundaries. Release builds keep the existing, narrower
+    // locations because optimization may move, merge, or remove an expression entirely.
+    if (flix.options.xdebug && exp0.loc.isReal) {
+      addLoc(exp0.loc)
+    }
+    compileExprInner(exp0)
+  }
+
+  private def compileExprInner(exp0: Expr)(implicit mv: MethodVisitor, ctx: MethodContext, root: Root, flix: Flix): Unit = exp0 match {
     case Expr.Cst(cst, loc) => cst match {
       case Constant.Unit =>
         GETSTATIC(GenUnit.SingletonField)
