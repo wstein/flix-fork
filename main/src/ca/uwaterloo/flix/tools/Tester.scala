@@ -17,7 +17,7 @@ package ca.uwaterloo.flix.tools
 
 import ca.uwaterloo.flix.api.Flix
 import ca.uwaterloo.flix.language.ast.Symbol
-import ca.uwaterloo.flix.runtime.{LoadedProgram, TestFn}
+import ca.uwaterloo.flix.runtime.{CoverageSession, CoverageSnapshot, LoadedProgram, TestFn}
 import ca.uwaterloo.flix.util.{Duration, Result}
 import org.jline.terminal.{Terminal, TerminalBuilder}
 
@@ -57,6 +57,15 @@ object Tester {
     * interruption-safe. Cancellation therefore has a precise boundary between test cases.
     */
   def run(filters: List[Regex], program: LoadedProgram, sink: TestEventSink, cancellation: CancellationToken)(implicit flix: Flix): Result[Unit, Int] = {
+    run(filters, program, sink, cancellation, None)
+  }
+
+  /** Runs tests and emits one coverage event before the final event when a session is supplied. */
+  def run(filters: List[Regex],
+          program: LoadedProgram,
+          sink: TestEventSink,
+          cancellation: CancellationToken,
+          coverageSession: Option[CoverageSession])(implicit flix: Flix): Result[Unit, Int] = {
     //
     // Find all test cases (both active and ignored).
     //
@@ -69,7 +78,7 @@ object Tester {
     }
 
     // Start the TestRunner and TestReporter.
-    val queue = new ConcurrentLinkedQueue[TestEvent]()
+    val queue = new ConcurrentLinkedQueue[Option[TestEvent]]()
     val reporter = new TestReporter(queue, sink)
     val runner = new TestRunner(queue, tests, cancellation)
 
@@ -89,6 +98,12 @@ object Tester {
       // Wait for everything to complete.
       reporter.join()
       runner.join()
+      for {
+        session <- coverageSession
+        handle <- program.coverage
+      } sink.accept(TestEvent.Coverage(CoverageReporter.snapshot(
+        session, handle, partial = cancellation.isCancelled, filters.map(_.regex))))
+      sink.accept(TestEvent.Finished(runner.elapsed))
     } finally {
       redirectedOut.foreach(_.flush())
       System.setOut(oldOut)
@@ -132,7 +147,7 @@ object Tester {
   /**
     * A class that reports the results of test events as they come in.
     */
-  private class TestReporter(queue: ConcurrentLinkedQueue[TestEvent], sink: TestEventSink)(implicit flix: Flix) extends Thread {
+  private class TestReporter(queue: ConcurrentLinkedQueue[Option[TestEvent]], sink: TestEventSink)(implicit flix: Flix) extends Thread {
 
     private val success = new java.util.concurrent.atomic.AtomicBoolean(true)
 
@@ -145,10 +160,10 @@ object Tester {
       while (!finished) {
         queue.poll() match {
           case null => () // tester have not started yet, retry
-          case event =>
+          case None => finished = true
+          case Some(event) =>
             event match {
               case TestEvent.Failure(_, _, _) => success.set(false)
-              case TestEvent.Finished(_) => finished = true
               case _ => ()
             }
             sink.accept(event)
@@ -198,6 +213,9 @@ object Tester {
           skipped = skipped + 1
           writer.println(s"  ${bgYellow(" SKIP ")} $sym (${yellow("SKIPPED")})")
           terminal.flush()
+        case TestEvent.Coverage(snapshot) =>
+          writer.println(CoverageReporter.formatSummary(snapshot))
+          terminal.flush()
         case TestEvent.Finished(elapsed) =>
           if (failed.nonEmpty) {
             writer.println()
@@ -226,7 +244,11 @@ object Tester {
   /**
     * A class that runs all the given tests emitting test events.
     */
-  private class TestRunner(queue: ConcurrentLinkedQueue[TestEvent], tests: Vector[TestCase], cancellation: CancellationToken)(implicit flix: Flix) extends Thread {
+  private class TestRunner(queue: ConcurrentLinkedQueue[Option[TestEvent]], tests: Vector[TestCase], cancellation: CancellationToken)(implicit flix: Flix) extends Thread {
+    @volatile private var elapsedTime: Duration = Duration(0L)
+
+    def elapsed: Duration = elapsedTime
+
     /**
       * Runs all the given tests.
       */
@@ -235,8 +257,8 @@ object Tester {
       for (testCase <- tests if !cancellation.isCancelled) {
         runTest(testCase)
       }
-      val elapsed = System.nanoTime() - start
-      queue.add(TestEvent.Finished(Duration(elapsed)))
+      elapsedTime = Duration(System.nanoTime() - start)
+      queue.add(None)
     }
 
     /**
@@ -246,12 +268,12 @@ object Tester {
       case TestCase(sym, skip, run) =>
         // Check if the test case should be ignored.
         if (skip) {
-          queue.add(TestEvent.Skip(sym))
+          queue.add(Some(TestEvent.Skip(sym)))
           return
         }
 
         // We are about to run the test case.
-        queue.add(TestEvent.Before(sym))
+        queue.add(Some(TestEvent.Before(sym)))
 
         // Redirect std out and std err.
         val redirect = new ConsoleRedirection
@@ -273,15 +295,15 @@ object Tester {
           result match {
             case java.lang.Boolean.FALSE =>
               // Case 1: Assertion Error.
-              queue.add(TestEvent.Failure(sym, "Assertion Error" :: redirect.stdOut ++ redirect.stdErr, Duration(elapsed)))
+              queue.add(Some(TestEvent.Failure(sym, "Assertion Error" :: redirect.stdOut ++ redirect.stdErr, Duration(elapsed))))
 
             case _ =>
               if (redirect.stdErr.isEmpty) {
                 // Case 2: Non-False result and no stderr output.
-                queue.add(TestEvent.Success(sym, Duration(elapsed)))
+                queue.add(Some(TestEvent.Success(sym, Duration(elapsed))))
               } else {
                 // Case 3: Non-False result, but with stderr output.
-                queue.add(TestEvent.Failure(sym, "Std Err Output" :: redirect.stdOut ++ redirect.stdErr, Duration(elapsed)))
+                queue.add(Some(TestEvent.Failure(sym, "Std Err Output" :: redirect.stdOut ++ redirect.stdErr, Duration(elapsed))))
               }
 
           }
@@ -292,7 +314,7 @@ object Tester {
 
             // Compute elapsed time.
             val elapsed = System.nanoTime() - start
-            queue.add(TestEvent.Failure(sym, redirect.stdOut ++ redirect.stdErr ++ fmtStackTrace(ex), Duration(elapsed)))
+            queue.add(Some(TestEvent.Failure(sym, redirect.stdOut ++ redirect.stdErr ++ fmtStackTrace(ex), Duration(elapsed))))
         }
     }
   }
@@ -448,6 +470,9 @@ object Tester {
       * A test event emitted to indicate that a test was ignored.
       */
     case class Skip(sym: Symbol.DefnSym) extends TestEvent
+
+    /** A coherent coverage snapshot emitted after test execution and before Finished. */
+    case class Coverage(snapshot: CoverageSnapshot) extends TestEvent
 
     /**
       * A test event emitted to indicates that testing has completed.

@@ -35,6 +35,7 @@ class TestRunParams {
   @BeanProperty var protocolVersion: Int = 0
   @BeanProperty var runId: String = _
   @BeanProperty var filters: java.util.List[String] = new java.util.ArrayList[String]()
+  @BeanProperty var coverage: Boolean = false
 }
 
 class TestCancelParams {
@@ -84,6 +85,8 @@ class TestRunEvent {
   @BeanProperty var output: java.util.List[String] = new java.util.ArrayList[String]()
   @BeanProperty var diagnostics: java.util.List[String] = new java.util.ArrayList[String]()
   @BeanProperty var cancelled: Boolean = false
+  @BeanProperty var coverageJson: String = _
+  @BeanProperty var partial: Boolean = false
 }
 
 /** Custom notifications emitted by the Flix language server. */
@@ -108,6 +111,11 @@ private[lsp] final class LspTestEventSink(runId: String, client: FlixLanguageCli
       case Tester.TestEvent.Failure(sym, output, elapsed) =>
         val e = withTest("failed", sym); e.nanos = elapsed.d; output.foreach(e.output.add); e
       case Tester.TestEvent.Skip(sym) => withTest("skipped", sym)
+      case Tester.TestEvent.Coverage(snapshot) =>
+        val e = base("coverage")
+        e.coverageJson = ca.uwaterloo.flix.tools.CoverageReporter.renderJson(snapshot)
+        e.partial = snapshot.partial
+        e
       case Tester.TestEvent.Finished(elapsed) =>
         val e = base("finished"); e.nanos = elapsed.d; e.cancelled = cancellation.get(); e
     }

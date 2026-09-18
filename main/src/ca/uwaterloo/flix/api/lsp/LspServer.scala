@@ -209,7 +209,7 @@ object LspServer {
         return CompletableFuture.completedFuture(TestRunResult.rejected(runId, "a test run with this runId is already active"))
       }
 
-      CompletableFuture.runAsync(() => executeTestRun(runId, filters, cancelled))
+      CompletableFuture.runAsync(() => executeTestRun(runId, filters, params.coverage, cancelled))
       CompletableFuture.completedFuture(TestRunResult.accepted(runId))
     }
 
@@ -232,17 +232,19 @@ object LspServer {
       }
     }
 
-    private def executeTestRun(runId: String, filters: List[Regex], cancelled: AtomicBoolean): Unit = {
+    private def executeTestRun(runId: String, filters: List[Regex], coverage: Boolean, cancelled: AtomicBoolean): Unit = {
       val sink = new LspTestEventSink(runId, flixLanguageClient, cancelled)
       var compiler: ca.uwaterloo.flix.api.Flix = null
       try {
-        compiler = project.testCompiler()
+        compiler = project.testCompiler(coverage)
         compiler.compile() match {
           case Result.Ok(compilationResult) =>
             val token = new Tester.CancellationToken {
               override def isCancelled: Boolean = cancelled.get()
             }
-            Tester.run(filters, JvmLoader.load(compilationResult), sink, token)(compiler)
+            val loaded = JvmLoader.load(compilationResult)
+            try Tester.run(filters, loaded, sink, token, compilationResult.getCoverageSession)(compiler)
+            finally loaded.coverage.foreach(_.close())
           case Result.Err(errors) =>
             sink.diagnostics(errors.map(_.summary))
         }

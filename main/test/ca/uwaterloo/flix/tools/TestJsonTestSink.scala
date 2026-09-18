@@ -30,7 +30,7 @@ import java.nio.charset.StandardCharsets
 class TestJsonTestSink extends AnyFunSuite {
 
   test("test events carry names, locations, outcomes, and elapsed time") {
-    implicit val flix: Flix = new Flix().setOptions(Options.DefaultTest)
+    implicit val flix: Flix = new Flix().setOptions(Options.DefaultTest.copy(coverage = true))
     implicit val sctx: SecurityContext = SecurityContext.Unrestricted
     flix.addSource(
       CompilerConstants.VirtualTestFile,
@@ -47,7 +47,9 @@ class TestJsonTestSink extends AnyFunSuite {
     }
     val (sink, written) = mkSink()
 
-    val result = Tester.run(Nil, JvmLoader.load(compilationResult), sink)
+    val loaded = JvmLoader.load(compilationResult)
+    val result = try Tester.run(Nil, loaded, sink, Tester.CancellationToken.Never, compilationResult.getCoverageSession)
+    finally loaded.coverage.foreach(_.close())
     val events = jsonLines(written)
 
     assert(result == Result.Ok(()))
@@ -55,7 +57,9 @@ class TestJsonTestSink extends AnyFunSuite {
     assert((events.head \ "protocolVersion") == JInt(1))
     assert((events.last \ "event") == JString("finished"))
     assert((events.last \ "nanos").isInstanceOf[JInt])
-    assert(events.map(_ \ "event").toSet == Set(JString("start"), JString("before"), JString("output"), JString("passed"), JString("skipped"), JString("finished")))
+    assert(events.map(_ \ "event").toSet == Set(JString("start"), JString("before"), JString("output"), JString("passed"), JString("skipped"), JString("coverage"), JString("finished")))
+    val coverage = events.find(json => (json \ "event") == JString("coverage")).get
+    assert((coverage \ "coverage" \ "formatVersion") == JInt(1))
     assert(events.filter(json => (json \ "event") == JString("output")).map(_ \ "line") == List(JString("héllo from test")))
 
     val announced = (events.head \ "tests") match {

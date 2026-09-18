@@ -23,7 +23,7 @@ import ca.uwaterloo.flix.language.ast.shared.SecurityContext
 import ca.uwaterloo.flix.language.ast.{Symbol, TypedAst}
 import ca.uwaterloo.flix.language.phase.HtmlDocumentor
 import ca.uwaterloo.flix.language.phase.unification.zhegalkin.ZhegalkinPerf
-import ca.uwaterloo.flix.runtime.{CompilationResult, JvmLoader, LoadedProgram}
+import ca.uwaterloo.flix.runtime.JvmLoader
 import ca.uwaterloo.flix.runtime.shell.Shell
 import ca.uwaterloo.flix.tools.*
 import ca.uwaterloo.flix.tools.pkg.PackageModules
@@ -387,8 +387,9 @@ object Main {
             flix.compile() match {
               case Result.Ok(compilationResult) =>
                 val loaded = JvmLoader.load(compilationResult)
-                val result = try Tester.run(filters, loaded, sink)(flix)
-                finally finishCoverage(compilationResult, loaded, coverageOutput, cmdOpts.testFilters, System.err)
+                val publishingSink = CoverageReporter.publishingSink(sink, coverageOutput)
+                val result = try Tester.run(filters, loaded, publishingSink, Tester.CancellationToken.Never, compilationResult.getCoverageSession)(flix)
+                finally loaded.coverage.foreach(_.close())
                 result match {
                   case Result.Ok(_) => System.exit(0)
                   case Result.Err(_) => System.exit(1)
@@ -529,26 +530,6 @@ object Main {
     Option.when(cmdOpts.coverage)(
       cwd.resolve(cmdOpts.coverageOutput).normalize() -> cwd.resolve(cmdOpts.coverageLcovOutput).normalize()
     )
-
-  private def finishCoverage(compilation: CompilationResult,
-                             loaded: LoadedProgram,
-                             output: Option[(Path, Path)],
-                             testFilters: List[String],
-                             out: PrintStream): Unit =
-    loaded.coverage.foreach { handle =>
-      try {
-        for {
-          session <- compilation.getCoverageSession
-          (jsonPath, lcovPath) <- output
-        } {
-          val snapshot = CoverageReporter.snapshot(session, handle, partial = false, testFilters)
-          CoverageReporter.write(snapshot, jsonPath, lcovPath)
-          out.println(CoverageReporter.formatSummary(snapshot))
-        }
-      } finally {
-        handle.close()
-      }
-    }
 
   /**
     * A case class representing the parsed command line options.

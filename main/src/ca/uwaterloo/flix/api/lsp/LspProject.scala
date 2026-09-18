@@ -100,13 +100,13 @@ class LspProject(o: Options) {
     * Open buffers are copied into this compiler, so the run observes the same source snapshot as
     * the editor without racing a concurrent check.
     */
-  def testCompiler(): Flix = synchronized {
+  def testCompiler(coverage: Boolean = false): Flix = synchronized {
     if (stale) {
       throw new IllegalStateException("the project has changed and must be checked before tests can run")
     }
     val result = bootstrap match {
-      case Some(b) => b.mkFlix(o.copy(inMemory = true), NoFormatter)
-      case None => new Flix().setFormatter(NoFormatter).setOptions(o.copy(inMemory = true))
+      case Some(b) => b.mkFlix(o.copy(inMemory = true, coverage = coverage), NoFormatter)
+      case None => new Flix().setFormatter(NoFormatter).setOptions(o.copy(inMemory = true, coverage = coverage))
     }
     for ((name, src) <- buffers) {
       ClientUri.addSource(result, name, src)

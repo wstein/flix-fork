@@ -46,7 +46,7 @@ class TestTestRunWire extends AnyFunSuite {
   }
 
   test("the LSP sink carries run identity, locations, outcomes, and cancellation") {
-    implicit val flix: Flix = new Flix().setOptions(Options.DefaultTest)
+    implicit val flix: Flix = new Flix().setOptions(Options.DefaultTest.copy(coverage = true))
     implicit val sctx: SecurityContext = SecurityContext.Unrestricted
     flix.addSource(Paths.get("Wire.flix").toAbsolutePath,
       """mod Wire {
@@ -61,13 +61,17 @@ class TestTestRunWire extends AnyFunSuite {
     val cancelled = new AtomicBoolean(false)
     val sink = new LspTestEventSink("run-7", client, cancelled)
 
-    val result = Tester.run(Nil, JvmLoader.load(compilation), sink)
+    val loaded = JvmLoader.load(compilation)
+    val result = try Tester.run(Nil, loaded, sink, Tester.CancellationToken.Never, compilation.getCoverageSession)
+    finally loaded.coverage.foreach(_.close())
 
     assert(result == Result.Ok(()))
-    assert(client.events.map(_.event) == List("start", "before", "passed", "finished"))
+    assert(client.events.map(_.event) == List("start", "before", "passed", "coverage", "finished"))
     assert(client.events.forall(_.runId == "run-7"))
     assert(client.events.head.tests.asScala.map(_.name).toList == List("Wire.passes"))
     assert(client.events(1).test.file.endsWith("Wire.flix"))
+    assert(client.events(3).coverageJson.contains("\"formatVersion\":1"))
+    assert(!client.events(3).partial)
     assert(client.events.last.protocolVersion == TestRunProtocol.Version)
     assert(!client.events.last.cancelled)
   }

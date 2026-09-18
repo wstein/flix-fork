@@ -26,6 +26,24 @@ import java.nio.file.{AtomicMoveNotSupportedException, Files, Path, StandardCopy
 /** Deterministic serializers for one immutable coverage snapshot. */
 object CoverageReporter {
 
+  /** Decorates a test sink so the coverage event is also published to disk. */
+  def publishingSink(delegate: Tester.TestEventSink, output: Option[(Path, Path)]): Tester.TestEventSink =
+    new Tester.TestEventSink {
+      override def start(tests: Vector[Tester.TestCase])(implicit flix: ca.uwaterloo.flix.api.Flix): Unit =
+        delegate.start(tests)
+
+      override def accept(event: Tester.TestEvent)(implicit flix: ca.uwaterloo.flix.api.Flix): Unit = {
+        event match {
+          case Tester.TestEvent.Coverage(snapshot) =>
+            output.foreach { case (jsonPath, lcovPath) => write(snapshot, jsonPath, lcovPath) }
+          case _ => ()
+        }
+        delegate.accept(event)
+      }
+
+      override def outputStream: Option[java.io.OutputStream] = delegate.outputStream
+    }
+
   def snapshot(session: CoverageSession,
                handle: CoverageHandle,
                partial: Boolean = false,

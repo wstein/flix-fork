@@ -69,4 +69,16 @@ Both monomorphizers lower the probe to the same JVM operation. Loading the compi
 session in the generated program's isolated class loader and returns a handle for taking snapshots
 and releasing its counters.
 
-Cancellation plumbing, TestEventSink integration, and LSP events remain separate later slices.
+## Test event stream and cancellation
+
+Coverage is a `Tester.TestEvent`, emitted after the last selected test and immediately before the
+single `Finished` event. Console, JSON-lines, LSP, and on-disk reports all consume that same immutable
+snapshot; no renderer takes a second counter reading. The JSON-lines event contains the complete
+hierarchical JSON report under `coverage`.
+
+`flix/test/run` accepts `coverage: true`. Its `flix/test/event` stream then includes a `coverage`
+event whose `coverageJson` is JSON format 1. If cooperative cancellation stops the run between test
+cases, the event and report set `partial: true`, retain counters collected so far, and the final event
+still reports cancellation. The isolated runtime session is closed after the event has been emitted.
+
+IDE gutter rendering from the LSP coverage event remains a client-side integration slice.

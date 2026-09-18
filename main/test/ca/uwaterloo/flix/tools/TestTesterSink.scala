@@ -71,7 +71,7 @@ class TestTesterSink extends AnyFunSuite {
   }
 
   test("cancellation stops before the next test") {
-    implicit val flix: Flix = new Flix().setOptions(Options.DefaultTest)
+    implicit val flix: Flix = new Flix().setOptions(Options.DefaultTest.copy(coverage = true))
     implicit val sctx: SecurityContext = SecurityContext.Unrestricted
     flix.addSource(CompilerConstants.VirtualTestFile, MixedTests, sctx)
     val compilationResult = flix.compile() match {
@@ -84,10 +84,16 @@ class TestTesterSink extends AnyFunSuite {
       override def isCancelled: Boolean = checks.incrementAndGet() > 1
     }
 
-    val result = Tester.run(Nil, JvmLoader.load(compilationResult), sink, token)
+    val loaded = JvmLoader.load(compilationResult)
+    val result = try Tester.run(Nil, loaded, sink, token, compilationResult.getCoverageSession)
+    finally loaded.coverage.foreach(_.close())
 
     assert(result == Result.Err(1))
     assert(sink.events.count(_.isInstanceOf[Tester.TestEvent.Before]) == 1)
+    val coverage = sink.events.collectFirst { case Tester.TestEvent.Coverage(snapshot) => snapshot }
+      .getOrElse(fail("Expected a coverage event"))
+    assert(coverage.partial)
+    assert(sink.events.dropRight(1).last.isInstanceOf[Tester.TestEvent.Coverage])
     assert(sink.events.last.isInstanceOf[Tester.TestEvent.Finished])
   }
 

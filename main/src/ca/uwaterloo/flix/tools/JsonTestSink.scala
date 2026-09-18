@@ -37,6 +37,8 @@ class JsonTestSink(out: PrintStream) extends Tester.TestEventSink {
     case Tester.TestEvent.Failure(sym, output, elapsed) =>
       emit(("event" -> "failed") ~ idFields(sym) ~ ("nanos" -> elapsed.d) ~ ("output" -> output))
     case Tester.TestEvent.Skip(sym) => emit(("event" -> "skipped") ~ idFields(sym))
+    case Tester.TestEvent.Coverage(snapshot) =>
+      emit(("event" -> "coverage") ~ ("coverage" -> JsonMethods.parse(CoverageReporter.renderJson(snapshot))))
     case Tester.TestEvent.Finished(elapsed) => emit(("event" -> "finished") ~ ("nanos" -> elapsed.d))
   }
 

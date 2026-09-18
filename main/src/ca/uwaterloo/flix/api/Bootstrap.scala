@@ -1240,8 +1240,9 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
            coverageOutput: Option[(Path, Path)] = None): Result[Unit, BootstrapError] = {
     compileProject(flix, Build.Development).flatMap { compilationResult =>
       val loaded = JvmLoader.load(compilationResult)
-      val result = try Tester.run(filters, loaded, sink)(flix)
-      finally finishCoverage(compilationResult, loaded, coverageOutput, filters.map(_.regex))
+      val publishingSink = CoverageReporter.publishingSink(sink, coverageOutput)
+      val result = try Tester.run(filters, loaded, publishingSink, Tester.CancellationToken.Never, compilationResult.getCoverageSession)(flix)
+      finally loaded.coverage.foreach(_.close())
       result.mapErr(_ => BootstrapError.GeneralError("Tester Error"))
     }
   }
