@@ -15,6 +15,7 @@
  */
 package ca.uwaterloo.flix.language.phase.jvm
 
+import ca.uwaterloo.flix.language.jvm.ClassDescs
 import ca.uwaterloo.flix.util.FileOps
 import org.objectweb.asm.{ClassReader, ClassVisitor, Opcodes}
 
@@ -71,7 +72,7 @@ object DebugIndex {
     val index = mutable.Map.empty[String, mutable.Set[String]]
     for (clazz <- classes) {
       for (source <- sourcesOf(clazz)) {
-        index.getOrElseUpdate(source, mutable.Set.empty) += clazz.name.toBinaryName
+        index.getOrElseUpdate(source, mutable.Set.empty) += ClassDescs.binaryNameOf(clazz.name)
       }
     }
     index.map { case (source, names) => source -> names.toSet }.toMap

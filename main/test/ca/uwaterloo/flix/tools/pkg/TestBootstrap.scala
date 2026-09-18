@@ -129,6 +129,22 @@ class TestBootstrap extends AnyFunSuite {
     assert(second.buildIfNeeded(PkgTestUtils.mkFlix(second)).unsafeGet, "a stray class file must not be reported as current")
   }
 
+  test("debug build publishes source-to-class index and a normal rebuild removes it") {
+    val p = Files.createTempDirectory(ProjectPrefix)
+    Bootstrap.init(p)(System.out).unsafeGet
+    val b = Bootstrap.bootstrap(p, None)(Formatter.getDefault, System.out).unsafeGet
+    val debug = PkgTestUtils.mkFlix
+    debug.setOptions(debug.options.copy(xdebug = true))
+    val index = Bootstrap.getDevelopmentDirectory(p).resolve("debug-index.json")
+
+    b.build(debug).unsafeGet
+    assert(Files.exists(index))
+    assert(Files.readString(index).contains("\"formatVersion\":1"))
+
+    b.build(PkgTestUtils.mkFlix).unsafeGet
+    assert(!Files.exists(index))
+  }
+
   test("build reconciles obsolete class files in build/development") {
     val p = Files.createTempDirectory(ProjectPrefix)
     Bootstrap.init(p)(System.out).unsafeGet

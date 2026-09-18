@@ -23,7 +23,7 @@ import ca.uwaterloo.flix.language.ast.shared.SecurityContext
 import ca.uwaterloo.flix.language.ast.{Scheme, SourceLocation, Symbol, TypedAst}
 import ca.uwaterloo.flix.language.jvm.ClassDescs
 import ca.uwaterloo.flix.language.phase.HtmlDocumentor
-import ca.uwaterloo.flix.language.phase.jvm.JvmClass
+import ca.uwaterloo.flix.language.phase.jvm.{DebugIndex, JvmClass}
 
 import java.lang.constant.ClassDesc
 import ca.uwaterloo.flix.runtime.{CompilationResult, JvmLoader}
@@ -1717,8 +1717,24 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
     for {
       _ <- Result.traverse(classes.values.toList)(writeClass(devClassDir, _)).map(_ => ())
       _ <- reconcileClassDirectory(devClassDir, classes)
+      _ <- writeDebugIndex(flix, result)
       _ <- writeDevelopmentManifest(flix, result)
     } yield ()
+  }
+
+  /** Publishes the source-to-emitted-class index only for a debug build. */
+  private def writeDebugIndex(flix: Flix, result: CompilationResult): Result[Unit, BootstrapError] = {
+    val path = Bootstrap.getDevelopmentDirectory(projectPath).resolve(DebugIndex.FileName)
+    try {
+      if (flix.options.xdebug) {
+        DebugIndex.write(path, DebugIndex.of(result.getClasses.values))
+      } else {
+        Files.deleteIfExists(path)
+      }
+      Ok(())
+    } catch {
+      case e: Exception => Err(BootstrapError.FileError(s"Failed to publish debug index: ${e.getMessage}"))
+    }
   }
 
   private def writeDevelopmentManifest(flix: Flix, result: CompilationResult): Result[Unit, BootstrapError] = {
