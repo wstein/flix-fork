@@ -97,6 +97,25 @@ their ordinary debugger fallback.
 
 ## Current limits
 
+## Expression typing
+
+The language server implements `flix/debugEval/compile`. A request identifies the
+paused JVM class and method, supplies a Flix expression, and chooses `pure` or
+`allowEffects`. The compiler reads the exact format-2 scope sidecar produced by the
+debug build, declares only the referenced debugger-visible bindings in an in-memory
+wrapper, and returns the compiler's type, effect, or diagnostics. It writes no project
+artifact during this typing pass.
+
+The build sidecar is authoritative for frame types. This keeps a paused process joined
+to the build it is actually running even if the language server has subsequently
+refreshed its typed AST. Class names are accepted in both JDI binary form and JVM
+internal form. Repeated names with conflicting source types are omitted from the
+sidecar rather than resolved arbitrarily; an expression that needs one receives an
+ordinary unknown-name diagnostic.
+
+Pure evaluation is the default policy. `allowEffects` permits compilation only; the
+debugger still applies its explicit user setting before it executes effectful code.
+
 The debug policy does not promise a bindable location for every lexical line, preserve
 unused definitions removed by reachability analysis, or preserve local/lambda bodies.
 Line-table attribution and the source/class and binding-type sidecars are available,
@@ -108,5 +127,6 @@ let-binding state, whose invariants assume substitution has already happened. Th
 explicit `DebugLocal` state resolves that distinction; it does not pretend an optimized
 expression has a recoverable slot.
 
-Expression evaluation at a breakpoint and final JetBrains IDE qualification remain open.
+Executing a compiled expression in the paused process and final JetBrains IDE
+qualification remain open.
 Release builds remain subject to the normal optimizer policy.
