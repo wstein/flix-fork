@@ -92,6 +92,33 @@ class TestCoverageRuntime extends AnyFunSuite {
     }
   }
 
+  test("an inlineable helper retains its function probe") {
+    val flix = new Flix().setOptions(Options.DefaultTest.copy(coverage = true))
+    flix.addSource(CompilerConstants.VirtualTestFile,
+      """def helper(x: Int32): Int32 = x + 1
+        |
+        |pub def main(): Unit \ IO = println(helper(41))
+        |""".stripMargin,
+      SecurityContext.Unrestricted)
+    val compilation = flix.compile() match {
+      case Result.Ok(result) => result
+      case Result.Err(errors) => fail(errors.map(_.summary).mkString("; "))
+    }
+    val session = compilation.getCoverageSession.getOrElse(fail("Expected coverage metadata"))
+    val loaded = JvmLoader.load(compilation)
+    val coverage = loaded.coverage.getOrElse(fail("Expected loaded coverage session"))
+    try {
+      loaded.main.getOrElse(fail("Expected main entry point"))(Array.empty)
+      val counts = coverage.snapshot()
+      val functions = session.probes.filter(_.kind == CoverageProbeKind.Function)
+        .map(probe => probe.qualifiedName -> counts(probe.id)).toMap
+      assert(functions.keySet == Set("helper", "main"))
+      assert(functions.values.forall(_ > 0L))
+    } finally {
+      coverage.close()
+    }
+  }
+
   test("compiled line probes execute and are unique per definition source line") {
     for (newMonomorphizer <- List(false, true)) {
       val flix = new Flix().setOptions(Options.DefaultTest.copy(coverage = true, xnewmono = newMonomorphizer))

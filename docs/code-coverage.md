@@ -82,3 +82,10 @@ cases, the event and report set `partial: true`, retain counters collected so fa
 still reports cancellation. The isolated runtime session is closed after the event has been emitted.
 
 IDE gutter rendering from the LSP coverage event remains a client-side integration slice.
+
+## Maintenance guards
+
+The coverage tests contain an exhaustive, wildcard-free classification of every `TypedAst.Expr`
+constructor. Adding an expression form therefore requires an explicit instrumentation decision.
+Runtime regression coverage also uses an inlineable pure helper and asserts that both its helper and
+caller probes execute, protecting the compiler-owned `CoverageHit` operation from optimizer removal.
