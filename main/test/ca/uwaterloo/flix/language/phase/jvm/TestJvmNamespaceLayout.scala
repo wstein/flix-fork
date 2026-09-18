@@ -26,7 +26,10 @@ class TestJvmNamespaceLayout extends AnyFunSuite {
 
   test("generated classes are siblings of their namespace facade at every depth") {
     val names = compile(
-      """mod Acme { }
+      """mod Acme {
+        |    @Export
+        |    pub def one(x: Int32): Int32 = x + 1
+        |}
         |mod Acme.Api {
         |    @Export
         |    pub def two(x: Int32): Int32 = x + 2
@@ -43,6 +46,7 @@ class TestJvmNamespaceLayout extends AnyFunSuite {
         |def main(): Unit \ IO = println("built")
         |""".stripMargin)
 
+    assert(names.contains("dev.flix.gen.Acme"))
     assert(names.contains("Acme.Api"))
     assert(names.contains("Acme.Api$Deep"))
     assert(names.contains("Acme.Api$Deep$Deeper"))
@@ -68,8 +72,9 @@ class TestJvmNamespaceLayout extends AnyFunSuite {
         |def main(): Unit \ IO = println(PublicApi.answer(0))
         |""".stripMargin)
 
-    assert(names.contains("PublicApi"))
+    assert(names.contains("dev.flix.gen.PublicApi"))
     assert(names.exists(_.startsWith("dev.flix.gen.PublicApi$Def$answer")))
+    assert(names.contains("Root$"), "the root facade retains its historical binary name")
   }
 
   private def compile(program: String): Set[String] = {

@@ -116,10 +116,16 @@ object Mangle {
   def mkNamespacedDesc(namespace: List[String], prefix: String, name: String): ClassDesc =
     mkDesc(packageOfNamespace(namespace), classPrefixOfNamespace(namespace) + mkClassName(prefix, name))
 
-  /** Returns the facade class that carries the exported entry points of `namespace`. */
+  /**
+    * Returns the facade class that carries the exported entry points of `namespace`.
+    *
+    * A one-segment namespace cannot use the unnamed package: a deeper namespace with the same
+    * first segment uses that segment as its JVM package. Keeping the facade under [[DevFlixGen]]
+    * places it beside its implementation classes and prevents a class/package collision.
+    */
   def namespaceFacadeDesc(namespace: List[String]): ClassDesc = namespace match {
-    case Nil => mkDesc(DevFlixGen, s"Root${Flix.Delimiter}")
-    case one :: Nil => mkDesc(RootPackage, mangle(one))
+    case Nil => mkDesc(RootPackage, s"Root${Flix.Delimiter}")
+    case one :: Nil => mkDesc(DevFlixGen, mangle(one))
     case first :: rest => mkDesc(List(first), rest.map(mangle).mkString(Flix.Delimiter))
   }
 

@@ -64,7 +64,8 @@ layout:
 
 | Flix namespace | Java facade |
 | --- | --- |
-| `PublicApi` | `PublicApi` |
+| root namespace | `Root$` |
+| `PublicApi` | `dev.flix.gen.PublicApi` |
 | `Acme.Api` | `Acme.Api` |
 | `Acme.Api.Deep` | `Acme.Api$Deep` |
 

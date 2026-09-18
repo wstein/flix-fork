@@ -47,15 +47,17 @@ mod Acme.Api              -> facade Acme.Api
                               implementation Acme.Api$Def$get
 mod Acme.Api.Deep         -> facade Acme.Api$Deep
                               implementation Acme.Api$Deep$Def$run
-mod List                  -> facade List
+mod List                  -> facade dev.flix.gen.List
                               implementation dev.flix.gen.List$Def$map
+root namespace            -> facade Root$
 ```
 
 Definitions, closures, effects, and nullary enum cases all use this rule. Root and one-segment
-namespaces place implementation classes below `dev.flix.gen`; their facades retain their historical
-source-facing names. Tests assert both the concrete names and the stronger invariant that no emitted
-class name is also a package prefix of another emitted class, including namespaces three and four
-segments deep.
+namespaces place implementation classes below `dev.flix.gen`. The root facade retains its historical
+unqualified `Root$` name. A one-segment facade also lives below `dev.flix.gen`; leaving it unqualified
+would make it collide with the package used by any deeper namespace sharing its first segment. Tests
+assert both the concrete names and the stronger invariant that no emitted class name is also a package
+prefix of another emitted class, including namespaces one through four segments deep.
 
 ## Semantic type keys
 
