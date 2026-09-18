@@ -27,6 +27,14 @@ successive `let` bindings and calls in a retained function expose their own JVM 
 numbers for breakpoint binding and stepping. Release builds retain their existing,
 narrower line-table policy because optimization can move, merge, or remove expressions.
 
+## Variables
+
+For control-pure static methods, debug builds emit standard JVM local-variable entries
+for source formal parameters. This makes their names and JVM descriptors available to a
+native JVM debugger without exposing compiler-generated temporaries. Source `let`
+bindings, captures, and continuation-frame values require the separate pre-erasure
+debug-provenance snapshot; they are intentionally not guessed from lowered ANF names.
+
 ## Current limits
 
 The debug policy does not promise a bindable location for every lexical line, preserve

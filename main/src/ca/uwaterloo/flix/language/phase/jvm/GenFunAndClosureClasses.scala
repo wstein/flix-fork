@@ -17,7 +17,7 @@
 package ca.uwaterloo.flix.language.phase.jvm
 
 import ca.uwaterloo.flix.api.{CompilerConstants, Flix, FlixEvent}
-import ca.uwaterloo.flix.language.ast.JvmAst.{Def, Root}
+import ca.uwaterloo.flix.language.ast.JvmAst.{Def, OffsetFormalParam, Root}
 import ca.uwaterloo.flix.language.ast.{Purity, SimpleType, Symbol}
 import ca.uwaterloo.flix.language.jvm.ClassDescs
 import ca.uwaterloo.flix.language.phase.jvm.ClassMaker.StaticMethod
@@ -323,9 +323,30 @@ object GenFunAndClosureClasses {
 
     xReturn(GenResult.Desc)
 
+    nameParams(m, defn.fparams, enterLabel, localOffset)
+
 
     m.visitMaxs(999, 999)
     m.visitEnd()
+  }
+
+  /**
+    * Records source parameters for a static function method in a debug build.
+    *
+    * The entry label is used as the lower bound so that a parameter remains visible across a
+    * self-recursive tail call. Captured and continuation-frame values use fields rather than these
+    * method slots and are intentionally handled by later debug metadata work.
+    */
+  private def nameParams(m: MethodVisitor, params: List[OffsetFormalParam], start: Label, localOffset: Int)(implicit root: Root, flix: Flix): Unit = {
+    if (!flix.options.xdebug) {
+      return
+    }
+    val end = new Label()
+    m.visitLabel(end)
+    for (param <- params if !param.sym.isWild) {
+      val tpe = TypeDescs.toClassDesc(param.tpe)
+      m.visitLocalVariable(param.sym.text, tpe.descriptorString(), null, start, end, param.offset + localOffset)
+    }
   }
 
   private def compileStaticInvokeMethod(visitor: ClassWriter, className: ClassDesc, defn: Def)(implicit root: Root): Unit = {
