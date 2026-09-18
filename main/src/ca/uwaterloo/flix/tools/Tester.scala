@@ -22,6 +22,7 @@ import ca.uwaterloo.flix.util.{Duration, Result}
 import org.jline.terminal.{Terminal, TerminalBuilder}
 
 import java.io.{ByteArrayOutputStream, OutputStream, PrintStream, PrintWriter, StringWriter}
+import java.nio.charset.StandardCharsets
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.logging.{Level, Logger}
 import scala.util.matching.Regex
@@ -32,9 +33,20 @@ import scala.util.matching.Regex
 object Tester {
 
   /**
-    * Runs all tests.
+    * Runs all tests, printing the results to the terminal.
     */
-  def run(filters: List[Regex], program: LoadedProgram)(implicit flix: Flix): Result[Unit, Int] = {
+  def run(filters: List[Regex], program: LoadedProgram)(implicit flix: Flix): Result[Unit, Int] =
+    run(filters, program, consoleSink)
+
+  /**
+    * Returns a fresh terminal renderer for a test run.
+    */
+  def consoleSink: TestEventSink = new ConsoleSink
+
+  /**
+    * Runs all tests, reporting their events to `sink`.
+    */
+  def run(filters: List[Regex], program: LoadedProgram, sink: TestEventSink)(implicit flix: Flix): Result[Unit, Int] = {
     //
     // Find all test cases (both active and ignored).
     //
@@ -42,14 +54,29 @@ object Tester {
 
     // Start the TestRunner and TestReporter.
     val queue = new ConcurrentLinkedQueue[TestEvent]()
-    val reporter = new TestReporter(queue, tests)
+    val reporter = new TestReporter(queue, sink)
     val runner = new TestRunner(queue, tests)
-    reporter.start()
-    runner.start()
 
-    // Wait for everything to complete.
-    reporter.join()
-    runner.join()
+    // A structured sink owns stdout while tests run. ConsoleRedirection tees each test's output to
+    // this stream, which turns it into protocol events instead of corrupting the JSONL stream.
+    val oldOut = System.out
+    // Do not auto-flush after every byte-array write. PrintStream may encode the text and newline as
+    // separate arrays; flushing the text array would publish a partial line, then publish the newline
+    // as a second empty output event.
+    val redirectedOut = sink.outputStream.map(out => new PrintStream(out, false, StandardCharsets.UTF_8))
+    redirectedOut.foreach(System.setOut)
+    try {
+      sink.start(tests)
+      reporter.start()
+      runner.start()
+
+      // Wait for everything to complete.
+      reporter.join()
+      runner.join()
+    } finally {
+      redirectedOut.foreach(_.flush())
+      System.setOut(oldOut)
+    }
 
     if (reporter.isSuccess()) {
       Result.Ok(())
@@ -60,9 +87,25 @@ object Tester {
   }
 
   /**
+    * A rendering of the events produced by the single test runner.
+    */
+  trait TestEventSink {
+    /** Called once before any test event, with the complete selected test set. */
+    def start(tests: Vector[TestCase])(implicit flix: Flix): Unit
+
+    /** Called for each event in runner order. */
+    def accept(event: TestEvent)(implicit flix: Flix): Unit
+
+    /**
+      * A stream that should replace stdout while tests run, if this rendering carries program output.
+      */
+    def outputStream: Option[OutputStream] = None
+  }
+
+  /**
     * A class that reports the results of test events as they come in.
     */
-  private class TestReporter(queue: ConcurrentLinkedQueue[TestEvent], tests: Vector[TestCase])(implicit flix: Flix) extends Thread {
+  private class TestReporter(queue: ConcurrentLinkedQueue[TestEvent], sink: TestEventSink)(implicit flix: Flix) extends Thread {
 
     private val success = new java.util.concurrent.atomic.AtomicBoolean(true)
 
@@ -71,88 +114,86 @@ object Tester {
     }
 
     override def run(): Unit = {
-      // Silence JLine warnings about terminal type.
-      Logger.getLogger("org.jline").setLevel(Level.OFF)
-
-      // Import formatter.
-      val formatter = flix.getFormatter
-      import formatter.*
-
-      // Initialize the terminal.
-      implicit val terminal: Terminal = TerminalBuilder
-        .builder()
-        .system(true)
-        .build()
-      val writer = terminal.writer()
-
-      // Print headline.
-      writer.println(s"Running ${tests.length} tests...")
-      writer.println()
-      writer.flush()
-
-      // Main event loop.
-      var passed = 0
-      var skipped = 0
-      var failed: List[(Symbol.DefnSym, List[String])] = Nil
-
       var finished = false
       while (!finished) {
         queue.poll() match {
-          case TestEvent.Before(sym) =>
-            // Note: Print \r to reset the caret.
-            writer.print(s"  ${bgYellow(" TEST ")} $sym\r")
-            terminal.flush()
-
-          case TestEvent.Success(sym, elapsed) =>
-            passed = passed + 1
-            writer.println(s"  ${bgGreen(" PASS ")} $sym ${elapsed.fmt}")
-            terminal.flush()
-
-          case TestEvent.Failure(sym, output, elapsed) =>
-            failed = (sym, output) :: failed
-            val line = output.headOption.map(s => s"(${red(s)})").getOrElse("")
-            writer.println(s"  ${bgRed(" FAIL ")} $sym $line")
-            terminal.flush()
-            success.set(false)
-
-          case TestEvent.Skip(sym) =>
-            skipped = skipped + 1
-            writer.println(s"  ${bgYellow(" SKIP ")} $sym (${yellow("SKIPPED")})")
-            terminal.flush()
-
-          case TestEvent.Finished(elapsed) =>
-            // Print the std out / std err of every failed test.
-            if (failed.nonEmpty) {
-              writer.println()
-              writer.println("-" * 80)
-              writer.println()
-              for ((sym, output) <- failed; if output.nonEmpty) {
-                writer.println(s"  ${bgRed(" FAIL ")} $sym")
-                writer.println(s"         ${sym.loc.source.name}:${sym.loc.startLine}")
-                for (line <- output) {
-                  writer.println(s"    $line")
-                }
-                writer.println()
-              }
-              writer.println("-" * 80)
-            }
-
-            // Print the summary.
-            writer.println()
-            writer.println(
-              s"Passed: ${green(passed.toString)}, " +
-                s"Failed: ${red(failed.length.toString)}. " +
-                s"Skipped: ${yellow(skipped.toString)}. " +
-                s"Elapsed: ${elapsed.fmt}."
-            )
-            terminal.flush()
-            finished = true
-
           case null => () // tester have not started yet, retry
+          case event =>
+            event match {
+              case TestEvent.Failure(_, _, _) => success.set(false)
+              case TestEvent.Finished(_) => finished = true
+              case _ => ()
+            }
+            sink.accept(event)
         }
       }
     }
 
+  }
+
+  /**
+    * The traditional terminal rendering of `flix test`.
+    */
+  private class ConsoleSink extends TestEventSink {
+    private var terminal: Terminal = _
+    private var writer: PrintWriter = _
+    private var passed = 0
+    private var skipped = 0
+    private var failed: List[(Symbol.DefnSym, List[String])] = Nil
+
+    override def start(tests: Vector[TestCase])(implicit flix: Flix): Unit = {
+      Logger.getLogger("org.jline").setLevel(Level.OFF)
+      terminal = TerminalBuilder.builder().system(true).build()
+      writer = terminal.writer()
+      writer.println(s"Running ${tests.length} tests...")
+      writer.println()
+      writer.flush()
+    }
+
+    override def accept(event: TestEvent)(implicit flix: Flix): Unit = {
+      val formatter = flix.getFormatter
+      import formatter.*
+
+      event match {
+        case TestEvent.Before(sym) =>
+          writer.print(s"  ${bgYellow(" TEST ")} $sym\r")
+          terminal.flush()
+        case TestEvent.Success(sym, elapsed) =>
+          passed = passed + 1
+          writer.println(s"  ${bgGreen(" PASS ")} $sym ${elapsed.fmt}")
+          terminal.flush()
+        case TestEvent.Failure(sym, output, _) =>
+          failed = (sym, output) :: failed
+          val line = output.headOption.map(s => s"(${red(s)})").getOrElse("")
+          writer.println(s"  ${bgRed(" FAIL ")} $sym $line")
+          terminal.flush()
+        case TestEvent.Skip(sym) =>
+          skipped = skipped + 1
+          writer.println(s"  ${bgYellow(" SKIP ")} $sym (${yellow("SKIPPED")})")
+          terminal.flush()
+        case TestEvent.Finished(elapsed) =>
+          if (failed.nonEmpty) {
+            writer.println()
+            writer.println("-" * 80)
+            writer.println()
+            for ((sym, output) <- failed; if output.nonEmpty) {
+              writer.println(s"  ${bgRed(" FAIL ")} $sym")
+              writer.println(s"         ${sym.loc.source.name}:${sym.loc.startLine}")
+              output.foreach(line => writer.println(s"    $line"))
+              writer.println()
+            }
+            writer.println("-" * 80)
+          }
+          writer.println()
+          writer.println(
+            s"Passed: ${green(passed.toString)}, " +
+              s"Failed: ${red(failed.length.toString)}. " +
+              s"Skipped: ${yellow(skipped.toString)}. " +
+              s"Elapsed: ${elapsed.fmt}."
+          )
+          terminal.flush()
+      }
+    }
   }
 
   /**

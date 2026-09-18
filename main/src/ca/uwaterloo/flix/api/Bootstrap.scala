@@ -1229,10 +1229,10 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
     * Runs project tests whose fully-qualified symbols match at least one filter.
     * Runs all tests when `filters` is empty.
     */
-  def test(flix: Flix, filters: List[Regex] = Nil): Result[Unit, BootstrapError] = {
+  def test(flix: Flix, filters: List[Regex] = Nil, sink: Tester.TestEventSink = Tester.consoleSink): Result[Unit, BootstrapError] = {
     for {
       compilationResult <- compileProject(flix, Build.Development)
-      res <- Tester.run(filters, JvmLoader.load(compilationResult))(flix).mapErr(_ => BootstrapError.GeneralError("Tester Error"))
+      res <- Tester.run(filters, JvmLoader.load(compilationResult), sink)(flix).mapErr(_ => BootstrapError.GeneralError("Tester Error"))
     } yield {
       res
     }

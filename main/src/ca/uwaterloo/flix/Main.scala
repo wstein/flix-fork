@@ -371,18 +371,19 @@ object Main {
         case Command.Test =>
           featureNotSupportedInNativeImage()
           val filters = cmdOpts.testFilters.map(new Regex(_))
+          val sink = if (cmdOpts.testEventsJson) new JsonTestSink(System.out) else Tester.consoleSink
           if (cmdOpts.files.isEmpty) {
             exitOnResult {
               Bootstrap.bootstrap(cwd, options.githubToken).flatMap { bootstrap =>
                 val flix = bootstrap.mkFlix(options.copy(progress = false), formatter)
-                bootstrap.test(flix, filters)
+                bootstrap.test(flix, filters, sink)
               }
             }
           } else {
             val flix = mkFlixWithFiles(cmdOpts.files, options.copy(progress = false))
             flix.compile() match {
               case Result.Ok(compilationResult) =>
-                Tester.run(filters, JvmLoader.load(compilationResult))(flix) match {
+                Tester.run(filters, JvmLoader.load(compilationResult), sink)(flix) match {
                   case Result.Ok(_) => System.exit(0)
                   case Result.Err(_) => System.exit(1)
                 }
@@ -525,6 +526,7 @@ object Main {
     command: Command = Command.None,
     args: List[String] = Nil,
     testFilters: List[String] = Nil,
+    testEventsJson: Boolean = false,
     entryPoint: Option[String] = None,
     installDeps: Boolean = true,
     githubToken: Option[String] = None,
@@ -680,7 +682,10 @@ object Main {
           }
           .action((pattern, c) => c.copy(testFilters = c.testFilters :+ pattern))
           .valueName("<regex>")
-          .text("runs tests whose fully-qualified name matches the regular expression; may be repeated.")
+          .text("runs tests whose fully-qualified name matches the regular expression; may be repeated."),
+        opt[Unit]("events-json")
+          .action((_, c) => c.copy(testEventsJson = true))
+          .text("writes test events as newline-delimited JSON.")
       )
 
       cmd("repl").action((_, c) => c.copy(command = Command.Repl)).text("  starts a repl for the current project, or provided Flix source files.")

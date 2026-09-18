@@ -109,6 +109,16 @@ class TestMain extends AnyFunSuite {
     assert(Main.parseCmdOpts(Array("run", "--filter", "Main\\..*")).isEmpty)
   }
 
+  test("test --events-json") {
+    val opts = Main.parseCmdOpts(Array("test", "--events-json")).get
+    assert(opts.command == Main.Command.Test)
+    assert(opts.testEventsJson)
+  }
+
+  test("--events-json belongs to test") {
+    assert(Main.parseCmdOpts(Array("run", "--events-json")).isEmpty)
+  }
+
   test("repl") {
     val args = Array("repl")
     val opts = Main.parseCmdOpts(args).get

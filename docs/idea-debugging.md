@@ -263,8 +263,20 @@ expressions are rejected during argument parsing.
 
 The same contract applies to a project and to loose source files passed to `flix test`.
 Arguments after `--` remain program arguments and are not interpreted as filters.
-Structured test-event output is a separate CLI contract; `--filter` neither introduces
-nor implies an `--events-json` option.
+
+`flix test --events-json` selects a structured rendering of the same test runner. It
+writes one compact JSON object per line: `start`, `before`, `passed`, `failed`,
+`skipped`, and `finished` describe the run, while `output` carries a line written by
+the program under test. Test-bearing events repeat the fully-qualified name and source
+range so an IDE does not need hidden ordering state to navigate to a result. Durations
+are reported in nanoseconds. Program output is UTF-8, line-buffered, and quarantined as
+`output` events so it cannot corrupt the JSONL stream; a partial final line is emitted
+when the stream is flushed, and an unbroken line is bounded to 8 KiB per event.
+
+`--events-json` and repeated `--filter` options compose for both project and loose-file
+test runs. They do not change test selection, pass/fail rules, skipped-test behavior, or
+the process exit code. Without `--events-json`, the existing terminal rendering remains
+the default.
 
 ## Current limits
 
