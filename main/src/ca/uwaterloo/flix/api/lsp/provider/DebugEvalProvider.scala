@@ -235,13 +235,14 @@ object DebugEvalProvider {
     // measured by removing it, whereupon every test still passed.
     val sources = sourcesUnder(projectRoot)
     val sourcesDigest = sourcesDigestOf(projectRoot)
+    val buildIdentity = launchedBuildId.orElse(currentBuildId(projectRoot)).getOrElse(sourcesDigest)
     val scopeId = s"${frame.className}#${frame.methodName}"
     val freshCompiler = compilerFactory.getOrElse(() => DebugEvalSidecar.standaloneCompiler(sources))
     DebugEvalSidecar.cached(
-      projectRoot, sources, sourcesDigest, scopeId, expression, policy.toString, withArtifact,
+      projectRoot, sources, buildIdentity, scopeId, expression, policy.toString, withArtifact,
       freshCompiler,
     ) {
-      DebugEvalSidecar.withCompiler(projectRoot, sources, sourcesDigest, freshCompiler) { compiler =>
+      DebugEvalSidecar.withCompiler(projectRoot, sources, buildIdentity, freshCompiler) { compiler =>
         implicit val flix: Flix = compiler
         val referenced = identifiersIn(expression)
         val params = scope.methods(frame.methodName)

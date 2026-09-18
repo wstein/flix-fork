@@ -146,11 +146,11 @@ the Flix trampoline, returns the compiler-selected `Value` field, and refuses su
 effects rather than attempting to resume the program's handlers while it is paused.
 
 The language server keeps one in-memory evaluation compiler for the active project and
-caches answers by build source digest, frame, expression, policy, and artifact request.
+caches answers by the full build ID, frame, expression, policy, and artifact request.
 Repeated watches therefore reuse both the compiler and the emitted artifact. At most 32
 answers are retained for the active session, with the least recently used discarded
 first. A changed
-source set, a new build digest, or a different project closes and replaces the compiler;
+source set, a new source/dependency/options build identity, or a different project closes and replaces the compiler;
 no cache entry is allowed to cross the identity of the launched build.
 
 That compiler is created by the language server project's existing `Bootstrap`, not by

@@ -67,7 +67,7 @@ object DebugEvalSidecar {
   private case class Entry(
                             projectRoot: Path,
                             sources: Set[Path],
-                            sourcesDigest: String,
+                            buildIdentity: String,
                             flix: Flix,
                             answers: mutable.LinkedHashMap[Key, Any] = mutable.LinkedHashMap.empty,
                           )
@@ -79,12 +79,12 @@ object DebugEvalSidecar {
     * whatever `n` currently holds. That is what makes caching worth doing at all — a watch is
     * re-evaluated on every step, and every one of those steps asks this same question again.
     *
-    * The sources' digest is in the key because the answer is about a *running program*. A rebuild
-    * gives a different one, and an artifact compiled against the old sources would call into classes
-    * the new program does not have. It is the manifest's `sourcesDigest` rather than its
-    * `fingerprint`: measured, only the first changes when a source file does.
+    * The full build identity is in the key because the answer is about a *running program*. It joins
+    * the manifest fingerprint with `sourcesDigest`: source edits change the latter, while compiler
+    * options and dependency changes can change only the former. An artifact compiled against either
+    * old half may call into classes the new program does not have.
     */
-  private case class Key(sourcesDigest: String, scope: String, expression: String, policy: String, withArtifact: Boolean)
+  private case class Key(buildIdentity: String, scope: String, expression: String, policy: String, withArtifact: Boolean)
 
   private var entry: Option[Entry] = None
 
@@ -97,22 +97,22 @@ object DebugEvalSidecar {
     * `sources` is passed rather than discovered here so the caller keeps one rule for what a
     * project's sources are.
     */
-  def withCompiler[A](projectRoot: Path, sources: List[Path], sourcesDigest: String)(body: Flix => A): A =
-    withCompiler(projectRoot, sources, sourcesDigest, () => standaloneCompiler(sources))(body)
+  def withCompiler[A](projectRoot: Path, sources: List[Path], buildIdentity: String)(body: Flix => A): A =
+    withCompiler(projectRoot, sources, buildIdentity, () => standaloneCompiler(sources))(body)
 
   /** As [[withCompiler]], creating the compiler with the project's dependency configuration. */
-  def withCompiler[A](projectRoot: Path, sources: List[Path], sourcesDigest: String,
+  def withCompiler[A](projectRoot: Path, sources: List[Path], buildIdentity: String,
                       freshCompiler: () => Flix)(body: Flix => A): A = synchronized {
-    body(current(projectRoot, sources, sourcesDigest, freshCompiler).flix)
+    body(current(projectRoot, sources, buildIdentity, freshCompiler).flix)
   }
 
-  /** Replaced when the project, source set, or launched build digest changes. */
-  private def current(projectRoot: Path, sources: List[Path], sourcesDigest: String,
+  /** Replaced when the project, source set, or launched build identity changes. */
+  private def current(projectRoot: Path, sources: List[Path], buildIdentity: String,
                       freshCompiler: () => Flix): Entry = entry match {
-    case Some(e) if e.projectRoot == projectRoot && e.sources == sources.toSet && e.sourcesDigest == sourcesDigest => e
+    case Some(e) if e.projectRoot == projectRoot && e.sources == sources.toSet && e.buildIdentity == buildIdentity => e
     case _ =>
       entry.foreach(_.flix.close())
-      val fresh = Entry(projectRoot, sources.toSet, sourcesDigest, freshCompiler())
+      val fresh = Entry(projectRoot, sources.toSet, buildIdentity, freshCompiler())
       entry = Some(fresh)
       fresh
   }
@@ -127,18 +127,18 @@ object DebugEvalSidecar {
     * `compute` is trusted to be a pure function of the key. It is called under the same lock as
     * everything else here, so two requests for one question compile it once.
     */
-  def cached[A](projectRoot: Path, sources: List[Path], sourcesDigest: String, scope: String,
+  def cached[A](projectRoot: Path, sources: List[Path], buildIdentity: String, scope: String,
                 expression: String, policy: String, withArtifact: Boolean)(compute: => A): A = synchronized {
-    cached(projectRoot, sources, sourcesDigest, scope, expression, policy, withArtifact,
+    cached(projectRoot, sources, buildIdentity, scope, expression, policy, withArtifact,
       () => standaloneCompiler(sources))(compute)
   }
 
   /** As [[cached]], creating a replacement compiler with the project's dependency configuration. */
-  def cached[A](projectRoot: Path, sources: List[Path], sourcesDigest: String, scope: String,
+  def cached[A](projectRoot: Path, sources: List[Path], buildIdentity: String, scope: String,
                 expression: String, policy: String, withArtifact: Boolean,
                 freshCompiler: () => Flix)(compute: => A): A = synchronized {
-    val key = Key(sourcesDigest, scope, expression, policy, withArtifact)
-    val answers = current(projectRoot, sources, sourcesDigest, freshCompiler).answers
+    val key = Key(buildIdentity, scope, expression, policy, withArtifact)
+    val answers = current(projectRoot, sources, buildIdentity, freshCompiler).answers
     answers.remove(key) match {
       case Some(answer) =>
         // Reinsert on a hit: LinkedHashMap order is then least-recently-used first.
@@ -148,7 +148,7 @@ object DebugEvalSidecar {
         val answer = compute
         // Re-read rather than reused: `compute` may have replaced the entry, and remembering an
         // answer against a compiler that has been dropped would outlive what it was computed from.
-        val currentAnswers = current(projectRoot, sources, sourcesDigest, freshCompiler).answers
+        val currentAnswers = current(projectRoot, sources, buildIdentity, freshCompiler).answers
         currentAnswers.put(key, answer)
         while (currentAnswers.size > MaxAnswers) {
           currentAnswers.remove(currentAnswers.head._1)

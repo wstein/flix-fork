@@ -66,6 +66,17 @@ class TestDebugEvalSidecar extends AnyFunSuite {
     assert(DebugEvalSidecar.cachedAnswers(project) == 1)
   }
 
+  test("a dependency-only build identity change replaces the compiler") {
+    DebugEvalSidecar.evict()
+    val project = build(Program)
+    val sources = sourceFiles(project)
+    val first = DebugEvalSidecar.withCompiler(project, sources, "fingerprint-one:same-sources")(identity)
+
+    val second = DebugEvalSidecar.withCompiler(project, sources, "fingerprint-two:same-sources")(identity)
+
+    assert(!(second eq first))
+  }
+
   test("a changed source set replaces the compiler") {
     DebugEvalSidecar.evict()
     val project = build(Program)

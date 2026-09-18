@@ -183,6 +183,29 @@ class TestDebugEvalProvider extends AnyFunSuite {
     assert(created == 1, s"the configured compiler was created $created times")
   }
 
+  test("a dependency-only build change cannot reuse the previous evaluation compiler") {
+    val project = build()
+    var created = 0
+    val factory = () => {
+      created += 1
+      val flix = new Flix().setOptions(Options.DefaultTest.copy(xdebug = true, inMemory = true))
+      flix.addFile(project.resolve("Main.flix"), sctx)
+      flix
+    }
+    DebugEvalSidecar.evict()
+    writeManifestIdentity(project, "first-dependencies", "same-sources")
+    DebugEvalProvider.compile(Describe, "at", Policy.Pure, project, TypedAst.empty,
+      withArtifact = false, launchedBuildId = Some("first-dependencies:same-sources"),
+      compilerFactory = Some(factory))
+
+    writeManifestIdentity(project, "second-dependencies", "same-sources")
+    DebugEvalProvider.compile(Describe, "at", Policy.Pure, project, TypedAst.empty,
+      withArtifact = false, launchedBuildId = Some("second-dependencies:same-sources"),
+      compilerFactory = Some(factory))
+
+    assert(created == 2, s"a dependency-only rebuild reused compiler number $created")
+  }
+
   test("the build sidecar is authoritative when the server AST has been refreshed") {
     val project = build()
 
