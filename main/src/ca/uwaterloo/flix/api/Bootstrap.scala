@@ -23,7 +23,7 @@ import ca.uwaterloo.flix.language.ast.shared.SecurityContext
 import ca.uwaterloo.flix.language.ast.{Scheme, SourceLocation, Symbol, TypedAst}
 import ca.uwaterloo.flix.language.jvm.ClassDescs
 import ca.uwaterloo.flix.language.phase.HtmlDocumentor
-import ca.uwaterloo.flix.language.phase.jvm.{DebugIndex, DebugScopes, JvmClass}
+import ca.uwaterloo.flix.language.phase.jvm.{DebugCalls, DebugIndex, DebugScopes, JvmClass}
 
 import java.lang.constant.ClassDesc
 import ca.uwaterloo.flix.runtime.{CompilationResult, JvmLoader}
@@ -1719,6 +1719,7 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
       _ <- Result.traverse(classes.values.toList)(writeClass(devClassDir, _)).map(_ => ())
       _ <- reconcileClassDirectory(devClassDir, classes)
       _ <- writeDebugIndex(flix, result)
+      _ <- writeDebugCalls(flix, result)
       _ <- writeDebugScopes(flix, result)
       _ <- writeDevelopmentManifest(flix, result)
     } yield ()
@@ -1733,6 +1734,18 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
       Ok(())
     } catch {
       case e: Exception => Err(BootstrapError.FileError(s"Failed to publish debug scopes: ${e.getMessage}"))
+    }
+  }
+
+  /** Publishes statically resolved source calls only for a debug build. */
+  private def writeDebugCalls(flix: Flix, result: CompilationResult): Result[Unit, BootstrapError] = {
+    val path = Bootstrap.getDevelopmentDirectory(projectPath).resolve(DebugCalls.FileName)
+    try {
+      if (flix.options.xdebug) DebugCalls.write(path, result.getDebugCalls)
+      else Files.deleteIfExists(path)
+      Ok(())
+    } catch {
+      case e: Exception => Err(BootstrapError.FileError(s"Failed to publish debug calls: ${e.getMessage}"))
     }
   }
 

@@ -38,6 +38,7 @@ object CodeGen {
       root.anonClasses.map(_.sym)
     flix.jvmOrigins.freeze(namedSymbols)
     flix.jvmOrigins.finalizeDebugDefinitions(root.defs.values)
+    flix.jvmOrigins.finalizeDebugCalls(root)
     implicit val r: Root = root
 
     // Types/classes required for Flix runtime.
