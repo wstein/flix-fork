@@ -86,6 +86,34 @@ class TestDebugLocalVariables extends AnyFunSuite {
     assert(localNames(compile(xdebug = false, program), "Def$log", "applyFrame").isEmpty)
   }
 
+  test("debug build records a let bound after a suspension point in the debug scope") {
+    // The debug-scope snapshot is captured from the pre-lowering source and joined to the
+    // emitted method by the declaring def's symbol, so it does not depend on whether the
+    // optimizer or ANF lowering left the binding intact -- unlike a real JVM local, which
+    // this does not attempt to be. See docs/idea-debugging.md, "Variables".
+    val program = """eff Log {
+      |  def write(x: Int32): Unit
+      |}
+      |
+      |def log(prefix: Int32): Int32 \ Log = {
+      |    Log.write(prefix);
+      |    let doubled = prefix + prefix;
+      |    doubled
+      |}
+      |
+      |def main(): Unit \ IO = run {
+      |  println(log(41))
+      |} with handler Log {
+      |  def write(_, k) = k()
+      |}
+      |""".stripMargin
+    val debug = compile(xdebug = true, program)
+    val bindings = debug.getDebugDefinitions.collectFirst {
+      case (clazz, methods) if clazz.contains("Def$log") => methods("applyFrame").map(_.name).toSet
+    }.getOrElse(fail("Expected debug scopes for Def$log, got: " + debug.getDebugDefinitions.keys))
+    assert(bindings.contains("doubled"), s"Expected the post-suspension let to be recorded, got: $bindings")
+  }
+
   private def localNamesOfCompute(xdebug: Boolean): Set[String] = {
     val result = compile(xdebug)
     val clazz = result.getClasses.values.find(_.name.displayName() == "Def$compute")
