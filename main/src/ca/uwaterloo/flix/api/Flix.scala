@@ -859,7 +859,7 @@ class Flix(pkgs: List[InstalledPackage] = Nil, jars: List[Path] = Nil) extends A
       val iterator = zip.entries()
       while (iterator.hasMoreElements) {
         val entry = iterator.nextElement()
-        val name = entry.getName
+        val name = entry.getName.dropWhile(_ == '/')
         if (name.endsWith(".flix")) {
           val bytes = StreamOps.readAllBytes(zip.getInputStream(entry))
           val text = new String(bytes, defaultCharset)

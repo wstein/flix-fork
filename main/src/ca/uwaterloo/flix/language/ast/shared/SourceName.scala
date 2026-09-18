@@ -41,7 +41,7 @@ sealed trait SourceName {
   def toPath: Option[Path] = this match {
     case SourceName.PathName(path) => Some(path)
     case SourceName.UriName(_) => None
-    case SourceName.PackageEntry(_, entry) => Some(Path.of(entry))
+    case SourceName.PackageEntry(_, entry) => Some(Path.of(entry.dropWhile(_ == '/')))
   }
 
   /**

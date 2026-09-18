@@ -95,7 +95,9 @@ is retained on the following file-table line. IntelliJ supports both forms. A so
 inside an `.fpkg` has the canonical archive identity
 `jar:file:///absolute/path/package.fpkg!/path/inside/package.flix`. The archive path is
 absolute, normalized, and URI-escaped; `SourceName.toPath` still returns only the entry
-path for compiler operations that require its package-relative structure.
+path for compiler operations that require its package-relative structure. A leading
+archive separator is removed from both representations so that `toPath` cannot become an
+absolute host path.
 
 ## Build sidecars
 

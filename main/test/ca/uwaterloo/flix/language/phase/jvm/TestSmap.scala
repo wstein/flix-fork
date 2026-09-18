@@ -123,6 +123,16 @@ class TestSmap extends AnyFunSuite {
     assert(actual.contains(s"+ 2 Nested.flix\n$identity"))
   }
 
+  test("a nested bundled-library source retains its hierarchy") {
+    val primary = source("Main.flix", 5)
+    val foreign = source(SourceName.PathName(Path.of("BPlusTree", "Lock.flix")), 10)
+    val smap = new Smap(primary)
+    smap.register(location(foreign, 3))
+
+    val actual = smap.build(ClassName).get
+    assert(actual.contains("+ 2 Lock.flix\nBPlusTree/Lock.flix"))
+  }
+
   test("an unrepresentable synthetic line suppresses the SMAP") {
     val primary = source("Main.flix", 65535)
     val smap = new Smap(primary)

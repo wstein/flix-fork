@@ -41,5 +41,6 @@ class TestSourceName extends AnyFunSuite {
     val name = SourceName.PackageEntry(archive, "/src/Main.flix")
 
     assert(name.toString == s"jar:${archive.toAbsolutePath.normalize().toUri}!/src/Main.flix")
+    assert(name.toPath.contains(Path.of("src/Main.flix")))
   }
 }
