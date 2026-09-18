@@ -51,7 +51,8 @@ A successful `flix build --Xdebug` writes two deterministic sidecars beside
 - `debug-index.json` format 1 maps each source identity recorded in emitted
   `SourceFile`/SMAP attributes to the generated binary classes carrying its code.
 - `debug-scopes.json` format 2 maps emitted class, method, and source binding name
-  to its pre-erasure Flix type. JVM local-variable tables remain authoritative for
+  to its pre-erasure Flix type, including lifted closure captures and lambda
+  parameters in `applyFrame`. JVM local-variable tables remain authoritative for
   slots and live ranges.
 
 The sidecars are produced only after class emission succeeds. A following non-debug

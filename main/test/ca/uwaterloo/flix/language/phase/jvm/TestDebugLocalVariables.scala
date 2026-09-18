@@ -62,6 +62,10 @@ class TestDebugLocalVariables extends AnyFunSuite {
     val debug = compile(xdebug = true, program)
     val names = localNames(debug, "Clo$", "applyFrame")
     assert(names.contains("prefix"), s"Expected captured source name, got: $names")
+    val bindings = debug.getDebugDefinitions.collectFirst {
+      case (clazz, methods) if clazz.contains("Clo$") => methods("applyFrame").map(_.name).toSet
+    }.getOrElse(fail("Expected debug scopes for an emitted closure, got: " + debug.getDebugDefinitions.keys))
+    assert(bindings == Set("prefix", "value"), s"Expected closure scope names, got: $bindings")
     assert(localNames(compile(xdebug = false, program), "Clo$", "applyFrame").isEmpty)
   }
 

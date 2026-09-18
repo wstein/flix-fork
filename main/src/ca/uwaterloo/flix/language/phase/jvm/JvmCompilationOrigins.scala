@@ -26,6 +26,12 @@ final class JvmCompilationOrigins(val symbols: JvmProvenance) {
     debugBindings.getOrElse(sym, Nil)
   }
 
+  /** Associates generated definitions with source bindings retained for debugger metadata. */
+  def recordDebugBindings(sym: Symbol.DefnSym, bindings: List[JvmLexicalOrigins.Binding]): Unit = synchronized {
+    requireOpen()
+    if (bindings.nonEmpty) debugBindings = debugBindings.updated(sym, bindings)
+  }
+
   /** Finalizes retained source bindings against the stable binary names of emitted definitions. */
   def finalizeDebugDefinitions(defs: Iterable[JvmAst.Def])(implicit flix: Flix): Unit = synchronized {
     if (!flix.options.xdebug) return
