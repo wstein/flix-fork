@@ -88,7 +88,10 @@ When optimization places code from more than one source in a generated class, th
 compiler emits a JSR-45 `SourceDebugExtension` with a `Flix` stratum. Primary-source
 lines keep their original numbers; foreign lines receive stable synthetic JVM line
 numbers and map back to their real source path and line. Single-source classes omit the
-SMAP and use their ordinary `SourceFile` attribute. IntelliJ supports both forms.
+SMAP and use their ordinary `SourceFile` attribute. SMAP display names are derived from
+the structured path, package-entry, or URI source identity; for example an opaque
+`untitled:Scratch.flix` document is displayed as `Scratch.flix` while its full identity
+is retained on the following file-table line. IntelliJ supports both forms.
 
 ## Build sidecars
 

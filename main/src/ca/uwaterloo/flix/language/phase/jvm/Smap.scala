@@ -16,9 +16,10 @@
 package ca.uwaterloo.flix.language.phase.jvm
 
 import ca.uwaterloo.flix.language.ast.SourceLocation
-import ca.uwaterloo.flix.language.ast.shared.Source
+import ca.uwaterloo.flix.language.ast.shared.{Source, SourceName}
 
 import java.lang.constant.ClassDesc
+import java.nio.file.{InvalidPathException, Path}
 import scala.collection.mutable
 
 /** Builds the JSR-45 source map for one generated class. */
@@ -67,10 +68,17 @@ class Smap(primary: Source) {
   }
 
   private def baseName(source: Source): String = {
-    val name = source.name
-    val separator = math.max(name.lastIndexOf('/'), name.lastIndexOf('\\'))
-    if (separator < 0) name else name.substring(separator + 1)
+    val component = source.sourceName match {
+      case SourceName.PathName(path) => return fileName(path)
+      case SourceName.PackageEntry(_, entry) => entry
+      case SourceName.UriName(uri) => Option(uri.getPath).filter(_.nonEmpty).getOrElse(uri.getSchemeSpecificPart)
+    }
+    try fileName(Path.of(component)) catch {
+      case _: InvalidPathException => component
+    }
   }
+
+  private def fileName(path: Path): String = Option(path.getFileName).fold(path.toString)(_.toString)
 }
 
 object Smap {

@@ -20,6 +20,7 @@ import ca.uwaterloo.flix.language.ast.{SourceLocation, SourcePosition}
 import org.scalatest.funsuite.AnyFunSuite
 
 import java.lang.constant.ClassDesc
+import java.net.URI
 import java.nio.file.Path
 
 class TestSmap extends AnyFunSuite {
@@ -29,6 +30,11 @@ class TestSmap extends AnyFunSuite {
   private def source(name: String, lines: Int): Source = {
     val text = List.fill(lines)("x").mkString("\n")
     Source.fromString(SourceName.PathName(Path.of(name)), Origin.User, sctx, text)
+  }
+
+  private def source(name: SourceName, lines: Int): Source = {
+    val text = List.fill(lines)("x").mkString("\n")
+    Source.fromString(name, Origin.User, sctx, text)
   }
 
   private def location(source: Source, line: Int): SourceLocation =
@@ -93,6 +99,16 @@ class TestSmap extends AnyFunSuite {
     val actual = smap.build(ClassName).get
     assert(actual.contains("+ 2 List.flix") && actual.contains("+ 3 Map.flix"))
     assert(actual.contains("30#2,1:6") && actual.contains("40#3,1:7"))
+  }
+
+  test("an opaque source URI contributes its document name, not its URI scheme") {
+    val primary = source("Main.flix", 5)
+    val foreign = source(SourceName.UriName(URI.create("untitled:Scratch.flix")), 10)
+    val smap = new Smap(primary)
+    smap.register(location(foreign, 3))
+
+    val actual = smap.build(ClassName).get
+    assert(actual.contains("+ 2 Scratch.flix\nuntitled:Scratch.flix"))
   }
 
   test("an unrepresentable synthetic line suppresses the SMAP") {
