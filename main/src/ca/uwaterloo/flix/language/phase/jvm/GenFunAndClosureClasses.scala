@@ -27,7 +27,7 @@ import ca.uwaterloo.flix.util.ParOps
 import org.objectweb.asm.{ClassWriter, Label, MethodVisitor, Opcodes}
 
 import java.lang.constant.{ClassDesc, MethodTypeDesc}
-import java.lang.constant.ConstantDescs.CD_int
+import java.lang.constant.ConstantDescs.{CD_String, CD_int}
 
 /**
   * Generates byte code for the function and closure classes.
@@ -279,6 +279,7 @@ object GenFunAndClosureClasses {
       visitor.visitField(Opcodes.ACC_PUBLIC, s"l$i", TypeDescs.toErasedClassDesc(x.tpe).descriptorString(), null, null)
     }
     visitor.visitField(Opcodes.ACC_PUBLIC, "pc", CD_int.descriptorString(), null, null)
+    captureNames(visitor, defn)
 
     compileConstructor(functionInterface, visitor)
 
@@ -507,6 +508,47 @@ object GenFunAndClosureClasses {
     m.visitMaxs(999, 999)
     m.visitEnd()
   }
+
+  /**
+    * Records what a closure's captured values are called, under `--Xdebug`.
+    *
+    * ==What a reader has without it==
+    *
+    * A lambda is lifted into a class of its own holding what it captured in `clo0`, `clo1`, so
+    * `y -> x * y` inside `curriedMultiply` becomes a value whose one field is `clo0 = 6`. The `6` is
+    * the interesting part -- it is what distinguishes one closure of that definition from another --
+    * and `clo0` says only where it sits.
+    *
+    * The names are in the `LocalVariableTable` [[nameFrameSlots]] writes, but not usably: that table
+    * is keyed on JVM *slots*, and pairing a slot back to a field means redoing the offset
+    * arithmetic the frame method does. A reader would be inferring what the compiler already knows.
+    *
+    * ==Why a constant on the class, unlike the tag and struct names==
+    *
+    * Those had to be written into each value because their classes are shared by every value of the
+    * same erased shape. A closure class is not: it belongs to one lifted lambda, so its captures
+    * have one set of names and they can be a `ConstantValue` on a static final field -- no
+    * `<clinit>`, no instruction anywhere, and nothing per instance.
+    *
+    * Wildcards and compiler-introduced captures are recorded as `_`, so the list still lines up with
+    * `clo0`, `clo1` by position; a name that was never written is not invented.
+    */
+  private def captureNames(visitor: ClassWriter, defn: Def)(implicit flix: Flix): Unit = {
+    if (!flix.options.xdebug || defn.cparams.isEmpty) {
+      return
+    }
+    val names = defn.cparams.map(_.sourceName.getOrElse("_"))
+    visitor.visitField(
+      Opcodes.ACC_PUBLIC + Opcodes.ACC_STATIC + Opcodes.ACC_FINAL,
+      CaptureNamesField,
+      CD_String.descriptorString(),
+      null,
+      names.mkString(","),
+    )
+  }
+
+  /** The name of the constant [[captureNames]] writes. */
+  private val CaptureNamesField: String = "cloNames"
 
   private def loadFromField(m: MethodVisitor, className: ClassDesc, name: String, localIndex: Int, fieldType: ClassDesc, castTo: Option[ClassDesc]): Unit = {
     implicit val mm: MethodVisitor = m

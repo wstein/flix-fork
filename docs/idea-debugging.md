@@ -35,6 +35,12 @@ parameters and closure captures the same way. Closure conversion retains a captu
 source name through lowering, so a debugger sees `prefix`, not a generated `arg0$…`
 temporary. This metadata is omitted from release builds.
 
+Each generated closure class also carries a debug-only `cloNames` constant. Its comma-
+separated entries correspond positionally to `clo0`, `clo1`, and so on; unnamed
+compiler captures use `_` so later names cannot shift onto the wrong value. A closure
+class belongs to one lifted lambda, making class-level metadata unambiguous. The IDEA
+renderer uses this constant to display captured values by their source names.
+
 User-source `let` bindings are materialized in debug builds. The inliner registers them
 as `DebugLocal`, an explicit non-substitutable binding state, even when occurrence
 analysis says a pure binding is used once. This preserves the inliner's substitution
