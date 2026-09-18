@@ -2,8 +2,8 @@
 
 Status: implemented for the compiler and native IntelliJ debugger increment (M1–M4,
 M7–M9). BSP milestones M5–M6 were explicitly excluded from this increment. M10's
-automated gates are implemented; its click-through IDEA matrix remains a manual release
-qualification activity.
+automated gates and core IDEA click-through are complete. Split Mode and optional-language
+plugin combinations remain release-matrix variants rather than implementation blockers.
 
 Implementation note (2026-09-17): this document remains the architectural record and
 acceptance checklist. The shipped contract is summarized in `docs/idea-debugging.md`.
@@ -32,8 +32,13 @@ the conformance test used its documented local-checkout mismatch override becaus
 qualification pairs the plugin with an unmerged compiler feature revision.
 
 This evidence closes the automated M10 gate for the compiler/native-IDEA increment.
-The gutter/tool-window/Split Mode click-through remains manual, as stated above, and BSP
-qualification remains outside this increment.
+On 2026-09-18 the core manual click-through was also reported successful against compiler
+`6c41de23baf59ab06973636b513316b6fa5a505b` and plugin
+`a42837287cf4a3fb5675c137acb0a40578ec889f`: Run and Debug gestures, breakpoint
+binding, Step Over and trampoline-aware Step Out, reconstructed async frames and their
+read-only Variables snapshots, live-frame evaluation, and termination all behaved as
+expected. Split Mode and optional-language combinations were not part of that report.
+BSP qualification remains outside this increment.
 
 Post-review hardening qualification (2026-09-17) used compiler revision
 `b6149c5e1ed59fb7772178a9a367f9c2214acfe1`, plugin revision

@@ -111,6 +111,28 @@ class TestSmap extends AnyFunSuite {
     assert(actual.contains("+ 2 Scratch.flix\nuntitled:Scratch.flix"))
   }
 
+  test("a package source retains its canonical archive identity") {
+    val primary = source("Main.flix", 5)
+    val archive = Path.of("build", "packages", "dependency package.fpkg")
+    val foreign = source(SourceName.PackageEntry(archive, "src/Nested.flix"), 10)
+    val smap = new Smap(primary)
+    smap.register(location(foreign, 3))
+
+    val identity = s"jar:${archive.toAbsolutePath.normalize().toUri}!/src/Nested.flix"
+    val actual = smap.build(ClassName).get
+    assert(actual.contains(s"+ 2 Nested.flix\n$identity"))
+  }
+
+  test("a nested bundled-library source retains its hierarchy") {
+    val primary = source("Main.flix", 5)
+    val foreign = source(SourceName.PathName(Path.of("BPlusTree", "Lock.flix")), 10)
+    val smap = new Smap(primary)
+    smap.register(location(foreign, 3))
+
+    val actual = smap.build(ClassName).get
+    assert(actual.contains("+ 2 Lock.flix\nBPlusTree/Lock.flix"))
+  }
+
   test("an unrepresentable synthetic line suppresses the SMAP") {
     val primary = source("Main.flix", 65535)
     val smap = new Smap(primary)

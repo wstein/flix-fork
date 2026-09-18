@@ -695,7 +695,8 @@ class Flix(pkgs: List[InstalledPackage] = Nil, jars: List[Path] = Nil) extends A
     // Construct the compilation result. The generated classes are not loaded into the JVM;
     // that is the caller's responsibility (see [[ca.uwaterloo.flix.runtime.JvmLoader]]).
     val totalSize = bytecodeAst.classes.values.map(_.bytecode.length).sum
-    val result = new CompilationResult(bytecodeAst, totalTime, totalSize, this, jvmOrigins.finalizedDebugDefinitions)
+    val result = new CompilationResult(bytecodeAst, totalTime, totalSize, this,
+      jvmOrigins.finalizedDebugDefinitions, jvmOrigins.finalizedDebugCalls)
 
     // Shutdown the thread pool.
     shutdownThreadPool()
@@ -852,16 +853,17 @@ class Flix(pkgs: List[InstalledPackage] = Nil, jars: List[Path] = Nil) extends A
     * Returns the `.flix` source files inside the package at `p`, with the security context `sctx`.
     */
   private def getSourcesOfPkg(p: Path, sctx: SecurityContext): List[Source] = {
-    Using(new ZipFile(p.toFile)) { zip =>
+    val packagePath = p.toAbsolutePath.normalize()
+    Using(new ZipFile(packagePath.toFile)) { zip =>
       val result = mutable.ArrayBuffer.empty[Source]
       val iterator = zip.entries()
       while (iterator.hasMoreElements) {
         val entry = iterator.nextElement()
-        val name = entry.getName
+        val name = entry.getName.dropWhile(_ == '/')
         if (name.endsWith(".flix")) {
           val bytes = StreamOps.readAllBytes(zip.getInputStream(entry))
           val text = new String(bytes, defaultCharset)
-          result += Source.fromString(SourceName.PackageEntry(p, name), Origin.Package, sctx, text)
+          result += Source.fromString(SourceName.PackageEntry(packagePath, name), Origin.Package, sctx, text)
         }
       }
       result.toList

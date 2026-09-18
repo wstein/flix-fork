@@ -84,6 +84,30 @@ Regression coverage includes both monomorphizers, non-overlapping two-slot `Int6
 locals, release-mode omission, sequential-mode pruning, and a real JDWP/JDI breakpoint
 that reads locals after a handler resumes a suspended function.
 
+Control-impure `applyFrame` classes also publish a `public static final String pcLines`
+constant under `--Xdebug`. Entry `n - 1` is the SMAP-aware source line associated with
+continuation program counter `n`; `-1` means that no source line was available. This
+lets the debugger position a suspended heap frame at the call that is awaiting a result
+without disassembling its `tableswitch`. The field is omitted from ordinary builds and
+from classes with no recorded resume point. Tests independently reconstruct each line
+from the switch targets and JVM `LineNumberTable` rather than merely pinning the string.
+
+The same class carries a `public static final String frameSlots` JSON constant when at
+least one source variable is available at a suspension point. Format 1 is keyed by
+continuation `pc`; each entry names the exact generated instance field (`cloN`, `argN`,
+or `lN`), source name, pre-erasure Flix type, and binding kind. Metadata is recorded at
+the suspension while lexical scopes are being generated, so a later or out-of-scope
+local is not exposed merely because its backing field exists on every continuation
+object. Synthetic and wildcard fields are omitted. Ordinary builds emit no constant.
+Regression coverage checks the first and later PCs independently, including a local
+initialized after an earlier suspension, and checks lifted closures with a capture,
+lambda parameter, typed local, and wildcard. This pins both positional field mapping
+and lexical liveness rather than only validating the JSON shape.
+The sibling IntelliJ plugin's live JDWP suite builds this compiler, stops inside an
+effectful callee, reads a caller continuation's saved `label: String = "root"`, and
+verifies that the reconstructed async frame carries the same read-only value into its
+Variables node. Missing or malformed metadata remains an empty-variable fallback.
+
 When optimization places code from more than one source in a generated class, the
 compiler emits a JSR-45 `SourceDebugExtension` with a `Flix` stratum. Primary-source
 lines keep their original numbers; foreign lines receive stable synthetic JVM line
@@ -91,11 +115,17 @@ numbers and map back to their real source path and line. Single-source classes o
 SMAP and use their ordinary `SourceFile` attribute. SMAP display names are derived from
 the structured path, package-entry, or URI source identity; for example an opaque
 `untitled:Scratch.flix` document is displayed as `Scratch.flix` while its full identity
-is retained on the following file-table line. IntelliJ supports both forms.
+is retained on the following file-table line. IntelliJ supports both forms. A source
+inside an `.fpkg` has the canonical archive identity
+`jar:file:///absolute/path/package.fpkg!/path/inside/package.flix`. The archive path is
+absolute, normalized, and URI-escaped; `SourceName.toPath` still returns only the entry
+path for compiler operations that require its package-relative structure. A leading
+archive separator is removed from both representations so that `toPath` cannot become an
+absolute host path.
 
 ## Build sidecars
 
-A successful `flix build --Xdebug` writes two deterministic sidecars beside
+A successful `flix build --Xdebug` writes three deterministic sidecars beside
 `build/development/build.json`:
 
 - `debug-index.json` format 1 maps each source identity recorded in emitted
@@ -104,6 +134,34 @@ A successful `flix build --Xdebug` writes two deterministic sidecars beside
   to its pre-erasure Flix type, including lifted closure captures and lambda
   parameters in `applyFrame`. JVM local-variable tables remain authoritative for
   slots and live ranges.
+- `debug-calls.json` format 2 provides Smart Step Into provenance as a source-first
+  tree. Its `sources` object maps each source identity to calls containing a compact
+  one-based `[startLine, startColumn, endLine, endColumn]` range, an unmangled definition name,
+  and a structured JVM target. `staticApply` is the default target method and is
+  omitted; other methods are explicit. Consumers materialize a source/line index once
+  rather than scanning every project call at each debugger step. Format 1 is not read.
+
+The sidecars describe one whole-program build. Reachable standard-library and package
+code is specialized into that build and therefore appears in these same sidecars; an
+`.fpkg` and the compiler jar do not carry separate static debug sidecars. Package
+entries use the canonical archive identity above, allowing an IDE to open the exact
+source entry without basename guessing. Package paths are normalized when the archive
+is loaded, and regression coverage verifies that the identical URI reaches the JVM
+`SourceFile` attribute, SMAP file table, source index, and call provenance.
+
+For example:
+
+```json
+{
+  "formatVersion": 2,
+  "sources": {
+    "/work/src/Bench.flix": [
+      {"range":[72,22,72,39],"name":"List.range","target":{"className":"List.Def$range"}},
+      {"range":[73,32,73,80],"name":"List.map","target":{"className":"List.Def$map$evsb8gnwxvwt"}}
+    ]
+  }
+}
+```
 
 Lambda parameters are captured from the typed source and joined by their source name
 and declaration location when lifted. Parameterized types such as `Option[Int32]`
@@ -220,9 +278,10 @@ default. Evaluation also requires a name to be visible in JDI at the paused inst
 the method-wide scope sidecar never overrides JVM liveness.
 
 Automated compiler, bytecode, JDI, launch-contract, reader, and plugin tests cover this
-foundation. The final click-through IDEA UI matrix (gutter gesture, rendered tool-window
-state, Split Mode, and optional-language plugin combinations) remains a manual release
-qualification gate rather than an unimplemented compiler/debugger feature.
+foundation. The core IDEA click-through passed on 2026-09-18: Run and Debug gestures,
+breakpoints, stepping and logical Step Out, reconstructed async frames and Variables,
+live-frame evaluation, and termination. Split Mode and optional-language plugin
+combinations remain release-matrix variants rather than unimplemented debugger features.
 
 BSP import/server work is outside this increment. The supported IDEA path is the
 existing two-phase CLI build (`build --Xdebug`) followed by the format-4 manifest launch.

@@ -41,7 +41,7 @@ sealed trait SourceName {
   def toPath: Option[Path] = this match {
     case SourceName.PathName(path) => Some(path)
     case SourceName.UriName(_) => None
-    case SourceName.PackageEntry(_, entry) => Some(Path.of(entry))
+    case SourceName.PackageEntry(_, entry) => Some(Path.of(entry.dropWhile(_ == '/')))
   }
 
   /**
@@ -53,7 +53,10 @@ sealed trait SourceName {
   override def toString: String = this match {
     case SourceName.PathName(path) => path.toString
     case SourceName.UriName(uri) => uri.toString
-    case SourceName.PackageEntry(pkg, entry) => pkg.getFileName.toString + ":" + entry
+    case SourceName.PackageEntry(pkg, entry) =>
+      val archive = pkg.toAbsolutePath.normalize().toUri
+      val archiveEntry = entry.dropWhile(_ == '/')
+      s"jar:$archive!/$archiveEntry"
   }
 
 }

@@ -13,6 +13,7 @@ final class JvmCompilationOrigins(val symbols: JvmProvenance) {
   private var expressions = new IdentityHashMap[AnyRef, GeneratedJvmKey]()
   private var debugBindings = Map.empty[Symbol.DefnSym, List[JvmLexicalOrigins.Binding]]
   private var debugDefinitions = Map.empty[String, Map[String, List[JvmLexicalOrigins.Binding]]]
+  private var debugCalls = List.empty[DebugCalls.Call]
   private var closed = false
   private var freezeStarted = false
   private var frozenNames: Option[JvmNameTable] = None
@@ -44,6 +45,54 @@ final class JvmCompilationOrigins(val symbols: JvmProvenance) {
 
   def finalizedDebugDefinitions: Map[String, Map[String, List[JvmLexicalOrigins.Binding]]] = synchronized {
     debugDefinitions
+  }
+
+  /** Finalizes direct call sites against the stable binary names selected by code generation. */
+  def finalizeDebugCalls(root: JvmAst.Root)(implicit flix: Flix): Unit = synchronized {
+    if (!flix.options.xdebug) return
+    if (frozenNames.isEmpty) fail("Debug calls require frozen JVM names.")
+
+    def target(sym: Symbol.DefnSym, loc: SourceLocation): Option[DebugCalls.Call] = for {
+      defn <- root.defs.get(sym)
+      if loc.isReal
+    } yield {
+      // ApplyDef lowering always names Def$..., even for the control-impure path that allocates a
+      // frame. Closure applications have no statically selected definition and are not recorded.
+      val desc = GenFunAndClosureClasses.defnDesc(sym)
+      // `name` includes the fresh monomorphization identity (`map$228969`). Smart Step Into is
+      // source-facing metadata, so retain the original definition spelling while the JVM target
+      // below continues to identify the selected specialization exactly.
+      val label = (sym.namespace :+ sym.text).mkString(".")
+      DebugCalls.Call(loc.source.name, loc.startLine, loc.startCol, loc.endLine, loc.endCol,
+        label, ClassDescs.binaryNameOf(desc), GenFunAndClosureClasses.methodNameOf(defn))
+    }
+
+    val found = mutable.ListBuffer.empty[DebugCalls.Call]
+    def visit(exp: JvmAst.Expr): Unit = {
+      exp match {
+        case JvmAst.Expr.ApplyDef(sym, _, _, _, _, loc) => target(sym, loc).foreach(found += _)
+        // ApplySelfTail jumps back to the current method's entry label. Class and method identity
+        // cannot distinguish that new source activation, so offering it would create a target the
+        // MethodFilter cannot honor.
+        case _: JvmAst.Expr.ApplySelfTail => ()
+        case _ => ()
+      }
+      exp.asInstanceOf[Product].productIterator.foreach {
+        case child: JvmAst.Expr => visit(child)
+        case values: Iterable[?] => values.foreach {
+          case child: JvmAst.Expr => visit(child)
+          case (_, child: JvmAst.Expr) => visit(child)
+          case _ => ()
+        }
+        case _ => ()
+      }
+    }
+    root.defs.values.foreach(defn => visit(defn.expr))
+    debugCalls = found.toList.distinct
+  }
+
+  def finalizedDebugCalls: List[DebugCalls.Call] = synchronized {
+    debugCalls
   }
 
   def freeze(required: Iterable[Symbol]): Unit = synchronized {
@@ -151,6 +200,7 @@ final class JvmCompilationOrigins(val symbols: JvmProvenance) {
     expressions = new IdentityHashMap[AnyRef, GeneratedJvmKey]()
     debugBindings = Map.empty
     debugDefinitions = Map.empty
+    debugCalls = Nil
     frozenNames = None
     symbols.close()
     closed = true

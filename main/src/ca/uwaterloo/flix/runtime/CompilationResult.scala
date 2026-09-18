@@ -19,7 +19,7 @@ package ca.uwaterloo.flix.runtime
 import ca.uwaterloo.flix.api.Flix
 import ca.uwaterloo.flix.language.ast.*
 import ca.uwaterloo.flix.language.ast.shared.Source
-import ca.uwaterloo.flix.language.phase.jvm.{JvmClass, JvmLexicalOrigins}
+import ca.uwaterloo.flix.language.phase.jvm.{DebugCalls, JvmClass, JvmLexicalOrigins}
 
 import java.lang.constant.ClassDesc
 
@@ -37,7 +37,8 @@ class CompilationResult(val root: BytecodeAst.Root,
                         val totalTime: Long,
                         val codeSize: Int,
                         val flix: Flix,
-                        val debugDefinitions: Map[String, Map[String, List[JvmLexicalOrigins.Binding]]] = Map.empty
+                        val debugDefinitions: Map[String, Map[String, List[JvmLexicalOrigins.Binding]]] = Map.empty,
+                        val debugCalls: List[DebugCalls.Call] = Nil
                        ) {
 
   /** Returns the generated JVM classes. */
@@ -47,6 +48,9 @@ class CompilationResult(val root: BytecodeAst.Root,
   /** Returns source bindings keyed by stable generated class name for a debug compilation. */
   def getDebugDefinitions: Map[String, Map[String, List[JvmLexicalOrigins.Binding]]] =
     debugDefinitions
+
+  /** Returns direct call sites resolved to stable generated definitions for a debug compilation. */
+  def getDebugCalls: List[DebugCalls.Call] = debugCalls
 
   /** Optionally returns the main entry point. */
   def getMain: Option[BytecodeAst.Def] =

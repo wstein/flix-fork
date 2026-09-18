@@ -502,9 +502,14 @@ object GenFunAndClosureClasses {
         }
       }
 
-      val ctx = GenExpression.EffectContext(enterLabel, Map.empty, newFrame, setPc, narrowLocals, localOffset, pcLabels.prepended(null), Array(0), smap)
+      // Indexed by `pc`, so slot 0 is the entry the tableswitch never uses.
+      val pcLines = Array.fill(pcLabels.size + 1)(NoLine)
+      val frameSlots = continuationFrameSlots(defn)
+      val ctx = GenExpression.EffectContext(enterLabel, Map.empty, newFrame, setPc, narrowLocals, localOffset, pcLabels.prepended(null), Array(0), smap, pcLines, frameSlots)
       GenExpression.compileExpr(defn.expr)(m, ctx, root, flix)
       assert(ctx.pcCounter(0) == pcLabels.size, s"${(className, ctx.pcCounter(0), pcLabels.size)}")
+      resumeLines(visitor, pcLines)
+      emitFrameSlots(visitor, frameSlots.byPc)
     }
 
     xReturn(GenResult.Desc)
@@ -514,6 +519,74 @@ object GenFunAndClosureClasses {
     m.visitMaxs(999, 999)
     m.visitEnd()
   }
+
+  /** Records the source line at which each continuation program counter resumes. */
+  private def resumeLines(visitor: ClassWriter, pcLines: Array[Int])(implicit flix: Flix): Unit = {
+    if (!flix.options.xdebug) return
+
+    // Index 0 is unused because continuation pcs start at 1.
+    val lines = pcLines.drop(1)
+    if (lines.isEmpty || lines.forall(_ == NoLine)) return
+
+    visitor.visitField(
+      Opcodes.ACC_PUBLIC + Opcodes.ACC_STATIC + Opcodes.ACC_FINAL,
+      ResumeLinesField,
+      CD_String.descriptorString(),
+      null,
+      lines.mkString(","),
+    )
+  }
+
+  /** Field consumed by the IntelliJ continuation-frame renderer. */
+  private val ResumeLinesField: String = "pcLines"
+
+  /** Indicates that no source line was associated with a continuation pc. */
+  private val NoLine: Int = -1
+
+  /** Builds the source-facing description of fields saved in a suspended continuation. */
+  private def continuationFrameSlots(defn: Def)(implicit flix: Flix): GenExpression.FrameSlots = {
+    if (!flix.options.xdebug) return new GenExpression.FrameSlots(Nil, Map.empty, defn.pcPoints)
+    val bindings = flix.jvmOrigins.sourceBindings(defn.sym)
+
+    def binding(sym: Symbol.VarSym, preferredName: Option[String]): Option[JvmLexicalOrigins.Binding] = {
+      val name = preferredName.getOrElse(sym.text)
+      bindings.find(b => b.name == name && b.loc == sym.loc)
+    }
+
+    def slot(field: String, sym: Symbol.VarSym, preferredName: Option[String], kind: String): Option[GenExpression.FrameSlot] =
+      if (sym.isWild) None
+      else binding(sym, preferredName).map(b => GenExpression.FrameSlot(field, b.name, b.tpe, kind))
+
+    val captures = defn.cparams.zipWithIndex.flatMap { case (param, index) =>
+      slot(s"clo$index", param.sym, param.sourceName, "capture")
+    }
+    val parameters = defn.fparams.zipWithIndex.flatMap { case (param, index) =>
+      slot(s"arg$index", param.sym, param.sourceName, "parameter")
+    }
+    val locals = defn.lparams.zipWithIndex.flatMap { case (param, index) =>
+      slot(s"l$index", param.sym, None, "local").map(param.sym -> _)
+    }.toMap
+    new GenExpression.FrameSlots(captures ::: parameters, locals, defn.pcPoints)
+  }
+
+  /** Emits versioned metadata for the source values saved at each continuation pc. */
+  private def emitFrameSlots(visitor: ClassWriter, slotsByPc: Array[List[GenExpression.FrameSlot]])(implicit flix: Flix): Unit = {
+    if (!flix.options.xdebug) return
+    val pcs = slotsByPc.iterator.zipWithIndex.collect {
+      case (slots, pc) if pc > 0 && slots.nonEmpty =>
+        val rendered = slots.map { slot =>
+          s"{\"field\":${JvmDebugJson.quote(slot.field)},\"name\":${JvmDebugJson.quote(slot.name)}," +
+            s"\"type\":${JvmDebugJson.quote(slot.tpe)},\"kind\":${JvmDebugJson.quote(slot.kind)}}"
+        }.mkString(",")
+        s"${JvmDebugJson.quote(pc.toString)}:[$rendered]"
+    }.mkString(",")
+    if (pcs.isEmpty) return
+    val json = s"{\"formatVersion\":1,\"pcs\":{$pcs}}"
+    visitor.visitField(Opcodes.ACC_PUBLIC + Opcodes.ACC_STATIC + Opcodes.ACC_FINAL,
+      FrameSlotsField, CD_String.descriptorString(), null, json)
+  }
+
+  private val FrameSlotsField: String = "frameSlots"
 
   /**
     * Records what a closure's captured values are called, under `--Xdebug`.
