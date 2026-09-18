@@ -38,13 +38,30 @@ debug-provenance snapshot; they are intentionally not guessed from lowered ANF n
 The compiler now captures source parameter and `let` binding identities, names, and
 locations in that compilation-local snapshot before typed bodies are released. This is
 finalized against stable generated class names and exposed on the in-memory compilation
-result for debug builds. It is not yet emitted as a debug sidecar or joined to JVM
-slots, captures, or continuation fields.
+result for debug builds. It retains the pre-erasure Flix type and the emitted method
+(`staticApply` or `applyFrame`) but does not duplicate JVM slots or liveness ranges.
+
+## Build sidecars
+
+A successful `flix build --Xdebug` writes two deterministic sidecars beside
+`build/development/build.json`:
+
+- `debug-index.json` format 1 maps each source identity recorded in emitted
+  `SourceFile`/SMAP attributes to the generated binary classes carrying its code.
+- `debug-scopes.json` format 2 maps emitted class, method, and source binding name
+  to its pre-erasure Flix type. JVM local-variable tables remain authoritative for
+  slots and live ranges.
+
+The sidecars are produced only after class emission succeeds. A following non-debug
+build removes them, so an IDE cannot accidentally consume metadata from an earlier
+debug build. Clients that do not understand a sidecar format must ignore it and use
+their ordinary debugger fallback.
 
 ## Current limits
 
 The debug policy does not promise a bindable location for every lexical line, preserve
 unused definitions removed by reachability analysis, or preserve local/lambda bodies.
-Line-table attribution, scope metadata, source-to-class indexing, and JetBrains IDE
-integration are delivered in later milestones. Release builds remain subject to the
-normal optimizer policy.
+Line-table attribution and the initial source/class and binding-type sidecars are
+available. Captures, continuation fields, complete lexical scopes, evaluation, and
+JetBrains IDE integration remain later milestones. Release builds remain subject to
+the normal optimizer policy.
