@@ -95,7 +95,7 @@ is retained on the following file-table line. IntelliJ supports both forms.
 
 ## Build sidecars
 
-A successful `flix build --Xdebug` writes two deterministic sidecars beside
+A successful `flix build --Xdebug` writes three deterministic sidecars beside
 `build/development/build.json`:
 
 - `debug-index.json` format 1 maps each source identity recorded in emitted
@@ -104,6 +104,26 @@ A successful `flix build --Xdebug` writes two deterministic sidecars beside
   to its pre-erasure Flix type, including lifted closure captures and lambda
   parameters in `applyFrame`. JVM local-variable tables remain authoritative for
   slots and live ranges.
+- `debug-calls.json` format 2 provides Smart Step Into provenance as a source-first
+  tree. Its `sources` object maps each source identity to calls containing a compact
+  one-based `[startLine, startColumn, endLine, endColumn]` range, an unmangled definition name,
+  and a structured JVM target. `staticApply` is the default target method and is
+  omitted; other methods are explicit. Consumers materialize a source/line index once
+  rather than scanning every project call at each debugger step. Format 1 is not read.
+
+For example:
+
+```json
+{
+  "formatVersion": 2,
+  "sources": {
+    "/work/src/Bench.flix": [
+      {"range":[72,22,72,39],"name":"List.range","target":{"className":"List.Def$range"}},
+      {"range":[73,32,73,80],"name":"List.map","target":{"className":"List.Def$map$evsb8gnwxvwt"}}
+    ]
+  }
+}
+```
 
 Lambda parameters are captured from the typed source and joined by their source name
 and declaration location when lifted. Parameterized types such as `Option[Int32]`

@@ -59,7 +59,10 @@ final class JvmCompilationOrigins(val symbols: JvmProvenance) {
       // ApplyDef lowering always names Def$..., even for the control-impure path that allocates a
       // frame. Closure applications have no statically selected definition and are not recorded.
       val desc = GenFunAndClosureClasses.defnDesc(sym)
-      val label = (sym.namespace :+ sym.name).mkString(".")
+      // `name` includes the fresh monomorphization identity (`map$228969`). Smart Step Into is
+      // source-facing metadata, so retain the original definition spelling while the JVM target
+      // below continues to identify the selected specialization exactly.
+      val label = (sym.namespace :+ sym.text).mkString(".")
       DebugCalls.Call(loc.source.name, loc.startLine, loc.startCol, loc.endLine, loc.endCol,
         label, ClassDescs.binaryNameOf(desc), GenFunAndClosureClasses.methodNameOf(defn))
     }

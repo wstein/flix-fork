@@ -160,7 +160,8 @@ class TestBootstrap extends AnyFunSuite {
     assert(Files.exists(calls))
     assert(Files.readString(index).contains("\"formatVersion\":1"))
     assert(Files.readString(scopes).contains("\"formatVersion\":2"))
-    assert(Files.readString(calls).contains("\"formatVersion\":1"))
+    assert(Files.readString(calls).contains("\"formatVersion\":2"))
+    assert(Files.readString(calls).contains("\"sources\""))
 
     b.build(PkgTestUtils.mkFlix(b)).unsafeGet
     assert(!Files.exists(index))

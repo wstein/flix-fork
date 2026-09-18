@@ -7,7 +7,8 @@ import java.nio.file.Path
 /** Direct source calls and the generated JVM definitions selected for them. */
 object DebugCalls {
   val FileName: String = "debug-calls.json"
-  val FormatVersion: Int = 1
+  val FormatVersion: Int = 2
+  val DefaultMethodName: String = "staticApply"
 
   case class Call(source: String,
                   startLine: Int,
@@ -19,16 +20,31 @@ object DebugCalls {
                   methodName: String)
 
   def write(path: Path, calls: Iterable[Call]): Unit = {
-    val entries = calls.toList.sortBy(c => (c.source, c.startLine, c.startCol, c.endLine, c.endCol, c.label)).map { call =>
-      s"""    {"source":${JvmDebugJson.quote(call.source)},"startLine":${call.startLine},"startCol":${call.startCol},"endLine":${call.endLine},"endCol":${call.endCol},"label":${JvmDebugJson.quote(call.label)},"className":${JvmDebugJson.quote(call.className)},"methodName":${JvmDebugJson.quote(call.methodName)}}"""
+    val sources = calls.toList
+      .groupBy(_.source)
+      .toList
+      .sortBy(_._1)
+      .map { case (source, sourceCalls) =>
+        val entries = sourceCalls
+          .sortBy(c => (c.startLine, c.startCol, c.endLine, c.endCol, c.label, c.className, c.methodName))
+          .map(callJson)
+        s"""    ${JvmDebugJson.quote(source)}:[
+           |${entries.mkString(",\n")}
+           |    ]""".stripMargin
     }
     FileOps.writeString(path,
       s"""{
          |  "formatVersion":$FormatVersion,
-         |  "calls":[
-         |${entries.mkString(",\n")}
-         |  ]
+         |  "sources":{
+         |${sources.mkString(",\n")}
+         |  }
          |}
          |""".stripMargin)
+  }
+
+  private def callJson(call: Call): String = {
+    val method = if (call.methodName == DefaultMethodName) "" else
+      s""",\"methodName\":${JvmDebugJson.quote(call.methodName)}"""
+    s"""      {"range":[${call.startLine},${call.startCol},${call.endLine},${call.endCol}],"name":${JvmDebugJson.quote(call.label)},"target":{"className":${JvmDebugJson.quote(call.className)}$method}}"""
   }
 }
