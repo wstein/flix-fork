@@ -69,6 +69,23 @@ class TestDebugLocalVariables extends AnyFunSuite {
     assert(localNames(compile(xdebug = false, program), "Clo$", "applyFrame").isEmpty)
   }
 
+  test("debug build records effectful definition parameters in applyFrame") {
+    val program = """eff Log {
+      |  def write(x: Int32): Unit
+      |}
+      |
+      |def log(prefix: Int32): Unit \ Log = Log.write(prefix)
+      |
+      |def main(): Unit = run {
+      |  log(41)
+      |} with handler Log {
+      |  def write(_, k) = k()
+      |}
+      |""".stripMargin
+    assert(localNames(compile(xdebug = true, program), "Def$log", "applyFrame").contains("prefix"))
+    assert(localNames(compile(xdebug = false, program), "Def$log", "applyFrame").isEmpty)
+  }
+
   private def localNamesOfCompute(xdebug: Boolean): Set[String] = {
     val result = compile(xdebug)
     val clazz = result.getClasses.values.find(_.name.displayName() == "Def$compute")
