@@ -99,6 +99,10 @@ or `lN`), source name, pre-erasure Flix type, and binding kind. Metadata is reco
 the suspension while lexical scopes are being generated, so a later or out-of-scope
 local is not exposed merely because its backing field exists on every continuation
 object. Synthetic and wildcard fields are omitted. Ordinary builds emit no constant.
+Regression coverage checks the first and later PCs independently, including a local
+initialized after an earlier suspension, and checks lifted closures with a capture,
+lambda parameter, typed local, and wildcard. This pins both positional field mapping
+and lexical liveness rather than only validating the JSON shape.
 
 When optimization places code from more than one source in a generated class, the
 compiler emits a JSR-45 `SourceDebugExtension` with a `Flix` stratum. Primary-source

@@ -35,13 +35,35 @@ class TestContinuationFrameSlots extends AnyFunSuite {
       |
       |def work(prefix: Int32): Int32 \ Ask =
       |    let before = prefix + 1;
-      |    let answer = Ask.ask();
-      |    let after = answer + 1;
-      |    before + after
+      |    let first = Ask.ask();
+      |    let between = before + first;
+      |    let second = Ask.ask();
+      |    let after = second + between;
+      |    after
       |
       |def main(): Unit \ IO =
       |    run { println(work(40)) } with handler Ask {
       |        def ask(resume) = resume(1)
+      |    }
+      |""".stripMargin
+
+  private val ClosureProgram: String =
+    """eff Ask {
+      |    def ask(): String
+      |}
+      |
+      |def work(prefix: Option[String]): Option[String] \ Ask =
+      |    let f = (fallback: String) -> {
+      |        let before = prefix;
+      |        let _ = 123;
+      |        let answer = Ask.ask();
+      |        if (answer == fallback) before else Some(answer)
+      |    };
+      |    f("fallback")
+      |
+      |def main(): Unit \ IO =
+      |    run { println(work(Some("captured"))) } with handler Ask {
+      |        def ask(resume) = resume("fallback")
       |    }
       |""".stripMargin
 
@@ -57,15 +79,45 @@ class TestContinuationFrameSlots extends AnyFunSuite {
       Slot("arg0", "prefix", "Int32", "parameter"),
       Slot("l0", "before", "Int32", "local"),
     ))(slots)
-    assert(!slots.exists(_.name == "answer"), "the effect result is not initialized while the call is suspended")
+    assert(!slots.exists(_.name == "first"), "the effect result is not initialized while the call is suspended")
+    assert(!slots.exists(_.name == "between"), "a later binding must not appear before its initializer")
+    assert(!slots.exists(_.name == "second"), "a later effect result must not appear at the first suspension")
     assert(!slots.exists(_.name == "after"), "a later binding must not appear before its initializer")
+  }
+
+  test("a later pc includes values initialized after the first suspension") {
+    val json = metadata(compile(xdebug = true), "Def$work").getOrElse(fail("missing frameSlots"))
+
+    assertResult(List(
+      Slot("arg0", "prefix", "Int32", "parameter"),
+      Slot("l0", "before", "Int32", "local"),
+      Slot("l1", "first", "Int32", "local"),
+      Slot("l2", "between", "Int32", "local"),
+    ))(slotsAt(json, pc = 2))
+  }
+
+  test("a lifted closure records captures parameters and live locals but no wildcard") {
+    val entries = compile(xdebug = true, ClosureProgram).iterator.flatMap { clazz =>
+      metadata(List(clazz), clazz.name.displayName()).map(clazz.name.displayName() -> _)
+    }
+    val (className, json) = entries.find { case (_, value) =>
+      slotsAt(value, pc = 1).exists(slot => slot.name == "prefix" && slot.kind == "capture")
+    }.getOrElse(fail("missing closure frameSlots for captured prefix"))
+
+    assert(className.startsWith("Clo$"), s"expected a lifted closure, got $className")
+    assertResult(List(
+      Slot("clo0", "prefix", "Option[String]", "capture"),
+      Slot("arg0", "fallback", "String", "parameter"),
+      Slot("l0", "before", "Option[String]", "local"),
+    ))(slotsAt(json, pc = 1))
+    assert(!json.contains("wild"), "wildcard bindings must not be published")
   }
 
   private case class Slot(field: String, name: String, tpe: String, kind: String)
 
-  private def compile(xdebug: Boolean): Iterable[JvmClass] = {
+  private def compile(xdebug: Boolean, program: String = Program): Iterable[JvmClass] = {
     val flix = new Flix().setOptions(Options.DefaultTest.copy(xdebug = xdebug))
-    flix.addSource(CompilerConstants.VirtualTestFile, sctx = sctx, text = Program)
+    flix.addSource(CompilerConstants.VirtualTestFile, sctx = sctx, text = program)
     flix.compile() match {
       case Result.Ok(result) => result.getClasses.values
       case Result.Err(errors) => fail(s"the test program must compile, but got: $errors")
