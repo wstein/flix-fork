@@ -23,7 +23,7 @@ import ca.uwaterloo.flix.language.phase.jvm.ClassMaker.Visibility.IsPublic
 import ca.uwaterloo.flix.language.phase.jvm.ClassMaker.{ConstructorMethod, InstanceField, StaticMethod}
 import ca.uwaterloo.flix.language.phase.jvm.Instructions.*
 import ca.uwaterloo.flix.language.phase.jvm.MethodTypeDescs.mkDescriptor
-import ca.uwaterloo.flix.language.phase.jvm.{ClassConstants, ClassMaker, ExportPlan, GenFunAndClosureClasses, JvmNames, Mangle, TypeDescs}
+import ca.uwaterloo.flix.language.phase.jvm.{ClassConstants, ClassMaker, ExportPlan, ExportSignature, GenFunAndClosureClasses, JvmNames, Mangle, TypeDescs}
 import org.objectweb.asm.MethodVisitor
 
 import java.lang.constant.ClassDesc
@@ -87,17 +87,18 @@ object GenNamespace {
 
   /** Returns the caller-facing type for an export and the historical erased type otherwise. */
   private def boundaryType(isExport: Boolean, tpe: ca.uwaterloo.flix.language.ast.SimpleType): ClassDesc =
-    if (isExport) ExportPlan.exact(tpe).map(_.javaType).getOrElse(TypeDescs.toErasedClassDesc(tpe))
+    if (isExport) ExportPlan.signatureOf(tpe).map(_.javaType).getOrElse(TypeDescs.toErasedClassDesc(tpe))
     else TypeDescs.toErasedClassDesc(tpe)
 
   /** Returns the generic method signature when the exported result carries type arguments. */
   private def methodSignature(defn: JvmAst.Def): Option[String] = {
     if (!defn.ann.isExport) None
     else defn.exportedReturnType.flatMap(ExportPlan.signatureOf).flatMap { result =>
-      if (result.typeArgument == result.javaType.descriptorString()) None
+      val params = defn.fparams.map(fp => ExportPlan.signatureOf(fp.tpe).getOrElse(ExportSignature.Exact(TypeDescs.toErasedClassDesc(fp.tpe))))
+      val needsSignature = result.typeArgument != result.javaType.descriptorString() || params.exists(p => p.typeArgument != p.javaType.descriptorString())
+      if (!needsSignature) None
       else {
-        val params = defn.fparams.map(fp => boundaryType(isExport = true, fp.tpe).descriptorString()).mkString
-        Some(s"($params)${result.typeArgument}")
+        Some(s"(${params.map(_.typeArgument).mkString})${result.typeArgument}")
       }
     }
   }

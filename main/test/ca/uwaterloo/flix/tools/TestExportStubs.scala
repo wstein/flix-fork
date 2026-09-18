@@ -116,6 +116,23 @@ class TestExportStubs extends AnyFunSuite {
     assert(ExportStubs.javaSource(facades.head).contains("java.util.List<java.lang.Integer> values(int arg0)"))
   }
 
+  test("imported generic Java types retain arguments in both positions") {
+    val src =
+      """mod Acme.Api {
+        |    import java.util.ArrayList
+        |    @Export pub def echo(xs: ArrayList[String]): ArrayList[String] = xs
+        |}
+        |""".stripMargin
+
+    val (facades, unsupported) = stubs(src)
+    assert(unsupported.isEmpty)
+    val method = facades.head.methods.head
+    assert(method.params.head.sourceName == "java.util.ArrayList<java.lang.String>")
+    assert(method.result.sourceName == "java.util.ArrayList<java.lang.String>")
+    assert(ExportStubs.javaSource(facades.head).contains(
+      "java.util.ArrayList<java.lang.String> echo(java.util.ArrayList<java.lang.String> arg0)"))
+  }
+
   test("generated sources use the sibling facade name and compile with javac") {
     val src = "mod Acme.Api.Deep { @Export pub def id(x: Int32): Int32 = x }"
     val (facades, unsupported) = stubs(src)

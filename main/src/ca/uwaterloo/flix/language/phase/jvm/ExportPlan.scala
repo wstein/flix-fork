@@ -54,6 +54,15 @@ object ExportPlan {
     override def emit(nextLocal: Int)(implicit mv: MethodVisitor): Unit = ()
   }
 
+  /** A Java value passed through unchanged while retaining its generic arguments for callers. */
+  case class GenericNative(clazz: ClassDesc, targs: List[ExportSignature]) extends ExportPlan {
+    override def flixType: ClassDesc = clazz
+
+    override def signature: ExportSignature = ExportSignature.Applied(clazz, targs)
+
+    override def emit(nextLocal: Int)(implicit mv: MethodVisitor): Unit = ()
+  }
+
   /** A primitive element boxed for a reference-only Java container. */
   case class Boxed(flixType: ClassDesc, boxed: ClassDesc) extends ExportPlan {
     override def signature: ExportSignature = ExportSignature.Boxed(flixType, boxed)
@@ -138,7 +147,7 @@ object ExportPlan {
     case SimpleType.Float32 => Some(Identity(CD_float))
     case SimpleType.Float64 => Some(Identity(CD_double))
     case SimpleType.String => Some(Identity(JavaClasses.String))
-    case SimpleType.Native(clazz) => Some(Identity(clazz))
+    case SimpleType.Native(clazz, Nil) => Some(Identity(clazz))
     case SimpleType.AnyType => Some(Identity(CD_Object))
     case _ => None
   }
@@ -149,6 +158,8 @@ object ExportPlan {
       typeArgumentPlan(element).map(sig => ExportSignature.Applied(Optional, List(sig)))
     case SimpleType.Enum(sym, List(element)) if isList(sym) =>
       typeArgumentPlan(element).map(sig => ExportSignature.Applied(ClassDesc.ofInternalName("java/util/List"), List(sig)))
+    case SimpleType.Native(clazz, targs) if targs.nonEmpty =>
+      traverse(targs)(typeArgumentPlan).map(ExportSignature.Applied(clazz, _))
     case _ => exact(tpe).map(_.signature)
   }
 
@@ -158,6 +169,8 @@ object ExportPlan {
     else defn.exportedReturnType.flatMap {
       case SimpleType.Enum(sym, List(element)) if isOption(sym) => optionPlan(element, defn.unboxedType.tpe)
       case SimpleType.Enum(sym, List(element)) if isList(sym) => listPlan(element, defn.unboxedType.tpe)
+      case SimpleType.Native(clazz, targs) if targs.nonEmpty =>
+        traverse(targs)(typeArgumentPlan).map(GenericNative(clazz, _))
       case declared => exact(declared)
     }
 
@@ -191,7 +204,12 @@ object ExportPlan {
 
   private def typeArgumentPlan(tpe: SimpleType): Option[ExportSignature] =
     Wrappers.get(TypeDescs.toErasedClassDesc(tpe)).map(ExportSignature.Boxed(TypeDescs.toErasedClassDesc(tpe), _))
-      .orElse(exact(tpe).map(_.signature))
+      .orElse(signatureOf(tpe))
+
+  private def traverse[A, B](xs: List[A])(f: A => Option[B]): Option[List[B]] =
+    xs.foldRight(Option(List.empty[B])) {
+      case (x, acc) => for (values <- acc; value <- f(x)) yield value :: values
+    }
 
   private def isOption(sym: ca.uwaterloo.flix.language.ast.Symbol.EnumSym): Boolean =
     sym.namespace.isEmpty && sym.text == "Option"

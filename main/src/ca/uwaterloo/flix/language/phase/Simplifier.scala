@@ -370,7 +370,7 @@ object Simplifier {
             val enumSym = new Symbol.EnumSym(None, sym.namespace, sym.name, sym.loc)
             SimpleType.mkEnum(enumSym, targs.map(visitType))
 
-          case TypeConstructor.Native(desc, _) => SimpleType.Native(desc)
+          case TypeConstructor.Native(desc, _) => SimpleType.Native(desc, tpe.typeArguments.map(visitType))
 
           case TypeConstructor.Array =>
             // Remove the region from the array.

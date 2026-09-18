@@ -123,6 +123,39 @@ class TestExportedShims extends AnyFunSuite {
     } finally deleteRecursively(output)
   }
 
+  test("generic Java types retain arguments in exported parameters and results") {
+    val result = compile(
+      """mod Acme.Api {
+        |    import java.util.ArrayList
+        |    @Export pub def echo(xs: ArrayList[String]): ArrayList[String] = xs
+        |}
+        |""".stripMargin)
+
+    val facade = result.getClasses(Mangle.namespaceFacadeDesc(List("Acme", "Api"))).bytecode
+    var member: Option[(String, String)] = None
+    new ClassReader(facade).accept(new ClassVisitor(Opcodes.ASM9) {
+      override def visitMethod(access: Int, name: String, descriptor: String, signature: String, exceptions: Array[String]): MethodVisitor = {
+        if (name == "echo") member = Some(descriptor -> signature)
+        null
+      }
+    }, ClassReader.SKIP_CODE)
+    assert(member.contains(
+      "(Ljava/util/ArrayList;)Ljava/util/ArrayList;" ->
+        "(Ljava/util/ArrayList<Ljava/lang/String;>;)Ljava/util/ArrayList<Ljava/lang/String;>;"))
+
+    val output = Files.createTempDirectory("flix-export-generic-java")
+    try {
+      writeClasses(result, output)
+      val loader = new URLClassLoader(Array(output.toUri.toURL), getClass.getClassLoader)
+      try {
+        val clazz = loader.loadClass("Acme.Api")
+        val values = new java.util.ArrayList[String]()
+        values.add("hello")
+        assert(clazz.getMethod("echo", classOf[java.util.ArrayList[?]]).invoke(null, values) eq values)
+      } finally loader.close()
+    } finally deleteRecursively(output)
+  }
+
   private def compile(program: String) = {
     val flix = new Flix().setOptions(Options.DefaultTest)
     flix.addSource(CompilerConstants.VirtualTestFile, program, sctx)

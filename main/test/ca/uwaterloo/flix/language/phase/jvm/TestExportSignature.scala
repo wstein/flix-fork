@@ -7,6 +7,7 @@
 package ca.uwaterloo.flix.language.phase.jvm
 
 import org.scalatest.funsuite.AnyFunSuite
+import ca.uwaterloo.flix.language.ast.SimpleType
 
 import java.lang.constant.ClassDesc
 import java.lang.constant.ConstantDescs.{CD_String, CD_boolean, CD_int}
@@ -63,5 +64,16 @@ class TestExportSignature extends AnyFunSuite {
     val sig = ExportSignature.Applied(JavaList, Nil)
     assert(sig.typeArgument == "Ljava/util/List;")
     assert(sig.sourceName == "java.util.List")
+  }
+
+  test("native type arguments describe the boundary without changing JVM identity") {
+    val clazz = ClassDesc.ofInternalName("java/util/ArrayList")
+    val strings = SimpleType.Native(clazz, List(SimpleType.String))
+    val ints = SimpleType.Native(clazz, List(SimpleType.Int32))
+
+    assert(strings == ints)
+    assert(strings.hashCode() == ints.hashCode())
+    assert(ExportPlan.signatureOf(strings).get.sourceName == "java.util.ArrayList<java.lang.String>")
+    assert(ExportPlan.signatureOf(ints).get.sourceName == "java.util.ArrayList<java.lang.Integer>")
   }
 }

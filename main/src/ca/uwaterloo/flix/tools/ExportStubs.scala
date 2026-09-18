@@ -24,7 +24,7 @@ import ca.uwaterloo.flix.language.phase.{Lexer, Parser2, Weeder2}
 import ca.uwaterloo.flix.util.Result
 
 import java.lang.constant.ClassDesc
-import java.lang.constant.ConstantDescs.{CD_Object, CD_boolean, CD_byte, CD_char, CD_double, CD_float, CD_int, CD_long, CD_short}
+import java.lang.constant.ConstantDescs.{CD_boolean, CD_byte, CD_char, CD_double, CD_float, CD_int, CD_long, CD_short}
 
 import java.nio.file.{Files, Path}
 
@@ -250,11 +250,16 @@ object ExportStubs {
   /** Returns how the type named `qname` and applied to `args` crosses the boundary. */
   private def named(qname: Name.QName, args: List[WeededAst.Type], imps: Map[String, String], allowConvertedResult: Boolean): Option[ExportSignature] = {
     (simpleName(qname, imps), args) match {
-      case (Some(name), Nil) => builtin(name).orElse(importedObject(name, imps))
+      case (Some(name), Nil) => builtin(name).orElse(imported(name, imps).map(ExportSignature.Exact(_)))
       case (Some("Option"), List(element)) if allowConvertedResult =>
         typeArgumentSignatureOf(element, imps).map(sig => ExportSignature.Applied(ClassDesc.ofInternalName("java/util/Optional"), List(sig)))
       case (Some("List"), List(element)) if allowConvertedResult =>
         typeArgumentSignatureOf(element, imps).map(sig => ExportSignature.Applied(ClassDesc.ofInternalName("java/util/List"), List(sig)))
+      case (Some(name), targs) if targs.nonEmpty =>
+        for {
+          clazz <- imported(name, imps)
+          signatures <- traverse(targs)(typeArgumentSignatureOf(_, imps))
+        } yield ExportSignature.Applied(clazz, signatures)
       case _ => None
     }
   }
@@ -299,9 +304,9 @@ object ExportStubs {
     case _ => None
   }
 
-  /** Returns Object when `name` is the one native reference type the current export ABI accepts. */
-  private def importedObject(name: String, imps: Map[String, String]): Option[ExportSignature] =
-    imps.get(name).filter(_ == "java.lang.Object").map(_ => ExportSignature.Exact(CD_Object))
+  /** Returns the JVM class named by an explicit Java import. */
+  private def imported(name: String, imps: Map[String, String]): Option[ClassDesc] =
+    imps.get(name).map(fqn => ClassDesc.ofInternalName(fqn.replace('.', '/')))
 
   /** Returns the alias-to-class table an `import` list establishes. */
   private def imports(usesAndImports: List[WeededAst.UseOrImport]): Map[String, String] =

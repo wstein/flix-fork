@@ -54,10 +54,10 @@ development lineages. It currently supports:
   elements are boxed and the emitted facade retains `T` in its generic signature.
 - `List[t]` results as eager, unmodifiable `java.util.List<T>` copies under the same element and
   generic-signature rules.
-- An explicitly imported `java.lang.Object`.
+- Explicitly imported Java classes, including nested generic arguments in parameters and results.
 
-It refuses other Flix algebraic data types, generic Java types, other containers, functions, and
-other reference types because `EntryPoints` refuses those exports on this branch. Refusal is intentional:
+It refuses other Flix algebraic data types, other containers, functions, and unaccounted reference
+types because `EntryPoints` refuses those exports on this branch. Refusal is intentional:
 a missing stub fails the build at generation time, while an incorrect stub compiles and later fails
 with a linkage error in innocent calling code.
 
