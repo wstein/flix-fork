@@ -98,6 +98,11 @@ refuses the operation with a concise diagnostic and leaves that file untouched.
 Generic and converted-container acceptance tests belong to a future export-ABI expansion; they must
 not be claimed by this branch until the real generated facades support them.
 
+The caller-visible spelling is centralized in `ExportSignature`: it retains generic arguments for
+Java source and signature attributes while exposing their erased JVM descriptor. This model does
+not itself admit a type at the boundary. `EntryPoints` and code generation must gain and test the
+matching runtime conversion before stub generation may use a new signature shape.
+
 `--lib` is repeatable on `check` and `build`. It supplements dependencies from `flix.toml` without
 writing build output into package-manager-owned cache directories. Dependencies are fixed when a
 `Flix` instance is constructed, so project builds combine these paths with the bootstrapped project
