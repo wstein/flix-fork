@@ -29,6 +29,7 @@ object Options {
     lib = LibLevel.All,
     build = Build.Development,
     compilerTop = false,
+    coverage = false,
     entryPoint = None,
     githubToken = None,
     installDeps = false,
@@ -80,6 +81,7 @@ object Options {
   * @param lib                     selects the level of libraries to include.
   * @param build                   selects development or production mode.
   * @param compilerTop             shows a live TUI of where the compiler spends its time.
+  * @param coverage                enables source-level coverage instrumentation and runtime support.
   * @param entryPoint              specifies the main entry point.
   * @param githubToken             the token to use for authenticated GitHub requests.
   * @param incremental             enables incremental compilation.
@@ -102,6 +104,7 @@ object Options {
 case class Options(lib: LibLevel,
                    build: Build,
                    compilerTop: Boolean,
+                   coverage: Boolean,
                    entryPoint: Option[Symbol.DefnSym],
                    githubToken: Option[String],
                    incremental: Boolean,

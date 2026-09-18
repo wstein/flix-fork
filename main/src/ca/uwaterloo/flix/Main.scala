@@ -92,6 +92,7 @@ object Main {
       installDeps = cmdOpts.installDeps,
       threads = cmdOpts.threads.getOrElse(Options.Default.threads),
       compilerTop = cmdOpts.top,
+      coverage = false,
       assumeYes = cmdOpts.assumeYes,
       xprintphases = cmdOpts.xprintphases,
       xnodeprecated = cmdOpts.xnodeprecated,

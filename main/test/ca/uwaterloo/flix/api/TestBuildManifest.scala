@@ -1,6 +1,6 @@
 package ca.uwaterloo.flix.api
 
-import ca.uwaterloo.flix.util.Result
+import ca.uwaterloo.flix.util.{Options, Result}
 import org.json4s.jvalue2monadic
 import org.json4s.native.JsonMethods
 import org.scalatest.funsuite.AnyFunSuite
@@ -79,6 +79,13 @@ class TestBuildManifest extends AnyFunSuite {
     assert(m.debugBuildId == "fp:sd")
     assert(m.copy(fingerprint = "other").debugBuildId != m.debugBuildId)
     assert(m.copy(sourcesDigest = "other").debugBuildId != m.debugBuildId)
+  }
+
+  test("fingerprint.includesCoveragePolicy") {
+    val ordinary = BuildManifest.fingerprintOf(Options.Default, Nil)
+    val coverage = BuildManifest.fingerprintOf(Options.Default.copy(coverage = true), Nil)
+
+    assert(ordinary != coverage)
   }
 
   test("read.rejectsAManifestWithNoLaunch") {
