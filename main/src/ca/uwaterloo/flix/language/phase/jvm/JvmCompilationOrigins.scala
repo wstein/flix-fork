@@ -9,12 +9,18 @@ import scala.collection.mutable
 
 final class JvmCompilationOrigins(val symbols: JvmProvenance) {
   private var expressions = new IdentityHashMap[AnyRef, GeneratedJvmKey]()
+  private var debugBindings = Map.empty[Symbol.DefnSym, List[JvmLexicalOrigins.Binding]]
   private var closed = false
   private var freezeStarted = false
   private var frozenNames: Option[JvmNameTable] = None
 
   def nameTable: JvmNameTable = synchronized {
     frozenNames.getOrElse(fail("JVM names are not available outside frozen code generation."))
+  }
+
+  /** Source bindings captured before lowering; unavailable after the compilation closes. */
+  def sourceBindings(sym: Symbol.DefnSym): List[JvmLexicalOrigins.Binding] = synchronized {
+    debugBindings.getOrElse(sym, Nil)
   }
 
   def freeze(required: Iterable[Symbol]): Unit = synchronized {
@@ -115,6 +121,7 @@ final class JvmCompilationOrigins(val symbols: JvmProvenance) {
 
   def close(): Unit = synchronized {
     expressions = new IdentityHashMap[AnyRef, GeneratedJvmKey]()
+    debugBindings = Map.empty
     frozenNames = None
     symbols.close()
     closed = true
@@ -167,6 +174,9 @@ object JvmCompilationOrigins {
     val source = JvmSourceOrigins.capture(root)
     val origins = new JvmCompilationOrigins(source.provenance)
     source.foreachExpression(origins.record)
+    source.foreachBinding { case (sym, binding) =>
+      origins.debugBindings = origins.debugBindings.updated(sym, origins.debugBindings.getOrElse(sym, Nil) :+ binding)
+    }
     source.releaseBodies()
     origins
   }

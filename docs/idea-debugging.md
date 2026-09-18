@@ -35,6 +35,11 @@ native JVM debugger without exposing compiler-generated temporaries. Source `let
 bindings, captures, and continuation-frame values require the separate pre-erasure
 debug-provenance snapshot; they are intentionally not guessed from lowered ANF names.
 
+The compiler now captures source parameter and `let` binding identities, names, and
+locations in that compilation-local snapshot before typed bodies are released. This is
+an internal foundation only: it is not yet emitted as a debug sidecar or joined to JVM
+slots, captures, or continuation fields.
+
 ## Current limits
 
 The debug policy does not promise a bindable location for every lexical line, preserve

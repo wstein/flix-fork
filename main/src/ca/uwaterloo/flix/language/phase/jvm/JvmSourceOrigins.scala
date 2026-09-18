@@ -15,6 +15,10 @@ final class JvmSourceOrigins private (val provenance: JvmProvenance,
 
   def foreachExpression(consume: (TypedAst.Expr, GeneratedJvmKey) => Unit): Unit =
     bodies.values.foreach(_.allEntries.foreach { case (exp, key) => consume(exp, key) })
+
+  /** Returns immutable source bindings before their typed bodies are released. */
+  def foreachBinding(consume: (Symbol.DefnSym, JvmLexicalOrigins.Binding) => Unit): Unit =
+    bodies.foreach { case (sym, lexical) => lexical.bindings.foreach(binding => consume(sym, binding)) }
 }
 
 object JvmSourceOrigins {

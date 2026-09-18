@@ -13,6 +13,7 @@ import scala.collection.mutable
 final class JvmLexicalOrigins private (private val origins: IdentityHashMap[Expr, GeneratedJvmKey],
                                        val entries: List[(Expr, GeneratedJvmKey)],
                                        val allEntries: List[(Expr, GeneratedJvmKey)],
+                                       val bindings: List[JvmLexicalOrigins.Binding],
                                        private[jvm] val fingerprintEvaluations: Long) {
   def get(exp: Expr): Option[GeneratedJvmKey] = Option(origins.get(exp))
 
@@ -29,6 +30,9 @@ final class JvmLexicalOrigins private (private val origins: IdentityHashMap[Expr
   */
 object JvmLexicalOrigins {
   type TypeEncoder = (Type, Map[Symbol, GeneratedJvmKey]) => String
+
+  /** A source binding captured before ANF/lowering replaces its user-facing name. */
+  case class Binding(identity: String, name: String, loc: SourceLocation, kind: String)
 
   def capture(exp: Expr, owner: GeneratedJvmKey, fparams: List[FormalParam],
               encodeType: TypeEncoder, sourceOrigin: Symbol => GeneratedJvmKey): JvmLexicalOrigins = {
@@ -61,6 +65,7 @@ object JvmLexicalOrigins {
     private val origins = new IdentityHashMap[Expr, GeneratedJvmKey]()
     private val ordered = mutable.ListBuffer.empty[(Expr, GeneratedJvmKey)]
     private val all = mutable.ListBuffer.empty[(Expr, GeneratedJvmKey)]
+    private val bindings = mutable.ListBuffer.empty[Binding]
     private val groups = mutable.Map.empty[(String, String, String), Int]
     private val fingerprints = new IdentityHashMap[Env, IdentityHashMap[Expr, mutable.Map[Int, String]]]()
     private var fingerprintEvaluations = 0L
@@ -69,8 +74,11 @@ object JvmLexicalOrigins {
       val env = Env(fparams.zipWithIndex.map { case (param, index) =>
         param.bnd.sym -> frame("parameter", List(index.toString))
       }.toMap, Map.empty)
+      fparams.zipWithIndex.foreach { case (param, index) =>
+        if (!param.bnd.sym.isWild) bindings += Binding(frame("parameter", List(index.toString)), param.bnd.sym.text, param.bnd.sym.loc, "parameter")
+      }
       visit(exp, env, frame(owner.family, owner.fields), "body", isRoot = true)
-      new JvmLexicalOrigins(origins, ordered.toList, all.toList, fingerprintEvaluations)
+      new JvmLexicalOrigins(origins, ordered.toList, all.toList, bindings.toList, fingerprintEvaluations)
     }
 
     private def symbol(sym: Symbol): String = {
@@ -168,6 +176,7 @@ object JvmLexicalOrigins {
           ()
         case Expr.Let(binder, value, rest, _, _, _) =>
           val binding = identity(scope, "let:" + role, fingerprint(value, env, 0))
+          if (!binder.sym.isWild) bindings += Binding(binding, binder.sym.text, binder.sym.loc, "let")
           val site = if (isRoot) frame("root", List(scope, role)) else frame("let-expression", List(binding))
           val key = GeneratedJvmKey("lexical-expression", List(site))
           if (origins.containsKey(exp)) fail("Repeated AST identity in lexical capture.", exp)
