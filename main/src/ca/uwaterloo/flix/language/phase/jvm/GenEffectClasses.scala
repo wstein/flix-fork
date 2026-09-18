@@ -62,7 +62,7 @@ object GenEffectClasses {
     * List.Crash  =>  List.Eff$Crash
     */
   def effectDesc(sym: Symbol.EffSym): ClassDesc =
-    Mangle.mkDesc(sym.namespace, Mangle.mkClassName("Eff", sym.name))
+    Mangle.mkNamespacedDesc(sym.namespace, "Eff", sym.name)
 
   def gen(effects: Iterable[Effect])(implicit root: Root, flix: Flix): List[JvmClass] = {
     for (effect <- effects.toList) yield {

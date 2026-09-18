@@ -318,7 +318,7 @@ class TestJvmProvenancePipeline extends AnyFunSuite {
       val edited = emitted(imports + "import java.lang.Runnable\n" + unrelated + source, newMono, 4, checkRuntime = true)
       assert(first == parallel)
       assertPreserved(first, edited)
-      val nullaryDescriptors = first.descriptors.filter(desc => desc.startsWith("LCase$Box") && desc.contains("$Empty"))
+      val nullaryDescriptors = first.descriptors.filter(desc => desc.startsWith("Ldev/flix/gen/Case$Box") && desc.contains("$Empty"))
       assert(nullaryDescriptors.size >= 2, nullaryDescriptors.toString)
       assert(first.descriptors.exists(_.startsWith("LAnon$")))
       assert(edited.descriptors.count(_.startsWith("LAnon$")) > first.descriptors.count(_.startsWith("LAnon$")))

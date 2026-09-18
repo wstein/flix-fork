@@ -1,5 +1,9 @@
 # Changelog
 
+- Compiler: Generated implementation classes now sit beside their namespace facade, allowing
+  exported Flix functions to be referenced from Scala, Kotlin, and other JVM languages without a
+  class/package name collision.
+
 Unreleased:
 - Package Manager: `[package].name` in `flix.toml` is now the sole canonical,
   strictly validated package name. Checkout-directory and GitHub-repository

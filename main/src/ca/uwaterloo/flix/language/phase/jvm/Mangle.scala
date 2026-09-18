@@ -80,6 +80,9 @@ object Mangle {
   /** The root (unnamed) package. */
   val RootPackage: List[String] = Nil
 
+  /** The `dev.flix.gen` package used when a namespace has no parent package. */
+  val DevFlixGen: List[String] = List("dev", "flix", "gen")
+
   /** The `dev.flix.runtime` package of the Flix runtime classes. */
   val DevFlixRuntime: List[String] = FlixClasses.RuntimePackage
 
@@ -88,6 +91,41 @@ object Mangle {
     val prefix = if (pkg.isEmpty) "" else pkg.mkString("", "/", "/")
     ClassDesc.ofInternalName(prefix + name)
   }
+
+  /**
+    * Returns the package that may safely hold implementation classes belonging to `namespace`.
+    *
+    * Only the first namespace segment becomes a package. Every deeper segment names a facade
+    * class, and using such a facade as a package prefix makes Scala reject the classpath and makes
+    * Kotlin resolve the package instead of the class. A one-segment namespace has no parent package,
+    * so its implementation classes live under [[DevFlixGen]].
+    */
+  def packageOfNamespace(namespace: List[String]): List[String] =
+    if (namespace.lengthIs <= 1) DevFlixGen else namespace.take(1)
+
+  /** Returns the `$`-separated namespace prefix retained in an implementation class name. */
+  def classPrefixOfNamespace(namespace: List[String]): String =
+    segmentsBelowPackage(namespace).map(segment => mangle(segment) + Flix.Delimiter).mkString
+
+  /**
+    * Returns a generated implementation class beside its namespace facade.
+    *
+    * `List.map` becomes `dev.flix.gen.List$Def$map`; `Acme.Api.get` becomes
+    * `Acme.Api$Def$get`; and `Acme.Api.Deep.run` becomes `Acme.Api$Deep$Clo$run`.
+    */
+  def mkNamespacedDesc(namespace: List[String], prefix: String, name: String): ClassDesc =
+    mkDesc(packageOfNamespace(namespace), classPrefixOfNamespace(namespace) + mkClassName(prefix, name))
+
+  /** Returns the facade class that carries the exported entry points of `namespace`. */
+  def namespaceFacadeDesc(namespace: List[String]): ClassDesc = namespace match {
+    case Nil => mkDesc(DevFlixGen, s"Root${Flix.Delimiter}")
+    case one :: Nil => mkDesc(RootPackage, mangle(one))
+    case first :: rest => mkDesc(List(first), rest.map(mangle).mkString(Flix.Delimiter))
+  }
+
+  /** The namespace segments not consumed as the sole JVM package segment. */
+  private def segmentsBelowPackage(namespace: List[String]): List[String] =
+    if (namespace.lengthIs <= 1) namespace else namespace.drop(1)
 
   /**
     * Returns the name of the erased type `desc`, as used in parametrized class names.

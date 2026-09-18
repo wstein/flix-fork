@@ -22,7 +22,6 @@ import ca.uwaterloo.flix.language.phase.jvm.ClassMaker.Final.IsFinal
 import ca.uwaterloo.flix.language.phase.jvm.ClassMaker.Visibility.IsPublic
 import ca.uwaterloo.flix.language.phase.jvm.ClassMaker.{ConstructorMethod, InstanceField, StaticMethod}
 import ca.uwaterloo.flix.language.phase.jvm.Instructions.*
-import ca.uwaterloo.flix.language.phase.jvm.Mangle.mkDesc
 import ca.uwaterloo.flix.language.phase.jvm.MethodTypeDescs.mkDescriptor
 import ca.uwaterloo.flix.language.phase.jvm.{ClassConstants, ClassMaker, GenFunAndClosureClasses, JvmNames, Mangle, TypeDescs}
 import org.objectweb.asm.MethodVisitor
@@ -36,7 +35,7 @@ import java.lang.constant.ClassDesc
 object GenNamespace {
 
   def desc(ns: List[String]): ClassDesc =
-    mkDesc(ns.dropRight(1), ns.lastOption.getOrElse(s"Root${Flix.Delimiter}"))
+    Mangle.namespaceFacadeDesc(ns)
 
   def genByteCode(ns: List[String], defs: List[JvmAst.Def])(implicit flix: Flix): Array[Byte] = {
     val cm = ClassMaker.mkClass(desc(ns), IsFinal)

@@ -54,7 +54,7 @@ class TestJvmFrozenNames extends AnyFunSuite {
       flix.jvmOrigins.symbols.register(definition, GeneratedJvmKey("definition", List("example")))
       intercept[InternalCompilerException] { GenFunAndClosureClasses.defnDesc(definition) }
       flix.jvmOrigins.freeze(List(definition))
-      assert(GenFunAndClosureClasses.defnDesc(definition).descriptorString() == "LDef$example;")
+      assert(GenFunAndClosureClasses.defnDesc(definition).descriptorString() == "Ldev/flix/gen/Def$example;")
     }
     intercept[InternalCompilerException] { GenFunAndClosureClasses.defnDesc(definition) }
   }
