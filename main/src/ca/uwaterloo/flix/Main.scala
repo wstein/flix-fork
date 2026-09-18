@@ -249,9 +249,13 @@ object Main {
           // exist because that class calls back into this module. So it must not bootstrap the
           // project or resolve dependencies -- it reads sources and nothing else.
           val destination = Paths.get(cmdOpts.stubsOut.getOrElse("build/stubs"))
-          val sources =
-            if (cmdOpts.files.nonEmpty) cmdOpts.files.toList.map(_.toPath)
-            else FileOps.getFilesWithExtIn(cwd.resolve("src"), "flix", Int.MaxValue)
+          val sources = stubSourcePaths(cwd, cmdOpts.files) match {
+            case Result.Ok(paths) => paths
+            case Result.Err(message) =>
+              Console.err.println(message)
+              System.exit(1)
+              Nil
+          }
 
           implicit val sctx: SecurityContext = SecurityContext.Unrestricted
           implicit val flix: Flix = new Flix().setFormatter(formatter).setOptions(options)
@@ -1007,6 +1011,19 @@ object Main {
     val (optRoot, errors) = flix.check()
     if (errors.isEmpty) Result.Ok(())
     else Result.Err(BootstrapError.CompilationErrors(errors, optRoot))
+  }
+
+  /** Returns the explicit stub inputs, or discovers project sources with a useful missing-root error. */
+  private[flix] def stubSourcePaths(cwd: Path, files: Seq[File]): Result[List[Path], String] = {
+    if (files.nonEmpty) {
+      Result.Ok(files.toList.map(_.toPath))
+    } else {
+      val sourceDirectory = cwd.resolve("src")
+      if (!Files.isDirectory(sourceDirectory))
+        Result.Err(s"Cannot generate stubs: source directory does not exist: $sourceDirectory")
+      else
+        Result.Ok(FileOps.getFilesWithExtIn(sourceDirectory, "flix", Int.MaxValue))
+    }
   }
 
 

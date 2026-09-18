@@ -166,6 +166,15 @@ class TestMain extends AnyFunSuite {
     }
   }
 
+  test("stub discovery rejects a project without a source directory") {
+    val project = Files.createTempDirectory("flix-stubs-no-src")
+
+    Main.stubSourcePaths(project, Nil) match {
+      case Result.Err(message) => assert(message.contains(project.resolve("src").toString))
+      case Result.Ok(sources) => fail(s"expected a missing-source error, found: $sources")
+    }
+  }
+
   test("test with files") {
     val args = Array("test", "foo.flix", "bar.flix")
     val opts = Main.parseCmdOpts(args).get
