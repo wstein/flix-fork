@@ -52,6 +52,7 @@ class TestJsonTestSink extends AnyFunSuite {
 
     assert(result == Result.Ok(()))
     assert((events.head \ "event") == JString("start"))
+    assert((events.head \ "protocolVersion") == JInt(1))
     assert((events.last \ "event") == JString("finished"))
     assert((events.last \ "nanos").isInstanceOf[JInt])
     assert(events.map(_ \ "event").toSet == Set(JString("start"), JString("before"), JString("output"), JString("passed"), JString("skipped"), JString("finished")))

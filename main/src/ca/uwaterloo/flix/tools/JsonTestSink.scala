@@ -27,7 +27,7 @@ class JsonTestSink(out: PrintStream) extends Tester.TestEventSink {
 
   override def start(tests: Vector[Tester.TestCase])(implicit flix: ca.uwaterloo.flix.api.Flix): Unit = {
     val entries: List[JValue] = tests.toList.map(test => idFields(test.sym) ~ ("skip" -> test.skip))
-    emit(("event" -> "start") ~ ("tests" -> JArray(entries)))
+    emit(("event" -> "start") ~ ("protocolVersion" -> ProtocolVersion) ~ ("tests" -> JArray(entries)))
   }
 
   override def accept(event: Tester.TestEvent)(implicit flix: ca.uwaterloo.flix.api.Flix): Unit = event match {
@@ -99,4 +99,5 @@ class JsonTestSink(out: PrintStream) extends Tester.TestEventSink {
   }
 
   private val MaxLine: Int = 8 * 1024
+  private val ProtocolVersion: Int = 1
 }
