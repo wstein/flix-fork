@@ -502,9 +502,12 @@ object GenFunAndClosureClasses {
         }
       }
 
-      val ctx = GenExpression.EffectContext(enterLabel, Map.empty, newFrame, setPc, narrowLocals, localOffset, pcLabels.prepended(null), Array(0), smap)
+      // Indexed by `pc`, so slot 0 is the entry the tableswitch never uses.
+      val pcLines = Array.fill(pcLabels.size + 1)(NoLine)
+      val ctx = GenExpression.EffectContext(enterLabel, Map.empty, newFrame, setPc, narrowLocals, localOffset, pcLabels.prepended(null), Array(0), smap, pcLines)
       GenExpression.compileExpr(defn.expr)(m, ctx, root, flix)
       assert(ctx.pcCounter(0) == pcLabels.size, s"${(className, ctx.pcCounter(0), pcLabels.size)}")
+      resumeLines(visitor, pcLines)
     }
 
     xReturn(GenResult.Desc)
@@ -514,6 +517,29 @@ object GenFunAndClosureClasses {
     m.visitMaxs(999, 999)
     m.visitEnd()
   }
+
+  /** Records the source line at which each continuation program counter resumes. */
+  private def resumeLines(visitor: ClassWriter, pcLines: Array[Int])(implicit flix: Flix): Unit = {
+    if (!flix.options.xdebug) return
+
+    // Index 0 is unused because continuation pcs start at 1.
+    val lines = pcLines.drop(1)
+    if (lines.isEmpty || lines.forall(_ == NoLine)) return
+
+    visitor.visitField(
+      Opcodes.ACC_PUBLIC + Opcodes.ACC_STATIC + Opcodes.ACC_FINAL,
+      ResumeLinesField,
+      CD_String.descriptorString(),
+      null,
+      lines.mkString(","),
+    )
+  }
+
+  /** Field consumed by the IntelliJ continuation-frame renderer. */
+  private val ResumeLinesField: String = "pcLines"
+
+  /** Indicates that no source line was associated with a continuation pc. */
+  private val NoLine: Int = -1
 
   /**
     * Records what a closure's captured values are called, under `--Xdebug`.

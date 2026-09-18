@@ -84,6 +84,14 @@ Regression coverage includes both monomorphizers, non-overlapping two-slot `Int6
 locals, release-mode omission, sequential-mode pruning, and a real JDWP/JDI breakpoint
 that reads locals after a handler resumes a suspended function.
 
+Control-impure `applyFrame` classes also publish a `public static final String pcLines`
+constant under `--Xdebug`. Entry `n - 1` is the SMAP-aware source line associated with
+continuation program counter `n`; `-1` means that no source line was available. This
+lets the debugger position a suspended heap frame at the call that is awaiting a result
+without disassembling its `tableswitch`. The field is omitted from ordinary builds and
+from classes with no recorded resume point. Tests independently reconstruct each line
+from the switch targets and JVM `LineNumberTable` rather than merely pinning the string.
+
 When optimization places code from more than one source in a generated class, the
 compiler emits a JSR-45 `SourceDebugExtension` with a `Flix` stratum. Primary-source
 lines keep their original numbers; foreign lines receive stable synthetic JVM line

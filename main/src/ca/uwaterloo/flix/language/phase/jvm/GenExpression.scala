@@ -85,6 +85,7 @@ object GenExpression {
     pcLabels: Vector[Label],
     pcCounter: Ref[Int],
     smap: Smap,
+    pcLines: Array[Int],
   ) extends MethodContext
 
   /**
@@ -1130,11 +1131,12 @@ object GenExpression {
             GenResult.unwindSuspensionFreeThunk("in pure closure call", loc)
           } else {
             ctx match {
-              case EffectContext(_, _, newFrame, setPc, narrowLocals, _, pcLabels, pcCounter, _) =>
+              case EffectContext(_, _, newFrame, setPc, narrowLocals, _, pcLabels, pcCounter, smap, pcLines) =>
                 val pcPoint = pcCounter(0) + 1
                 val pcPointLabel = pcLabels(pcPoint)
                 val afterUnboxing = new Label()
                 pcCounter(0) += 1
+                pcLines(pcPoint) = smap.register(loc)
                 GenResult.unwindThunkToValue(pcPoint, newFrame, setPc)
                 mv.visitJumpInsn(Opcodes.GOTO, afterUnboxing)
 
@@ -1207,7 +1209,7 @@ object GenExpression {
           }
           // Calling unwind and unboxing
           ctx match {
-            case EffectContext(_, _, newFrame, setPc, narrowLocals, _, pcLabels, pcCounter, _) =>
+            case EffectContext(_, _, newFrame, setPc, narrowLocals, _, pcLabels, pcCounter, smap, pcLines) =>
               val defn = root.defs(sym)
               if (Purity.isControlPure(defn.expr.purity)) {
                 GenResult.unwindSuspensionFreeThunk("in pure function call", loc)
@@ -1216,6 +1218,7 @@ object GenExpression {
                 val pcPointLabel = pcLabels(pcPoint)
                 val afterUnboxing = new Label()
                 pcCounter(0) += 1
+                pcLines(pcPoint) = smap.register(loc)
                 GenResult.unwindThunkToValue(pcPoint, newFrame, setPc)
                 mv.visitJumpInsn(Opcodes.GOTO, afterUnboxing)
 
@@ -1235,12 +1238,13 @@ object GenExpression {
       case DirectInstanceContext(_, _, _, _) | DirectStaticContext(_, _, _, _) =>
         GenResult.crashIfSuspension("Unexpected do-expression in direct method context", loc)
 
-      case EffectContext(_, _, newFrame, setPc, narrowLocals, _, pcLabels, pcCounter, _) =>
+      case EffectContext(_, _, newFrame, setPc, narrowLocals, _, pcLabels, pcCounter, smap, pcLines) =>
         val pcPoint = pcCounter(0) + 1
         val pcPointLabel = pcLabels(pcPoint)
         val afterUnboxing = new Label()
         val erasedResult = TypeDescs.toErasedClassDesc(tpe)
         pcCounter(0) += 1
+        pcLines(pcPoint) = smap.register(loc)
 
         val effectName = GenEffectClasses.effectDesc(sym.eff)
         val effectStaticMethod = ClassMaker.StaticMethod(
@@ -1289,7 +1293,7 @@ object GenExpression {
     }
 
     case Expr.ApplySelfTail(sym, exps, _, _, _) => ctx match {
-      case EffectContext(_, _, _, setPc, _, _, _, _, _) =>
+      case EffectContext(_, _, _, setPc, _, _, _, _, _, _) =>
         // The function abstract class name
         val (fnArgs, fnResult) = GenArrow.erasedArgsAndResult(root.defs(sym).arrowType)
         // Evaluate each argument and put the result on the Fn class.
@@ -1587,11 +1591,12 @@ object GenExpression {
           case DirectInstanceContext(_, _, _, _) | DirectStaticContext(_, _, _, _) =>
             GenResult.unwindSuspensionFreeThunk("in pure run-with call", loc)
 
-          case EffectContext(_, _, newFrame, setPc, narrowLocals, _, pcLabels, pcCounter, _) =>
+          case EffectContext(_, _, newFrame, setPc, narrowLocals, _, pcLabels, pcCounter, smap, pcLines) =>
             val pcPoint = pcCounter(0) + 1
             val pcPointLabel = pcLabels(pcPoint)
             val afterUnboxing = new Label()
             pcCounter(0) += 1
+            pcLines(pcPoint) = smap.register(loc)
             GenResult.unwindThunkToValue(pcPoint, newFrame, setPc)
             mv.visitJumpInsn(Opcodes.GOTO, afterUnboxing)
 
