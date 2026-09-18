@@ -168,7 +168,13 @@ object JvmLexicalOrigins {
       exp match {
         case lambda: Expr.Lambda =>
           val site = record(exp, scope, role, "lambda", fingerprint(exp, env, 0))
-          mapLambdaBody(lambda, env, SiteBinding(site)) { (_, body, inner) => visit(body, inner, site, "body") }
+          mapLambdaBody(lambda, env, SiteBinding(site)) { (param, body, inner) =>
+            if (!param.bnd.sym.isWild) {
+              bindings += Binding(frame("lambda-parameter", List(site)), param.bnd.sym.text,
+                param.bnd.sym.loc, "lambda-parameter", param.tpe.toString)
+            }
+            visit(body, inner, site, "body")
+          }
         case local: Expr.LocalDef =>
           val site = record(exp, scope, role, "local-def", localFingerprint(local, env, 0))
           mapLocalDefBodies(local, env, SiteBinding(site))(

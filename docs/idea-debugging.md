@@ -73,6 +73,11 @@ A successful `flix build --Xdebug` writes two deterministic sidecars beside
   parameters in `applyFrame`. JVM local-variable tables remain authoritative for
   slots and live ranges.
 
+Lambda parameters are captured from the typed source and joined by their source name
+and declaration location when lifted. Parameterized types such as `Option[Int32]`
+therefore retain their Flix spelling; generated parameters with no source binding are
+omitted rather than assigned a guessed type from an erased backend representation.
+
 The sidecars are produced only after class emission succeeds. A following non-debug
 build removes them, so an IDE cannot accidentally consume metadata from an earlier
 debug build. Clients that do not understand a sidecar format must ignore it and use

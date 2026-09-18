@@ -220,6 +220,18 @@ class TestDebugLocalVariables extends AnyFunSuite {
     assert(localNames(compile(xdebug = false, program), "Clo$", "applyFrame").isEmpty)
   }
 
+  test("closure scopes retain parameterized source types for lambda parameters and captures") {
+    val program = """def make(prefix: Option[Bool]): Option[Int32] -> Unit \ IO =
+      |    value -> println((prefix, value))
+      |def main(): Unit \ IO = make(Some(true))(Some(1))
+      |""".stripMargin
+    val scopes = compile(xdebug = true, program).getDebugDefinitions.collect {
+      case (clazz, methods) if clazz.contains("Clo$") =>
+        methods("applyFrame").map(b => b.name -> b.tpe).toMap
+    }
+    assert(scopes.exists(s => s.get("prefix").contains("Option[Bool]") && s.get("value").contains("Option[Int32]")), scopes.toString)
+  }
+
   test("debug build records effectful definition parameters in applyFrame") {
     val program = """eff Log {
       |  def write(x: Int32): Unit

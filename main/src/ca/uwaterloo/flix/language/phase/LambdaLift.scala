@@ -20,7 +20,6 @@ import ca.uwaterloo.flix.api.Flix
 import ca.uwaterloo.flix.language.ast.shared.*
 import ca.uwaterloo.flix.language.ast.{AtomicOp, LiftedAst, SimpleType, Purity, SimplifiedAst, Symbol}
 import ca.uwaterloo.flix.language.dbg.AstPrinter.*
-import ca.uwaterloo.flix.language.phase.jvm.JvmLexicalOrigins
 import ca.uwaterloo.flix.util.collection.MapOps
 import ca.uwaterloo.flix.util.{InternalCompilerException, ParOps}
 
@@ -129,9 +128,9 @@ object LambdaLift {
         case (_, SimplifiedAst.FreeVar(originalSym, _)) =>
           flix.jvmOrigins.sourceBindings(sym0).find(b => b.name == originalSym.text && b.loc == originalSym.loc)
       }
-      val parameters = fs.zipWithIndex.collect {
-        case (param, index) if !param.sym.isWild =>
-          JvmLexicalOrigins.Binding(s"lambda-parameter-$index", param.sym.text, param.sym.loc, "parameter", param.tpe.toString)
+      val parameters = fs.filterNot(_.sym.isWild).flatMap { param =>
+        flix.jvmOrigins.sourceBindings(sym0)
+          .find(b => b.name == param.sym.text && b.loc == param.sym.loc)
       }
       flix.jvmOrigins.recordDebugBindings(freshSymbol, captures ::: parameters)
 
