@@ -240,8 +240,9 @@ object DebugEvalProvider {
     ) {
       DebugEvalSidecar.withCompiler(projectRoot, sources, sourcesDigest, freshCompiler) { compiler =>
         implicit val flix: Flix = compiler
+        val referenced = identifiersIn(expression)
         val params = scope.methods(frame.methodName)
-          .filter(p => mentions(expression, p.name))
+          .filter(p => referenced.contains(p.name))
           .map(p => s"${p.name}: ${p.tpe}")
 
         answerFor(params, expression, policy, projectRoot, withArtifact)
@@ -547,16 +548,87 @@ object DebugEvalProvider {
        |""".stripMargin
 
   /**
-    * Whether `expression` mentions `name` as a word.
+    * The identifiers which occur as code in `expression`.
     *
-    * Deliberately crude: this decides which parameters to declare, and the cost of being wrong is a
-    * diagnostic rather than a wrong answer. A name inside a string literal over-includes and the
-    * compiler then reports it as unused; a name this misses would fail to resolve, which is why the
-    * boundary test is on both sides rather than a plain `contains`.
+    * Scope parameters must be restricted to referenced names because an unused formal parameter is
+    * a Flix error. A word regex is insufficient: `"at"` is text and must not declare `at`, while
+    * `"${at}"` is interpolation code and must. This deliberately small scanner handles precisely
+    * that lexical distinction, including nested braces, strings, characters, and comments; the
+    * compiler remains authoritative about whether the resulting code parses or resolves.
     */
-  private def mentions(expression: String, name: String): Boolean =
-    s"(^|[^A-Za-z0-9_])${java.util.regex.Pattern.quote(name)}([^A-Za-z0-9_]|$$)".r
-      .findFirstIn(expression).isDefined
+  private def identifiersIn(expression: String): Set[String] = {
+    val names = scala.collection.mutable.Set.empty[String]
+    val n = expression.length
+
+    def identifierStart(c: Char): Boolean = c == '_' || Character.isLetter(c)
+    def identifierPart(c: Char): Boolean = c == '_' || c == '\'' || Character.isLetterOrDigit(c)
+
+    def skipLineComment(from: Int): Int = {
+      var i = from
+      while (i < n && expression.charAt(i) != '\n') i += 1
+      i
+    }
+
+    def skipBlockComment(from: Int): Int = {
+      var i = from
+      var depth = 1
+      while (i < n && depth > 0) {
+        if (i + 1 < n && expression.startsWith("/*", i)) { depth += 1; i += 2 }
+        else if (i + 1 < n && expression.startsWith("*/", i)) { depth -= 1; i += 2 }
+        else i += 1
+      }
+      i
+    }
+
+    def skipChar(from: Int): Int = {
+      var i = from
+      var escaped = false
+      while (i < n) {
+        val c = expression.charAt(i)
+        i += 1
+        if (escaped) escaped = false
+        else if (c == '\\') escaped = true
+        else if (c == '\'') return i
+      }
+      i
+    }
+
+    def scanString(from: Int): Int = {
+      var i = from
+      while (i < n) {
+        expression.charAt(i) match {
+          case '\\' => i = math.min(i + 2, n)
+          case '"' => return i + 1
+          case '$' if i + 1 < n && expression.charAt(i + 1) == '{' => i = scanCode(i + 2, stopAtBrace = true)
+          case _ => i += 1
+        }
+      }
+      i
+    }
+
+    def scanCode(from: Int, stopAtBrace: Boolean): Int = {
+      var i = from
+      while (i < n) {
+        val c = expression.charAt(i)
+        if (stopAtBrace && c == '}') return i + 1
+        else if (i + 1 < n && expression.startsWith("//", i)) i = skipLineComment(i + 2)
+        else if (i + 1 < n && expression.startsWith("/*", i)) i = skipBlockComment(i + 2)
+        else if (c == '"') i = scanString(i + 1)
+        else if (c == '\'') i = skipChar(i + 1)
+        else if (c == '{') i = scanCode(i + 1, stopAtBrace = true)
+        else if (identifierStart(c)) {
+          val start = i
+          i += 1
+          while (i < n && identifierPart(expression.charAt(i))) i += 1
+          names += expression.substring(start, i)
+        } else i += 1
+      }
+      i
+    }
+
+    scanCode(0, stopAtBrace = false)
+    names.toSet
+  }
 
   /** Every `.flix` file under `projectRoot`, excluding what a build wrote. */
   private def sourcesUnder(projectRoot: Path): List[Path] = {

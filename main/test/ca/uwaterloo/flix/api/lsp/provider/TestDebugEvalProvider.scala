@@ -71,6 +71,18 @@ class TestDebugEvalProvider extends AnyFunSuite {
     assertOk(evaluate(project, "if (Option.isEmpty(at)) n else 0"), "Int32", "Pure")
   }
 
+  test("a frame name in ordinary string text is not declared as an unused parameter") {
+    val project = build()
+
+    assertOk(evaluate(project, "\"at\""), "String", "Pure")
+  }
+
+  test("a frame name in string interpolation is still declared") {
+    val project = build()
+
+    assertOk(evaluate(project, "\"${at}\""), "String", "Pure")
+  }
+
   test("a type error is the compiler's own, not a rejection") {
     // A rejection means this server declined; a failure means the expression is wrong. Reporting
     // one as the other sends a user looking in the wrong place.

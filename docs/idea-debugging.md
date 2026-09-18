@@ -106,6 +106,12 @@ debug build, declares only the referenced debugger-visible bindings in an in-mem
 wrapper, and returns the compiler's type, effect, or diagnostics. It writes no project
 artifact during this typing pass.
 
+Referenced bindings are selected lexically rather than by substring: a frame variable
+named `at` is not declared for the literal `"at"` (which would make the generated wrapper
+fail its unused-parameter check), but is declared for interpolation code such as
+`"${at}"`. Comments, character literals, nested braces, and escaped string content are
+skipped by the same scan; parsing and name resolution remain the compiler's authority.
+
 The build sidecar is authoritative for frame types. At launch the debugger records a
 build ID made from both the manifest fingerprint (compiler options and dependencies)
 and `sourcesDigest` (source contents), and sends it with every evaluation request. The
