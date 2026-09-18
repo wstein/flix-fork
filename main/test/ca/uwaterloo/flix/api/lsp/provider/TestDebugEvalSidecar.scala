@@ -6,7 +6,7 @@
  */
 package ca.uwaterloo.flix.api.lsp.provider
 
-import ca.uwaterloo.flix.api.Flix
+import ca.uwaterloo.flix.api.{BuildManifest, Flix, LaunchSpec}
 import ca.uwaterloo.flix.api.lsp.LspProject
 import ca.uwaterloo.flix.api.lsp.provider.DebugEvalProvider.{Answer, Policy, ScopeId}
 import ca.uwaterloo.flix.language.ast.TypedAst
@@ -16,9 +16,7 @@ import ca.uwaterloo.flix.language.phase.jvm.DebugScopes
 import ca.uwaterloo.flix.util.{Options, Result}
 import org.scalatest.funsuite.AnyFunSuite
 
-import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
-import java.security.MessageDigest
 
 class TestDebugEvalSidecar extends AnyFunSuite {
   private implicit val sctx: SecurityContext = SecurityContext.Unrestricted
@@ -124,7 +122,7 @@ class TestDebugEvalSidecar extends AnyFunSuite {
 
   private def compiler(project: Path): Flix = {
     val sources = sourceFiles(project)
-    DebugEvalSidecar.withCompiler(project, sources, digestInManifest(project))(identity)
+    DebugEvalSidecar.withCompiler(project, sources, buildIdInManifest(project))(identity)
   }
 
   private def build(program: String, existing: Option[Path] = None): Path = {
@@ -146,10 +144,20 @@ class TestDebugEvalSidecar extends AnyFunSuite {
         }.sorted
         Files.createDirectories(output)
         DebugScopes.write(output.resolve(DebugScopes.FileName), result.getDebugDefinitions)
-        val digest = sourceDigest(sourceFiles(project))
-        val entries = products.map(p => s"\"$p\"").mkString(",")
-        Files.writeString(output.resolve("build.json"),
-          s"{\"formatVersion\":4,\"sourcesDigest\":\"$digest\",\"products\":[$entries]}")
+        val sources = sourceFiles(project)
+        val manifest = BuildManifest(
+          fingerprint = "test-fingerprint",
+          frontendFingerprint = "test-frontend",
+          products = products,
+          sources = sources.map(project.relativize(_).toString.replace('\\', '/')),
+          sourcesDigest = BuildManifest.digestOfSources(project, sources),
+          hasMain = true,
+          launch = LaunchSpec("java", Some("Main"), List(classDir.toString)),
+        )
+        BuildManifest.write(output.resolve(BuildManifest.FileName), manifest) match {
+          case Result.Ok(_) => ()
+          case Result.Err(error) => fail(s"the test manifest must be writable: $error")
+        }
         project
     }
   }
@@ -163,17 +171,6 @@ class TestDebugEvalSidecar extends AnyFunSuite {
     finally stream.close()
   }
 
-  private def sourceDigest(sources: List[Path]): String = {
-    val digest = MessageDigest.getInstance("SHA-256")
-    sources.foreach { path =>
-      digest.update(path.toString.getBytes(StandardCharsets.UTF_8))
-      digest.update(Files.readAllBytes(path))
-    }
-    digest.digest().map("%02x".format(_)).mkString
-  }
-
-  private def digestInManifest(project: Path): String = {
-    val text = Files.readString(project.resolve("build/development/build.json"))
-    """"sourcesDigest":"([^"]+)"""".r.findFirstMatchIn(text).map(_.group(1)).get
-  }
+  private def buildIdInManifest(project: Path): String =
+    BuildManifest.read(project.resolve("build/development/build.json")).get.debugBuildId
 }

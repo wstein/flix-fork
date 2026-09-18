@@ -15,7 +15,7 @@
  */
 package ca.uwaterloo.flix.api.lsp.provider
 
-import ca.uwaterloo.flix.api.Flix
+import ca.uwaterloo.flix.api.{BuildManifest, Flix, LaunchSpec}
 import ca.uwaterloo.flix.api.lsp.provider.DebugEvalProvider.{Answer, Policy, ScopeId}
 import ca.uwaterloo.flix.language.ast.TypedAst
 import ca.uwaterloo.flix.language.ast.shared.SecurityContext
@@ -235,8 +235,20 @@ class TestDebugEvalHost extends AnyFunSuite {
           relative
         }.sorted
         DebugScopes.write(output.resolve(DebugScopes.FileName), result.getDebugDefinitions)
-        val productJson = products.map(p => s"\"$p\"").mkString(",")
-        Files.writeString(output.resolve("build.json"), s"{\"formatVersion\":4,\"products\":[$productJson]}")
+        val source = project.resolve("Main.flix")
+        val manifest = BuildManifest(
+          fingerprint = "test-fingerprint",
+          frontendFingerprint = "test-frontend",
+          products = products,
+          sources = List("Main.flix"),
+          sourcesDigest = BuildManifest.digestOfSources(project, List(source)),
+          hasMain = true,
+          launch = LaunchSpec("java", Some("Main"), List(classDir.toString)),
+        )
+        BuildManifest.write(output.resolve(BuildManifest.FileName), manifest) match {
+          case Result.Ok(_) => ()
+          case Result.Err(error) => fail(s"the test manifest must be writable: $error")
+        }
         project
       case Result.Err(errors) => fail(s"the test program must compile, but got: $errors")
     }

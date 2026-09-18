@@ -15,7 +15,7 @@
  */
 package ca.uwaterloo.flix.api.lsp.provider
 
-import ca.uwaterloo.flix.api.Flix
+import ca.uwaterloo.flix.api.{BuildManifest, Flix}
 import ca.uwaterloo.flix.language.ast.TypedAst.{Expr, Root}
 import ca.uwaterloo.flix.language.ast.TokenKind
 import ca.uwaterloo.flix.language.ast.shared.{Origin, SecurityContext, Source, SourceName}
@@ -185,18 +185,34 @@ object DebugEvalProvider {
   def compile(frame: ScopeId, expression: String, policy: Policy, projectRoot: Path, root: Root,
               withArtifact: Boolean, launchedBuildId: Option[String],
               compilerFactory: Option[() => Flix]): Answer = {
+    val manifestPath = projectRoot.resolve("build").resolve("development").resolve(BuildManifest.FileName)
+    val manifest = BuildManifest.read(manifestPath) match {
+      case Some(m) => m
+      case None => return Answer.Rejected(
+        s"no readable format-${BuildManifest.FormatVersion} ${BuildManifest.FileName} exists under $projectRoot; " +
+          "rebuild with --Xdebug before evaluating expressions",
+      )
+    }
+
     launchedBuildId.foreach { launched =>
-      currentBuildId(projectRoot) match {
-        case Some(current) if current == launched => ()
-        case Some(_) => return Answer.Rejected(
+      if (manifest.debugBuildId != launched) {
+        return Answer.Rejected(
           "the debug files now describe a different build from the running program. " +
             "Stop the session and rebuild before evaluating expressions",
         )
-        case None => return Answer.Rejected(
-          "the running program has a build identity, but the current build manifest does not. " +
-            "Rebuild with --Xdebug before evaluating expressions",
-        )
       }
+    }
+
+    val sources = manifest.sources.map { name =>
+      val path = Paths.get(name)
+      if (path.isAbsolute) path.normalize() else projectRoot.resolve(path).normalize()
+    }
+    val currentSourcesDigest = BuildManifest.digestOfSources(projectRoot, sources)
+    if (currentSourcesDigest != manifest.sourcesDigest) {
+      return Answer.Rejected(
+        "the project's sources have changed since the debug build was written. " +
+          "Stop the session and rebuild before evaluating expressions",
+      )
     }
 
     val table = readTable(projectRoot) match {
@@ -235,9 +251,7 @@ object DebugEvalProvider {
     // whose symbol is not in the snapshot, and a specialised copy carries a hash the snapshot does
     // not have. A filter here would be a second statement of that, and one no fixture could reach:
     // measured by removing it, whereupon every test still passed.
-    val sources = sourcesUnder(projectRoot)
-    val sourcesDigest = sourcesDigestOf(projectRoot)
-    val buildIdentity = launchedBuildId.orElse(currentBuildId(projectRoot)).getOrElse(sourcesDigest)
+    val buildIdentity = launchedBuildId.getOrElse(manifest.debugBuildId)
     val scopeId = s"${frame.className}#${frame.methodName}"
     val freshCompiler = compilerFactory.getOrElse(() => DebugEvalSidecar.standaloneCompiler(sources))
     DebugEvalSidecar.cached(
@@ -254,39 +268,6 @@ object DebugEvalProvider {
         answerFor(params, expression, policy, projectRoot, withArtifact)
       }
     }
-  }
-
-  /**
-    * What identifies the sources the debuggee was built from.
-    *
-    * `sourcesDigest`, and **not** `fingerprint`, which is the trap here: the manifest carries both,
-    * the names suggest the opposite, and only the first changes when a source file changes.
-    * Measured -- two builds of a program whose only definition was edited kept the same
-    * `fingerprint` and differed in `sourcesDigest`. Keying a cache on the other one would answer a
-    * watch from before a rebuild, handing the debuggee classes that call into code it no longer has.
-    *
-    * An absent manifest yields the empty string, which matches only other absent manifests: correct,
-    * because there is then nothing recorded to have changed.
-    */
-  private def sourcesDigestOf(projectRoot: Path): String = {
-    val manifest = projectRoot.resolve("build").resolve("development").resolve(BuildManifest)
-    if (!Files.isRegularFile(manifest)) return ""
-    val text = Files.readString(manifest)
-    """"sourcesDigest"\s*:\s*"([^"]*)"""".r.findFirstMatchIn(text).map(_.group(1)).getOrElse("")
-  }
-
-  /** The identity stored by the current manifest, if both required halves are present. */
-  private def currentBuildId(projectRoot: Path): Option[String] = {
-    val manifest = projectRoot.resolve("build").resolve("development").resolve(BuildManifest)
-    if (!Files.isRegularFile(manifest)) return None
-    val text = Files.readString(manifest)
-    def field(name: String): Option[String] =
-      ("\"" + java.util.regex.Pattern.quote(name) + "\"\\s*:\\s*\"([^\"]*)\"").r
-        .findFirstMatchIn(text).map(_.group(1))
-    for {
-      fingerprint <- field("fingerprint")
-      sourcesDigest <- field("sourcesDigest")
-    } yield ca.uwaterloo.flix.api.BuildManifest.debugBuildId(fingerprint, sourcesDigest)
   }
 
   /** Types the expression, and produces something runnable when one was asked for. */
@@ -455,23 +436,12 @@ object DebugEvalProvider {
     * exactly when someone has rebuilt while a session is running, which is the case that matters.
     */
   private def productsOf(projectRoot: Path): Option[Set[String]] = {
-    val manifest = projectRoot.resolve("build").resolve("development").resolve(BuildManifest)
-    if (!Files.isRegularFile(manifest)) return None
-    val text = Files.readString(manifest)
-    val version = """"formatVersion"\s*:\s*(\d+)""".r
-      .findFirstMatchIn(text).map(_.group(1).toInt)
-    if (!version.contains(ca.uwaterloo.flix.api.BuildManifest.FormatVersion)) return None
-    val products = """"products"\s*:\s*\[([^]]*)]""".r
-    val entry = """"([^"]+)"""".r
-    products.findFirstMatchIn(text)
-      .map(m => entry.findAllMatchIn(m.group(1)).map(_.group(1)).toSet)
+    val path = projectRoot.resolve("build").resolve("development").resolve(BuildManifest.FileName)
+    BuildManifest.read(path).map(_.products.toSet)
   }
 
   private def binaryNameOf(relative: String): String =
     relative.stripSuffix(".class").replace('/', '.')
-
-  /** The build manifest, which names the classes the debuggee was launched with. */
-  private val BuildManifest: String = "build.json"
 
   /**
     * Compiles the wrapper alongside the project's sources and reads the binding back.
@@ -566,20 +536,6 @@ object DebugEvalProvider {
       SecurityContext.Unrestricted, expression)
     val (tokens, _) = Lexer.lex(source)
     tokens.iterator.collect { case token if token.kind == TokenKind.NameLowercase => token.text }.toSet
-  }
-
-  /** Every `.flix` file under `projectRoot`, excluding what a build wrote. */
-  private def sourcesUnder(projectRoot: Path): List[Path] = {
-    if (!Files.isDirectory(projectRoot)) return Nil
-    val stream = Files.walk(projectRoot)
-    try {
-      stream.toArray.toList.collect {
-        case p: Path if Files.isRegularFile(p) && p.toString.endsWith(".flix") &&
-          !projectRoot.relativize(p).toString.startsWith("build") => p
-      }
-    } finally {
-      stream.close()
-    }
   }
 
   /**

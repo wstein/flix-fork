@@ -15,7 +15,7 @@
  */
 package ca.uwaterloo.flix.api.lsp.provider
 
-import ca.uwaterloo.flix.api.Flix
+import ca.uwaterloo.flix.api.{BuildManifest, Flix, LaunchSpec}
 import ca.uwaterloo.flix.api.lsp.provider.DebugEvalProvider.{Answer, Policy, ScopeId}
 import ca.uwaterloo.flix.language.ast.TypedAst
 import ca.uwaterloo.flix.language.ast.shared.SecurityContext
@@ -148,7 +148,7 @@ class TestDebugEvalProvider extends AnyFunSuite {
 
   test("an evaluation for a different launched build is refused") {
     val project = build()
-    writeManifestIdentity(project, "current-fingerprint", "current-sources")
+    writeManifest(project, "current-fingerprint")
 
     DebugEvalProvider.compile(Describe, "at", Policy.Pure, project, TypedAst.empty,
       withArtifact = false, launchedBuildId = Some("older-fingerprint:older-sources")) match {
@@ -161,10 +161,10 @@ class TestDebugEvalProvider extends AnyFunSuite {
 
   test("an evaluation for the current launched build is accepted") {
     val project = build()
-    writeManifestIdentity(project, "current-fingerprint", "current-sources")
+    val buildId = writeManifest(project, "current-fingerprint")
 
     val answer = DebugEvalProvider.compile(Describe, "at", Policy.Pure, project, TypedAst.empty,
-      withArtifact = false, launchedBuildId = Some("current-fingerprint:current-sources"))
+      withArtifact = false, launchedBuildId = Some(buildId))
 
     assertOk(answer, "Option[String]", "Pure")
   }
@@ -201,14 +201,14 @@ class TestDebugEvalProvider extends AnyFunSuite {
       flix
     }
     DebugEvalSidecar.evict()
-    writeManifestIdentity(project, "first-dependencies", "same-sources")
+    val firstBuild = writeManifest(project, "first-dependencies")
     DebugEvalProvider.compile(Describe, "at", Policy.Pure, project, TypedAst.empty,
-      withArtifact = false, launchedBuildId = Some("first-dependencies:same-sources"),
+      withArtifact = false, launchedBuildId = Some(firstBuild),
       compilerFactory = Some(factory))
 
-    writeManifestIdentity(project, "second-dependencies", "same-sources")
+    val secondBuild = writeManifest(project, "second-dependencies")
     DebugEvalProvider.compile(Describe, "at", Policy.Pure, project, TypedAst.empty,
-      withArtifact = false, launchedBuildId = Some("second-dependencies:same-sources"),
+      withArtifact = false, launchedBuildId = Some(secondBuild),
       compilerFactory = Some(factory))
 
     assert(created == 2, s"a dependency-only rebuild reused compiler number $created")
@@ -220,6 +220,20 @@ class TestDebugEvalProvider extends AnyFunSuite {
     DebugEvalProvider.compile(Describe, "at", Policy.Pure, project, TypedAst.empty) match {
       case Answer.Ok(tpe, eff, _) => assert(tpe == "Option[String]" && eff == "Pure")
       case other => fail(s"the published debug scope was not used: $other")
+    }
+  }
+
+  test("saved source changes after the build are refused") {
+    val project = build()
+    val buildId = BuildManifest.read(project.resolve("build/development/build.json")).get.debugBuildId
+    Files.writeString(project.resolve("Main.flix"), Program.replace("punctuated(1)", "punctuated(2)"))
+
+    DebugEvalProvider.compile(Describe, "at", Policy.Pure, project, TypedAst.empty,
+      withArtifact = false, launchedBuildId = Some(buildId)) match {
+      case Answer.Rejected(reason) =>
+        assert(reason.contains("sources have changed"), s"the refusal does not name the stale sources: $reason")
+        assert(reason.contains("rebuild"), s"the refusal does not say how to recover: $reason")
+      case other => fail(s"an expression was compiled against changed sources: $other")
     }
   }
 
@@ -261,6 +275,7 @@ class TestDebugEvalProvider extends AnyFunSuite {
         val output = project.resolve("build").resolve("development")
         Files.createDirectories(output)
         DebugScopes.write(output.resolve(DebugScopes.FileName), result.getDebugDefinitions)
+        writeManifest(project, "test-fingerprint")
         project
       case Result.Err(errors) => fail(s"the test program must compile, but got: $errors")
     }
@@ -281,10 +296,21 @@ class TestDebugEvalProvider extends AnyFunSuite {
                       ): Answer =
     DebugEvalProvider.compile(frame, expression, policy, project, snapshot(project))
 
-  private def writeManifestIdentity(project: Path, fingerprint: String, sourcesDigest: String): Unit = {
-    val path = project.resolve("build/development/build.json")
-    Files.writeString(path,
-      s"""{"formatVersion":4,"fingerprint":"$fingerprint","sourcesDigest":"$sourcesDigest","products":["Main.class"]}""")
+  private def writeManifest(project: Path, fingerprint: String): String = {
+    val source = project.resolve("Main.flix")
+    val manifest = BuildManifest(
+      fingerprint = fingerprint,
+      frontendFingerprint = "test-frontend",
+      products = List("Main.class"),
+      sources = List("Main.flix"),
+      sourcesDigest = BuildManifest.digestOfSources(project, List(source)),
+      hasMain = true,
+      launch = LaunchSpec("java", Some("Main"), List("build/development/class")),
+    )
+    BuildManifest.write(project.resolve("build/development/build.json"), manifest) match {
+      case Result.Ok(_) => manifest.debugBuildId
+      case Result.Err(error) => fail(s"the test manifest must be writable: $error")
+    }
   }
 
   private def assertOk(answer: Answer, tpe: String, eff: String): Unit = answer match {
