@@ -34,6 +34,22 @@ qualification pairs the plugin with an unmerged compiler feature revision.
 This evidence closes the automated M10 gate for the compiler/native-IDEA increment.
 The gutter/tool-window/Split Mode click-through remains manual, as stated above, and BSP
 qualification remains outside this increment.
+
+Post-review hardening qualification (2026-09-17) used compiler revision
+`b6149c5e1ed59fb7772178a9a367f9c2214acfe1`, plugin revision
+`2e7632c1ef830203f861a4def372337ef0865a6c`, and compiler assembly SHA-256
+`671f3b6131e86f27370d33b86bce763f919afe00f4ce96261ce44ee3b30a150a`.
+The review fixes exact evaluation-wrapper selection, debug-only binding capture,
+linear-time binding collection, compiler-lexer-based evaluation identifiers, and
+path-aware SMAP display names. The debug-aware inlining branches remain intentional
+policy: their sequential-mode regression passed in the complete suite.
+
+`./mill --no-server __.testForked` ran 17,749 tests: 17,748 passed in the restricted
+sandbox and the sole failure was the JDI fixture's denied loopback socket bind. Rerunning
+that exact fixture with loopback permission passed, so every test assertion passed across
+the two runs. `flix.assembly` passed, and the plugin's 14 live JDWP session tests passed
+against that exact assembly. No branch integration or BSP work was performed as part of
+this hardening pass.
 Prepared: 2026-09-16.
 
 Updated for the merge of stable JVM naming into `dev0.76.0` and a source review of
