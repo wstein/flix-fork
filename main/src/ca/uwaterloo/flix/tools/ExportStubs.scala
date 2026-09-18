@@ -18,11 +18,13 @@ package ca.uwaterloo.flix.tools
 import ca.uwaterloo.flix.api.Flix
 import ca.uwaterloo.flix.language.ast.shared.Source
 import ca.uwaterloo.flix.language.ast.{ChangeSet, Name, ReadAst, SourceLocation, SyntaxTree, WeededAst}
-import ca.uwaterloo.flix.language.phase.jvm.Mangle
+import ca.uwaterloo.flix.language.jvm.JavaClasses
+import ca.uwaterloo.flix.language.phase.jvm.{ExportSignature, Mangle}
 import ca.uwaterloo.flix.language.phase.{Lexer, Parser2, Weeder2}
 import ca.uwaterloo.flix.util.Result
 
 import java.lang.constant.ClassDesc
+import java.lang.constant.ConstantDescs.{CD_Object, CD_boolean, CD_byte, CD_char, CD_double, CD_float, CD_int, CD_long, CD_short}
 
 import java.nio.file.{Files, Path}
 
@@ -64,16 +66,10 @@ object ExportStubs {
   /** A generated facade: one Java class standing in for one Flix module's exported defs. */
   case class Facade(name: ClassDesc, methods: List[Method])
 
-  /** A Java source type in the currently supported export ABI. */
-  case class JavaType(sourceName: String)
-
   /**
     * One `public static` method on a facade.
-    *
-    * `result` is `None` for a def returning `Unit`, which is a `void` method rather than a method
-    * returning some unit value.
     */
-  case class Method(name: String, result: JavaType, params: List[JavaType])
+  case class Method(name: String, result: ExportSignature, params: List[ExportSignature])
 
   /** A def that could not be described, and why. */
   case class Unsupported(name: String, reason: String, loc: SourceLocation)
@@ -228,7 +224,7 @@ object ExportStubs {
     * in `TestExportStubs`; that test is what makes this safe to rely on, because nothing in the
     * types stops them drifting.
     */
-  private def signatureOf(tpe: WeededAst.Type, imps: Map[String, String]): Option[JavaType] = tpe match {
+  private def signatureOf(tpe: WeededAst.Type, imps: Map[String, String]): Option[ExportSignature] = tpe match {
     case WeededAst.Type.Var(_, _) => None
 
     case WeededAst.Type.Ambiguous(qname, _) => named(qname, Nil, imps)
@@ -244,7 +240,7 @@ object ExportStubs {
   }
 
   /** Returns how the type named `qname` and applied to `args` crosses the boundary. */
-  private def named(qname: Name.QName, args: List[WeededAst.Type], imps: Map[String, String]): Option[JavaType] = {
+  private def named(qname: Name.QName, args: List[WeededAst.Type], imps: Map[String, String]): Option[ExportSignature] = {
     (simpleName(qname, imps), args) match {
       case (Some(name), Nil) => builtin(name).orElse(importedObject(name, imps))
       case _ => None
@@ -264,21 +260,22 @@ object ExportStubs {
     else None
 
   /** Returns the Flix type named `name`, when it is one with a fixed Java counterpart. */
-  private def builtin(name: String): Option[JavaType] = name match {
-    case "Bool" => Some(JavaType("boolean"))
-    case "Char" => Some(JavaType("char"))
-    case "Int8" => Some(JavaType("byte"))
-    case "Int16" => Some(JavaType("short"))
-    case "Int32" => Some(JavaType("int"))
-    case "Int64" => Some(JavaType("long"))
-    case "Float32" => Some(JavaType("float"))
-    case "Float64" => Some(JavaType("double"))
+  private def builtin(name: String): Option[ExportSignature] = name match {
+    case "Bool" => Some(ExportSignature.Exact(CD_boolean))
+    case "Char" => Some(ExportSignature.Exact(CD_char))
+    case "Int8" => Some(ExportSignature.Exact(CD_byte))
+    case "Int16" => Some(ExportSignature.Exact(CD_short))
+    case "Int32" => Some(ExportSignature.Exact(CD_int))
+    case "Int64" => Some(ExportSignature.Exact(CD_long))
+    case "Float32" => Some(ExportSignature.Exact(CD_float))
+    case "Float64" => Some(ExportSignature.Exact(CD_double))
+    case "String" => Some(ExportSignature.Exact(JavaClasses.String))
     case _ => None
   }
 
   /** Returns Object when `name` is the one native reference type the current export ABI accepts. */
-  private def importedObject(name: String, imps: Map[String, String]): Option[JavaType] =
-    imps.get(name).filter(_ == "java.lang.Object").map(JavaType(_))
+  private def importedObject(name: String, imps: Map[String, String]): Option[ExportSignature] =
+    imps.get(name).filter(_ == "java.lang.Object").map(_ => ExportSignature.Exact(CD_Object))
 
   /** Returns the alias-to-class table an `import` list establishes. */
   private def imports(usesAndImports: List[WeededAst.UseOrImport]): Map[String, String] =

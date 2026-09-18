@@ -49,9 +49,10 @@ Stub generation follows the export ABI implemented by this branch, not the riche
 development lineages. It currently supports:
 
 - `Bool`, `Char`, `Int8`, `Int16`, `Int32`, `Int64`, `Float32`, and `Float64`.
+- `String`, whose exported descriptor is `java.lang.String` rather than erased `Object`.
 - An explicitly imported `java.lang.Object`.
 
-It refuses `String`, Flix algebraic data types, generic Java types, containers, functions, and other
+It refuses Flix algebraic data types, generic Java types, containers, functions, and other
 reference types because `EntryPoints` refuses those exports on this branch. Refusal is intentional:
 a missing stub fails the build at generation time, while an incorrect stub compiles and later fails
 with a linkage error in innocent calling code.

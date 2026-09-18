@@ -69,7 +69,7 @@ class TestExportStubs extends AnyFunSuite {
     assert(facades.head.methods.map(_.name) == List("twice"))
   }
 
-  test("unsupported reference and generic exports are refused rather than guessed") {
+  test("String is described exactly while unsupported generic exports are refused") {
     val src =
       """mod Acme.Api {
         |    @Export pub def text(x: String): String = x
@@ -78,8 +78,10 @@ class TestExportStubs extends AnyFunSuite {
         |""".stripMargin
 
     val (facades, unsupported) = stubs(src)
-    assert(facades.isEmpty)
-    assert(unsupported.map(_.name).toSet == Set("text", "list"))
+    assert(facades.flatMap(_.methods).map(_.name) == List("text"))
+    assert(facades.head.methods.head.params.head.sourceName == "java.lang.String")
+    assert(facades.head.methods.head.result.sourceName == "java.lang.String")
+    assert(unsupported.map(_.name) == List("list"))
   }
 
   test("generated sources use the sibling facade name and compile with javac") {

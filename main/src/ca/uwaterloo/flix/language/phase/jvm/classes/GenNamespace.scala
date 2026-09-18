@@ -23,7 +23,7 @@ import ca.uwaterloo.flix.language.phase.jvm.ClassMaker.Visibility.IsPublic
 import ca.uwaterloo.flix.language.phase.jvm.ClassMaker.{ConstructorMethod, InstanceField, StaticMethod}
 import ca.uwaterloo.flix.language.phase.jvm.Instructions.*
 import ca.uwaterloo.flix.language.phase.jvm.MethodTypeDescs.mkDescriptor
-import ca.uwaterloo.flix.language.phase.jvm.{ClassConstants, ClassMaker, GenFunAndClosureClasses, JvmNames, Mangle, TypeDescs}
+import ca.uwaterloo.flix.language.phase.jvm.{ClassConstants, ClassMaker, ExportPlan, GenFunAndClosureClasses, JvmNames, Mangle, TypeDescs}
 import org.objectweb.asm.MethodVisitor
 
 import java.lang.constant.ClassDesc
@@ -52,8 +52,8 @@ object GenNamespace {
   private def Constructor(ns: List[String]): ConstructorMethod = ConstructorMethod(desc(ns), Nil)
 
   def ShimMethod(ns: List[String], defn: JvmAst.Def)(implicit flix: Flix): StaticMethod = {
-    val erasedArgs = defn.fparams.map(_.tpe).map(TypeDescs.toErasedClassDesc)
-    val erasedResult = TypeDescs.toErasedClassDesc(defn.unboxedType.tpe)
+    val erasedArgs = defn.fparams.map(_.tpe).map(boundaryType(defn.ann.isExport, _))
+    val erasedResult = boundaryType(defn.ann.isExport, defn.unboxedType.tpe)
     // Exported names are checked in Safety, so no mangling is needed.
     val defnName = JvmNames.defnName(defn.sym)
     val name = if (defn.ann.isExport) defn.sym.text else "m_" + Mangle.mangle(defnName)
@@ -62,21 +62,30 @@ object GenNamespace {
 
   private def shimIns(defn: JvmAst.Def)(implicit mv: MethodVisitor, flix: Flix): Unit = {
     val defnDesc = GenFunAndClosureClasses.defnDesc(defn.sym)
-    val paramTypes = defn.fparams.map(fp => TypeDescs.toErasedClassDesc(fp.tpe))
-    withNames(0, paramTypes) {
+    val facadeParamTypes = defn.fparams.map(fp => boundaryType(defn.ann.isExport, fp.tpe))
+    val fieldTypes = defn.fparams.map(fp => TypeDescs.toErasedClassDesc(fp.tpe))
+    withNames(0, facadeParamTypes) {
       case (_, args) =>
-        val erasedResult = TypeDescs.toErasedClassDesc(defn.unboxedType.tpe)
+        val resultPlan = if (defn.ann.isExport) ExportPlan.exact(defn.unboxedType.tpe) else None
+        val flixResult = resultPlan.map(_.flixType).getOrElse(TypeDescs.toErasedClassDesc(defn.unboxedType.tpe))
+        val javaResult = resultPlan.map(_.javaType).getOrElse(flixResult)
         NEW(defnDesc)
         DUP()
         INVOKESPECIAL(ConstructorMethod(defnDesc, Nil))
         for ((arg, index) <- args.zipWithIndex) {
           DUP()
           arg.load()
-          PUTFIELD(InstanceField(defnDesc, s"arg$index", paramTypes(index)))
+          PUTFIELD(InstanceField(defnDesc, s"arg$index", fieldTypes(index)))
         }
-        GenResult.unwindSuspensionFreeThunkToType(erasedResult, s"in shim method of ${defn.sym}", defn.loc)
-        xReturn(erasedResult)
+        GenResult.unwindSuspensionFreeThunkToType(flixResult, s"in shim method of ${defn.sym}", defn.loc)
+        resultPlan.foreach(_.emit())
+        xReturn(javaResult)
     }
   }
+
+  /** Returns the caller-facing type for an export and the historical erased type otherwise. */
+  private def boundaryType(isExport: Boolean, tpe: ca.uwaterloo.flix.language.ast.SimpleType): ClassDesc =
+    if (isExport) ExportPlan.exact(tpe).map(_.javaType).getOrElse(TypeDescs.toErasedClassDesc(tpe))
+    else TypeDescs.toErasedClassDesc(tpe)
 
 }

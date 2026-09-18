@@ -465,6 +465,7 @@ object EntryPoints {
       case Type.Cst(TypeConstructor.Int16, _) => Result.Ok(true)
       case Type.Cst(TypeConstructor.Int32, _) => Result.Ok(true)
       case Type.Cst(TypeConstructor.Int64, _) => Result.Ok(true)
+      case Type.Cst(TypeConstructor.Str, _) => Result.Ok(true)
       case Type.Cst(TypeConstructor.Native(desc, _), _) if desc == CD_Object => Result.Ok(true)
       case Type.Cst(_, _) => Result.Ok(false)
       case Type.Apply(_, _, _) => Result.Ok(false)
