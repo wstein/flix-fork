@@ -21,6 +21,7 @@ import ca.uwaterloo.flix.api.{Flix, FlixEvent}
 import ca.uwaterloo.flix.language.ast.MonoAst.{Expr, FormalParam, Occur, Pattern}
 import ca.uwaterloo.flix.language.ast.shared.Constant
 import ca.uwaterloo.flix.language.ast.{AtomicOp, MonoAst, SourceLocation, Symbol, Type}
+import ca.uwaterloo.flix.language.phase.LibraryOptions
 import ca.uwaterloo.flix.language.phase.jvm.{GeneratedJvmKey, JvmOriginKey}
 import ca.uwaterloo.flix.util.collection.ListOps
 import ca.uwaterloo.flix.util.collection.Nel
@@ -862,8 +863,16 @@ object Inliner {
     * @param ctx0 the local context.
     * @return `true` if `defn` should be inlined, `false` otherwise.
     */
-  private def shouldInlineDef(defn: MonoAst.Def, exps: List[Expr], ctx0: LocalContext)(implicit sym0: Symbol.DefnSym): Boolean = {
+  private def shouldInlineDef(defn: MonoAst.Def, exps: List[Expr], ctx0: LocalContext)(implicit sym0: Symbol.DefnSym, flix: Flix): Boolean = {
     if (ctx0.currentlyInlining) {
+      return false
+    }
+
+    // Keep user definitions as distinct JVM bodies in debug builds. The library switches are the
+    // narrow exception: LibraryOptions has already rewritten them to constants, and inlining them
+    // is required for the established constant-folding/tree-shaking pipeline to remove the
+    // disabled sequential/parallel implementation.
+    if (flix.options.xdebug && !LibraryOptions.isCompilerSwitch(defn.sym)) {
       return false
     }
 
