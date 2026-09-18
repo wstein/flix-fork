@@ -853,7 +853,8 @@ class Flix(pkgs: List[InstalledPackage] = Nil, jars: List[Path] = Nil) extends A
     * Returns the `.flix` source files inside the package at `p`, with the security context `sctx`.
     */
   private def getSourcesOfPkg(p: Path, sctx: SecurityContext): List[Source] = {
-    Using(new ZipFile(p.toFile)) { zip =>
+    val packagePath = p.toAbsolutePath.normalize()
+    Using(new ZipFile(packagePath.toFile)) { zip =>
       val result = mutable.ArrayBuffer.empty[Source]
       val iterator = zip.entries()
       while (iterator.hasMoreElements) {
@@ -862,7 +863,7 @@ class Flix(pkgs: List[InstalledPackage] = Nil, jars: List[Path] = Nil) extends A
         if (name.endsWith(".flix")) {
           val bytes = StreamOps.readAllBytes(zip.getInputStream(entry))
           val text = new String(bytes, defaultCharset)
-          result += Source.fromString(SourceName.PackageEntry(p, name), Origin.Package, sctx, text)
+          result += Source.fromString(SourceName.PackageEntry(packagePath, name), Origin.Package, sctx, text)
         }
       }
       result.toList

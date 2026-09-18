@@ -119,7 +119,9 @@ The sidecars describe one whole-program build. Reachable standard-library and pa
 code is specialized into that build and therefore appears in these same sidecars; an
 `.fpkg` and the compiler jar do not carry separate static debug sidecars. Package
 entries use the canonical archive identity above, allowing an IDE to open the exact
-source entry without basename guessing.
+source entry without basename guessing. Package paths are normalized when the archive
+is loaded, and regression coverage verifies that the identical URI reaches the JVM
+`SourceFile` attribute, SMAP file table, source index, and call provenance.
 
 For example:
 
