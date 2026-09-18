@@ -91,7 +91,11 @@ numbers and map back to their real source path and line. Single-source classes o
 SMAP and use their ordinary `SourceFile` attribute. SMAP display names are derived from
 the structured path, package-entry, or URI source identity; for example an opaque
 `untitled:Scratch.flix` document is displayed as `Scratch.flix` while its full identity
-is retained on the following file-table line. IntelliJ supports both forms.
+is retained on the following file-table line. IntelliJ supports both forms. A source
+inside an `.fpkg` has the canonical archive identity
+`jar:file:///absolute/path/package.fpkg!/path/inside/package.flix`. The archive path is
+absolute, normalized, and URI-escaped; `SourceName.toPath` still returns only the entry
+path for compiler operations that require its package-relative structure.
 
 ## Build sidecars
 
@@ -110,6 +114,12 @@ A successful `flix build --Xdebug` writes three deterministic sidecars beside
   and a structured JVM target. `staticApply` is the default target method and is
   omitted; other methods are explicit. Consumers materialize a source/line index once
   rather than scanning every project call at each debugger step. Format 1 is not read.
+
+The sidecars describe one whole-program build. Reachable standard-library and package
+code is specialized into that build and therefore appears in these same sidecars; an
+`.fpkg` and the compiler jar do not carry separate static debug sidecars. Package
+entries use the canonical archive identity above, allowing an IDE to open the exact
+source entry without basename guessing.
 
 For example:
 
