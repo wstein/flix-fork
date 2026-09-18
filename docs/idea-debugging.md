@@ -103,6 +103,10 @@ Regression coverage checks the first and later PCs independently, including a lo
 initialized after an earlier suspension, and checks lifted closures with a capture,
 lambda parameter, typed local, and wildcard. This pins both positional field mapping
 and lexical liveness rather than only validating the JSON shape.
+The sibling IntelliJ plugin's live JDWP suite builds this compiler, stops inside an
+effectful callee, reads a caller continuation's saved `label: String = "root"`, and
+verifies that the reconstructed async frame carries the same read-only value into its
+Variables node. Missing or malformed metadata remains an empty-variable fallback.
 
 When optimization places code from more than one source in a generated class, the
 compiler emits a JSR-45 `SourceDebugExtension` with a `Flix` stratum. Primary-source
