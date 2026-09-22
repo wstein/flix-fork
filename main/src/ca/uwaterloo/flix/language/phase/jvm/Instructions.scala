@@ -396,6 +396,7 @@ object Instructions {
     else if (tpe == CD_long) mv.visitInsn(Opcodes.LRETURN)
     else if (tpe == CD_float) mv.visitInsn(Opcodes.FRETURN)
     else if (tpe == CD_double) mv.visitInsn(Opcodes.DRETURN)
+    else if (tpe == CD_void) mv.visitInsn(Opcodes.RETURN)
     else mv.visitInsn(Opcodes.ARETURN)
   }
 

@@ -13,7 +13,7 @@ import ca.uwaterloo.flix.language.phase.jvm.classes.{GenTag, GenTagged}
 import org.objectweb.asm.MethodVisitor
 
 import java.lang.constant.ClassDesc
-import java.lang.constant.ConstantDescs.{CD_Object, CD_boolean, CD_byte, CD_char, CD_double, CD_float, CD_int, CD_long, CD_short}
+import java.lang.constant.ConstantDescs.{CD_Object, CD_boolean, CD_byte, CD_char, CD_double, CD_float, CD_int, CD_long, CD_short, CD_void}
 
 /**
   * How an exported Flix value is represented to a Java caller.
@@ -52,6 +52,15 @@ object ExportPlan {
     override def signature: ExportSignature = ExportSignature.Exact(flixType)
 
     override def emit(nextLocal: Int)(implicit mv: MethodVisitor): Unit = ()
+  }
+
+  /** A Flix `Unit` result discarded so a Java caller sees `void`. */
+  case object ToVoid extends ExportPlan {
+    override def flixType: ClassDesc = CD_Object
+
+    override def signature: ExportSignature = ExportSignature.Exact(CD_void)
+
+    override def emit(nextLocal: Int)(implicit mv: MethodVisitor): Unit = POP()
   }
 
   /** A Java value passed through unchanged while retaining its generic arguments for callers. */
@@ -149,6 +158,7 @@ object ExportPlan {
     case SimpleType.String => Some(Identity(JavaClasses.String))
     case SimpleType.Native(clazz, Nil) => Some(Identity(clazz))
     case SimpleType.AnyType => Some(Identity(CD_Object))
+    case SimpleType.Unit => Some(ToVoid)
     case _ => None
   }
 

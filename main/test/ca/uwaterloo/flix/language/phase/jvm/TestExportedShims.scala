@@ -156,6 +156,37 @@ class TestExportedShims extends AnyFunSuite {
     } finally deleteRecursively(output)
   }
 
+  test("a Unit-returning export still retains a generic parameter's signature") {
+    val result = compile(
+      """mod Acme.Api {
+        |    import java.util.ArrayList
+        |    @Export pub def consume(_xs: ArrayList[String]): Unit = ()
+        |}
+        |""".stripMargin)
+
+    val facade = result.getClasses(Mangle.namespaceFacadeDesc(List("Acme", "Api"))).bytecode
+    var member: Option[(String, String)] = None
+    new ClassReader(facade).accept(new ClassVisitor(Opcodes.ASM9) {
+      override def visitMethod(access: Int, name: String, descriptor: String, signature: String, exceptions: Array[String]): MethodVisitor = {
+        if (name == "consume") member = Some(descriptor -> signature)
+        null
+      }
+    }, ClassReader.SKIP_CODE)
+    assert(member.contains("(Ljava/util/ArrayList;)V" -> "(Ljava/util/ArrayList<Ljava/lang/String;>;)V"))
+
+    val output = Files.createTempDirectory("flix-export-unit-generic")
+    try {
+      writeClasses(result, output)
+      val loader = new URLClassLoader(Array(output.toUri.toURL), getClass.getClassLoader)
+      try {
+        val clazz = loader.loadClass("Acme.Api")
+        val values = new java.util.ArrayList[String]()
+        values.add("hello")
+        assert(clazz.getMethod("consume", classOf[java.util.ArrayList[?]]).invoke(null, values) == null)
+      } finally loader.close()
+    } finally deleteRecursively(output)
+  }
+
   test("a nullary export's Unit parameter still verifies") {
     val result = compile(
       """mod Acme.Api {
