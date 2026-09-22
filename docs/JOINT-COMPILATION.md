@@ -58,6 +58,10 @@ development lineages. It currently supports:
   underlying array, under the same element and generic-signature rules. `Array[t, r]` erases to
   the same representation and stays refused; only `EntryPoints`, working from the pre-erasure
   type, keeps a mutable, region-scoped array from reaching this conversion.
+- `Chain[t]` results as eager, unmodifiable `java.util.Collection<T>` copies, under the same
+  element and generic-signature rules. `Collection`, not `List`: a `Chain` has no efficient
+  indexed access to advertise. Its `Empty | One(t) | Chain(l, r)` binary-tree shape is walked
+  with an explicit stack rather than `List`'s single cursor.
 - Explicitly imported Java classes, including nested generic arguments in parameters and results.
 
 It refuses other Flix algebraic data types, other containers, functions, and unaccounted reference
@@ -65,8 +69,9 @@ types because `EntryPoints` refuses those exports on this branch. Refusal is int
 a missing stub fails the build at generation time, while an incorrect stub compiles and later fails
 with a linkage error in innocent calling code.
 
-Converted containers are result-only. `Option[t]`, `List[t]`, and `Vector[t]` parameters remain
-refused because the shim currently passes parameters straight into Flix and therefore has no
+Converted containers are result-only. `Option[t]`, `List[t]`, `Vector[t]`, and `Chain[t]`
+parameters remain refused because the shim currently passes parameters straight into Flix and
+therefore has no
 reverse conversion.
 
 The tests compare generated stub declarations with the method descriptors on the facade bytecode.

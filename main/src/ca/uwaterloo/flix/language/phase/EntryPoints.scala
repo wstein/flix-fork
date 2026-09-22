@@ -436,7 +436,7 @@ object EntryPoints {
     val retTpe = defn.spec.retTpe
     val returnTypes =
       if (isUnitType(retTpe) == Result.Ok(true)) Nil
-      else List(unapplyOption(retTpe).orElse(unapplyList(retTpe)).orElse(unapplyVector(retTpe)).getOrElse(retTpe))
+      else List(unapplyOption(retTpe).orElse(unapplyList(retTpe)).orElse(unapplyVector(retTpe)).orElse(unapplyChain(retTpe)).getOrElse(retTpe))
     val types = returnTypes ::: paramTypes
     types.flatMap(tpe => {
       isExportableType(tpe) match {
@@ -481,6 +481,15 @@ object EntryPoints {
   private def unapplyVector(tpe: Type): Option[Type] = tpe match {
     case Type.Apply(Type.Cst(TypeConstructor.Vector, _), elm, _) => Some(elm)
     case Type.Alias(_, _, inner, _) => unapplyVector(inner)
+    case _ => None
+  }
+
+  /** Returns the element of the standard library's `Chain`, which is converted on return. */
+  @tailrec
+  private def unapplyChain(tpe: Type): Option[Type] = tpe match {
+    case Type.Apply(Type.Cst(TypeConstructor.Enum(sym, _), _), elm, _)
+      if sym.namespace.isEmpty && sym.text == "Chain" => Some(elm)
+    case Type.Alias(_, _, inner, _) => unapplyChain(inner)
     case _ => None
   }
 

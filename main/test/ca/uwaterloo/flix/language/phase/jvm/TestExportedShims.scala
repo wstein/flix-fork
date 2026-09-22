@@ -158,6 +158,46 @@ class TestExportedShims extends AnyFunSuite {
     } finally deleteRecursively(output)
   }
 
+  test("Chain results cross as typed unmodifiable java.util.Collection values") {
+    val result = compile(
+      """mod Acme.Api {
+        |    @Export pub def strings(_x: Int32): Chain[String] =
+        |        Chain.append(Chain.append(Chain.singleton("a"), Chain.singleton("b")), Chain.singleton("c"))
+        |    @Export pub def ints(_x: Int32): Chain[Int32] =
+        |        Chain.append(Chain.append(Chain.singleton(1), Chain.singleton(2)), Chain.singleton(3))
+        |    @Export pub def empty(_x: Int32): Chain[Int32] = Chain.empty()
+        |}
+        |""".stripMargin)
+
+    val facade = result.getClasses(Mangle.namespaceFacadeDesc(List("Acme", "Api"))).bytecode
+    val methods = collection.mutable.Map.empty[String, (String, String)]
+    new ClassReader(facade).accept(new ClassVisitor(Opcodes.ASM9) {
+      override def visitMethod(access: Int, name: String, descriptor: String, signature: String, exceptions: Array[String]): MethodVisitor = {
+        if ((access & Opcodes.ACC_PUBLIC) != 0 && (access & Opcodes.ACC_STATIC) != 0)
+          methods(name) = descriptor -> signature
+        null
+      }
+    }, ClassReader.SKIP_CODE)
+    assert(methods("strings") == ("(I)Ljava/util/Collection;", "(I)Ljava/util/Collection<Ljava/lang/String;>;"))
+    assert(methods("ints") == ("(I)Ljava/util/Collection;", "(I)Ljava/util/Collection<Ljava/lang/Integer;>;"))
+
+    val output = Files.createTempDirectory("flix-export-chain")
+    try {
+      writeClasses(result, output)
+      val loader = new URLClassLoader(Array(output.toUri.toURL), getClass.getClassLoader)
+      try {
+        val clazz = loader.loadClass("Acme.Api")
+        val strings = clazz.getMethod("strings", Integer.TYPE).invoke(null, Int.box(0)).asInstanceOf[java.util.Collection[String]]
+        val ints = clazz.getMethod("ints", Integer.TYPE).invoke(null, Int.box(0)).asInstanceOf[java.util.Collection[Integer]]
+        val empty = clazz.getMethod("empty", Integer.TYPE).invoke(null, Int.box(0)).asInstanceOf[java.util.Collection[Integer]]
+        assert(strings.asScala.toList == List("a", "b", "c"))
+        assert(ints.asScala.map(_.intValue()).toList == List(1, 2, 3))
+        assert(empty.isEmpty)
+        assertThrows[UnsupportedOperationException](strings.add("d"))
+      } finally loader.close()
+    } finally deleteRecursively(output)
+  }
+
   test("generic Java types retain arguments in exported parameters and results") {
     val result = compile(
       """mod Acme.Api {

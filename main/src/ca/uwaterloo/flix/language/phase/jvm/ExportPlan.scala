@@ -36,6 +36,7 @@ object ExportPlan {
 
   private val Optional = ClassDesc.ofInternalName("java/util/Optional")
   private val JavaList = ClassDesc.ofInternalName("java/util/List")
+  private val JavaCollection = ClassDesc.ofInternalName("java/util/Collection")
 
   private val Wrappers: Map[ClassDesc, ClassDesc] = Map(
     CD_boolean -> ClassDesc.ofInternalName("java/lang/Boolean"),
@@ -195,6 +196,88 @@ object ExportPlan {
     }
   }
 
+  /**
+    * A Flix `Chain` result converted to an unmodifiable eager Java collection.
+    *
+    * `Chain` offers no efficient indexed access, unlike `List` or `Vector`, so this is a
+    * `Collection`, not a `List`. Its `Empty | One(t) | Chain(l, r)` shape is a binary tree rather
+    * than a linear structure, so the walk needs an explicit stack instead of `AsList`'s single
+    * cursor: `chainFields` pushes the right child before the left, so a LIFO pop visits elements
+    * left-to-right.
+    */
+  case class AsChain(element: ExportPlan, emptyOrdinal: Int, oneOrdinal: Int, oneFields: List[ClassDesc], chainFields: List[ClassDesc]) extends ExportPlan {
+    private val ArrayList = ClassDesc.ofInternalName("java/util/ArrayList")
+    private val ArrayDeque = ClassDesc.ofInternalName("java/util/ArrayDeque")
+    private val Collections = ClassDesc.ofInternalName("java/util/Collections")
+
+    override def flixType: ClassDesc = GenTagged.Desc
+
+    override def signature: ExportSignature = ExportSignature.Applied(JavaCollection, List(element.signature))
+
+    override def emit(nextLocal: Int)(implicit mv: MethodVisitor): Unit = {
+      withName(nextLocal, GenTagged.Desc) { node =>
+        withName(nextLocal + 1, ArrayDeque) { stack =>
+          withName(nextLocal + 2, ArrayList) { acc =>
+            node.store()
+            NEW(ArrayList)
+            DUP()
+            INVOKESPECIAL(ClassMaker.ConstructorMethod(ArrayList, Nil))
+            acc.store()
+            NEW(ArrayDeque)
+            DUP()
+            INVOKESPECIAL(ClassMaker.ConstructorMethod(ArrayDeque, Nil))
+            stack.store()
+            stack.load()
+            node.load()
+            INVOKEVIRTUAL(ArrayDeque, "push", MethodTypeDescs.mkDescriptor(CD_Object)(CD_void))
+            whileLoop(Condition.ICMPNE) {
+              stack.load()
+              INVOKEVIRTUAL(ArrayDeque, "size", MethodTypeDescs.mkDescriptor()(CD_int))
+              pushInt(0)
+            } {
+              stack.load()
+              INVOKEVIRTUAL(ArrayDeque, "pop", MethodTypeDescs.mkDescriptor()(CD_Object))
+              CHECKCAST(GenTagged.Desc)
+              node.store()
+              node.load()
+              GETFIELD(GenTagged.OrdinalField)
+              pushInt(emptyOrdinal)
+              ifConditionElse(Condition.ICMPEQ) {
+                // Empty: nothing to add or push.
+              } {
+                node.load()
+                GETFIELD(GenTagged.OrdinalField)
+                pushInt(oneOrdinal)
+                ifConditionElse(Condition.ICMPEQ) {
+                  acc.load()
+                  node.load()
+                  CHECKCAST(GenTag.desc(oneFields))
+                  GETFIELD(GenTag.IndexField(oneFields, 0))
+                  element.emit(nextLocal + 3)
+                  INVOKEVIRTUAL(ArrayList, "add", MethodTypeDescs.mkDescriptor(CD_Object)(CD_boolean))
+                  POP()
+                } {
+                  stack.load()
+                  node.load()
+                  CHECKCAST(GenTag.desc(chainFields))
+                  GETFIELD(GenTag.IndexField(chainFields, 1))
+                  INVOKEVIRTUAL(ArrayDeque, "push", MethodTypeDescs.mkDescriptor(CD_Object)(CD_void))
+                  stack.load()
+                  node.load()
+                  CHECKCAST(GenTag.desc(chainFields))
+                  GETFIELD(GenTag.IndexField(chainFields, 0))
+                  INVOKEVIRTUAL(ArrayDeque, "push", MethodTypeDescs.mkDescriptor(CD_Object)(CD_void))
+                }
+              }
+            }
+            acc.load()
+            INVOKESTATIC(Collections, "unmodifiableCollection", MethodTypeDescs.mkDescriptor(JavaCollection)(JavaCollection))
+          }
+        }
+      }
+    }
+  }
+
   /** Returns the exact boundary plan currently supported for `tpe`. */
   def exact(tpe: SimpleType): Option[ExportPlan] = tpe match {
     case SimpleType.Bool => Some(Identity(CD_boolean))
@@ -220,6 +303,8 @@ object ExportPlan {
       typeArgumentPlan(element).map(sig => ExportSignature.Applied(JavaList, List(sig)))
     case SimpleType.Array(element) =>
       typeArgumentPlan(element).map(sig => ExportSignature.Applied(JavaList, List(sig)))
+    case SimpleType.Enum(sym, List(element)) if isChain(sym) =>
+      typeArgumentPlan(element).map(sig => ExportSignature.Applied(JavaCollection, List(sig)))
     case SimpleType.Native(clazz, targs) if targs.nonEmpty =>
       traverse(targs)(typeArgumentPlan).map(ExportSignature.Applied(clazz, _))
     case _ => exact(tpe).map(_.signature)
@@ -232,6 +317,7 @@ object ExportPlan {
       case SimpleType.Enum(sym, List(element)) if isOption(sym) => optionPlan(element, defn.unboxedType.tpe)
       case SimpleType.Enum(sym, List(element)) if isList(sym) => listPlan(element, defn.unboxedType.tpe)
       case SimpleType.Array(element) => vectorPlan(element)
+      case SimpleType.Enum(sym, List(element)) if isChain(sym) => chainPlan(element, defn.unboxedType.tpe)
       case SimpleType.Native(clazz, targs) if targs.nonEmpty =>
         traverse(targs)(typeArgumentPlan).map(GenericNative(clazz, _))
       case declared => exact(declared)
@@ -270,6 +356,19 @@ object ExportPlan {
   private def vectorPlan(element: SimpleType)(implicit root: ca.uwaterloo.flix.language.ast.JvmAst.Root): Option[ExportPlan] =
     elementPlan(element, TypeDescs.toClassDesc(element)).map(AsVector(_, TypeDescs.toClassDesc(element)))
 
+  /** Builds a Chain conversion from the specialized enum retained by erasure. */
+  private def chainPlan(element: SimpleType, erased: SimpleType)(implicit root: ca.uwaterloo.flix.language.ast.JvmAst.Root): Option[ExportPlan] = erased match {
+    case SimpleType.Enum(sym, Nil) =>
+      val cases = root.enums(sym).cases.values
+      for {
+        empty <- cases.find(_.sym.name == "Empty")
+        one <- cases.find(c => c.sym.name == "One" && c.tpes.lengthCompare(1) == 0)
+        chain <- cases.find(c => c.sym.name == "Chain" && c.tpes.lengthCompare(2) == 0)
+        elementPlan <- elementPlan(element, TypeDescs.toClassDesc(one.tpes.head))
+      } yield AsChain(elementPlan, empty.sym.ordinal, one.sym.ordinal, one.tpes.map(TypeDescs.toClassDesc), chain.tpes.map(TypeDescs.toClassDesc))
+    case _ => None
+  }
+
   /** Returns a plan for a value placed in a Java reference-only type argument position. */
   private def elementPlan(declared: SimpleType, erased: ClassDesc): Option[ExportPlan] =
     Wrappers.get(erased).map(Boxed(erased, _)).orElse(exact(declared))
@@ -288,4 +387,7 @@ object ExportPlan {
 
   private def isList(sym: ca.uwaterloo.flix.language.ast.Symbol.EnumSym): Boolean =
     sym.namespace.isEmpty && sym.text == "List"
+
+  private def isChain(sym: ca.uwaterloo.flix.language.ast.Symbol.EnumSym): Boolean =
+    sym.namespace.isEmpty && sym.text == "Chain"
 }
