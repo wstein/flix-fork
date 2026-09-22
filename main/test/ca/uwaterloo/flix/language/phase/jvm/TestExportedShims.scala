@@ -156,6 +156,35 @@ class TestExportedShims extends AnyFunSuite {
     } finally deleteRecursively(output)
   }
 
+  test("a nullary export's Unit parameter still verifies") {
+    val result = compile(
+      """mod Acme.Api {
+        |    @Export pub def hello(): String = "hi"
+        |}
+        |""".stripMargin)
+
+    val facade = result.getClasses(Mangle.namespaceFacadeDesc(List("Acme", "Api"))).bytecode
+    var member: Option[String] = None
+    new ClassReader(facade).accept(new ClassVisitor(Opcodes.ASM9) {
+      override def visitMethod(access: Int, name: String, descriptor: String, signature: String, exceptions: Array[String]): MethodVisitor = {
+        if (name == "hello") member = Some(descriptor)
+        null
+      }
+    }, ClassReader.SKIP_CODE)
+    assert(member.isDefined)
+
+    val output = Files.createTempDirectory("flix-export-nullary")
+    try {
+      writeClasses(result, output)
+      val loader = new URLClassLoader(Array(output.toUri.toURL), getClass.getClassLoader)
+      try {
+        val clazz = loader.loadClass("Acme.Api")
+        val method = clazz.getDeclaredMethods.find(_.getName == "hello").get
+        assert(method.invoke(null) == "hi")
+      } finally loader.close()
+    } finally deleteRecursively(output)
+  }
+
   private def compile(program: String) = {
     val flix = new Flix().setOptions(Options.DefaultTest)
     flix.addSource(CompilerConstants.VirtualTestFile, program, sctx)

@@ -17,7 +17,7 @@
 package ca.uwaterloo.flix.language.phase.jvm.classes
 
 import ca.uwaterloo.flix.api.Flix
-import ca.uwaterloo.flix.language.ast.JvmAst
+import ca.uwaterloo.flix.language.ast.{JvmAst, SimpleType}
 import ca.uwaterloo.flix.language.phase.jvm.ClassMaker.Final.IsFinal
 import ca.uwaterloo.flix.language.phase.jvm.ClassMaker.Visibility.IsPublic
 import ca.uwaterloo.flix.language.phase.jvm.ClassMaker.{ConstructorMethod, InstanceField, StaticMethod}
@@ -51,8 +51,16 @@ object GenNamespace {
 
   private def Constructor(ns: List[String]): ConstructorMethod = ConstructorMethod(desc(ns), Nil)
 
+  /** The formal parameters as a Java caller sees them: a nullary export's lone `Unit` parameter is dropped. */
+  private def callerParams(defn: JvmAst.Def): List[JvmAst.OffsetFormalParam] =
+    if (!defn.ann.isExport) defn.fparams
+    else defn.fparams match {
+      case List(fp) if fp.tpe == SimpleType.Unit => Nil
+      case fps => fps
+    }
+
   def ShimMethod(ns: List[String], defn: JvmAst.Def)(implicit flix: Flix): StaticMethod = {
-    val erasedArgs = defn.fparams.map(_.tpe).map(boundaryType(defn.ann.isExport, _))
+    val erasedArgs = callerParams(defn).map(_.tpe).map(boundaryType(defn.ann.isExport, _))
     val erasedResult =
       if (defn.ann.isExport) defn.exportedReturnType.flatMap(ExportPlan.signatureOf).map(_.javaType).getOrElse(TypeDescs.toErasedClassDesc(defn.unboxedType.tpe))
       else TypeDescs.toErasedClassDesc(defn.unboxedType.tpe)
@@ -64,7 +72,8 @@ object GenNamespace {
 
   private def shimIns(defn: JvmAst.Def)(implicit mv: MethodVisitor, root: JvmAst.Root, flix: Flix): Unit = {
     val defnDesc = GenFunAndClosureClasses.defnDesc(defn.sym)
-    val facadeParamTypes = defn.fparams.map(fp => boundaryType(defn.ann.isExport, fp.tpe))
+    val params = callerParams(defn)
+    val facadeParamTypes = params.map(fp => boundaryType(defn.ann.isExport, fp.tpe))
     val fieldTypes = defn.fparams.map(fp => TypeDescs.toErasedClassDesc(fp.tpe))
     withNames(0, facadeParamTypes) {
       case (nextLocal, args) =>
@@ -78,6 +87,12 @@ object GenNamespace {
           DUP()
           arg.load()
           PUTFIELD(InstanceField(defnDesc, s"arg$index", fieldTypes(index)))
+        }
+        if (params.isEmpty && defn.fparams.nonEmpty) {
+          // A dropped nullary `Unit` parameter: the shim supplies the singleton itself.
+          DUP()
+          GETSTATIC(GenUnit.SingletonField)
+          PUTFIELD(InstanceField(defnDesc, "arg0", fieldTypes.head))
         }
         GenResult.unwindSuspensionFreeThunkToType(flixResult, s"in shim method of ${defn.sym}", defn.loc)
         resultPlan.foreach(_.emit(nextLocal))
@@ -94,7 +109,7 @@ object GenNamespace {
   private def methodSignature(defn: JvmAst.Def): Option[String] = {
     if (!defn.ann.isExport) None
     else defn.exportedReturnType.flatMap(ExportPlan.signatureOf).flatMap { result =>
-      val params = defn.fparams.map(fp => ExportPlan.signatureOf(fp.tpe).getOrElse(ExportSignature.Exact(TypeDescs.toErasedClassDesc(fp.tpe))))
+      val params = callerParams(defn).map(fp => ExportPlan.signatureOf(fp.tpe).getOrElse(ExportSignature.Exact(TypeDescs.toErasedClassDesc(fp.tpe))))
       val needsSignature = result.typeArgument != result.javaType.descriptorString() || params.exists(p => p.typeArgument != p.javaType.descriptorString())
       if (!needsSignature) None
       else {
