@@ -54,6 +54,10 @@ development lineages. It currently supports:
   elements are boxed and the emitted facade retains `T` in its generic signature.
 - `List[t]` results as eager, unmodifiable `java.util.List<T>` copies under the same element and
   generic-signature rules.
+- `Vector[t]` results as eager, unmodifiable `java.util.List<T>` copies read directly off the
+  underlying array, under the same element and generic-signature rules. `Array[t, r]` erases to
+  the same representation and stays refused; only `EntryPoints`, working from the pre-erasure
+  type, keeps a mutable, region-scoped array from reaching this conversion.
 - Explicitly imported Java classes, including nested generic arguments in parameters and results.
 
 It refuses other Flix algebraic data types, other containers, functions, and unaccounted reference
@@ -61,8 +65,9 @@ types because `EntryPoints` refuses those exports on this branch. Refusal is int
 a missing stub fails the build at generation time, while an incorrect stub compiles and later fails
 with a linkage error in innocent calling code.
 
-Converted containers are result-only. `Option[t]` and `List[t]` parameters remain refused because
-the shim currently passes parameters straight into Flix and therefore has no reverse conversion.
+Converted containers are result-only. `Option[t]`, `List[t]`, and `Vector[t]` parameters remain
+refused because the shim currently passes parameters straight into Flix and therefore has no
+reverse conversion.
 
 The tests compare generated stub declarations with the method descriptors on the facade bytecode.
 This pins the source-facing stub contract to the backend contract and catches drift between them.

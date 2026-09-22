@@ -255,6 +255,8 @@ object ExportStubs {
         typeArgumentSignatureOf(element, imps).map(sig => ExportSignature.Applied(ClassDesc.ofInternalName("java/util/Optional"), List(sig)))
       case (Some("List"), List(element)) if allowConvertedResult =>
         typeArgumentSignatureOf(element, imps).map(sig => ExportSignature.Applied(ClassDesc.ofInternalName("java/util/List"), List(sig)))
+      case (Some("Vector"), List(element)) if allowConvertedResult =>
+        typeArgumentSignatureOf(element, imps).map(sig => ExportSignature.Applied(ClassDesc.ofInternalName("java/util/List"), List(sig)))
       case (Some(name), targs) if targs.nonEmpty =>
         for {
           clazz <- imported(name, imps)

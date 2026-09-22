@@ -35,6 +35,7 @@ sealed trait ExportPlan {
 object ExportPlan {
 
   private val Optional = ClassDesc.ofInternalName("java/util/Optional")
+  private val JavaList = ClassDesc.ofInternalName("java/util/List")
 
   private val Wrappers: Map[ClassDesc, ClassDesc] = Map(
     CD_boolean -> ClassDesc.ofInternalName("java/lang/Boolean"),
@@ -106,7 +107,6 @@ object ExportPlan {
   case class AsList(element: ExportPlan, nilOrdinal: Int, consFields: List[ClassDesc]) extends ExportPlan {
     private val ArrayList = ClassDesc.ofInternalName("java/util/ArrayList")
     private val Collections = ClassDesc.ofInternalName("java/util/Collections")
-    private val JavaList = ClassDesc.ofInternalName("java/util/List")
 
     override def flixType: ClassDesc = GenTagged.Desc
 
@@ -145,6 +145,56 @@ object ExportPlan {
     }
   }
 
+  /**
+    * A Flix `Vector` result converted to an unmodifiable eager Java list.
+    *
+    * Unlike every other converted collection, `Vector` needs no `Tagged` unwrap: its Flix
+    * representation already is the Java array named by `component.arrayType()`.
+    */
+  case class AsVector(element: ExportPlan, component: ClassDesc) extends ExportPlan {
+    private val ArrayList = ClassDesc.ofInternalName("java/util/ArrayList")
+    private val Collections = ClassDesc.ofInternalName("java/util/Collections")
+
+    override def flixType: ClassDesc = component.arrayType()
+
+    override def signature: ExportSignature = ExportSignature.Applied(JavaList, List(element.signature))
+
+    override def emit(nextLocal: Int)(implicit mv: MethodVisitor): Unit = {
+      withName(nextLocal, component.arrayType()) { arr =>
+        withName(nextLocal + 1, CD_int) { index =>
+          withName(nextLocal + 2, ArrayList) { acc =>
+            arr.store()
+            NEW(ArrayList)
+            DUP()
+            INVOKESPECIAL(ClassMaker.ConstructorMethod(ArrayList, Nil))
+            acc.store()
+            ICONST_0()
+            index.store()
+            whileLoop(Condition.ICMPNE) {
+              index.load()
+              arr.load()
+              ARRAYLENGTH()
+            } {
+              acc.load()
+              arr.load()
+              index.load()
+              xArrayLoad(component)
+              element.emit(nextLocal + 3)
+              INVOKEVIRTUAL(ArrayList, "add", MethodTypeDescs.mkDescriptor(CD_Object)(CD_boolean))
+              POP()
+              index.load()
+              ICONST_1()
+              IADD()
+              index.store()
+            }
+            acc.load()
+            INVOKESTATIC(Collections, "unmodifiableList", MethodTypeDescs.mkDescriptor(JavaList)(JavaList))
+          }
+        }
+      }
+    }
+  }
+
   /** Returns the exact boundary plan currently supported for `tpe`. */
   def exact(tpe: SimpleType): Option[ExportPlan] = tpe match {
     case SimpleType.Bool => Some(Identity(CD_boolean))
@@ -167,7 +217,9 @@ object ExportPlan {
     case SimpleType.Enum(sym, List(element)) if isOption(sym) =>
       typeArgumentPlan(element).map(sig => ExportSignature.Applied(Optional, List(sig)))
     case SimpleType.Enum(sym, List(element)) if isList(sym) =>
-      typeArgumentPlan(element).map(sig => ExportSignature.Applied(ClassDesc.ofInternalName("java/util/List"), List(sig)))
+      typeArgumentPlan(element).map(sig => ExportSignature.Applied(JavaList, List(sig)))
+    case SimpleType.Array(element) =>
+      typeArgumentPlan(element).map(sig => ExportSignature.Applied(JavaList, List(sig)))
     case SimpleType.Native(clazz, targs) if targs.nonEmpty =>
       traverse(targs)(typeArgumentPlan).map(ExportSignature.Applied(clazz, _))
     case _ => exact(tpe).map(_.signature)
@@ -179,6 +231,7 @@ object ExportPlan {
     else defn.exportedReturnType.flatMap {
       case SimpleType.Enum(sym, List(element)) if isOption(sym) => optionPlan(element, defn.unboxedType.tpe)
       case SimpleType.Enum(sym, List(element)) if isList(sym) => listPlan(element, defn.unboxedType.tpe)
+      case SimpleType.Array(element) => vectorPlan(element)
       case SimpleType.Native(clazz, targs) if targs.nonEmpty =>
         traverse(targs)(typeArgumentPlan).map(GenericNative(clazz, _))
       case declared => exact(declared)
@@ -207,6 +260,15 @@ object ExportPlan {
       } yield AsList(elementPlan, nil.sym.ordinal, cons.tpes.map(TypeDescs.toClassDesc))
     case _ => None
   }
+
+  /**
+    * Builds a `java.util.List` conversion from a `Vector`'s element type.
+    *
+    * `Array[t, r]` erases to the same `SimpleType.Array` this matches; `EntryPoints` is what
+    * keeps a mutable, region-scoped `Array` from ever reaching this plan.
+    */
+  private def vectorPlan(element: SimpleType)(implicit root: ca.uwaterloo.flix.language.ast.JvmAst.Root): Option[ExportPlan] =
+    elementPlan(element, TypeDescs.toClassDesc(element)).map(AsVector(_, TypeDescs.toClassDesc(element)))
 
   /** Returns a plan for a value placed in a Java reference-only type argument position. */
   private def elementPlan(declared: SimpleType, erased: ClassDesc): Option[ExportPlan] =

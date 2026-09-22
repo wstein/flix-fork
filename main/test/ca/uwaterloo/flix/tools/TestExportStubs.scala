@@ -116,6 +116,22 @@ class TestExportStubs extends AnyFunSuite {
     assert(ExportStubs.javaSource(facades.head).contains("java.util.List<java.lang.Integer> values(int arg0)"))
   }
 
+  test("Vector results are typed while Vector parameters remain refused") {
+    val src =
+      """mod Acme.Api {
+        |    @Export pub def values(_x: Int32): Vector[Int32] = Vector#{}
+        |    @Export pub def consume(_x: Vector[Int32]): Int32 = 0
+        |}
+        |""".stripMargin
+
+    val (facades, unsupported) = stubs(src)
+    val methods = facades.flatMap(_.methods)
+    assert(methods.map(_.name) == List("values"))
+    assert(methods.head.result.sourceName == "java.util.List<java.lang.Integer>")
+    assert(unsupported.map(_.name) == List("consume"))
+    assert(ExportStubs.javaSource(facades.head).contains("java.util.List<java.lang.Integer> values(int arg0)"))
+  }
+
   test("imported generic Java types retain arguments in both positions") {
     val src =
       """mod Acme.Api {

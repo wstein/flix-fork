@@ -823,6 +823,24 @@ class TestEntryPoints extends AnyFunSuite with TestUtils {
     expectSuccess(result)
   }
 
+  test("Test.ValidExportFunction.VectorResult.01") {
+    val input =
+      """
+        |mod Mod { @Export pub def id(x: Int32): Vector[Int32] = ??? }
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibNix)
+    expectSuccess(result)
+  }
+
+  test("Test.IllegalExportFunction.05") {
+    val input =
+      """
+        |mod Mod { @Export pub def id(x: Int32): Array[Int32, Static] = ??? }
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibNix)
+    expectError[EntryPointError.IllegalExportType](result)
+  }
+
   test("Test.IllegalExportFunction.06") {
     val input =
       """

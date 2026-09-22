@@ -436,7 +436,7 @@ object EntryPoints {
     val retTpe = defn.spec.retTpe
     val returnTypes =
       if (isUnitType(retTpe) == Result.Ok(true)) Nil
-      else List(unapplyOption(retTpe).orElse(unapplyList(retTpe)).getOrElse(retTpe))
+      else List(unapplyOption(retTpe).orElse(unapplyList(retTpe)).orElse(unapplyVector(retTpe)).getOrElse(retTpe))
     val types = returnTypes ::: paramTypes
     types.flatMap(tpe => {
       isExportableType(tpe) match {
@@ -466,6 +466,21 @@ object EntryPoints {
     case Type.Apply(Type.Cst(TypeConstructor.Enum(sym, _), _), elm, _)
       if sym.namespace.isEmpty && sym.text == "List" => Some(elm)
     case Type.Alias(_, _, inner, _) => unapplyList(inner)
+    case _ => None
+  }
+
+  /**
+    * Returns the element of `Vector`, which is converted on return.
+    *
+    * `Array[t, r]` erases to the same `SimpleType.Array` as `Vector[t]` once codegen no longer
+    * has `Type` to tell them apart, so this unwrap -- exercised only in return position, as with
+    * `Option` and `List` above -- is the sole place soundness is enforced: a mutable, region-scoped
+    * `Array` must never reach here.
+    */
+  @tailrec
+  private def unapplyVector(tpe: Type): Option[Type] = tpe match {
+    case Type.Apply(Type.Cst(TypeConstructor.Vector, _), elm, _) => Some(elm)
+    case Type.Alias(_, _, inner, _) => unapplyVector(inner)
     case _ => None
   }
 
