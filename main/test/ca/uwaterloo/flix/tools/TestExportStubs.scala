@@ -148,6 +148,38 @@ class TestExportStubs extends AnyFunSuite {
     assert(ExportStubs.javaSource(facades.head).contains("java.util.Collection<java.lang.Integer> values(int arg0)"))
   }
 
+  test("Set results are typed while Set parameters remain refused") {
+    val src =
+      """mod Acme.Api {
+        |    @Export pub def values(_x: Int32): Set[Int32] = Set#{}
+        |    @Export pub def consume(_x: Set[Int32]): Int32 = 0
+        |}
+        |""".stripMargin
+
+    val (facades, unsupported) = stubs(src)
+    val methods = facades.flatMap(_.methods)
+    assert(methods.map(_.name) == List("values"))
+    assert(methods.head.result.sourceName == "java.util.Set<java.lang.Integer>")
+    assert(unsupported.map(_.name) == List("consume"))
+    assert(ExportStubs.javaSource(facades.head).contains("java.util.Set<java.lang.Integer> values(int arg0)"))
+  }
+
+  test("Map results are typed while Map parameters remain refused") {
+    val src =
+      """mod Acme.Api {
+        |    @Export pub def values(_x: Int32): Map[Int32, Int32] = Map#{}
+        |    @Export pub def consume(_x: Map[Int32, Int32]): Int32 = 0
+        |}
+        |""".stripMargin
+
+    val (facades, unsupported) = stubs(src)
+    val methods = facades.flatMap(_.methods)
+    assert(methods.map(_.name) == List("values"))
+    assert(methods.head.result.sourceName == "java.util.Map<java.lang.Integer, java.lang.Integer>")
+    assert(unsupported.map(_.name) == List("consume"))
+    assert(ExportStubs.javaSource(facades.head).contains("java.util.Map<java.lang.Integer, java.lang.Integer> values(int arg0)"))
+  }
+
   test("imported generic Java types retain arguments in both positions") {
     val src =
       """mod Acme.Api {

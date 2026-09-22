@@ -198,6 +198,78 @@ class TestExportedShims extends AnyFunSuite {
     } finally deleteRecursively(output)
   }
 
+  test("Set results cross as typed unmodifiable java.util.Set values") {
+    val result = compile(
+      """mod Acme.Api {
+        |    @Export pub def strings(_x: Int32): Set[String] = Set#{"a", "b", "c"}
+        |    @Export pub def ints(_x: Int32): Set[Int32] = Set#{1, 2, 3}
+        |    @Export pub def empty(_x: Int32): Set[Int32] = Set#{}
+        |}
+        |""".stripMargin)
+
+    val facade = result.getClasses(Mangle.namespaceFacadeDesc(List("Acme", "Api"))).bytecode
+    val methods = collection.mutable.Map.empty[String, (String, String)]
+    new ClassReader(facade).accept(new ClassVisitor(Opcodes.ASM9) {
+      override def visitMethod(access: Int, name: String, descriptor: String, signature: String, exceptions: Array[String]): MethodVisitor = {
+        if ((access & Opcodes.ACC_PUBLIC) != 0 && (access & Opcodes.ACC_STATIC) != 0)
+          methods(name) = descriptor -> signature
+        null
+      }
+    }, ClassReader.SKIP_CODE)
+    assert(methods("strings") == ("(I)Ljava/util/Set;", "(I)Ljava/util/Set<Ljava/lang/String;>;"))
+    assert(methods("ints") == ("(I)Ljava/util/Set;", "(I)Ljava/util/Set<Ljava/lang/Integer;>;"))
+
+    val output = Files.createTempDirectory("flix-export-set")
+    try {
+      writeClasses(result, output)
+      val loader = new URLClassLoader(Array(output.toUri.toURL), getClass.getClassLoader)
+      try {
+        val clazz = loader.loadClass("Acme.Api")
+        val strings = clazz.getMethod("strings", Integer.TYPE).invoke(null, Int.box(0)).asInstanceOf[java.util.Set[String]]
+        val ints = clazz.getMethod("ints", Integer.TYPE).invoke(null, Int.box(0)).asInstanceOf[java.util.Set[Integer]]
+        val empty = clazz.getMethod("empty", Integer.TYPE).invoke(null, Int.box(0)).asInstanceOf[java.util.Set[Integer]]
+        assert(strings.asScala == Set("a", "b", "c"))
+        assert(ints.asScala.map(_.intValue()) == Set(1, 2, 3))
+        assert(empty.isEmpty)
+        assertThrows[UnsupportedOperationException](strings.add("d"))
+      } finally loader.close()
+    } finally deleteRecursively(output)
+  }
+
+  test("Map results cross as typed unmodifiable java.util.Map values") {
+    val result = compile(
+      """mod Acme.Api {
+        |    @Export pub def ages(_x: Int32): Map[String, Int32] = Map#{"a" => 1, "b" => 2}
+        |    @Export pub def empty(_x: Int32): Map[String, Int32] = Map#{}
+        |}
+        |""".stripMargin)
+
+    val facade = result.getClasses(Mangle.namespaceFacadeDesc(List("Acme", "Api"))).bytecode
+    val methods = collection.mutable.Map.empty[String, (String, String)]
+    new ClassReader(facade).accept(new ClassVisitor(Opcodes.ASM9) {
+      override def visitMethod(access: Int, name: String, descriptor: String, signature: String, exceptions: Array[String]): MethodVisitor = {
+        if ((access & Opcodes.ACC_PUBLIC) != 0 && (access & Opcodes.ACC_STATIC) != 0)
+          methods(name) = descriptor -> signature
+        null
+      }
+    }, ClassReader.SKIP_CODE)
+    assert(methods("ages") == ("(I)Ljava/util/Map;", "(I)Ljava/util/Map<Ljava/lang/String;Ljava/lang/Integer;>;"))
+
+    val output = Files.createTempDirectory("flix-export-map")
+    try {
+      writeClasses(result, output)
+      val loader = new URLClassLoader(Array(output.toUri.toURL), getClass.getClassLoader)
+      try {
+        val clazz = loader.loadClass("Acme.Api")
+        val ages = clazz.getMethod("ages", Integer.TYPE).invoke(null, Int.box(0)).asInstanceOf[java.util.Map[String, Integer]]
+        val empty = clazz.getMethod("empty", Integer.TYPE).invoke(null, Int.box(0)).asInstanceOf[java.util.Map[String, Integer]]
+        assert(ages.asScala.view.mapValues(_.intValue()).toMap == Map("a" -> 1, "b" -> 2))
+        assert(empty.isEmpty)
+        assertThrows[UnsupportedOperationException](ages.put("c", 3))
+      } finally loader.close()
+    } finally deleteRecursively(output)
+  }
+
   test("generic Java types retain arguments in exported parameters and results") {
     val result = compile(
       """mod Acme.Api {

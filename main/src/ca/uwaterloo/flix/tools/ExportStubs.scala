@@ -259,6 +259,13 @@ object ExportStubs {
         typeArgumentSignatureOf(element, imps).map(sig => ExportSignature.Applied(ClassDesc.ofInternalName("java/util/List"), List(sig)))
       case (Some("Chain"), List(element)) if allowConvertedResult =>
         typeArgumentSignatureOf(element, imps).map(sig => ExportSignature.Applied(ClassDesc.ofInternalName("java/util/Collection"), List(sig)))
+      case (Some("Set"), List(element)) if allowConvertedResult =>
+        typeArgumentSignatureOf(element, imps).map(sig => ExportSignature.Applied(ClassDesc.ofInternalName("java/util/Set"), List(sig)))
+      case (Some("Map"), List(key, value)) if allowConvertedResult =>
+        for {
+          keySig <- typeArgumentSignatureOf(key, imps)
+          valueSig <- typeArgumentSignatureOf(value, imps)
+        } yield ExportSignature.Applied(ClassDesc.ofInternalName("java/util/Map"), List(keySig, valueSig))
       case (Some(name), targs) if targs.nonEmpty =>
         for {
           clazz <- imported(name, imps)

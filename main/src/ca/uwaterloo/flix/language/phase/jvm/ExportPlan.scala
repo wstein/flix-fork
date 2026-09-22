@@ -37,6 +37,8 @@ object ExportPlan {
   private val Optional = ClassDesc.ofInternalName("java/util/Optional")
   private val JavaList = ClassDesc.ofInternalName("java/util/List")
   private val JavaCollection = ClassDesc.ofInternalName("java/util/Collection")
+  private val JavaSet = ClassDesc.ofInternalName("java/util/Set")
+  private val JavaMap = ClassDesc.ofInternalName("java/util/Map")
 
   private val Wrappers: Map[ClassDesc, ClassDesc] = Map(
     CD_boolean -> ClassDesc.ofInternalName("java/lang/Boolean"),
@@ -278,6 +280,162 @@ object ExportPlan {
     }
   }
 
+  /**
+    * A Flix `Set` result converted to an unmodifiable eager Java set.
+    *
+    * `Set[t]` is a single-case wrapper around `RedBlackTree[t, Unit]`; `wrapperFields` unwraps
+    * it once, unconditionally, since there is no other case to branch on. The tree itself has
+    * more than one non-`Node` case (`Leaf`, and a transient `DoubleBlackLeaf` used mid-deletion),
+    * so the walk branches on being `Node` rather than enumerating every case that is not; order
+    * does not matter for a `Set`, so nothing tracks traversal direction, unlike `AsChain`.
+    */
+  case class AsSet(element: ExportPlan, wrapperFields: List[ClassDesc], nodeOrdinal: Int, nodeFields: List[ClassDesc]) extends ExportPlan {
+    private val ArrayDeque = ClassDesc.ofInternalName("java/util/ArrayDeque")
+    private val HashSet = ClassDesc.ofInternalName("java/util/HashSet")
+    private val Collections = ClassDesc.ofInternalName("java/util/Collections")
+
+    override def flixType: ClassDesc = GenTagged.Desc
+
+    override def signature: ExportSignature = ExportSignature.Applied(JavaSet, List(element.signature))
+
+    override def emit(nextLocal: Int)(implicit mv: MethodVisitor): Unit = {
+      withName(nextLocal, GenTagged.Desc) { wrapper =>
+        withName(nextLocal + 1, GenTagged.Desc) { node =>
+          withName(nextLocal + 2, ArrayDeque) { stack =>
+            withName(nextLocal + 3, HashSet) { acc =>
+              wrapper.store()
+              NEW(HashSet)
+              DUP()
+              INVOKESPECIAL(ClassMaker.ConstructorMethod(HashSet, Nil))
+              acc.store()
+              NEW(ArrayDeque)
+              DUP()
+              INVOKESPECIAL(ClassMaker.ConstructorMethod(ArrayDeque, Nil))
+              stack.store()
+              stack.load()
+              wrapper.load()
+              CHECKCAST(GenTag.desc(wrapperFields))
+              GETFIELD(GenTag.IndexField(wrapperFields, 0))
+              INVOKEVIRTUAL(ArrayDeque, "push", MethodTypeDescs.mkDescriptor(CD_Object)(CD_void))
+              whileLoop(Condition.ICMPNE) {
+                stack.load()
+                INVOKEVIRTUAL(ArrayDeque, "size", MethodTypeDescs.mkDescriptor()(CD_int))
+                pushInt(0)
+              } {
+                stack.load()
+                INVOKEVIRTUAL(ArrayDeque, "pop", MethodTypeDescs.mkDescriptor()(CD_Object))
+                CHECKCAST(GenTagged.Desc)
+                node.store()
+                node.load()
+                GETFIELD(GenTagged.OrdinalField)
+                pushInt(nodeOrdinal)
+                ifConditionElse(Condition.ICMPEQ) {
+                  acc.load()
+                  node.load()
+                  CHECKCAST(GenTag.desc(nodeFields))
+                  GETFIELD(GenTag.IndexField(nodeFields, 2))
+                  element.emit(nextLocal + 4)
+                  INVOKEVIRTUAL(HashSet, "add", MethodTypeDescs.mkDescriptor(CD_Object)(CD_boolean))
+                  POP()
+                  stack.load()
+                  node.load()
+                  CHECKCAST(GenTag.desc(nodeFields))
+                  GETFIELD(GenTag.IndexField(nodeFields, 1))
+                  INVOKEVIRTUAL(ArrayDeque, "push", MethodTypeDescs.mkDescriptor(CD_Object)(CD_void))
+                  stack.load()
+                  node.load()
+                  CHECKCAST(GenTag.desc(nodeFields))
+                  GETFIELD(GenTag.IndexField(nodeFields, 4))
+                  INVOKEVIRTUAL(ArrayDeque, "push", MethodTypeDescs.mkDescriptor(CD_Object)(CD_void))
+                } {
+                  // Leaf or DoubleBlackLeaf: nothing to add or push.
+                }
+              }
+              acc.load()
+              INVOKESTATIC(Collections, "unmodifiableSet", MethodTypeDescs.mkDescriptor(JavaSet)(JavaSet))
+            }
+          }
+        }
+      }
+    }
+  }
+
+  /** A Flix `Map` result converted to an unmodifiable eager Java map, by the same walk as `AsSet`. */
+  case class AsMap(key: ExportPlan, value: ExportPlan, wrapperFields: List[ClassDesc], nodeOrdinal: Int, nodeFields: List[ClassDesc]) extends ExportPlan {
+    private val ArrayDeque = ClassDesc.ofInternalName("java/util/ArrayDeque")
+    private val HashMap = ClassDesc.ofInternalName("java/util/HashMap")
+    private val Collections = ClassDesc.ofInternalName("java/util/Collections")
+
+    override def flixType: ClassDesc = GenTagged.Desc
+
+    override def signature: ExportSignature = ExportSignature.Applied(JavaMap, List(key.signature, value.signature))
+
+    override def emit(nextLocal: Int)(implicit mv: MethodVisitor): Unit = {
+      withName(nextLocal, GenTagged.Desc) { wrapper =>
+        withName(nextLocal + 1, GenTagged.Desc) { node =>
+          withName(nextLocal + 2, ArrayDeque) { stack =>
+            withName(nextLocal + 3, HashMap) { acc =>
+              wrapper.store()
+              NEW(HashMap)
+              DUP()
+              INVOKESPECIAL(ClassMaker.ConstructorMethod(HashMap, Nil))
+              acc.store()
+              NEW(ArrayDeque)
+              DUP()
+              INVOKESPECIAL(ClassMaker.ConstructorMethod(ArrayDeque, Nil))
+              stack.store()
+              stack.load()
+              wrapper.load()
+              CHECKCAST(GenTag.desc(wrapperFields))
+              GETFIELD(GenTag.IndexField(wrapperFields, 0))
+              INVOKEVIRTUAL(ArrayDeque, "push", MethodTypeDescs.mkDescriptor(CD_Object)(CD_void))
+              whileLoop(Condition.ICMPNE) {
+                stack.load()
+                INVOKEVIRTUAL(ArrayDeque, "size", MethodTypeDescs.mkDescriptor()(CD_int))
+                pushInt(0)
+              } {
+                stack.load()
+                INVOKEVIRTUAL(ArrayDeque, "pop", MethodTypeDescs.mkDescriptor()(CD_Object))
+                CHECKCAST(GenTagged.Desc)
+                node.store()
+                node.load()
+                GETFIELD(GenTagged.OrdinalField)
+                pushInt(nodeOrdinal)
+                ifConditionElse(Condition.ICMPEQ) {
+                  acc.load()
+                  node.load()
+                  CHECKCAST(GenTag.desc(nodeFields))
+                  GETFIELD(GenTag.IndexField(nodeFields, 2))
+                  key.emit(nextLocal + 4)
+                  node.load()
+                  CHECKCAST(GenTag.desc(nodeFields))
+                  GETFIELD(GenTag.IndexField(nodeFields, 3))
+                  value.emit(nextLocal + 4)
+                  INVOKEVIRTUAL(HashMap, "put", MethodTypeDescs.mkDescriptor(CD_Object, CD_Object)(CD_Object))
+                  POP()
+                  stack.load()
+                  node.load()
+                  CHECKCAST(GenTag.desc(nodeFields))
+                  GETFIELD(GenTag.IndexField(nodeFields, 1))
+                  INVOKEVIRTUAL(ArrayDeque, "push", MethodTypeDescs.mkDescriptor(CD_Object)(CD_void))
+                  stack.load()
+                  node.load()
+                  CHECKCAST(GenTag.desc(nodeFields))
+                  GETFIELD(GenTag.IndexField(nodeFields, 4))
+                  INVOKEVIRTUAL(ArrayDeque, "push", MethodTypeDescs.mkDescriptor(CD_Object)(CD_void))
+                } {
+                  // Leaf or DoubleBlackLeaf: nothing to put or push.
+                }
+              }
+              acc.load()
+              INVOKESTATIC(Collections, "unmodifiableMap", MethodTypeDescs.mkDescriptor(JavaMap)(JavaMap))
+            }
+          }
+        }
+      }
+    }
+  }
+
   /** Returns the exact boundary plan currently supported for `tpe`. */
   def exact(tpe: SimpleType): Option[ExportPlan] = tpe match {
     case SimpleType.Bool => Some(Identity(CD_boolean))
@@ -305,6 +463,11 @@ object ExportPlan {
       typeArgumentPlan(element).map(sig => ExportSignature.Applied(JavaList, List(sig)))
     case SimpleType.Enum(sym, List(element)) if isChain(sym) =>
       typeArgumentPlan(element).map(sig => ExportSignature.Applied(JavaCollection, List(sig)))
+    case SimpleType.Enum(sym, List(element)) if isSet(sym) =>
+      typeArgumentPlan(element).map(sig => ExportSignature.Applied(JavaSet, List(sig)))
+    case SimpleType.Enum(sym, List(key, value)) if isMap(sym) =>
+      for (keySig <- typeArgumentPlan(key); valueSig <- typeArgumentPlan(value))
+        yield ExportSignature.Applied(JavaMap, List(keySig, valueSig))
     case SimpleType.Native(clazz, targs) if targs.nonEmpty =>
       traverse(targs)(typeArgumentPlan).map(ExportSignature.Applied(clazz, _))
     case _ => exact(tpe).map(_.signature)
@@ -318,6 +481,8 @@ object ExportPlan {
       case SimpleType.Enum(sym, List(element)) if isList(sym) => listPlan(element, defn.unboxedType.tpe)
       case SimpleType.Array(element) => vectorPlan(element)
       case SimpleType.Enum(sym, List(element)) if isChain(sym) => chainPlan(element, defn.unboxedType.tpe)
+      case SimpleType.Enum(sym, List(element)) if isSet(sym) => setPlan(element, defn.unboxedType.tpe)
+      case SimpleType.Enum(sym, List(key, value)) if isMap(sym) => mapPlan(key, value, defn.unboxedType.tpe)
       case SimpleType.Native(clazz, targs) if targs.nonEmpty =>
         traverse(targs)(typeArgumentPlan).map(GenericNative(clazz, _))
       case declared => exact(declared)
@@ -369,6 +534,59 @@ object ExportPlan {
     case _ => None
   }
 
+  /**
+    * Builds a Set conversion by unwrapping the standard library's single-case `Set` wrapper and
+    * the `RedBlackTree` it carries.
+    */
+  private def setPlan(element: SimpleType, erased: SimpleType)(implicit root: ca.uwaterloo.flix.language.ast.JvmAst.Root): Option[ExportPlan] = erased match {
+    case SimpleType.Enum(sym, Nil) =>
+      for {
+        wrapper <- root.enums(sym).cases.values.find(_.sym.name == "Set")
+        nodeOrdinal <- redBlackTreeNodeOrdinal
+        elementPlan <- elementPlan(element, TypeDescs.toErasedClassDesc(element))
+      } yield AsSet(elementPlan, wrapper.tpes.map(TypeDescs.toClassDesc), nodeOrdinal, redBlackTreeNodeFields(element, SimpleType.Unit))
+    case _ => None
+  }
+
+  /**
+    * Builds a Map conversion by unwrapping the standard library's single-case `Map` wrapper and
+    * the `RedBlackTree` it carries.
+    */
+  private def mapPlan(key: SimpleType, value: SimpleType, erased: SimpleType)(implicit root: ca.uwaterloo.flix.language.ast.JvmAst.Root): Option[ExportPlan] = erased match {
+    case SimpleType.Enum(sym, Nil) =>
+      for {
+        wrapper <- root.enums(sym).cases.values.find(_.sym.name == "Map")
+        nodeOrdinal <- redBlackTreeNodeOrdinal
+        keyPlan <- elementPlan(key, TypeDescs.toErasedClassDesc(key))
+        valuePlan <- elementPlan(value, TypeDescs.toErasedClassDesc(value))
+      } yield AsMap(keyPlan, valuePlan, wrapper.tpes.map(TypeDescs.toClassDesc), nodeOrdinal, redBlackTreeNodeFields(key, value))
+    case _ => None
+  }
+
+  /**
+    * Returns the `Node` ordinal shared by every `RedBlackTree` specialization.
+    *
+    * A `Set`/`Map` wrapper's lone field is erased to `Object` by the time `root.enums` retains
+    * it: only fields at the export boundary itself keep a concrete type, and the wrapped tree is
+    * one level further in. There is no symbol here to look up the tree's own field types from,
+    * only its ordinals, which every specialization of the same source declaration shares.
+    */
+  private def redBlackTreeNodeOrdinal(implicit root: ca.uwaterloo.flix.language.ast.JvmAst.Root): Option[Int] =
+    root.enums.values.find(_.sym.text == "RedBlackTree")
+      .flatMap(_.cases.values.find(c => c.sym.name == "Node" && c.tpes.lengthCompare(5) == 0))
+      .map(_.sym.ordinal)
+
+  /**
+    * Returns the field types of `RedBlackTree`'s `Node(color, left, key, value, right)` case for
+    * the given key and value types.
+    *
+    * These are computed, not looked up: a tree's fields are erased the same way any value outside
+    * the export boundary is, so this mirrors ordinary erasure rather than reading a declaration
+    * this code has no reliable path to.
+    */
+  private def redBlackTreeNodeFields(key: SimpleType, value: SimpleType): List[ClassDesc] =
+    List(CD_Object, CD_Object, TypeDescs.toErasedClassDesc(key), TypeDescs.toErasedClassDesc(value), CD_Object)
+
   /** Returns a plan for a value placed in a Java reference-only type argument position. */
   private def elementPlan(declared: SimpleType, erased: ClassDesc): Option[ExportPlan] =
     Wrappers.get(erased).map(Boxed(erased, _)).orElse(exact(declared))
@@ -390,4 +608,10 @@ object ExportPlan {
 
   private def isChain(sym: ca.uwaterloo.flix.language.ast.Symbol.EnumSym): Boolean =
     sym.namespace.isEmpty && sym.text == "Chain"
+
+  private def isSet(sym: ca.uwaterloo.flix.language.ast.Symbol.EnumSym): Boolean =
+    sym.namespace.isEmpty && sym.text == "Set"
+
+  private def isMap(sym: ca.uwaterloo.flix.language.ast.Symbol.EnumSym): Boolean =
+    sym.namespace.isEmpty && sym.text == "Map"
 }

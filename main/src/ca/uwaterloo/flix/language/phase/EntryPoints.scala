@@ -436,7 +436,11 @@ object EntryPoints {
     val retTpe = defn.spec.retTpe
     val returnTypes =
       if (isUnitType(retTpe) == Result.Ok(true)) Nil
-      else List(unapplyOption(retTpe).orElse(unapplyList(retTpe)).orElse(unapplyVector(retTpe)).orElse(unapplyChain(retTpe)).getOrElse(retTpe))
+      else unapplyMap(retTpe) match {
+        case Some((k, v)) => List(k, v)
+        case None => List(unapplyOption(retTpe).orElse(unapplyList(retTpe)).orElse(unapplyVector(retTpe))
+          .orElse(unapplyChain(retTpe)).orElse(unapplySet(retTpe)).getOrElse(retTpe))
+      }
     val types = returnTypes ::: paramTypes
     types.flatMap(tpe => {
       isExportableType(tpe) match {
@@ -490,6 +494,24 @@ object EntryPoints {
     case Type.Apply(Type.Cst(TypeConstructor.Enum(sym, _), _), elm, _)
       if sym.namespace.isEmpty && sym.text == "Chain" => Some(elm)
     case Type.Alias(_, _, inner, _) => unapplyChain(inner)
+    case _ => None
+  }
+
+  /** Returns the element of the standard library's `Set`, which is converted on return. */
+  @tailrec
+  private def unapplySet(tpe: Type): Option[Type] = tpe match {
+    case Type.Apply(Type.Cst(TypeConstructor.Enum(sym, _), _), elm, _)
+      if sym.namespace.isEmpty && sym.text == "Set" => Some(elm)
+    case Type.Alias(_, _, inner, _) => unapplySet(inner)
+    case _ => None
+  }
+
+  /** Returns the key and value of the standard library's `Map`, which are converted on return. */
+  @tailrec
+  private def unapplyMap(tpe: Type): Option[(Type, Type)] = tpe match {
+    case Type.Apply(Type.Apply(Type.Cst(TypeConstructor.Enum(sym, _), _), key, _), value, _)
+      if sym.namespace.isEmpty && sym.text == "Map" => Some((key, value))
+    case Type.Alias(_, _, inner, _) => unapplyMap(inner)
     case _ => None
   }
 

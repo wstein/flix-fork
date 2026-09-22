@@ -62,6 +62,12 @@ development lineages. It currently supports:
   element and generic-signature rules. `Collection`, not `List`: a `Chain` has no efficient
   indexed access to advertise. Its `Empty | One(t) | Chain(l, r)` binary-tree shape is walked
   with an explicit stack rather than `List`'s single cursor.
+- `Set[t]` and `Map[k, v]` results as eager, unmodifiable `java.util.Set<T>` / `java.util.Map<K, V>`
+  copies. Both wrap a `RedBlackTree`, walked with the same explicit-stack technique as `Chain`
+  (branching on being its `Node` case, since it also has a transient `DoubleBlackLeaf` case
+  besides `Leaf`). The tree's field types are computed from the exported key/value types by
+  ordinary erasure rather than looked up: the wrapper's own field is itself erased to `Object` by
+  the time `EntryPoints`' retention reaches it, one level short of the tree it names.
 - Explicitly imported Java classes, including nested generic arguments in parameters and results.
 
 It refuses other Flix algebraic data types, other containers, functions, and unaccounted reference
@@ -69,10 +75,9 @@ types because `EntryPoints` refuses those exports on this branch. Refusal is int
 a missing stub fails the build at generation time, while an incorrect stub compiles and later fails
 with a linkage error in innocent calling code.
 
-Converted containers are result-only. `Option[t]`, `List[t]`, `Vector[t]`, and `Chain[t]`
-parameters remain refused because the shim currently passes parameters straight into Flix and
-therefore has no
-reverse conversion.
+Converted containers are result-only. `Option[t]`, `List[t]`, `Vector[t]`, `Chain[t]`, `Set[t]`,
+and `Map[k, v]` parameters remain refused because the shim currently passes parameters straight
+into Flix and therefore has no reverse conversion.
 
 The tests compare generated stub declarations with the method descriptors on the facade bytecode.
 This pins the source-facing stub contract to the backend contract and catches drift between them.
