@@ -1,17 +1,5 @@
 # Changelog
 
-Unreleased:
-- Package Manager: `[package].name` in `flix.toml` is now the sole canonical,
-  strictly validated package name. Checkout-directory and GitHub-repository
-  names identify locations and are not used as package names. Package and JAR
-  artifacts use the manifest name. Names containing separators, `:`, trailing
-  dots, Windows device names, or more than 250 characters must be renamed before
-  upgrading.
-- Package Manager: Public GitHub dependencies download release assets directly
-  without using the GitHub API. With `--github-token`, each dependency uses one
-  targeted release API lookup, reused to download both `flix.toml` and the
-  manifest-named fpkg through the authenticated asset API.
-
 Version 0.76.1:
 - Compiler: Restructure LSP internals (thanks Magnus!)
 

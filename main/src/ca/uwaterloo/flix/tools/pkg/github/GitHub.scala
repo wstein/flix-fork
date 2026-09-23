@@ -50,15 +50,14 @@ object GitHub {
   /**
     * An asset from a GitHub project release.
     *
-    * `apiUrl` is its REST API asset URL -- the only address that downloads it uniformly for a
-    * public or a private repo alike (see [[downloadAsset]]).
+    * `url` is the link to download the asset.
     */
-  case class Asset(name: String, apiUrl: URL)
+  case class Asset(name: String, url: URL)
 
   /**
-    * Lists the project's release versions.
+    * Lists the project's releases.
     */
-  def getReleases(project: Project, apiKey: Option[String]): Result[List[SemVer], PackageError] = {
+  def getReleases(project: Project, apiKey: Option[String]): Result[List[Release], PackageError] = {
     val url = releasesUrl(project)
     val reqBuilder = HttpRequest.newBuilder(url.toURI)
     // add the API key as bearer if needed
@@ -75,33 +74,7 @@ object GitHub {
 
       case _: ClassCastException => return Err(PackageError.JsonError(json, project))
     }
-    Ok(releaseJsons.arr.map(parseReleaseVersion))
-  }
-
-  /**
-    * Gets `project`'s `version` release directly, by tag -- one targeted request instead of
-    * [[getReleases]]'s whole release history filtered client-side.
-    */
-  def getRelease(project: Project, version: SemVer, apiKey: Option[String]): Result[Release, PackageError] = {
-    val url = releaseVersionUrl(project, version)
-    val reqBuilder = HttpRequest.newBuilder(url.toURI)
-    apiKey.foreach(key => reqBuilder.header("Authorization", "Bearer " + key))
-    val req = reqBuilder.GET().build()
-    val resp = try {
-      Client.sendRequest(req)
-    } catch {
-      case ex: IOException => return Err(PackageError.ProjectNotFound(url, project, ex))
-    }
-    val status = resp.statusCode()
-    if (status < 200 || status >= 300) {
-      return Err(releaseFailure(project, version, url, status, retryAfter(resp)))
-    }
-    val json = resp.body()
-    try {
-      Ok(parseRelease(parse(json)))
-    } catch {
-      case _: ClassCastException | _: RuntimeException => Err(PackageError.JsonError(json, project))
-    }
+    Ok(releaseJsons.arr.map(parseRelease))
   }
 
   /**
@@ -268,7 +241,9 @@ object GitHub {
     * Kept apart: a refusal (403/429, usually a rate limit), any other unexpected status, and never
     * reaching a server at all.
     */
-  private def download(url: URL, request: HttpRequest): Result[InputStream, PackageError] = {
+  def download(url: URL): Result[InputStream, PackageError] = {
+    val request = HttpRequest.newBuilder(url.toURI).GET().build()
+
     val response = try {
       Client.sendStreamingRequest(request)
     } catch {
@@ -281,27 +256,18 @@ object GitHub {
       case status =>
         // A close failure must not shadow the status being reported.
         try response.body().close() catch { case _: IOException => () }
-        Err(downloadFailure(url, status, retryAfter(response)))
+        status match {
+          case 403 => Err(PackageError.DownloadRefused(url, status, retryAfter(response)))
+          case 429 => Err(PackageError.DownloadRefused(url, status, retryAfter(response)))
+          case _ => Err(PackageError.DownloadFailed(url, status))
+        }
     }
-  }
-
-  /** Opens a public URL without authentication. */
-  def download(url: URL): Result[InputStream, PackageError] =
-    download(url, HttpRequest.newBuilder(url.toURI).GET().build())
-
-  /**
-    * Classifies an unsuccessful download response.
-    */
-  private[github] def downloadFailure(url: URL, status: Int, retryAfter: Option[String]): PackageError = status match {
-    case 403 => PackageError.DownloadRefused(url, status, retryAfter)
-    case 429 => PackageError.DownloadRefused(url, status, retryAfter)
-    case _ => PackageError.DownloadFailed(url, status)
   }
 
   /**
     * Returns `response`'s `Retry-After` header, if it has one.
     */
-  private def retryAfter[A](response: HttpResponse[A]): Option[String] = {
+  private def retryAfter(response: HttpResponse[InputStream]): Option[String] = {
     val header = response.headers().firstValue("Retry-After")
     if (header.isPresent) Some(header.get()) else None
   }
@@ -309,9 +275,9 @@ object GitHub {
   /**
     * Opens a stream over the `assetName` asset of `project`'s `version` release, without consulting
     * the REST API -- a release asset's address is fully predictable from owner/repo/tag/name.
-    * The caller closes the stream.
+    * The caller closes the stream. See [[findReleaseAsset]] for the fallback when this 404s.
     */
-  def downloadPublicReleaseAsset(project: Project, version: SemVer, assetName: String): Result[InputStream, PackageError] = {
+  def downloadReleaseAsset(project: Project, version: SemVer, assetName: String): Result[InputStream, PackageError] = {
     val url = releaseAssetUrl(project, version, assetName)
     download(url) match {
       case Err(PackageError.DownloadFailed(_, 404)) =>
@@ -320,44 +286,52 @@ object GitHub {
     }
   }
 
-  /** Downloads `asset` through GitHub's authenticated release asset API. */
-  def downloadAsset(asset: Asset, apiKey: String): Result[InputStream, PackageError] = {
-    val request = apiAssetDownloadRequest(asset.apiUrl, apiKey)
-    download(asset.apiUrl, request)
-  }
-
-  /** Constructs an authenticated request for a release asset's binary content. */
-  private[github] def apiAssetDownloadRequest(url: URL, apiKey: String): HttpRequest =
-    HttpRequest.newBuilder(url.toURI)
-      .header("Authorization", "Bearer " + apiKey)
-      .header("Accept", "application/octet-stream")
-      .GET()
-      .build()
-
-  /** Finds the asset whose name exactly matches `assetName`. */
-  private[github] def findAsset(release: Release, assetName: String): Option[Asset] =
-    release.assets.find(_.name == assetName)
-
-  /** Returns the exactly named asset, or an error if this already-fetched release lacks it. */
-  def requireAsset(project: Project, version: SemVer, release: Release, assetName: String): Result[Asset, PackageError] =
-    findAsset(release, assetName) match {
-      case Some(asset) => Ok(asset)
-      case None => Err(PackageError.AssetNotFound(project, version, assetName))
+  /**
+    * Finds the single `extension` asset in `project`'s `version` release by reading the REST API --
+    * the fallback for when [[downloadReleaseAsset]]'s guessed name 404s.
+    */
+  def findReleaseAsset(project: Project, version: SemVer, extension: String, apiKey: Option[String]): Result[Asset, PackageError] = {
+    getReleases(project, apiKey).flatMap { releases =>
+      releases.find(r => r.version == version) match {
+        case None => Err(PackageError.VersionDoesNotExist(version, project))
+        case Some(release) =>
+          release.assets.filter(_.name.endsWith(s".$extension")) match {
+            case Nil => Err(PackageError.NoSuchFile(project.toString, extension))
+            case asset :: Nil => Ok(asset)
+            case _ => Err(PackageError.TooManyFiles(project.toString, extension))
+          }
+      }
     }
-
-  /** Classifies an unsuccessful targeted release lookup. */
-  private[github] def releaseFailure(project: Project, version: SemVer, url: URL, status: Int, retryAfter: Option[String]): PackageError =
-    if (status == 404) PackageError.VersionDoesNotExist(version, project)
-    else downloadFailure(url, status, retryAfter)
+  }
 
   /**
     * The permanent, non-REST address of a release asset.
     */
   private def releaseAssetUrl(project: Project, version: SemVer, assetName: String): URL = {
-    // The 4-arg constructor percent-encodes the path components defensively.
+    // The 4-arg constructor percent-encodes the path, so a name with a space or "#" (legal in a
+    // manifest's declared name, which this can be built from) can't produce a malformed URL.
     val path = s"/${project.owner}/${project.repo}/releases/download/v$version/$assetName"
     new URI("https", "github.com", path, null).toURL
   }
+
+  /**
+    * Gets the project release with the relevant semantic version.
+    */
+  def getSpecificRelease(project: Project, version: SemVer, apiKey: Option[String]): Result[Release, PackageError] = {
+    getReleases(project, apiKey).flatMap {
+      releases =>
+        releases.find(r => r.version == version) match {
+          case None => Err(PackageError.VersionDoesNotExist(version, project))
+          case Some(release) => Ok(release)
+        }
+    }
+  }
+
+  /**
+    * Downloads the given asset.
+    */
+  def downloadAsset(asset: Asset): InputStream =
+    asset.url.openStream()
 
   /**
     * Returns the URL that returns data related to the project's releases.
@@ -402,19 +376,13 @@ object GitHub {
     Release(version, assets)
   }
 
-  /** Parses a release version without requiring asset metadata. */
-  private[github] def parseReleaseVersion(json: JValue): SemVer =
-    parseSemVer((json \ "tag_name").values.toString)
-
   /**
     * Parses an Asset JSON.
-    *
-    * Package-private so parsing can be tested without a network.
     */
-  private[github] def parseAsset(asset: JValue): Asset = {
-    val apiUrl = asset \ "url"
+  private def parseAsset(asset: JValue): Asset = {
+    val url = asset \ "browser_download_url"
     val name = asset \ "name"
-    Asset(name.values.toString, new URI(apiUrl.values.toString).toURL)
+    Asset(name.values.toString, new URI(url.values.toString).toURL)
   }
 
   /**

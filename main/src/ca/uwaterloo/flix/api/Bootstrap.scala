@@ -30,7 +30,7 @@ import ca.uwaterloo.flix.runtime.{CompilationResult, JvmLoader, LoadedProgram}
 import ca.uwaterloo.flix.runtime.shell.FileWatcher
 import ca.uwaterloo.flix.tools.{CoverageReporter, Stat, Tester}
 import ca.uwaterloo.flix.tools.pkg.github.GitHub
-import ca.uwaterloo.flix.tools.pkg.{FlixPackageManager, JarPackageManager, Manifest, ManifestParser, MavenPackageManager, PackageError, PackageModules, PackageName, ReleaseError, SemVer}
+import ca.uwaterloo.flix.tools.pkg.{FlixPackageManager, JarPackageManager, Manifest, ManifestParser, MavenPackageManager, PackageError, PackageModules, ReleaseError, SemVer}
 import ca.uwaterloo.flix.util.Result.{Err, Ok}
 import ca.uwaterloo.flix.util.collection.ListMap
 import ca.uwaterloo.flix.util.{Build, FileOps, Formatter, Options, Result}
@@ -63,7 +63,7 @@ object Bootstrap {
     //
     // Compute the name of the package based on the directory name.
     //
-    val packageName = getInitialPackageName(p)
+    val packageName = getPackageName(p)
 
     //
     // Compute all the directories and files we intend to create.
@@ -89,7 +89,7 @@ object Bootstrap {
 
     FileOps.newFileIfAbsent(manifestFile) {
       s"""[package]
-         |name        = "$packageName" # Stable package and artifact names.
+         |name        = "$packageName"
          |description = "test"
          |version     = "0.1.0"
          |flix        = "${Version.CurrentVersion}"
@@ -343,16 +343,10 @@ object Bootstrap {
     */
   private def getGitIgnoreFile(p: Path): Path = p.resolve("./.gitignore").normalize()
 
-  /** Returns the path to a project artifact with the given extension. */
-  private def getArtifactFile(p: Path, name: String, extension: String): Path = {
-    val artifactDirectory = getArtifactDirectory(p).toAbsolutePath.normalize()
-    val artifactFile = artifactDirectory.resolve(s"$name.$extension").normalize()
-    require(artifactFile.startsWith(artifactDirectory), s"Artifact path escapes its directory: $artifactFile")
-    artifactFile
-  }
-
-  /** Returns the path to the jar file based on its artifact name. */
-  private def getJarFile(p: Path, name: String): Path = getArtifactFile(p, name, EXT_JAR)
+  /**
+    * Returns the path to the jar file based on the given path `p`.
+    */
+  private def getJarFile(p: Path): Path = getArtifactDirectory(p).resolve(getPackageName(p) + s".$EXT_JAR").normalize()
 
   /**
     * Returns the package name based on the given path `p`.
@@ -360,18 +354,9 @@ object Bootstrap {
   private def getPackageName(p: Path): String = p.toAbsolutePath.normalize().getFileName.toString
 
   /**
-    * Returns a portable package-name default for a new project.
-    *
-    * A checkout directory is not necessarily a valid artifact basename: it can contain
-    * spaces, quotes, or platform-specific characters. `init` therefore derives a safe
-    * default which users may subsequently change in `flix.toml`.
+    * Returns the path to the pkg file based on the given path `p`.
     */
-  private def getInitialPackageName(p: Path): String = {
-    PackageName.normalize(getPackageName(p))
-  }
-
-  /** Returns the path to the package file based on its artifact name. */
-  private def getPkgFile(p: Path, name: String): Path = getArtifactFile(p, name, EXT_FPKG)
+  private def getPkgFile(p: Path): Path = getArtifactDirectory(p).resolve(getPackageName(p) + s".$EXT_FPKG").normalize()
 
   /**
     * Returns `true` if the given path `p` is a jar-file.
@@ -413,21 +398,6 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
 
   // The `flix.toml` manifest if in project mode, otherwise `None`
   private var optManifest: Option[Manifest] = None
-
-  /**
-    * The basename for artifacts produced by this project.
-    *
-    * Project mode uses the manifest's validated package name. Directory mode has no
-    * manifest and therefore retains the directory-name fallback.
-    */
-  private def artifactName: String = optManifest.map(_.name).getOrElse(PackageName.normalize(Bootstrap.getPackageName(projectPath)))
-
-  private def getJarFile: Path = Bootstrap.getJarFile(projectPath, artifactName)
-
-  private def getPkgFile: Path = Bootstrap.getPkgFile(projectPath, artifactName)
-
-  /** Returns the artifacts uploaded by [[release]]. */
-  private[flix] def releaseArtifacts: List[Path] = List(getPkgFile, Bootstrap.getManifestFile(projectPath))
 
   // The source files, packages, and JARs of the project. Replaced as a whole whenever the project is scanned.
   private var files: ProjectFiles = ProjectFiles(Nil, Nil, Nil)
@@ -926,7 +896,7 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
     * Builds a jar package for the project.
     */
   def buildJar(flix: Flix): Result[Unit, BootstrapError] = {
-    val jarFile = getJarFile
+    val jarFile = Bootstrap.getJarFile(projectPath)
     for {
       _ <- configureJarOutput(flix)
       result <- compile(flix)
@@ -1026,7 +996,7 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
     * Builds a fatjar package for the project.
     */
   def buildFatJar(flix: Flix): Result[Unit, BootstrapError] = {
-    val jarFile = getJarFile
+    val jarFile = Bootstrap.getJarFile(projectPath)
     val libDir = Bootstrap.getLibraryDirectory(projectPath)
     for {
       _ <- configureJarOutput(flix)
@@ -1180,7 +1150,7 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
     Files.createDirectories(Bootstrap.getArtifactDirectory(projectPath))
 
     // The path to the fpkg file.
-    val pkgFile = getPkgFile
+    val pkgFile = Bootstrap.getPkgFile(projectPath)
 
     // Check whether it is safe to write to the file.
     if (Files.exists(pkgFile) && !Bootstrap.isPkgFile(pkgFile)) {
@@ -1636,7 +1606,8 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
 
     // Publish to GitHub
     out.println("Publishing a new release...")
-    val publishResult = GitHub.publishRelease(githubRepo, manifest.version, releaseArtifacts, githubToken)
+    val artifacts = List(Bootstrap.getPkgFile(projectPath), Bootstrap.getManifestFile(projectPath))
+    val publishResult = GitHub.publishRelease(githubRepo, manifest.version, artifacts, githubToken)
     publishResult match {
       case Ok(()) => // Continue
       case Err(e) => return Result.Err(BootstrapError.ReleaseError(e))
