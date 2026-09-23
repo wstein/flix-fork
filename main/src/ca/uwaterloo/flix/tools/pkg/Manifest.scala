@@ -16,19 +16,30 @@
  */
 package ca.uwaterloo.flix.tools.pkg
 
-import ca.uwaterloo.flix.language.ast.shared.SecurityContext
+import ca.uwaterloo.flix.language.ast.shared.{Mountpoint, PackageId, SecurityContext}
 import ca.uwaterloo.flix.tools.pkg.github.GitHub
 
-case class Manifest(name: String,
-                    description: String,
-                    version: SemVer,
+case class Manifest(version: SemVer,
                     repository: Option[GitHub.Project],
-                    modules: PackageModules,
                     flix: SemVer,
-                    license: Option[String],
-                    authors: List[String],
                     dependencies: List[Dependency]) {
   def flixDependencies: List[Dependency.FlixDependency] = dependencies.collect { case dep: Dependency.FlixDependency => dep }
+
+  /**
+    * Returns how this package is named in a message.
+    *
+    * A package is named by the repository it is published as, and by nothing else: that is what
+    * a dependent writes to declare it, and what its release assets are found under. A package
+    * that declares no repository cannot be addressed, and so has no name to give.
+    */
+  def displayName: String = repository.map(_.toString).getOrElse(Manifest.Unnamed)
+
+  /**
+    * Returns the mount table of this manifest: the name of each mount to the identifier of the
+    * dependency it names. A dependency that declares no mount does not appear.
+    */
+  def mounts: Map[Mountpoint, PackageId] =
+    flixDependencies.flatMap(dep => dep.mount.map(_ -> dep.id)).toMap
 
   def mavenDependencies: List[Dependency.MavenDependency] = dependencies.collect { case dep: Dependency.MavenDependency => dep }
 
@@ -36,6 +47,12 @@ case class Manifest(name: String,
 }
 
 object Manifest {
+
+  /** How a package that declares no repository is named in a message. */
+  val Unnamed: String = "<unnamed>"
+
+  /** The keys that TOML reads as they are written. */
+  private val BareKey = "[A-Za-z0-9_-]+".r
 
   /**
     * Formats `manifest` as a string / a valid `.toml` file.
@@ -46,7 +63,9 @@ object Manifest {
     val flixDepSection = mkFlixDependencySection(manifest)
     val mvnDepSection = mkMavenDependencySection(manifest)
     val jarDepSection = mkJarDependencySection(manifest)
+    // A section that declares nothing is left out rather than written empty.
     List(packageSection, flixDepSection, mvnDepSection, jarDepSection)
+      .filter(section => section.entries.exists { case _: TomlEntry.Present => true; case TomlEntry.Absent => false })
       .map(formatTomlSection)
       .mkString(System.lineSeparator())
   }
@@ -54,29 +73,14 @@ object Manifest {
   private def mkPackageSection(manifest: Manifest): TomlSection = {
     val repository = manifest.repository.map(proj => TomlEntry.Present(TomlKey("repository"), TomlExp.TomlValue(s"github:$proj")))
       .getOrElse(TomlEntry.Absent)
-    val modules = manifest.modules match {
-      case PackageModules.All => TomlEntry.Absent
-      case PackageModules.Selected(included) =>
-        TomlEntry.Present(TomlKey("modules"), TomlExp.TomlArray(included.toList.map(TomlExp.TomlValue.apply)))
-    }
-    val license = manifest.license.map(license => TomlEntry.Present(TomlKey("license"), TomlExp.TomlValue(license)))
-      .getOrElse(TomlEntry.Absent)
-    val name = TomlEntry.Present(TomlKey("name"), TomlExp.TomlValue(manifest.name))
-    val description = TomlEntry.Present(TomlKey("description"), TomlExp.TomlValue(manifest.description))
     val version = TomlEntry.Present(TomlKey("version"), TomlExp.TomlValue(manifest.version))
     val flixVersion = TomlEntry.Present(TomlKey("flix"), TomlExp.TomlValue(manifest.flix))
-    val authors = TomlEntry.Present(TomlKey("authors"), TomlExp.TomlArray(manifest.authors.map(TomlExp.TomlValue.apply)))
 
     TomlSection("package",
       List(
-        name,
-        description,
         version,
         repository,
-        modules,
         flixVersion,
-        license,
-        authors,
       )
     )
   }
@@ -94,10 +98,10 @@ object Manifest {
   }
 
   private def mkFlixDependency(dep: Dependency.FlixDependency): TomlEntry = {
-    val key = TomlKey(dep.identifier)
+    val key = TomlKey(dep.id.toString)
     val version = TomlEntry.Present(TomlKey("version"), TomlExp.TomlValue(dep.version))
     // The default mount and the default security context are not rendered.
-    val mount = if (dep.hasDefaultMount) TomlEntry.Absent else TomlEntry.Present(TomlKey("mount"), TomlExp.TomlValue(dep.mount))
+    val mount = dep.mount.map(m => TomlEntry.Present(TomlKey("mount"), TomlExp.TomlValue(m))).getOrElse(TomlEntry.Absent)
     val security = dep.sctx match {
       case SecurityContext.Default => TomlEntry.Absent
       case sctx => TomlEntry.Present(TomlKey("security"), TomlExp.TomlValue(sctx))
@@ -148,15 +152,26 @@ object Manifest {
 
   private def formatTomlKey(key0: TomlKey): String = {
     val padding = List.range(0, key0.padding).map(_ => " ").mkString
-    s"\"${key0.k}\"$padding"
+    s"${renderTomlKey(key0.k)}$padding"
   }
+
+  /**
+    * Returns `k` as TOML reads it back as one key.
+    *
+    * A key is quoted only when it must be: a package identifier holds `:` and `/`, and the name
+    * of a jar holds `.`, none of which TOML reads as part of a bare key.
+    */
+  private def renderTomlKey(k: String): String =
+    if (BareKey.matches(k)) k else s"\"${escape(k)}\""
 
   /** Returns the list of entries, where the padding has been adjusted to account for the longest key. */
   private def padKeys(entries: List[TomlEntry.Present]): List[TomlEntry.Present] = {
-    val optLongestKey = entries.map(_.key.k.length).maxOption
+    // A key is padded by how it is rendered, since a quoted key is two characters wider than it
+    // reads.
+    val optLongestKey = entries.map(e => renderTomlKey(e.key.k).length).maxOption
     optLongestKey match {
       case Some(longestKey) => entries.map {
-        case TomlEntry.Present(TomlKey(key, _), texp) => TomlEntry.Present(TomlKey(key, longestKey - key.length), texp)
+        case TomlEntry.Present(TomlKey(key, _), texp) => TomlEntry.Present(TomlKey(key, longestKey - renderTomlKey(key).length), texp)
       }
       case None => entries
     }

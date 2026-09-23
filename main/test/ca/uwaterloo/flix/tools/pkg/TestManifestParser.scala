@@ -1,11 +1,11 @@
 package ca.uwaterloo.flix.tools.pkg
 
-import ca.uwaterloo.flix.language.ast.Symbol
-import ca.uwaterloo.flix.language.ast.shared.SecurityContext
+import ca.uwaterloo.flix.language.ast.shared.{Mountpoint, PackageId, Repository, SecurityContext}
 import ca.uwaterloo.flix.tools.pkg.github.GitHub
 import ca.uwaterloo.flix.util.Result.{Err, Ok}
 import ca.uwaterloo.flix.util.{Formatter, Result}
 import org.scalatest.DoNotDiscover
+import ca.uwaterloo.flix.tools.pkg.PkgTestUtils.ManifestPath
 import org.scalatest.funsuite.AnyFunSuite
 
 import java.io.File
@@ -55,27 +55,101 @@ class TestManifestParser extends AnyFunSuite {
       |""".stripMargin
   }
 
-  test("Ok.name") {
-    assertResult(expected = "hello-world")(actual = {
-      ManifestParser.parse(tomlCorrect, null) match {
-        case Ok(manifest) => manifest.name
+  test("Ok.ignores-name") {
+    // A package is named by the repository it is published as, which is what a dependent
+    // addresses it by. `name` is still accepted, and is not read: here it disagrees with the
+    // repository, and the repository is what names the package.
+    val toml =
+      """
+        |[package]
+        |name = "something-else"
+        |version = "0.1.0"
+        |repository = "github:johnDoe/hello-world"
+        |flix = "0.33.0"
+        |""".stripMargin
+    assertResult(expected = "johnDoe/hello-world")(actual =
+      ManifestParser.parse(toml, ManifestPath) match {
+        case Ok(m) => m.displayName
         case Err(e) => e.message(f)
       }
-    })
+    )
   }
 
-  test("Ok.description") {
-    assertResult(expected = "A simple program")(actual = {
-      ManifestParser.parse(tomlCorrect, null) match {
-        case Ok(manifest) => manifest.description
+  test("Ok.ignores-name.02") {
+    // `name` is not read at all, so it is not type checked either.
+    val toml =
+      """
+        |[package]
+        |name = 1
+        |version = "0.1.0"
+        |repository = "github:johnDoe/hello-world"
+        |flix = "0.33.0"
+        |""".stripMargin
+    assertResult(expected = "johnDoe/hello-world")(actual =
+      ManifestParser.parse(toml, ManifestPath) match {
+        case Ok(m) => m.displayName
         case Err(e) => e.message(f)
       }
-    })
+    )
+  }
+
+  test("Ok.unnamed") {
+    // A package that declares no repository cannot be addressed, and so has no name.
+    val toml =
+      """
+        |[package]
+        |version = "0.1.0"
+        |flix = "0.33.0"
+        |""".stripMargin
+    assertResult(expected = Manifest.Unnamed)(actual =
+      ManifestParser.parse(toml, ManifestPath) match {
+        case Ok(m) => m.displayName
+        case Err(e) => e.message(f)
+      }
+    )
+  }
+
+  test("Ok.minimal") {
+    // A manifest declares only what something reads.
+    val toml =
+      """
+        |[package]
+        |name = "hello-world"
+        |version = "0.1.0"
+        |flix = "0.33.0"
+        |""".stripMargin
+    assertResult(expected = SemVer(0, 1, 0))(actual =
+      ManifestParser.parse(toml, ManifestPath) match {
+        case Ok(m) => m.version
+        case Err(e) => fail(e.message(f))
+      }
+    )
+  }
+
+  test("Ok.ignores-removed-keys") {
+    // A manifest written before these keys were dropped still parses, which is what keeps every
+    // already-published package readable.
+    val toml =
+      """
+        |[package]
+        |name = "hello-world"
+        |description = "A simple program"
+        |version = "0.1.0"
+        |flix = "0.33.0"
+        |license = "Apache-2.0"
+        |authors = ["John Doe <john@example.com>"]
+        |""".stripMargin
+    assertResult(expected = SemVer(0, 1, 0))(actual =
+      ManifestParser.parse(toml, ManifestPath) match {
+        case Ok(m) => m.version
+        case Err(e) => fail(e.message(f))
+      }
+    )
   }
 
   test("Ok.version") {
     assertResult(expected = SemVer(0, 1, 0))(actual = {
-      ManifestParser.parse(tomlCorrect, null) match {
+      ManifestParser.parse(tomlCorrect, ManifestPath) match {
         case Ok(manifest) => manifest.version
         case Err(e) => e.message(f)
       }
@@ -84,7 +158,7 @@ class TestManifestParser extends AnyFunSuite {
 
   test("Ok.repository.Some") {
     assertResult(expected = Some(GitHub.Project("johnDoe", "hello-world")))(actual = {
-      ManifestParser.parse(tomlCorrect, null) match {
+      ManifestParser.parse(tomlCorrect, ManifestPath) match {
         case Ok(manifest) => manifest.repository
         case Err(e) => e.message(f)
       }
@@ -104,37 +178,8 @@ class TestManifestParser extends AnyFunSuite {
         |""".stripMargin
     }
     assertResult(expected = None)(actual =
-      ManifestParser.parse(toml, null) match {
+      ManifestParser.parse(toml, ManifestPath) match {
         case Ok(m) => m.repository
-        case Err(e) => e.message(f)
-      }
-    )
-  }
-
-  test("Ok.modules.Some") {
-    assertResult(expected = PackageModules.Selected(Set(Symbol.mkModuleSym(List("FirstMod")), Symbol.mkModuleSym(List("SecondMod", "Foo")))))(actual = {
-      ManifestParser.parse(tomlCorrect, null) match {
-        case Ok(manifest) => manifest.modules
-        case Err(e) => e.message(f)
-      }
-    })
-  }
-
-  test("Ok.modules.None") {
-    val toml = {
-      """
-        |[package]
-        |name = "hello-world"
-        |description = "A simple program"
-        |version = "0.1.0"
-        |flix = "0.33.0"
-        |authors = ["John Doe <john@example.com>"]
-        |
-        |""".stripMargin
-    }
-    assertResult(expected = PackageModules.All)(actual =
-      ManifestParser.parse(toml, null) match {
-        case Ok(m) => m.modules
         case Err(e) => e.message(f)
       }
     )
@@ -142,58 +187,20 @@ class TestManifestParser extends AnyFunSuite {
 
   test("Ok.flix") {
     assertResult(expected = SemVer(0, 33, 0))(actual = {
-      ManifestParser.parse(tomlCorrect, null) match {
+      ManifestParser.parse(tomlCorrect, ManifestPath) match {
         case Ok(manifest) => manifest.flix
         case Err(e) => e.message(f)
       }
     })
   }
 
-  test("Ok.license.Some") {
-    assertResult(expected = Some("Apache-2.0"))(actual = {
-      ManifestParser.parse(tomlCorrect, null) match {
-        case Ok(manifest) => manifest.license
-        case Err(e) => e.message(f)
-      }
-    })
-  }
-
-  test("Ok.license.None") {
-    val toml = {
-      """
-        |[package]
-        |name = "hello-world"
-        |description = "A simple program"
-        |version = "0.1.0"
-        |flix = "0.33.0"
-        |authors = ["John Doe <john@example.com>"]
-        |
-        |""".stripMargin
-    }
-    assertResult(expected = None)(actual =
-      ManifestParser.parse(toml, null) match {
-        case Ok(m) => m.license
-        case Err(e) => e.message(f)
-      }
-    )
-  }
-
-  test("Ok.authors") {
-    assertResult(expected = List("John Doe <john@example.com>"))(actual = {
-      ManifestParser.parse(tomlCorrect, null) match {
-        case Ok(manifest) => manifest.authors
-        case Err(e) => e.message(f)
-      }
-    })
-  }
-
   test("Ok.dependencies") {
-    assertResult(expected = List(Dependency.FlixDependency(Repository.GitHub, "jls", "tic-tac-toe", SemVer(1, 2, 3), "TicTacToe", SecurityContext.Plain),
-      Dependency.FlixDependency(Repository.GitHub, "mlutze", "flixball", SemVer(3, 2, 1), "Flixball", SecurityContext.Plain),
+    assertResult(expected = List(Dependency.FlixDependency(PackageId(Repository.GitHub, "jls", "tic-tac-toe"), SemVer(1, 2, 3), None, SecurityContext.Plain),
+      Dependency.FlixDependency(PackageId(Repository.GitHub, "mlutze", "flixball"), SemVer(3, 2, 1), None, SecurityContext.Plain),
       Dependency.MavenDependency("org.postgresql", "postgresql", "1.2.3.4"),
       Dependency.MavenDependency("org.eclipse.jetty", "jetty-server", "4.7.0-M1"),
       Dependency.JarDependency("https://repo1.maven.org/maven2/org/apache/commons/commons-lang3/3.12.0/commons-lang3-3.12.0.jar", "myJar.jar")))(actual = {
-      ManifestParser.parse(tomlCorrect, null) match {
+      ManifestParser.parse(tomlCorrect, ManifestPath) match {
         case Ok(manifest) => manifest.dependencies
         case Err(e) => e.message(f)
       }
@@ -218,7 +225,7 @@ class TestManifestParser extends AnyFunSuite {
         |""".stripMargin
     }
     assertResult(expected = List(Dependency.MavenDependency("org.postgresql", "postgresql", "1.2.3"),
-      Dependency.MavenDependency("org.eclipse.jetty", "jetty-server", "470")))(ManifestParser.parse(toml, null) match {
+      Dependency.MavenDependency("org.eclipse.jetty", "jetty-server", "470")))(ManifestParser.parse(toml, ManifestPath) match {
       case Ok(manifest) => manifest.dependencies
       case Err(e) => e.message(f)
     })
@@ -242,7 +249,7 @@ class TestManifestParser extends AnyFunSuite {
         |""".stripMargin
     }
     assertResult(expected = List(Dependency.MavenDependency("org.postgresql", "postgresql", "1.2.3"),
-      Dependency.MavenDependency("org.eclipse.jetty", "jetty-server", "47")))(ManifestParser.parse(toml, null) match {
+      Dependency.MavenDependency("org.eclipse.jetty", "jetty-server", "47")))(ManifestParser.parse(toml, ManifestPath) match {
       case Ok(manifest) => manifest.dependencies
       case Err(e) => e.message(f)
     })
@@ -266,7 +273,7 @@ class TestManifestParser extends AnyFunSuite {
         |""".stripMargin
     }
     assertResult(expected = List(Dependency.MavenDependency("org.postgresql", "postgresql", "1.2.3"),
-      Dependency.MavenDependency("org.eclipse.jetty", "jetty-server", "a.7.0")))(ManifestParser.parse(toml, null) match {
+      Dependency.MavenDependency("org.eclipse.jetty", "jetty-server", "a.7.0")))(ManifestParser.parse(toml, ManifestPath) match {
       case Ok(manifest) => manifest.dependencies
       case Err(e) => e.message(f)
     })
@@ -290,7 +297,7 @@ class TestManifestParser extends AnyFunSuite {
         |""".stripMargin
     }
     assertResult(expected = Set(Dependency.MavenDependency("org.postgresql", "postgresql", "1.2.3"),
-      Dependency.MavenDependency("org.eclipse.jetty", "jetty-server", "4.b.0")))(ManifestParser.parse(toml, null) match {
+      Dependency.MavenDependency("org.eclipse.jetty", "jetty-server", "4.b.0")))(ManifestParser.parse(toml, ManifestPath) match {
       case Ok(manifest) => manifest.dependencies.toSet
       case Err(e) => e.message(f)
     })
@@ -314,7 +321,7 @@ class TestManifestParser extends AnyFunSuite {
         |""".stripMargin
     }
     assertResult(expected = List(Dependency.MavenDependency("org.postgresql", "postgresql", "1.2.3"),
-      Dependency.MavenDependency("org.eclipse.jetty", "jetty-server", "4.7.c")))(ManifestParser.parse(toml, null) match {
+      Dependency.MavenDependency("org.eclipse.jetty", "jetty-server", "4.7.c")))(ManifestParser.parse(toml, ManifestPath) match {
       case Ok(manifest) => manifest.dependencies
       case Err(e) => e.message(f)
     })
@@ -335,7 +342,7 @@ class TestManifestParser extends AnyFunSuite {
         |""".stripMargin
     }
     assertResult(expected = SecurityContext.Plain)(actual =
-      ManifestParser.parse(toml, null) match {
+      ManifestParser.parse(toml, ManifestPath) match {
         case Ok(m) =>
           m.dependencies
             .head
@@ -361,7 +368,7 @@ class TestManifestParser extends AnyFunSuite {
         |""".stripMargin
     }
     assertResult(expected = SecurityContext.Plain)(actual =
-      ManifestParser.parse(toml, null) match {
+      ManifestParser.parse(toml, ManifestPath) match {
         case Ok(m) =>
           m.dependencies
             .head
@@ -387,7 +394,7 @@ class TestManifestParser extends AnyFunSuite {
         |""".stripMargin
     }
     assertResult(expected = SecurityContext.Paranoid)(actual =
-      ManifestParser.parse(toml, null) match {
+      ManifestParser.parse(toml, ManifestPath) match {
         case Ok(m) =>
           m.dependencies
             .head
@@ -413,7 +420,7 @@ class TestManifestParser extends AnyFunSuite {
         |""".stripMargin
     }
     assertResult(expected = SecurityContext.Plain)(actual =
-      ManifestParser.parse(toml, null) match {
+      ManifestParser.parse(toml, ManifestPath) match {
         case Ok(m) =>
           m.dependencies
             .head
@@ -439,7 +446,7 @@ class TestManifestParser extends AnyFunSuite {
         |""".stripMargin
     }
     assertResult(expected = SecurityContext.Unrestricted)(actual =
-      ManifestParser.parse(toml, null) match {
+      ManifestParser.parse(toml, ManifestPath) match {
         case Ok(m) =>
           m.dependencies
             .head
@@ -453,8 +460,8 @@ class TestManifestParser extends AnyFunSuite {
   // Identity tests / parse-render-parse
   test("Manifest.Identity.01") {
     val toml = tomlCorrect
-    val manifest1 = ManifestParser.parse(toml, null).unsafeGet
-    val manifest2 = ManifestParser.parse(Manifest.format(manifest1), null).unsafeGet
+    val manifest1 = ManifestParser.parse(toml, ManifestPath).unsafeGet
+    val manifest2 = ManifestParser.parse(Manifest.format(manifest1), ManifestPath).unsafeGet
     assertResult(manifest1)(manifest2)
   }
 
@@ -470,8 +477,8 @@ class TestManifestParser extends AnyFunSuite {
         |
         |""".stripMargin
     }
-    val manifest1 = ManifestParser.parse(toml, null).unsafeGet
-    val manifest2 = ManifestParser.parse(Manifest.format(manifest1), null).unsafeGet
+    val manifest1 = ManifestParser.parse(toml, ManifestPath).unsafeGet
+    val manifest2 = ManifestParser.parse(Manifest.format(manifest1), ManifestPath).unsafeGet
     assertResult(manifest1)(manifest2)
   }
 
@@ -492,8 +499,8 @@ class TestManifestParser extends AnyFunSuite {
         |
         |""".stripMargin
     }
-    val manifest1 = ManifestParser.parse(toml, null).unsafeGet
-    val manifest2 = ManifestParser.parse(Manifest.format(manifest1), null).unsafeGet
+    val manifest1 = ManifestParser.parse(toml, ManifestPath).unsafeGet
+    val manifest2 = ManifestParser.parse(Manifest.format(manifest1), ManifestPath).unsafeGet
     assertResult(manifest1)(manifest2)
   }
 
@@ -514,8 +521,8 @@ class TestManifestParser extends AnyFunSuite {
         |
         |""".stripMargin
     }
-    val manifest1 = ManifestParser.parse(toml, null).unsafeGet
-    val manifest2 = ManifestParser.parse(Manifest.format(manifest1), null).unsafeGet
+    val manifest1 = ManifestParser.parse(toml, ManifestPath).unsafeGet
+    val manifest2 = ManifestParser.parse(Manifest.format(manifest1), ManifestPath).unsafeGet
     assertResult(manifest1)(manifest2)
   }
 
@@ -536,8 +543,8 @@ class TestManifestParser extends AnyFunSuite {
         |
         |""".stripMargin
     }
-    val manifest1 = ManifestParser.parse(toml, null).unsafeGet
-    val manifest2 = ManifestParser.parse(Manifest.format(manifest1), null).unsafeGet
+    val manifest1 = ManifestParser.parse(toml, ManifestPath).unsafeGet
+    val manifest2 = ManifestParser.parse(Manifest.format(manifest1), ManifestPath).unsafeGet
     assertResult(manifest1)(manifest2)
   }
 
@@ -558,8 +565,8 @@ class TestManifestParser extends AnyFunSuite {
         |
         |""".stripMargin
     }
-    val manifest1 = ManifestParser.parse(toml, null).unsafeGet
-    val manifest2 = ManifestParser.parse(Manifest.format(manifest1), null).unsafeGet
+    val manifest1 = ManifestParser.parse(toml, ManifestPath).unsafeGet
+    val manifest2 = ManifestParser.parse(Manifest.format(manifest1), ManifestPath).unsafeGet
     assertResult(manifest1)(manifest2)
   }
 
@@ -580,8 +587,8 @@ class TestManifestParser extends AnyFunSuite {
         |
         |""".stripMargin
     }
-    val manifest1 = ManifestParser.parse(toml, null).unsafeGet
-    val manifest2 = ManifestParser.parse(Manifest.format(manifest1), null).unsafeGet
+    val manifest1 = ManifestParser.parse(toml, ManifestPath).unsafeGet
+    val manifest2 = ManifestParser.parse(Manifest.format(manifest1), ManifestPath).unsafeGet
     assertResult(manifest1)(manifest2)
   }
 
@@ -599,8 +606,8 @@ class TestManifestParser extends AnyFunSuite {
         |"github:jls/tic-tac-toe" = "1.2.3"
         |""".stripMargin
     }
-    val manifest1 = ManifestParser.parse(toml, null).unsafeGet
-    val manifest2 = ManifestParser.parse(Manifest.format(manifest1), null).unsafeGet
+    val manifest1 = ManifestParser.parse(toml, ManifestPath).unsafeGet
+    val manifest2 = ManifestParser.parse(Manifest.format(manifest1), ManifestPath).unsafeGet
     assertResult(manifest1)(manifest2)
   }
 
@@ -618,8 +625,8 @@ class TestManifestParser extends AnyFunSuite {
         |"github:jls/tic-tac-toe" = { version = "1.2.3" }
         |""".stripMargin
     }
-    val manifest1 = ManifestParser.parse(toml, null).unsafeGet
-    val manifest2 = ManifestParser.parse(Manifest.format(manifest1), null).unsafeGet
+    val manifest1 = ManifestParser.parse(toml, ManifestPath).unsafeGet
+    val manifest2 = ManifestParser.parse(Manifest.format(manifest1), ManifestPath).unsafeGet
     assertResult(manifest1)(manifest2)
   }
 
@@ -637,8 +644,8 @@ class TestManifestParser extends AnyFunSuite {
         |"github:jls/tic-tac-toe" = { version = "1.2.3", security = "paranoid" }
         |""".stripMargin
     }
-    val manifest1 = ManifestParser.parse(toml, null).unsafeGet
-    val manifest2 = ManifestParser.parse(Manifest.format(manifest1), null).unsafeGet
+    val manifest1 = ManifestParser.parse(toml, ManifestPath).unsafeGet
+    val manifest2 = ManifestParser.parse(Manifest.format(manifest1), ManifestPath).unsafeGet
     assertResult(manifest1)(manifest2)
   }
 
@@ -656,8 +663,8 @@ class TestManifestParser extends AnyFunSuite {
         |"github:jls/tic-tac-toe" = { version = "1.2.3", security = "plain" }
         |""".stripMargin
     }
-    val manifest1 = ManifestParser.parse(toml, null).unsafeGet
-    val manifest2 = ManifestParser.parse(Manifest.format(manifest1), null).unsafeGet
+    val manifest1 = ManifestParser.parse(toml, ManifestPath).unsafeGet
+    val manifest2 = ManifestParser.parse(Manifest.format(manifest1), ManifestPath).unsafeGet
     assertResult(manifest1)(manifest2)
   }
 
@@ -675,8 +682,8 @@ class TestManifestParser extends AnyFunSuite {
         |"github:jls/tic-tac-toe" = { version = "1.2.3", security = "unrestricted" }
         |""".stripMargin
     }
-    val manifest1 = ManifestParser.parse(toml, null).unsafeGet
-    val manifest2 = ManifestParser.parse(Manifest.format(manifest1), null).unsafeGet
+    val manifest1 = ManifestParser.parse(toml, ManifestPath).unsafeGet
+    val manifest2 = ManifestParser.parse(Manifest.format(manifest1), ManifestPath).unsafeGet
     assertResult(manifest1)(manifest2)
   }
 
@@ -694,8 +701,8 @@ class TestManifestParser extends AnyFunSuite {
         |"github:jls/tic-tac-toe" = { version = "1.2.3", security = "unrestricted" }
         |""".stripMargin
     }
-    val manifest1 = ManifestParser.parse(toml, null).unsafeGet
-    val manifest2 = ManifestParser.parse(Manifest.format(manifest1), null).unsafeGet
+    val manifest1 = ManifestParser.parse(toml, ManifestPath).unsafeGet
+    val manifest2 = ManifestParser.parse(Manifest.format(manifest1), ManifestPath).unsafeGet
     assertResult(manifest1)(manifest2)
   }
 
@@ -708,23 +715,6 @@ class TestManifestParser extends AnyFunSuite {
     val path = Paths.get(pathString)
     val result = ManifestParser.parse(path)
     expectError[ManifestError.IOError](result)
-  }
-
-  //Name
-  test("ManifestError.MissingRequiredProperty.01") {
-    val toml = {
-      """
-        |[package]
-        |description = "A simple program"
-        |version = "0.1.0"
-        |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
-        |
-        |""".stripMargin
-    }
-    val result = ManifestParser.parse(toml, null)
-    expectError[ManifestError.MissingRequiredProperty](result)
   }
 
   test("ManifestError.IllegalPackageKeyFound.01") {
@@ -740,43 +730,11 @@ class TestManifestParser extends AnyFunSuite {
         |
         |""".stripMargin
     }
-    val result = ManifestParser.parse(toml, null)
+    val result = ManifestParser.parse(toml, ManifestPath)
     expectError[ManifestError.IllegalPackageKeyFound](result)
   }
 
-  test("ManifestError.RequiredPropertyHasWrongType.01") {
-    val toml = {
-      """
-        |[package]
-        |name = 1
-        |description = "A simple program"
-        |version = "0.1.0"
-        |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
-        |
-        |""".stripMargin
-    }
-    val result = ManifestParser.parse(toml, null)
-    expectError[ManifestError.RequiredPropertyHasWrongType](result)
-  }
-
   //Description
-  test("ManifestError.MissingRequiredProperty.02") {
-    val toml = {
-      """
-        |[package]
-        |name = "hello-world"
-        |version = "0.1.0"
-        |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
-        |
-        |""".stripMargin
-    }
-    val result = ManifestParser.parse(toml, null)
-    expectError[ManifestError.MissingRequiredProperty](result)
-  }
 
   test("ManifestError.IllegalPackageKeyFound.02") {
     val toml = {
@@ -791,25 +749,8 @@ class TestManifestParser extends AnyFunSuite {
         |
         |""".stripMargin
     }
-    val result = ManifestParser.parse(toml, null)
+    val result = ManifestParser.parse(toml, ManifestPath)
     expectError[ManifestError.IllegalPackageKeyFound](result)
-  }
-
-  test("ManifestError.RequiredPropertyHasWrongType.02") {
-    val toml = {
-      """
-        |[package]
-        |name = "hello-world"
-        |description = 2
-        |version = "0.1.0"
-        |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
-        |
-        |""".stripMargin
-    }
-    val result = ManifestParser.parse(toml, null)
-    expectError[ManifestError.RequiredPropertyHasWrongType](result)
   }
 
   //Version
@@ -825,7 +766,7 @@ class TestManifestParser extends AnyFunSuite {
         |
         |""".stripMargin
     }
-    val result = ManifestParser.parse(toml, null)
+    val result = ManifestParser.parse(toml, ManifestPath)
     expectError[ManifestError.MissingRequiredProperty](result)
   }
 
@@ -842,7 +783,7 @@ class TestManifestParser extends AnyFunSuite {
         |
         |""".stripMargin
     }
-    val result = ManifestParser.parse(toml, null)
+    val result = ManifestParser.parse(toml, ManifestPath)
     expectError[ManifestError.IllegalPackageKeyFound](result)
   }
 
@@ -859,7 +800,7 @@ class TestManifestParser extends AnyFunSuite {
         |
         |""".stripMargin
     }
-    val result = ManifestParser.parse(toml, null)
+    val result = ManifestParser.parse(toml, ManifestPath)
     expectError[ManifestError.RequiredPropertyHasWrongType](result)
   }
 
@@ -876,7 +817,7 @@ class TestManifestParser extends AnyFunSuite {
         |
         |""".stripMargin
     }
-    val result = ManifestParser.parse(toml, null)
+    val result = ManifestParser.parse(toml, ManifestPath)
     expectError[ManifestError.FlixVersionHasWrongLength](result)
   }
 
@@ -893,7 +834,7 @@ class TestManifestParser extends AnyFunSuite {
         |
         |""".stripMargin
     }
-    val result = ManifestParser.parse(toml, null)
+    val result = ManifestParser.parse(toml, ManifestPath)
     expectError[ManifestError.FlixVersionHasWrongLength](result)
   }
 
@@ -910,7 +851,7 @@ class TestManifestParser extends AnyFunSuite {
         |
         |""".stripMargin
     }
-    val result = ManifestParser.parse(toml, null)
+    val result = ManifestParser.parse(toml, ManifestPath)
     expectError[ManifestError.VersionNumberWrong](result)
   }
 
@@ -927,7 +868,7 @@ class TestManifestParser extends AnyFunSuite {
         |
         |""".stripMargin
     }
-    val result = ManifestParser.parse(toml, null)
+    val result = ManifestParser.parse(toml, ManifestPath)
     expectError[ManifestError.VersionNumberWrong](result)
   }
 
@@ -944,7 +885,7 @@ class TestManifestParser extends AnyFunSuite {
         |
         |""".stripMargin
     }
-    val result = ManifestParser.parse(toml, null)
+    val result = ManifestParser.parse(toml, ManifestPath)
     expectError[ManifestError.VersionNumberWrong](result)
   }
 
@@ -963,7 +904,7 @@ class TestManifestParser extends AnyFunSuite {
         |
         |""".stripMargin
     }
-    val result = ManifestParser.parse(toml, null)
+    val result = ManifestParser.parse(toml, ManifestPath)
     expectError[ManifestError.IllegalPackageKeyFound](result)
   }
 
@@ -981,7 +922,7 @@ class TestManifestParser extends AnyFunSuite {
         |
         |""".stripMargin
     }
-    val result = ManifestParser.parse(toml, null)
+    val result = ManifestParser.parse(toml, ManifestPath)
     expectError[ManifestError.RepositoryFormatError](result)
   }
 
@@ -999,7 +940,7 @@ class TestManifestParser extends AnyFunSuite {
         |
         |""".stripMargin
     }
-    val result = ManifestParser.parse(toml, null)
+    val result = ManifestParser.parse(toml, ManifestPath)
     expectError[ManifestError.RepositoryFormatError](result)
   }
 
@@ -1017,7 +958,7 @@ class TestManifestParser extends AnyFunSuite {
         |
         |""".stripMargin
     }
-    val result = ManifestParser.parse(toml, null)
+    val result = ManifestParser.parse(toml, ManifestPath)
     expectError[ManifestError.RepositoryFormatError](result)
   }
 
@@ -1035,7 +976,7 @@ class TestManifestParser extends AnyFunSuite {
         |
         |""".stripMargin
     }
-    val result = ManifestParser.parse(toml, null)
+    val result = ManifestParser.parse(toml, ManifestPath)
     expectError[ManifestError.RepositoryFormatError](result)
   }
 
@@ -1053,7 +994,7 @@ class TestManifestParser extends AnyFunSuite {
         |
         |""".stripMargin
     }
-    val result = ManifestParser.parse(toml, null)
+    val result = ManifestParser.parse(toml, ManifestPath)
     expectError[ManifestError.RepositoryFormatError](result)
   }
 
@@ -1071,7 +1012,7 @@ class TestManifestParser extends AnyFunSuite {
         |
         |""".stripMargin
     }
-    val result = ManifestParser.parse(toml, null)
+    val result = ManifestParser.parse(toml, ManifestPath)
     expectError[ManifestError.RepositoryFormatError](result)
   }
 
@@ -1090,26 +1031,8 @@ class TestManifestParser extends AnyFunSuite {
         |
         |""".stripMargin
     }
-    val result = ManifestParser.parse(toml, null)
+    val result = ManifestParser.parse(toml, ManifestPath)
     expectError[ManifestError.IllegalPackageKeyFound](result)
-  }
-
-  test("ManifestError.RequiredPropertyHasWrongType.04") {
-    val toml = {
-      """
-        |[package]
-        |name = "hello-world"
-        |description = "A simple program"
-        |version = "0.1.0"
-        |modules = 123
-        |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
-        |
-        |""".stripMargin
-    }
-    val result = ManifestParser.parse(toml, null)
-    expectError[ManifestError.RequiredPropertyHasWrongType](result)
   }
 
   //Flix
@@ -1125,7 +1048,7 @@ class TestManifestParser extends AnyFunSuite {
         |
         |""".stripMargin
     }
-    val result = ManifestParser.parse(toml, null)
+    val result = ManifestParser.parse(toml, ManifestPath)
     expectError[ManifestError.MissingRequiredProperty](result)
   }
 
@@ -1142,7 +1065,7 @@ class TestManifestParser extends AnyFunSuite {
         |
         |""".stripMargin
     }
-    val result = ManifestParser.parse(toml, null)
+    val result = ManifestParser.parse(toml, ManifestPath)
     expectError[ManifestError.IllegalPackageKeyFound](result)
   }
 
@@ -1159,7 +1082,7 @@ class TestManifestParser extends AnyFunSuite {
         |
         |""".stripMargin
     }
-    val result = ManifestParser.parse(toml, null)
+    val result = ManifestParser.parse(toml, ManifestPath)
     expectError[ManifestError.RequiredPropertyHasWrongType](result)
   }
 
@@ -1176,7 +1099,7 @@ class TestManifestParser extends AnyFunSuite {
         |
         |""".stripMargin
     }
-    val result = ManifestParser.parse(toml, null)
+    val result = ManifestParser.parse(toml, ManifestPath)
     expectError[ManifestError.FlixVersionHasWrongLength](result)
   }
 
@@ -1193,7 +1116,7 @@ class TestManifestParser extends AnyFunSuite {
         |
         |""".stripMargin
     }
-    val result = ManifestParser.parse(toml, null)
+    val result = ManifestParser.parse(toml, ManifestPath)
     expectError[ManifestError.FlixVersionHasWrongLength](result)
   }
 
@@ -1210,7 +1133,7 @@ class TestManifestParser extends AnyFunSuite {
         |
         |""".stripMargin
     }
-    val result = ManifestParser.parse(toml, null)
+    val result = ManifestParser.parse(toml, ManifestPath)
     expectError[ManifestError.VersionNumberWrong](result)
   }
 
@@ -1227,7 +1150,7 @@ class TestManifestParser extends AnyFunSuite {
         |
         |""".stripMargin
     }
-    val result = ManifestParser.parse(toml, null)
+    val result = ManifestParser.parse(toml, ManifestPath)
     expectError[ManifestError.VersionNumberWrong](result)
   }
 
@@ -1244,27 +1167,11 @@ class TestManifestParser extends AnyFunSuite {
         |
         |""".stripMargin
     }
-    val result = ManifestParser.parse(toml, null)
+    val result = ManifestParser.parse(toml, ManifestPath)
     expectError[ManifestError.VersionNumberWrong](result)
   }
 
   //License
-  test("ManifestError.RequiredPropertyHasWrongType.06") {
-    val toml = {
-      """
-        |[package]
-        |name = "hello-world"
-        |description = "A simple program"
-        |version = "0.1.0"
-        |flix = "0.33.0"
-        |license = 123
-        |authors = ["John Doe <john@example.com>"]
-        |
-        |""".stripMargin
-    }
-    val result = ManifestParser.parse(toml, null)
-    expectError[ManifestError.RequiredPropertyHasWrongType](result)
-  }
 
   test("ManifestError.IllegalPackageKeyFound.07") {
     val toml = {
@@ -1279,26 +1186,11 @@ class TestManifestParser extends AnyFunSuite {
         |
         |""".stripMargin
     }
-    val result = ManifestParser.parse(toml, null)
+    val result = ManifestParser.parse(toml, ManifestPath)
     expectError[ManifestError.IllegalPackageKeyFound](result)
   }
 
   //Authors
-  test("ManifestError.MissingRequiredProperty.05") {
-    val toml = {
-      """
-        |[package]
-        |name = "hello-world"
-        |description = "A simple program"
-        |version = "0.1.0"
-        |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |
-        |""".stripMargin
-    }
-    val result = ManifestParser.parse(toml, null)
-    expectError[ManifestError.MissingRequiredProperty](result)
-  }
 
   test("ManifestError.IllegalPackageKeyFound.08") {
     val toml = {
@@ -1313,59 +1205,8 @@ class TestManifestParser extends AnyFunSuite {
         |
         |""".stripMargin
     }
-    val result = ManifestParser.parse(toml, null)
+    val result = ManifestParser.parse(toml, ManifestPath)
     expectError[ManifestError.IllegalPackageKeyFound](result)
-  }
-
-  test("ManifestError.RequiredPropertyHasWrongType.07") {
-    val toml = {
-      """
-        |[package]
-        |name = "hello-world"
-        |description = "A simple program"
-        |version = "0.1.0"
-        |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = "John Doe <john@example.com>"
-        |
-        |""".stripMargin
-    }
-    val result = ManifestParser.parse(toml, null)
-    expectError[ManifestError.RequiredPropertyHasWrongType](result)
-  }
-
-  test("ManifestError.AuthorNameError.01") {
-    val toml = {
-      """
-        |[package]
-        |name = "hello-world"
-        |description = "A simple program"
-        |version = "0.1.0"
-        |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = [12345678]
-        |
-        |""".stripMargin
-    }
-    val result = ManifestParser.parse(toml, null)
-    expectError[ManifestError.AuthorNameError](result)
-  }
-
-  test("ManifestError.AuthorNameError.02") {
-    val toml = {
-      """
-        |[package]
-        |name = "hello-world"
-        |description = "A simple program"
-        |version = "0.1.0"
-        |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>", 159]
-        |
-        |""".stripMargin
-    }
-    val result = ManifestParser.parse(toml, null)
-    expectError[ManifestError.AuthorNameError](result)
   }
 
   //Dependencies
@@ -1386,7 +1227,7 @@ class TestManifestParser extends AnyFunSuite {
         |
         |""".stripMargin
     }
-    val result = ManifestParser.parse(toml, null)
+    val result = ManifestParser.parse(toml, ManifestPath)
     expectError[ManifestError.VersionTypeError](result)
   }
 
@@ -1407,7 +1248,7 @@ class TestManifestParser extends AnyFunSuite {
         |
         |""".stripMargin
     }
-    val result = ManifestParser.parse(toml, null)
+    val result = ManifestParser.parse(toml, ManifestPath)
     expectError[ManifestError.IllegalTableFound](result)
   }
   test("ManifestError.IllegalName.01") {
@@ -1427,7 +1268,7 @@ class TestManifestParser extends AnyFunSuite {
         |
         |""".stripMargin
     }
-    val result = ManifestParser.parse(toml, null)
+    val result = ManifestParser.parse(toml, ManifestPath)
     expectError[ManifestError.IllegalName](result)
   }
 
@@ -1448,7 +1289,7 @@ class TestManifestParser extends AnyFunSuite {
         |
         |""".stripMargin
     }
-    val result = ManifestParser.parse(toml, null)
+    val result = ManifestParser.parse(toml, ManifestPath)
     expectError[ManifestError.IllegalName](result)
   }
 
@@ -1469,7 +1310,7 @@ class TestManifestParser extends AnyFunSuite {
         |
         |""".stripMargin
     }
-    val result = ManifestParser.parse(toml, null)
+    val result = ManifestParser.parse(toml, ManifestPath)
     expectError[ManifestError.FlixVersionFormatError](result)
   }
 
@@ -1490,7 +1331,7 @@ class TestManifestParser extends AnyFunSuite {
         |
         |""".stripMargin
     }
-    val result = ManifestParser.parse(toml, null)
+    val result = ManifestParser.parse(toml, ManifestPath)
     expectError[ManifestError.FlixVersionFormatError](result)
   }
 
@@ -1511,7 +1352,7 @@ class TestManifestParser extends AnyFunSuite {
         |
         |""".stripMargin
     }
-    val result = ManifestParser.parse(toml, null)
+    val result = ManifestParser.parse(toml, ManifestPath)
     expectError[ManifestError.FlixDependencyFormatError](result)
   }
 
@@ -1532,7 +1373,7 @@ class TestManifestParser extends AnyFunSuite {
         |
         |""".stripMargin
     }
-    val result = ManifestParser.parse(toml, null)
+    val result = ManifestParser.parse(toml, ManifestPath)
     expectError[ManifestError.FlixDependencyFormatError](result)
   }
 
@@ -1553,7 +1394,7 @@ class TestManifestParser extends AnyFunSuite {
         |
         |""".stripMargin
     }
-    val result = ManifestParser.parse(toml, null)
+    val result = ManifestParser.parse(toml, ManifestPath)
     expectError[ManifestError.FlixVersionFormatError](result)
   }
 
@@ -1574,7 +1415,7 @@ class TestManifestParser extends AnyFunSuite {
         |
         |""".stripMargin
     }
-    val result = ManifestParser.parse(toml, null)
+    val result = ManifestParser.parse(toml, ManifestPath)
     expectError[ManifestError.FlixVersionFormatError](result)
   }
 
@@ -1595,7 +1436,7 @@ class TestManifestParser extends AnyFunSuite {
         |
         |""".stripMargin
     }
-    val result = ManifestParser.parse(toml, null)
+    val result = ManifestParser.parse(toml, ManifestPath)
     expectError[ManifestError.FlixVersionFormatError](result)
   }
 
@@ -1617,7 +1458,7 @@ class TestManifestParser extends AnyFunSuite {
         |
         |""".stripMargin
     }
-    val result = ManifestParser.parse(toml, null)
+    val result = ManifestParser.parse(toml, ManifestPath)
     expectError[ManifestError.DependencyFormatError](result)
   }
 
@@ -1638,7 +1479,7 @@ class TestManifestParser extends AnyFunSuite {
         |
         |""".stripMargin
     }
-    val result = ManifestParser.parse(toml, null)
+    val result = ManifestParser.parse(toml, ManifestPath)
     expectError[ManifestError.IllegalTableFound](result)
   }
 
@@ -1659,7 +1500,7 @@ class TestManifestParser extends AnyFunSuite {
         |
         |""".stripMargin
     }
-    val result = ManifestParser.parse(toml, null)
+    val result = ManifestParser.parse(toml, ManifestPath)
     expectError[ManifestError.IllegalName](result)
   }
 
@@ -1680,10 +1521,9 @@ class TestManifestParser extends AnyFunSuite {
         |
         |""".stripMargin
     }
-    val result = ManifestParser.parse(toml, null)
+    val result = ManifestParser.parse(toml, ManifestPath)
     expectError[ManifestError.IllegalName](result)
   }
-
 
   test("ManifestError.MavenDependencyFormatError.01") {
     val toml = {
@@ -1702,7 +1542,7 @@ class TestManifestParser extends AnyFunSuite {
         |
         |""".stripMargin
     }
-    val result = ManifestParser.parse(toml, null)
+    val result = ManifestParser.parse(toml, ManifestPath)
     expectError[ManifestError.MavenDependencyFormatError](result)
   }
 
@@ -1723,7 +1563,7 @@ class TestManifestParser extends AnyFunSuite {
         |
         |""".stripMargin
     }
-    val result = ManifestParser.parse(toml, null)
+    val result = ManifestParser.parse(toml, ManifestPath)
     expectError[ManifestError.MavenDependencyFormatError](result)
   }
 
@@ -1744,7 +1584,7 @@ class TestManifestParser extends AnyFunSuite {
         |
         |""".stripMargin
     }
-    val result = ManifestParser.parse(toml, null)
+    val result = ManifestParser.parse(toml, ManifestPath)
     expectError[ManifestError.JarUrlTypeError](result)
   }
 
@@ -1764,7 +1604,7 @@ class TestManifestParser extends AnyFunSuite {
         |
         |""".stripMargin
     }
-    val result = ManifestParser.parse(toml, null)
+    val result = ManifestParser.parse(toml, ManifestPath)
     expectError[ManifestError.IllegalTableFound](result)
   }
 
@@ -1784,7 +1624,7 @@ class TestManifestParser extends AnyFunSuite {
         |
         |""".stripMargin
     }
-    val result = ManifestParser.parse(toml, null)
+    val result = ManifestParser.parse(toml, ManifestPath)
     expectError[ManifestError.JarUrlFileNameError](result)
   }
 
@@ -1804,7 +1644,7 @@ class TestManifestParser extends AnyFunSuite {
         |
         |""".stripMargin
     }
-    val result = ManifestParser.parse(toml, null)
+    val result = ManifestParser.parse(toml, ManifestPath)
     expectError[ManifestError.JarUrlExtensionError](result)
   }
 
@@ -1824,7 +1664,7 @@ class TestManifestParser extends AnyFunSuite {
         |
         |""".stripMargin
     }
-    val result = ManifestParser.parse(toml, null)
+    val result = ManifestParser.parse(toml, ManifestPath)
     expectError[ManifestError.JarUrlFormatError](result)
   }
 
@@ -1844,7 +1684,7 @@ class TestManifestParser extends AnyFunSuite {
         |
         |""".stripMargin
     }
-    val result = ManifestParser.parse(toml, null)
+    val result = ManifestParser.parse(toml, ManifestPath)
     expectError[ManifestError.WrongUrlFormat](result)
   }
 
@@ -1861,7 +1701,7 @@ class TestManifestParser extends AnyFunSuite {
         |[dependencies]
         |"github:jls/tic-tac-toe" = { version = "1.2.3", security = "" }
         |""".stripMargin
-    val result = ManifestParser.parse(toml, null)
+    val result = ManifestParser.parse(toml, ManifestPath)
     expectError[ManifestError.FlixUnknownSecurityValue](result)
   }
 
@@ -1878,7 +1718,7 @@ class TestManifestParser extends AnyFunSuite {
         |[dependencies]
         |"github:jls/tic-tac-toe" = { version = "1.2.3", security = "abc" }
         |""".stripMargin
-    val result = ManifestParser.parse(toml, null)
+    val result = ManifestParser.parse(toml, ManifestPath)
     expectError[ManifestError.FlixUnknownSecurityValue](result)
   }
 
@@ -1895,7 +1735,7 @@ class TestManifestParser extends AnyFunSuite {
         |[dependencies]
         |"github:jls/tic-tac-toe" = { version = "1.2.3", security = [] }
         |""".stripMargin
-    val result = ManifestParser.parse(toml, null)
+    val result = ManifestParser.parse(toml, ManifestPath)
     expectError[ManifestError.FlixDependencySecurityType](result)
   }
 
@@ -1912,7 +1752,7 @@ class TestManifestParser extends AnyFunSuite {
         |[dependencies]
         |"github:jls/tic-tac-toe" = { version = "1.2.3", security = ["plain"] }
         |""".stripMargin
-    val result = ManifestParser.parse(toml, null)
+    val result = ManifestParser.parse(toml, ManifestPath)
     expectError[ManifestError.FlixDependencySecurityType](result)
   }
 
@@ -1929,7 +1769,7 @@ class TestManifestParser extends AnyFunSuite {
         |[dependencies]
         |"github:jls/tic-tac-toe" = { version = "1.2.3", security = true }
         |""".stripMargin
-    val result = ManifestParser.parse(toml, null)
+    val result = ManifestParser.parse(toml, ManifestPath)
     expectError[ManifestError.FlixDependencySecurityType](result)
   }
 
@@ -1946,7 +1786,7 @@ class TestManifestParser extends AnyFunSuite {
         |[dependencies]
         |"github:jls/tic-tac-toe" = { version = "1.2.3", security = 42 }
         |""".stripMargin
-    val result = ManifestParser.parse(toml, null)
+    val result = ManifestParser.parse(toml, ManifestPath)
     expectError[ManifestError.FlixDependencySecurityType](result)
   }
 
@@ -1963,7 +1803,7 @@ class TestManifestParser extends AnyFunSuite {
         |[dependencies]
         |"hubgit:jls/tic-tac-toe" = "1.2.3"
         |""".stripMargin
-    val result = ManifestParser.parse(toml, null)
+    val result = ManifestParser.parse(toml, ManifestPath)
     expectError[ManifestError.UnsupportedRepository](result)
   }
 
@@ -1981,8 +1821,29 @@ class TestManifestParser extends AnyFunSuite {
         |"github:jls/tic-tac-toe" = { version = "1.2.3", mount = "Game" }
         |"github:mlutze/flixball" = "3.2.1"
         |""".stripMargin
-    assertResult(expected = List("Game", "Flixball"))(actual =
-      ManifestParser.parse(toml, null) match {
+    assertResult(expected = List(Some(Mountpoint("Game")), None))(actual =
+      ManifestParser.parse(toml, ManifestPath) match {
+        case Ok(m) => m.flixDependencies.map(_.mount)
+        case Err(e) => e.message(f)
+      }
+    )
+  }
+
+  test("Ok.mount.lowercase") {
+    val toml =
+      """[package]
+        |name = "hello-world"
+        |description = "A simple program"
+        |version = "0.1.0"
+        |flix = "0.33.0"
+        |license = "Apache-2.0"
+        |authors = ["John Doe <john@example.com>"]
+        |
+        |[dependencies]
+        |"github:jls/tic-tac-toe" = { version = "1.2.3", mount = "game" }
+        |""".stripMargin
+    assertResult(expected = List(Some(Mountpoint("game"))))(actual =
+      ManifestParser.parse(toml, ManifestPath) match {
         case Ok(m) => m.flixDependencies.map(_.mount)
         case Err(e) => e.message(f)
       }
@@ -2002,9 +1863,28 @@ class TestManifestParser extends AnyFunSuite {
         |"github:jls/tic-tac-toe" = { version = "1.2.3", mount = "Game", security = "paranoid" }
         |"github:mlutze/flixball" = "3.2.1"
         |""".stripMargin
-    val manifest1 = ManifestParser.parse(toml, null).unsafeGet
-    val manifest2 = ManifestParser.parse(Manifest.format(manifest1), null).unsafeGet
+    val manifest1 = ManifestParser.parse(toml, ManifestPath).unsafeGet
+    val manifest2 = ManifestParser.parse(Manifest.format(manifest1), ManifestPath).unsafeGet
     assertResult(manifest1)(manifest2)
+  }
+
+  test("ManifestError.FlixDependencyDuplicateMount") {
+    // Two dependencies under one mount. Without the error one of them would silently win.
+    val toml =
+      """[package]
+        |name = "hello-world"
+        |description = "A simple program"
+        |version = "0.1.0"
+        |flix = "0.33.0"
+        |license = "Apache-2.0"
+        |authors = ["John Doe <john@example.com>"]
+        |
+        |[dependencies]
+        |"github:jls/tic-tac-toe" = { version = "1.2.3", mount = "game" }
+        |"github:mlutze/flixball" = { version = "3.2.1", mount = "game" }
+        |""".stripMargin
+    val result = ManifestParser.parse(toml, ManifestPath)
+    expectError[ManifestError.FlixDependencyDuplicateMount](result)
   }
 
   test("ManifestError.FlixDependencyIllegalMount") {
@@ -2020,7 +1900,133 @@ class TestManifestParser extends AnyFunSuite {
         |[dependencies]
         |"github:jls/tic-tac-toe" = { version = "1.2.3", mount = "Foo.Bar" }
         |""".stripMargin
-    val result = ManifestParser.parse(toml, null)
+    val result = ManifestParser.parse(toml, ManifestPath)
+    expectError[ManifestError.FlixDependencyIllegalMount](result)
+  }
+
+  test("ManifestError.FlixDependencyIllegalMount.Keyword.01") {
+    // A keyword is read before a name, so it cannot be written before `::`.
+    val toml =
+      """[package]
+        |name = "hello-world"
+        |description = "A simple program"
+        |version = "0.1.0"
+        |flix = "0.33.0"
+        |license = "Apache-2.0"
+        |authors = ["John Doe <john@example.com>"]
+        |
+        |[dependencies]
+        |"github:jls/tic-tac-toe" = { version = "1.2.3", mount = "type" }
+        |""".stripMargin
+    val result = ManifestParser.parse(toml, ManifestPath)
+    expectError[ManifestError.FlixDependencyIllegalMount](result)
+  }
+
+  test("ManifestError.FlixDependencyIllegalMount.Keyword.02") {
+    // Only the first group matters: the lexer reads `type`, `-`, `level`.
+    val toml =
+      """[package]
+        |name = "hello-world"
+        |description = "A simple program"
+        |version = "0.1.0"
+        |flix = "0.33.0"
+        |license = "Apache-2.0"
+        |authors = ["John Doe <john@example.com>"]
+        |
+        |[dependencies]
+        |"github:jls/tic-tac-toe" = { version = "1.2.3", mount = "type-level" }
+        |""".stripMargin
+    val result = ManifestParser.parse(toml, ManifestPath)
+    expectError[ManifestError.FlixDependencyIllegalMount](result)
+  }
+
+  test("ManifestError.FlixDependencyIllegalMount.Digit.01") {
+    // A mount begins with a letter.
+    val toml =
+      """[package]
+        |name = "hello-world"
+        |description = "A simple program"
+        |version = "0.1.0"
+        |flix = "0.33.0"
+        |license = "Apache-2.0"
+        |authors = ["John Doe <john@example.com>"]
+        |
+        |[dependencies]
+        |"github:jls/tic-tac-toe" = { version = "1.2.3", mount = "2048" }
+        |""".stripMargin
+    val result = ManifestParser.parse(toml, ManifestPath)
+    expectError[ManifestError.FlixDependencyIllegalMount](result)
+  }
+
+  test("ManifestError.FlixDependencyIllegalMount.Digit.02") {
+    // Every group begins with a letter.
+    val toml =
+      """[package]
+        |name = "hello-world"
+        |description = "A simple program"
+        |version = "0.1.0"
+        |flix = "0.33.0"
+        |license = "Apache-2.0"
+        |authors = ["John Doe <john@example.com>"]
+        |
+        |[dependencies]
+        |"github:jls/tic-tac-toe" = { version = "1.2.3", mount = "utf-8" }
+        |""".stripMargin
+    val result = ManifestParser.parse(toml, ManifestPath)
+    expectError[ManifestError.FlixDependencyIllegalMount](result)
+  }
+
+  test("ManifestError.FlixDependencyIllegalMount.Hyphen.01") {
+    // A trailing hyphen.
+    val toml =
+      """[package]
+        |name = "hello-world"
+        |description = "A simple program"
+        |version = "0.1.0"
+        |flix = "0.33.0"
+        |license = "Apache-2.0"
+        |authors = ["John Doe <john@example.com>"]
+        |
+        |[dependencies]
+        |"github:jls/tic-tac-toe" = { version = "1.2.3", mount = "json-" }
+        |""".stripMargin
+    val result = ManifestParser.parse(toml, ManifestPath)
+    expectError[ManifestError.FlixDependencyIllegalMount](result)
+  }
+
+  test("ManifestError.FlixDependencyIllegalMount.Hyphen.02") {
+    // A repeated hyphen.
+    val toml =
+      """[package]
+        |name = "hello-world"
+        |description = "A simple program"
+        |version = "0.1.0"
+        |flix = "0.33.0"
+        |license = "Apache-2.0"
+        |authors = ["John Doe <john@example.com>"]
+        |
+        |[dependencies]
+        |"github:jls/tic-tac-toe" = { version = "1.2.3", mount = "flix--json" }
+        |""".stripMargin
+    val result = ManifestParser.parse(toml, ManifestPath)
+    expectError[ManifestError.FlixDependencyIllegalMount](result)
+  }
+
+  test("ManifestError.FlixDependencyIllegalMount.Hyphen.03") {
+    // A hyphen anywhere in a mount.
+    val toml =
+      """[package]
+        |name = "hello-world"
+        |description = "A simple program"
+        |version = "0.1.0"
+        |flix = "0.33.0"
+        |license = "Apache-2.0"
+        |authors = ["John Doe <john@example.com>"]
+        |
+        |[dependencies]
+        |"github:jls/tic-tac-toe" = { version = "1.2.3", mount = "tic-tac-toe" }
+        |""".stripMargin
+    val result = ManifestParser.parse(toml, ManifestPath)
     expectError[ManifestError.FlixDependencyIllegalMount](result)
   }
 

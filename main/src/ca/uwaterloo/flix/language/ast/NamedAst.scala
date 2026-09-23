@@ -17,7 +17,7 @@
 package ca.uwaterloo.flix.language.ast
 
 import ca.uwaterloo.flix.language.CompilationMessage
-import ca.uwaterloo.flix.language.ast.shared.{Annotations, CheckedCastType, Constant, Denotation, Doc, Fixity, Modifiers, Polarity, PredicateAndArity, SolveMode, Source}
+import ca.uwaterloo.flix.language.ast.shared.{Annotations, CheckedCastType, Constant, Denotation, Doc, Fixity, Modifiers, Mountpoint, PackageId, Polarity, PredicateAndArity, SolveMode, Source}
 import ca.uwaterloo.flix.util.collection.Nel
 
 
@@ -28,6 +28,9 @@ object NamedAst {
                   uses: Map[Name.NName, List[UseOrImport]],
                   units: Map[Source, CompilationUnit],
                   modules: Map[Symbol.ModuleSym, Declaration.Mod],
+                  mounts: Map[PackageId, Map[Mountpoint, Name.NName]],
+                  rootMounts: Map[Mountpoint, Name.NName],
+                  mountedPackages: Set[PackageId],
                   mainEntryPoint: Option[Symbol.DefnSym],
                   sources: Map[Source, SourceLocation],
                   tokens: Map[Source, Array[Token]])
@@ -81,7 +84,7 @@ object NamedAst {
 
   object UseOrImport {
 
-    case class Use(qname: Name.QName, alias: Name.Ident, loc: SourceLocation) extends UseOrImport
+    case class Use(pkg: Option[Name.Ident], qname: Name.QName, alias: Name.Ident, loc: SourceLocation) extends UseOrImport
 
     case class Import(name: Name.JavaName, alias: Name.Ident, loc: SourceLocation) extends UseOrImport
   }

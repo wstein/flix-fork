@@ -15,7 +15,7 @@
  */
 package ca.uwaterloo.flix.tools.pkg
 
-import ca.uwaterloo.flix.language.ast.shared.SecurityContext
+import ca.uwaterloo.flix.language.ast.shared.{Mountpoint, PackageId, SecurityContext}
 
 import java.net.{URI, URL}
 
@@ -26,40 +26,17 @@ object Dependency {
   /**
     * A dependency on a Flix package.
     *
-    * @param mount the name of the top-level module under which the package is visible to the dependent.
+    * @param version the least version of the package that the dependent can be built with. The
+    *                version it is built with is the greatest one that any dependent requires,
+    *                which has the same major version, see [[FlixPackageManager.resolve]].
+    * @param mount the name of the top-level module the package is visible under, if the dependency
+    *              declares one. A dependency without a mount is reachable unqualified instead, as
+    *              it was before mounts existed. Transitional: a mount becomes required.
     */
-  case class FlixDependency(repo: Repository, username: String, projectName: String, version: SemVer, mount: String, sctx: SecurityContext) extends Dependency {
-    val identifier: String = {
-      val r = repo.toString.toLowerCase
-      s"$r:$username/$projectName"
-    }
-
-    /** Returns `true` if `mount` is the default mount derived from `projectName`. */
-    def hasDefaultMount: Boolean = FlixDependency.defaultMount(projectName).contains(mount)
-
+  case class FlixDependency(id: PackageId, version: SemVer, mount: Option[Mountpoint], sctx: SecurityContext) extends Dependency {
     override def toString: String = {
-      val mountStr = if (hasDefaultMount) "" else s"mount = \"$mount\", "
-      s"\"$identifier\" = { version = \"$version\", ${mountStr}security = \"$sctx\" }"
-    }
-  }
-
-  object FlixDependency {
-    /** A valid mount: an uppercase letter followed by letters, digits, and underscores. */
-    private val ValidMount = "[A-Z][A-Za-z0-9_]*".r
-
-    /** Returns `true` if `s` can serve as a mount, i.e. as the name of a top-level module. */
-    def isValidMount(s: String): Boolean = ValidMount.matches(s)
-
-    /**
-      * Returns the default mount for the project `projectName`, if one can be derived.
-      *
-      * The hyphen-separated words of the project name are joined with their first letters
-      * uppercased: `flixball` becomes `Flixball` and `tic-tac-toe` becomes `TicTacToe`.
-      * Returns `None` if the result is not a valid mount, e.g. for a name that starts with a digit.
-      */
-    def defaultMount(projectName: String): Option[String] = {
-      val candidate = projectName.split('-').filter(_.nonEmpty).map(_.capitalize).mkString
-      Option.when(isValidMount(candidate))(candidate)
+      val mountStr = mount.map(m => s"mount = \"$m\", ").getOrElse("")
+      s"\"$id\" = { version = \"$version\", ${mountStr}security = \"$sctx\" }"
     }
   }
 

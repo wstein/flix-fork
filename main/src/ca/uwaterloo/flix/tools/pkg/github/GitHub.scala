@@ -29,11 +29,20 @@ import java.net.http.{HttpClient, HttpRequest, HttpResponse}
 import java.net.{URI, URL, URLEncoder}
 import java.nio.charset.StandardCharsets
 import java.nio.file.Path
+import java.util.Locale
 
 /**
   * An interface for the GitHub API.
   */
 object GitHub {
+
+  /**
+    * The hosts a token may be sent to.
+    *
+    * These are matched in full rather than by suffix: a host that merely ends in one of them, as
+    * `github.com.example.com` does, is a different host and is not one of them.
+    */
+  private val TokenHosts: Set[String] = Set("api.github.com", "github.com", "uploads.github.com")
 
   /**
     * A GitHub project.
@@ -56,18 +65,34 @@ object GitHub {
 
   /**
     * Lists the project's releases.
+    *
+    * The status is read before the body is: a project that does not exist, and a request that is
+    * refused, both answer with a body that is not a listing, and reporting either as a body that
+    * could not be parsed says nothing about what went wrong. Kept apart, as in [[download]]: no
+    * such project (404), a refusal (403/429, usually a rate limit), any other unexpected status,
+    * and never reaching a server at all.
     */
-  def getReleases(project: Project, apiKey: Option[String]): Result[List[Release], PackageError] = {
+  def getReleases(project: Project, token: Option[String]): Result[List[Release], PackageError] = {
     val url = releasesUrl(project)
-    val reqBuilder = HttpRequest.newBuilder(url.toURI)
-    // add the API key as bearer if needed
-    apiKey.foreach(key => reqBuilder.header("Authorization", "Bearer " + key))
-    val req = reqBuilder.GET().build()
-    val json = try {
-      Client.sendRequest(req).body()
+    val req = newRequest(url, token).GET().build()
+    val response = try {
+      Client.sendRequest(req)
     } catch {
-      case ex: IOException => return Err(PackageError.ProjectNotFound(url, project, ex))
+      case ex: IOException => return Err(PackageError.ProjectUnreachable(url, project, ex))
     }
+
+    val status = response.statusCode()
+    if (status < 200 || status >= 300) {
+      return status match {
+        case 401 if isAuthorized(url, token) => Err(PackageError.TokenRejected(url))
+        case 403 => Err(PackageError.DownloadRefused(url, status, retryAfter(response), isAuthorized(url, token)))
+        case 404 => Err(PackageError.ProjectDoesNotExist(project, url))
+        case 429 => Err(PackageError.DownloadRefused(url, status, retryAfter(response), isAuthorized(url, token)))
+        case _ => Err(PackageError.DownloadFailed(url, status))
+      }
+    }
+
+    val json = response.body()
     val releaseJsons = try {
       parse(json).asInstanceOf[JArray]
     } catch {
@@ -80,24 +105,21 @@ object GitHub {
   /**
     * Publish a new release the given project.
     */
-  def publishRelease(project: Project, version: SemVer, artifacts: Iterable[Path], apiKey: String): Result[Unit, ReleaseError] = {
+  def publishRelease(project: Project, version: SemVer, artifacts: Iterable[Path], token: String): Result[Unit, ReleaseError] = {
     for (
-      _ <- verifyRelease(project, version, apiKey);
-      id <- createDraftRelease(project, version, apiKey);
-      _ <- Result.traverse(artifacts)(p => uploadAsset(p, project, id, apiKey));
-      _ <- markReleaseReady(project, version, id, apiKey)
+      _ <- verifyRelease(project, version, token);
+      id <- createDraftRelease(project, version, token);
+      _ <- Result.traverse(artifacts)(p => uploadAsset(p, project, id, token));
+      _ <- markReleaseReady(project, version, id, token)
     ) yield Ok(())
   }
 
   /**
     * Verifies that the release does not already exist.
     */
-  private def verifyRelease(project: Project, version: SemVer, apiKey: String): Result[Unit, ReleaseError] = {
+  private def verifyRelease(project: Project, version: SemVer, token: String): Result[Unit, ReleaseError] = {
     val url = releaseVersionUrl(project, version)
-    val req = HttpRequest.newBuilder(url.toURI)
-      .header("Authorization", "Bearer " + apiKey)
-      .GET()
-      .build()
+    val req = newRequest(url, Some(token)).GET().build()
 
     try {
       // Send request
@@ -120,7 +142,7 @@ object GitHub {
     *
     * Returns the ID of the release if successful.
     */
-  private def createDraftRelease(project: Project, version: SemVer, apiKey: String): Result[String, ReleaseError] = {
+  private def createDraftRelease(project: Project, version: SemVer, token: String): Result[String, ReleaseError] = {
     val content: JValue =
       ("tag_name" -> s"v$version") ~
         ("name" -> s"v$version") ~
@@ -130,8 +152,7 @@ object GitHub {
     val jsonCompact = compact(render(content))
 
     val url = releasesUrl(project)
-    val req = HttpRequest.newBuilder(url.toURI)
-      .header("Authorization", "Bearer " + apiKey)
+    val req = newRequest(url, Some(token))
       .header("Content-Type", "application/json")
       .POST(BodyPublishers.ofByteArray(jsonCompact.getBytes("utf-8")))
       .build()
@@ -168,12 +189,11 @@ object GitHub {
   /**
     * Uploads a single asset.
     */
-  private def uploadAsset(assetPath: Path, project: Project, releaseId: String, apiKey: String): Result[Unit, ReleaseError] = {
+  private def uploadAsset(assetPath: Path, project: Project, releaseId: String, token: String): Result[Unit, ReleaseError] = {
     val assetName = assetPath.getFileName.toString
 
     val url = releaseAssetUploadUrl(project, releaseId, assetName)
-    val req = HttpRequest.newBuilder(url.toURI)
-      .header("Authorization", "Bearer " + apiKey)
+    val req = newRequest(url, Some(token))
       .header("Content-Type", "application/octet-stream")
       .POST(BodyPublishers.ofFile(assetPath))
       .build()
@@ -198,13 +218,12 @@ object GitHub {
   /**
     * Mark the given release as no longer being a draft, making it publicly available.
     */
-  private def markReleaseReady(project: Project, version: SemVer, releaseId: String, apiKey: String): Result[Unit, ReleaseError] = {
+  private def markReleaseReady(project: Project, version: SemVer, releaseId: String, token: String): Result[Unit, ReleaseError] = {
     val content: JValue = "draft" -> false
     val jsonCompact = compact(render(content))
 
     val url = releaseIdUrl(project, releaseId)
-    val req = HttpRequest.newBuilder(url.toURI)
-      .header("Authorization", "Bearer " + apiKey)
+    val req = newRequest(url, Some(token))
       .header("Content-Type", "application/json")
       .method("PATCH", BodyPublishers.ofByteArray(jsonCompact.getBytes("utf-8")))
       .build()
@@ -236,13 +255,19 @@ object GitHub {
   }
 
   /**
-    * Opens a stream over `url`, following redirects. The caller closes the stream.
+    * Opens a stream over `url`, following redirects, carrying `token` if `url` is an address it
+    * may be sent to. The caller closes the stream.
+    *
+    * A release asset redirects to the storage it is served from, which is not GitHub and
+    * authorizes requests its own way. The JDK drops the `Authorization` header across a redirect,
+    * so the token reaches GitHub and nothing past it; following redirects by hand would have to
+    * do the same.
     *
     * Kept apart: a refusal (403/429, usually a rate limit), any other unexpected status, and never
     * reaching a server at all.
     */
-  def download(url: URL): Result[InputStream, PackageError] = {
-    val request = HttpRequest.newBuilder(url.toURI).GET().build()
+  def download(url: URL, token: Option[String]): Result[InputStream, PackageError] = {
+    val request = newRequest(url, token).GET().build()
 
     val response = try {
       Client.sendStreamingRequest(request)
@@ -257,8 +282,9 @@ object GitHub {
         // A close failure must not shadow the status being reported.
         try response.body().close() catch { case _: IOException => () }
         status match {
-          case 403 => Err(PackageError.DownloadRefused(url, status, retryAfter(response)))
-          case 429 => Err(PackageError.DownloadRefused(url, status, retryAfter(response)))
+          case 401 if isAuthorized(url, token) => Err(PackageError.TokenRejected(url))
+          case 403 => Err(PackageError.DownloadRefused(url, status, retryAfter(response), isAuthorized(url, token)))
+          case 429 => Err(PackageError.DownloadRefused(url, status, retryAfter(response), isAuthorized(url, token)))
           case _ => Err(PackageError.DownloadFailed(url, status))
         }
     }
@@ -267,7 +293,7 @@ object GitHub {
   /**
     * Returns `response`'s `Retry-After` header, if it has one.
     */
-  private def retryAfter(response: HttpResponse[InputStream]): Option[String] = {
+  private def retryAfter(response: HttpResponse[?]): Option[String] = {
     val header = response.headers().firstValue("Retry-After")
     if (header.isPresent) Some(header.get()) else None
   }
@@ -277,9 +303,9 @@ object GitHub {
     * the REST API -- a release asset's address is fully predictable from owner/repo/tag/name.
     * The caller closes the stream. See [[findReleaseAsset]] for the fallback when this 404s.
     */
-  def downloadReleaseAsset(project: Project, version: SemVer, assetName: String): Result[InputStream, PackageError] = {
+  def downloadReleaseAsset(project: Project, version: SemVer, assetName: String, token: Option[String]): Result[InputStream, PackageError] = {
     val url = releaseAssetUrl(project, version, assetName)
-    download(url) match {
+    download(url, token) match {
       case Err(PackageError.DownloadFailed(_, 404)) =>
         Err(PackageError.ReleaseAssetNotFound(project, version, assetName, url))
       case other => other
@@ -290,8 +316,8 @@ object GitHub {
     * Finds the single `extension` asset in `project`'s `version` release by reading the REST API --
     * the fallback for when [[downloadReleaseAsset]]'s guessed name 404s.
     */
-  def findReleaseAsset(project: Project, version: SemVer, extension: String, apiKey: Option[String]): Result[Asset, PackageError] = {
-    getReleases(project, apiKey).flatMap { releases =>
+  def findReleaseAsset(project: Project, version: SemVer, extension: String, token: Option[String]): Result[Asset, PackageError] = {
+    getReleases(project, token).flatMap { releases =>
       releases.find(r => r.version == version) match {
         case None => Err(PackageError.VersionDoesNotExist(version, project))
         case Some(release) =>
@@ -313,25 +339,6 @@ object GitHub {
     val path = s"/${project.owner}/${project.repo}/releases/download/v$version/$assetName"
     new URI("https", "github.com", path, null).toURL
   }
-
-  /**
-    * Gets the project release with the relevant semantic version.
-    */
-  def getSpecificRelease(project: Project, version: SemVer, apiKey: Option[String]): Result[Release, PackageError] = {
-    getReleases(project, apiKey).flatMap {
-      releases =>
-        releases.find(r => r.version == version) match {
-          case None => Err(PackageError.VersionDoesNotExist(version, project))
-          case Some(release) => Ok(release)
-        }
-    }
-  }
-
-  /**
-    * Downloads the given asset.
-    */
-  def downloadAsset(asset: Asset): InputStream =
-    asset.url.openStream()
 
   /**
     * Returns the URL that returns data related to the project's releases.
@@ -399,6 +406,45 @@ object GitHub {
       case Some(semver) => semver
       case _ => throw new RuntimeException(s"Invalid semantic version: $str")
     }
+  }
+
+  /**
+    * Returns `true` if `url` is an address a token may be sent to.
+    *
+    * A token authorizes a request to GitHub, and is offered to nothing else. Not every address
+    * that is requested is GitHub's own: a jar is downloaded from wherever the manifest that
+    * declares it says, and a release asset is served from the storage it lives on rather than
+    * from GitHub itself. The scheme is part of the question, since a token that is sent in the
+    * clear is a token that has been given away.
+    */
+  def mayReceiveToken(url: URL): Boolean = {
+    val host = url.getHost
+    url.getProtocol == "https" && host != null && TokenHosts.contains(host.toLowerCase(Locale.ROOT))
+  }
+
+  /**
+    * Returns `true` if a request to `url` carries `token`.
+    *
+    * What to say about a refusal turns on it: a client that carries no token can be told to set
+    * one, and a token that was never sent cannot be what a request was refused over.
+    */
+  private def isAuthorized(url: URL, token: Option[String]): Boolean =
+    token.nonEmpty && mayReceiveToken(url)
+
+  /**
+    * Returns a builder for a request to `url`, carrying `token` if there is one to carry and
+    * `url` is an address it may be sent to.
+    *
+    * Every request is built here, so that whether it carries the token is decided in one place
+    * rather than separately at each call. Deciding it at each call is what left the download of
+    * a release asset anonymous while the listing that found it was authorized.
+    */
+  def newRequest(url: URL, token: Option[String]): HttpRequest.Builder = {
+    val builder = HttpRequest.newBuilder(url.toURI)
+    if (mayReceiveToken(url)) {
+      token.foreach(t => builder.header("Authorization", s"Bearer $t"))
+    }
+    builder
   }
 
   /** A thread-safe HTTP Client. */

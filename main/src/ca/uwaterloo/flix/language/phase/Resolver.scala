@@ -166,8 +166,9 @@ object Resolver {
     * The uses and imports of the unit are resolved silently: any errors are reported by [[visitUnit]].
     */
   private def semiResolveTypeAliasesInUnit(unit: NamedAst.CompilationUnit, defaultUses: LocalScope, root: NamedAst.Root)(implicit sctx: SharedContext, flix: Flix): List[ResolvedAst.Declaration.TypeAlias] = unit match {
-    case NamedAst.CompilationUnit(usesAndImports0, decls, _) =>
-      val usesAndImports = usesAndImports0.flatMap(visitUseOrImport(_, Name.RootNS, root).toOption)
+    case NamedAst.CompilationUnit(usesAndImports0, decls, loc) =>
+      val unitRoot = rootOf(loc, root)
+      val usesAndImports = usesAndImports0.flatMap(visitUseOrImport(_, unitRoot, root).toOption)
       val scp = appendAllUseScp(defaultUses, usesAndImports, root)
       val namespaces = decls.collect {
         case ns: NamedAst.Declaration.Mod => ns
@@ -175,7 +176,7 @@ object Resolver {
       val aliases0 = decls.collect {
         case alias: NamedAst.Declaration.TypeAlias => alias
       }
-      val aliases = aliases0.map(semiResolveTypeAlias(_, scp, Name.RootNS, root))
+      val aliases = aliases0.map(semiResolveTypeAlias(_, scp, unitRoot, root))
       val ns = namespaces.flatMap(semiResolveTypeAliasesInNamespace(_, defaultUses, root))
       aliases ::: ns
   }
@@ -364,9 +365,10 @@ object Resolver {
     */
   private def visitUnit(unit: NamedAst.CompilationUnit, defaultUses: LocalScope)(implicit taenv: Map[Symbol.TypeAliasSym, ResolvedAst.Declaration.TypeAlias], sctx: SharedContext, root: NamedAst.Root, flix: Flix): ResolvedAst.CompilationUnit = unit match {
     case NamedAst.CompilationUnit(usesAndImports0, decls0, loc) =>
-      val usesAndImports = resolveUsesAndImports(usesAndImports0, Name.RootNS, root)
+      val unitRoot = rootOf(loc, root)
+      val usesAndImports = resolveUsesAndImports(usesAndImports0, unitRoot, root)
       val scp = appendAllUseScp(defaultUses, usesAndImports, root)
-      val decls = decls0.flatMap(visitDecl(_, scp, Name.RootNS.copy(loc = loc), defaultUses))
+      val decls = decls0.flatMap(visitDecl(_, scp, unitRoot.copy(loc = loc), defaultUses))
       ResolvedAst.CompilationUnit(usesAndImports, decls, loc)
   }
 
@@ -876,9 +878,13 @@ object Resolver {
     case NamedAst.Expr.Use(use, exp, loc) =>
       // Lookup the used name and add it to the scp
       use match {
-        case NamedAst.UseOrImport.Use(qname, alias, _) =>
+        case NamedAst.UseOrImport.Use(pkg, qname, alias, useLoc) =>
           // TODO NS-REFACTOR allowing relative uses here...
-          lookupQualifiedName(qname, scp0, ns0, root) match {
+          val lookup = pkg match {
+            case Some(p) => lookupPackageUse(p, qname, scp0, ns0, root, useLoc)
+            case None => lookupQualifiedName(qname, scp0, ns0, root)
+          }
+          lookup match {
             case Result.Ok(decls) =>
               val scp = decls.foldLeft(scp0) {
                 case (acc, decl) => acc + (alias.name -> Resolution.Declaration(decl))
@@ -2929,10 +2935,14 @@ object Resolver {
         }
       }
 
-      // 4th priority: names in the root namespace
-      val rootNames = root.symbols.getOrElse(Name.RootNS, Map.empty).getOrElse(qname.ident.name, Nil).map(Resolution.Declaration.apply)
+      // 4th priority: names at the root of the package the name occurs in
+      val viewerRoot = rootOf(qname.loc, root)
+      val packageNames = declarationsIn(viewerRoot, qname.ident.name, root)
 
-      scpNames ::: localNames ::: currentNamespace ::: rootNames
+      // 5th priority: names in the root namespace, where the bundled library is declared
+      val rootNames = if (viewerRoot == Name.RootNS) Nil else declarationsIn(Name.RootNS, qname.ident.name, root)
+
+      scpNames ::: localNames ::: currentNamespace ::: packageNames ::: rootNames
 
     } else {
       // Case 2. Qualified name. Look it up directly.
@@ -2946,7 +2956,7 @@ object Resolver {
   private def tryLookupQualifiedName(qname0: Name.QName, scp0: LocalScope, ns0: Name.NName, root: NamedAst.Root): Option[List[NamedAst.Declaration]] = {
     // First resolve the root of the qualified name
     val head = qname0.namespace.parts.head
-    tryLookupModule(head, scp0, ns0, root) match {
+    tryLookupModule(head, scp0, ns0, root, qname0.loc) match {
       case None => None
       case Some(prefix) =>
         val ns = prefix ::: qname0.namespace.parts.tail
@@ -2958,7 +2968,7 @@ object Resolver {
   /**
     * Looks up the given module in the root.
     */
-  private def tryLookupModule(name: String, scp0: LocalScope, ns0: Name.NName, root: NamedAst.Root): Option[List[String]] = {
+  private def tryLookupModule(name: String, scp0: LocalScope, ns0: Name.NName, root: NamedAst.Root, loc: SourceLocation): Option[List[String]] = {
     // First see if there's a module with this name imported into our LocalScope
     scp0(name).collectFirst {
       case Resolution.Declaration(ns: NamedAst.Declaration.Mod) => ns.sym.ns
@@ -2969,24 +2979,81 @@ object Resolver {
       case Resolution.Declaration(eff: NamedAst.Declaration.Effect) => eff.sym.namespace :+ eff.sym.name
     }.orElse {
       // Then see if there's a module with this name declared in our namespace
-      root.symbols.getOrElse(ns0, Map.empty).getOrElse(name, Nil).collectFirst {
-        case Declaration.Mod(_, _, _, sym, _, _, _, _) => sym.ns
-        case Declaration.Trait(_, _, _, sym, _, _, _, _, _) => sym.namespace :+ sym.name
-        case Declaration.Enum(_, _, _, sym, _, _, _, _) => sym.namespace :+ sym.name
-        case Declaration.Struct(_, _, _, sym, _, _, _) => sym.namespace :+ sym.name
-        case Declaration.RestrictableEnum(_, _, _, sym, _, _, _, _, _) => sym.namespace :+ sym.name
-        case Declaration.Effect(_, _, _, sym, _, _, _) => sym.namespace :+ sym.name
-      }
+      tryLookupModuleIn(ns0, name, root)
     }.orElse {
-      // Then see if there's a module with this name declared in the root namespace
-      root.symbols.getOrElse(Name.RootNS, Map.empty).getOrElse(name, Nil).collectFirst {
-        case Declaration.Mod(_, _, _, sym, _, _, _, _) => sym.ns
-        case Declaration.Trait(_, _, _, sym, _, _, _, _, _) => sym.namespace :+ sym.name
-        case Declaration.Enum(_, _, _, sym, _, _, _, _) => sym.namespace :+ sym.name
-        case Declaration.Struct(_, _, _, sym, _, _, _) => sym.namespace :+ sym.name
-        case Declaration.RestrictableEnum(_, _, _, sym, _, _, _, _, _) => sym.namespace :+ sym.name
-        case Declaration.Effect(_, _, _, sym, _, _, _) => sym.namespace :+ sym.name
-      }
+      // Then see if there's a module with this name at the root of that package
+      tryLookupModuleIn(rootOf(loc, root), name, root)
+    }.orElse {
+      // Finally, the root namespace, where the bundled library is declared
+      tryLookupModuleIn(Name.RootNS, name, root)
+    }
+  }
+
+  /**
+    * Returns the namespace of the module `name` declared in the namespace `ns`, if there is one.
+    */
+  private def tryLookupModuleIn(ns: Name.NName, name: String, root: NamedAst.Root): Option[List[String]] =
+    root.symbols.getOrElse(ns, Map.empty).getOrElse(name, Nil).collectFirst {
+      case Declaration.Mod(_, _, _, sym, _, _, _, _) => sym.ns
+      case Declaration.Trait(_, _, _, sym, _, _, _, _, _) => sym.namespace :+ sym.name
+      case Declaration.Enum(_, _, _, sym, _, _, _, _) => sym.namespace :+ sym.name
+      case Declaration.Struct(_, _, _, sym, _, _, _) => sym.namespace :+ sym.name
+      case Declaration.RestrictableEnum(_, _, _, sym, _, _, _, _, _) => sym.namespace :+ sym.name
+      case Declaration.Effect(_, _, _, sym, _, _, _) => sym.namespace :+ sym.name
+    }
+
+  /**
+    * Returns the declarations of `name` in the namespace `ns`.
+    */
+  private def declarationsIn(ns: Name.NName, name: String, root: NamedAst.Root): List[Resolution] =
+    root.symbols.getOrElse(ns, Map.empty).getOrElse(name, Nil).map(Resolution.Declaration.apply)
+
+  /**
+    * Returns the root namespace of the package the source at `loc` belongs to.
+    *
+    * A package that something mounts is named under its own root, so that a name in one package
+    * cannot see its declarations except through a mount. Everything else, including a package that
+    * nothing mounts, is named under [[Name.RootNS]].
+    */
+  private def rootOf(loc: SourceLocation, root: NamedAst.Root): Name.NName = loc.source.origin match {
+    case Origin.Package(id) if root.mountedPackages.contains(id) =>
+      Name.mkUnlocatedNName(List(id.canonicalRoot))
+    case _ => Name.RootNS
+  }
+
+  /**
+    * Returns the mount table of the package the source at `loc` belongs to: the name of each mount
+    * to the root namespace of the package that mount names.
+    */
+  private def mountsOf(loc: SourceLocation, root: NamedAst.Root): Map[Mountpoint, Name.NName] =
+    loc.source.origin match {
+      case Origin.Package(id) => root.mounts.getOrElse(id, Map.empty)
+      case Origin.User => root.rootMounts
+      // The bundled library declares no dependencies, so the mounts of the project it is compiled
+      // with must not reach it.
+      case Origin.Library => Map.empty
+      case Origin.Unknown => Map.empty
+    }
+
+  /**
+    * Looks up the name `qname` in the package `pkg`, e.g. `Game.Board` in `flixball` for `use flixball::Game.Board`.
+    *
+    * The package is looked up in the mount table of the package the use occurs in. The name is looked
+    * up under the root of the package directly, not through `scp0`, so nothing in scope can shadow it.
+    */
+  private def lookupPackageUse(pkg: Name.Ident, qname: Name.QName, scp0: LocalScope, ns0: Name.NName, root: NamedAst.Root, loc: SourceLocation): Result[List[NamedAst.Declaration], ResolutionError] = {
+    val mounts = mountsOf(pkg.loc, root)
+    mounts.get(Mountpoint(pkg.name)) match {
+      case None =>
+        // The name may be a module, i.e. `use Game::Board` written for `use Game.Board`.
+        val isModule = tryLookupModule(pkg.name, scp0, ns0, root, pkg.loc).isDefined
+        Result.Err(ResolutionError.UndefinedPackage(pkg, qname, mounts.keys.toList, isModule, pkg.loc))
+      case Some(pkgRoot) =>
+        val ns = Name.mkUnlocatedNName(pkgRoot.parts ::: qname.namespace.parts)
+        root.symbols.getOrElse(ns, Map.empty).get(qname.ident.name) match {
+          case Some(decls) if decls.nonEmpty => Result.Ok(decls)
+          case _ => Result.Err(ResolutionError.UndefinedUse(Some(pkg), qname, ns0, Map.empty, loc))
+        }
     }
   }
 
@@ -3481,9 +3548,16 @@ object Resolver {
     * Resolves the given Use.
     */
   private def visitUseOrImport(useOrImport: NamedAst.UseOrImport, ns: Name.NName, root: NamedAst.Root)(implicit flix: Flix): Result[UseOrImport, ResolutionError] = useOrImport match {
-    case NamedAst.UseOrImport.Use(qname, alias, loc) => tryLookupName(qname, LocalScope.empty, ns, root) match {
+    case NamedAst.UseOrImport.Use(Some(pkg), qname, alias, loc) =>
+      lookupPackageUse(pkg, qname, LocalScope.empty, ns, root, loc) match {
+        // TODO NS-REFACTOR: should map to multiple uses or ignore namespaces or something
+        case Result.Ok(decls) => Result.Ok(UseOrImport.Use(getSym(decls.head), alias, loc))
+        case Result.Err(error) => Result.Err(error)
+      }
+
+    case NamedAst.UseOrImport.Use(None, qname, alias, loc) => tryLookupName(qname, LocalScope.empty, ns, root) match {
       // Case 1: No matches. Error.
-      case Nil => Result.Err(ResolutionError.UndefinedUse(qname, ns, Map.empty, loc))
+      case Nil => Result.Err(ResolutionError.UndefinedUse(None, qname, ns, Map.empty, loc))
       // Case 2: A match. Map it to a use.
       // TODO NS-REFACTOR: should map to multiple uses or ignore namespaces or something
       case Resolution.Declaration(d) :: _ =>
@@ -3506,10 +3580,17 @@ object Resolver {
     * and dropped, so that names it would have brought into scope are simply undefined.
     */
   private def resolveUsesAndImports(usesAndImports0: List[NamedAst.UseOrImport], ns: Name.NName, root: NamedAst.Root)(implicit sctx: SharedContext, flix: Flix): List[UseOrImport] = {
+    // The uses of `use flixball::{Game, Board}` share one package, which is reported once.
+    val undefinedPackages = mutable.Set.empty[SourceLocation]
     usesAndImports0.flatMap {
       u =>
         visitUseOrImport(u, ns, root) match {
           case Result.Ok(useOrImport) => Some(useOrImport)
+          case Result.Err(error: ResolutionError.UndefinedPackage) =>
+            if (undefinedPackages.add(error.loc)) {
+              sctx.errors.add(error)
+            }
+            None
           case Result.Err(error) =>
             sctx.errors.add(error)
             None

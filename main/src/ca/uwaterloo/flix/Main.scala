@@ -19,14 +19,13 @@ package ca.uwaterloo.flix
 import ca.uwaterloo.flix.api.lsp.{LspServer, VSCodeLspServer, FormatterLsp as LspFormatter}
 import ca.uwaterloo.flix.api.{Bootstrap, BootstrapError, Flix, Version}
 import ca.uwaterloo.flix.language.CompilationMessage
-import ca.uwaterloo.flix.language.ast.shared.SecurityContext
+import ca.uwaterloo.flix.language.ast.shared.{Origin, SecurityContext}
 import ca.uwaterloo.flix.language.ast.{Symbol, TypedAst}
 import ca.uwaterloo.flix.language.phase.HtmlDocumentor
 import ca.uwaterloo.flix.language.phase.unification.zhegalkin.ZhegalkinPerf
 import ca.uwaterloo.flix.runtime.JvmLoader
 import ca.uwaterloo.flix.runtime.shell.Shell
 import ca.uwaterloo.flix.tools.*
-import ca.uwaterloo.flix.tools.pkg.PackageModules
 import ca.uwaterloo.flix.util.*
 import org.json4s.JsonDSL.*
 import org.json4s.native.JsonMethods
@@ -325,14 +324,14 @@ object Main {
             exitOnResult {
               Bootstrap.bootstrap(cwd, options.githubToken).flatMap { bootstrap =>
                 val flix = bootstrap.mkFlix(options, formatter)
-                bootstrap.doc(flix)
+                bootstrap.doc(flix, docOrigin(cmdOpts))
               }
             }
           } else {
             val flix = mkFlixWithFiles(cmdOpts.files, options)
             val (optRoot, errors) = flix.check()
             if (errors.isEmpty) {
-              HtmlDocumentor.run(optRoot.get, PackageModules.All, Bootstrap.getDocumentationDirectory(cwd))(flix)
+              HtmlDocumentor.run(optRoot.get, docOrigin(cmdOpts), Bootstrap.getDocumentationDirectory(cwd))(flix)
               System.exit(0)
             } else exitWithErrors(flix, errors, optRoot)
           }
@@ -451,6 +450,27 @@ object Main {
             }
           }
 
+        case Command.Install(pkg) =>
+          if (cmdOpts.files.nonEmpty) {
+            println("The 'install' command does not support file arguments.")
+            System.exit(1)
+          }
+          exitOnResult(Bootstrap.install(cwd, pkg, options.githubToken, options.assumeYes))
+
+        case Command.Remove(pkg) =>
+          if (cmdOpts.files.nonEmpty) {
+            println("The 'remove' command does not support file arguments.")
+            System.exit(1)
+          }
+          exitOnResult(Bootstrap.remove(cwd, pkg, options.githubToken))
+
+        case Command.Upgrade(pkg) =>
+          if (cmdOpts.files.nonEmpty) {
+            println("The 'upgrade' command does not support file arguments.")
+            System.exit(1)
+          }
+          exitOnResult(Bootstrap.upgrade(cwd, pkg, options.githubToken))
+
         case Command.Outdated =>
           if (cmdOpts.files.nonEmpty) {
             println("The 'outdated' command does not support file arguments.")
@@ -544,6 +564,7 @@ object Main {
     coverageLcovOutput: String = "build/coverage.info",
     entryPoint: Option[String] = None,
     installDeps: Boolean = true,
+    library: Boolean = false,
     githubToken: Option[String] = None,
     json: Boolean = false,
     listen: Option[Int] = None,
@@ -612,6 +633,12 @@ object Main {
 
     case object Release extends Command
 
+    case class Install(pkg: String) extends Command
+
+    case class Remove(pkg: String) extends Command
+
+    case class Upgrade(pkg: String) extends Command
+
     case object Outdated extends Command
 
     case object Stat extends Command
@@ -679,6 +706,10 @@ object Main {
       cmd("clean").action((_, c) => c.copy(command = Command.Clean)).text("  removes the build directory (class files and generated documentation).")
 
       cmd("doc").action((_, c) => c.copy(command = Command.Doc)).text("  generates API documentation.")
+        .children(
+          opt[Unit]("library").action((_, c) => c.copy(library = true))
+            .text("documents the bundled library instead of the current project.")
+        )
 
       cmd("format").action((_, c) => c.copy(command = Command.Format)).text("  formats Flix source code files.")
 
@@ -724,6 +755,27 @@ object Main {
 
       cmd("release").text("  releases a new version to GitHub.")
         .action((_, c) => c.copy(command = Command.Release))
+
+      cmd("install").text("  adds a dependency to the current project.")
+        .children(
+          arg[String]("package").action((pkg, c) => c.copy(command = Command.Install(pkg)))
+            .required()
+            .text("the package to add, e.g. 'flix/museum-clerk' or 'flix/museum-clerk@1.1.0'.")
+        )
+
+      cmd("remove").text("  removes a dependency from the current project.")
+        .children(
+          arg[String]("package").action((pkg, c) => c.copy(command = Command.Remove(pkg)))
+            .required()
+            .text("the package to remove, e.g. 'flix/museum-clerk'.")
+        )
+
+      cmd("upgrade").text("  declares a dependency of the current project at another version.")
+        .children(
+          arg[String]("package").action((pkg, c) => c.copy(command = Command.Upgrade(pkg)))
+            .required()
+            .text("the package to upgrade, e.g. 'flix/museum-clerk' or 'flix/museum-clerk@1.1.0'.")
+        )
 
       cmd("outdated").text("  shows dependencies which have newer versions available.")
         .action((_, c) => c.copy(command = Command.Outdated))
@@ -879,6 +931,12 @@ object Main {
       println(Header)
     }
   }
+
+  /**
+    * Returns the origin whose declarations `flix doc` documents.
+    */
+  private def docOrigin(cmdOpts: CmdOpts): Origin =
+    if (cmdOpts.library) Origin.Library else Origin.User
 
   /**
     * Creates a fresh Flix instance configured with the given options and source files.

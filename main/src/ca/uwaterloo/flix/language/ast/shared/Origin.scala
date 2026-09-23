@@ -31,7 +31,7 @@ sealed trait Origin {
   def isUser: Boolean = this match {
     case Origin.User => true
     case Origin.Library => false
-    case Origin.Package => false
+    case Origin.Package(_) => false
     case Origin.Unknown => false
   }
 
@@ -51,8 +51,10 @@ object Origin {
 
   /**
     * A source unpacked from a Flix package the program depends on.
+    *
+    * @param id the package, e.g. `github:flix/museum-clerk`.
     */
-  case object Package extends Origin
+  case class Package(id: PackageId) extends Origin
 
   /**
     * A synthetic source with no origin. Used only by [[Source.Unknown]].

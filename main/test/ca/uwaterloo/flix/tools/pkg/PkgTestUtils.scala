@@ -16,7 +16,7 @@
 package ca.uwaterloo.flix.tools.pkg
 
 import ca.uwaterloo.flix.api.{Bootstrap, Flix, InstalledPackage, Version}
-import ca.uwaterloo.flix.language.ast.shared.SecurityContext
+import ca.uwaterloo.flix.language.ast.shared.{Mountpoint, PackageId, SecurityContext}
 import ca.uwaterloo.flix.util.{Formatter, Options}
 
 import java.nio.file.Path
@@ -38,6 +38,20 @@ object PkgTestUtils {
   }
 
   /**
+    * The path a manifest parsed from a string is reported as coming from.
+    *
+    * A test holds a manifest as a literal rather than as a file, but an error still has to say
+    * where the manifest came from, so it names the file a manifest normally lives in.
+    */
+  val ManifestPath: Path = Path.of("flix.toml")
+
+  /**
+    * The lock file of a project that has never been built, which records nothing and so checks
+    * nothing. Used by the tests that are not about the lock file.
+    */
+  val NoLock: Lockfile = Lockfile(Map.empty)
+
+  /**
     * Returns a new [[Flix]] object that has the GitHub token of the CI runner set if available.
     */
   def mkFlix: Flix = mkFlix(Nil)
@@ -45,8 +59,14 @@ object PkgTestUtils {
   /**
     * Returns a new [[Flix]] object with the given packages that has the GitHub token of the CI runner set if available.
     */
-  def mkFlix(pkgs: List[InstalledPackage]): Flix = {
-    val flix = new Flix(pkgs = pkgs)
+  def mkFlix(pkgs: List[InstalledPackage]): Flix = mkFlix(pkgs, Map.empty)
+
+  /**
+    * Returns a new [[Flix]] object with the given packages and root mount table that has the
+    * GitHub token of the CI runner set if available.
+    */
+  def mkFlix(pkgs: List[InstalledPackage], mounts: Map[Mountpoint, PackageId]): Flix = {
+    val flix = new Flix(pkgs = pkgs, mounts = mounts)
     flix.setOptions(flix.options.copy(githubToken = gitHubToken, progress = false))
   }
 

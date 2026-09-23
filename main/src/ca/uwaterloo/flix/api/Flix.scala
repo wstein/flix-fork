@@ -17,7 +17,7 @@
 package ca.uwaterloo.flix.api
 
 import ca.uwaterloo.flix.language.ast.*
-import ca.uwaterloo.flix.language.ast.shared.{AvailableClasses, Origin, SecurityContext, Source, SourceName}
+import ca.uwaterloo.flix.language.ast.shared.{AvailableClasses, Mountpoint, Origin, PackageId, SecurityContext, Source, SourceName}
 import ca.uwaterloo.flix.language.dbg.AstPrinter
 import ca.uwaterloo.flix.language.fmt.FormatOptions
 import ca.uwaterloo.flix.language.jvm.{ByteBuddyJavaTypeProvider, DependencyClassPath, ExternalJarLoader, JavaTypeProvider}
@@ -71,10 +71,12 @@ object Flix {
   * The packages and JARs are immutable: they are registered once at construction and cannot be
   * changed afterwards. If they change, a new Flix compiler instance must be created.
   *
-  * @param pkgs the Flix packages (`.fpkg`) to compile.
-  * @param jars the JAR files whose classes are available to Java interop.
+  * @param pkgs   the Flix packages (`.fpkg`) to compile.
+  * @param jars   the JAR files whose classes are available to Java interop.
+  * @param mounts the mount table of the root project, as its `flix.toml` declares it. Empty when
+  *               the project has no manifest.
   */
-class Flix(pkgs: List[InstalledPackage] = Nil, jars: List[Path] = Nil) extends AutoCloseable {
+class Flix(pkgs: List[InstalledPackage] = Nil, jars: List[Path] = Nil, mounts: Map[Mountpoint, PackageId] = Map.empty) extends AutoCloseable {
   private var activeJvmOrigins: Option[JvmCompilationOrigins] = None
 
   def jvmOrigins: JvmCompilationOrigins = activeJvmOrigins.getOrElse(
@@ -91,6 +93,26 @@ class Flix(pkgs: List[InstalledPackage] = Nil, jars: List[Path] = Nil) extends A
       origins.close()
     }
   }
+
+  /**
+    * The mount table of the root project.
+    */
+  val rootMounts: Map[Mountpoint, PackageId] = mounts
+
+  /**
+    * The mount table of each package.
+    */
+  val packageMounts: Map[PackageId, Map[Mountpoint, PackageId]] = pkgs.map(pkg => pkg.id -> pkg.mounts).toMap
+
+  /**
+    * The packages that something in the dependency graph mounts.
+    *
+    * A mounted package is named under its own root and is reachable only through its mount. A
+    * package that nothing mounts keeps sharing the root namespace, as it did before mounts
+    * existed. Transitional: every package is mounted once a mount is required.
+    */
+  val mountedPackages: Set[PackageId] =
+    (rootMounts.values ++ packageMounts.values.flatMap(_.values)).toSet
 
   /**
     * Whether [[close]] has been called. A closed instance cannot compile.
@@ -206,7 +228,7 @@ class Flix(pkgs: List[InstalledPackage] = Nil, jars: List[Path] = Nil) extends A
     FileOps.isValidFpkgFile(pkg.path) match {
       case Result.Err(e: Throwable) => throw e
       case Result.Ok(()) =>
-        for (source <- getSourcesOfPkg(pkg.path, pkg.sctx)) {
+        for (source <- getSourcesOfPkg(pkg)) {
           sources += source.sourceName -> source
         }
     }
@@ -858,10 +880,11 @@ class Flix(pkgs: List[InstalledPackage] = Nil, jars: List[Path] = Nil) extends A
   }
 
   /**
-    * Returns the `.flix` source files inside the package at `p`, with the security context `sctx`.
+    * Returns the `.flix` source files inside `pkg`, each stamped with the identifier and the
+    * security context of the package.
     */
-  private def getSourcesOfPkg(p: Path, sctx: SecurityContext): List[Source] = {
-    val packagePath = p.toAbsolutePath.normalize()
+  private def getSourcesOfPkg(pkg: InstalledPackage): List[Source] = {
+    val packagePath = pkg.path.toAbsolutePath.normalize()
     Using(new ZipFile(packagePath.toFile)) { zip =>
       val result = mutable.ArrayBuffer.empty[Source]
       val iterator = zip.entries()
@@ -871,7 +894,7 @@ class Flix(pkgs: List[InstalledPackage] = Nil, jars: List[Path] = Nil) extends A
         if (name.endsWith(".flix")) {
           val bytes = StreamOps.readAllBytes(zip.getInputStream(entry))
           val text = new String(bytes, defaultCharset)
-          result += Source.fromString(SourceName.PackageEntry(packagePath, name), Origin.Package, sctx, text)
+          result += Source.fromString(SourceName.PackageEntry(packagePath, name), Origin.Package(pkg.id), pkg.sctx, text)
         }
       }
       result.toList

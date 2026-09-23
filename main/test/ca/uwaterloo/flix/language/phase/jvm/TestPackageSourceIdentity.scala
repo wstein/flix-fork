@@ -16,7 +16,7 @@
 package ca.uwaterloo.flix.language.phase.jvm
 
 import ca.uwaterloo.flix.api.{CompilerConstants, Flix, InstalledPackage}
-import ca.uwaterloo.flix.language.ast.shared.{SecurityContext, SourceName}
+import ca.uwaterloo.flix.language.ast.shared.{PackageId, Repository, SecurityContext, SourceName}
 import ca.uwaterloo.flix.runtime.CompilationResult
 import ca.uwaterloo.flix.util.{Options, Result}
 import org.objectweb.asm.{ClassReader, ClassVisitor, Opcodes}
@@ -56,7 +56,7 @@ class TestPackageSourceIdentity extends AnyFunSuite {
     val archive = root.resolve("dependency package.fpkg")
     writePackage(archive)
     val unnormalizedArchive = root.resolve(".").resolve(archive.getFileName)
-    val pkg = InstalledPackage(unnormalizedArchive, "test:debug-package", sctx, Map.empty)
+    val pkg = InstalledPackage(unnormalizedArchive, PackageId(Repository.GitHub, "test", "debug-package"), sctx, Map.empty)
     val flix = new Flix(pkgs = List(pkg)).setOptions(Options.DefaultTest.copy(xdebug = true))
     flix.addSource(CompilerConstants.VirtualTestFile, sctx = sctx,
       text = "def main(): Unit \\ IO = println(DebugPackage.answer())\n")

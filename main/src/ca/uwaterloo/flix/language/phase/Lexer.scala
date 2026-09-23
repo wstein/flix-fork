@@ -160,6 +160,10 @@ object Lexer {
     PrefixTree.mk(simpleTokens)
   }
 
+  /** Returns `true` if `s` lexes as a keyword rather than as a name. */
+  def isKeyword(s: String): Boolean =
+    Keywords.getNode(s).exists(_.getValue.isDefined)
+
   /** Operators - tokens consumed as long as no operator-like char follows (see [[isUserOp]]). */
   private val Operators: PrefixTree.Node[TokenKind] = {
     // N.B.: `advanceIfInTree` takes the longest match, regardless of the ordering here.
@@ -388,7 +392,21 @@ object Lexer {
 
   /** Advance the current position past an operator if any operator completely matches the current position. */
   private def acceptIfOperator()(implicit s: State): Option[TokenKind] =
-    advanceIfInTree(Operators, c => !isUserOp(c))
+    advanceIfInTree(Operators, c => !isUserOp(c)) match {
+      case Some(TokenKind.ColonColon) =>
+        // If any whitespace exists around the `::`, it is `ColonColon`. Otherwise it is `ColonColonTight`.
+        // Examples:
+        // a::b:   ColonColonTight
+        // a ::b:  ColonColon
+        // a:: b:  ColonColon
+        // a :: b: ColonColon
+        if (s.sc.nthIs(-3, _.isWhitespace, outOfBounds = true) || s.sc.peekIs(_.isWhitespace, outOfBounds = true)) {
+          Some(TokenKind.ColonColon)
+        } else {
+          Some(TokenKind.ColonColonTight)
+        }
+      case res => res
+    }
 
   /** Advance the current position past a simple token if any simple token matches the current position. */
   private def acceptIfSimpleToken()(implicit s: State): Option[TokenKind] =
