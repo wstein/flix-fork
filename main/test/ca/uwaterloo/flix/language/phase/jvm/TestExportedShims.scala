@@ -306,6 +306,41 @@ class TestExportedShims extends AnyFunSuite {
     } finally deleteRecursively(output)
   }
 
+  test("Record results cross as a generated java.lang.Record with the source field names") {
+    val result = compile(
+      """mod Acme.Api {
+        |    @Export pub def person(_x: Int32): {name = String, age = Int32} = {name = "hello", age = 1}
+        |    @Export pub def another(_x: Int32): {name = String, age = Int32} = {name = "world", age = 2}
+        |}
+        |""".stripMargin)
+
+    val output = Files.createTempDirectory("flix-export-record")
+    try {
+      writeClasses(result, output)
+      val loader = new URLClassLoader(Array(output.toUri.toURL), getClass.getClassLoader)
+      try {
+        val clazz = loader.loadClass("Acme.Api")
+        val person = clazz.getDeclaredMethods.find(_.getName == "person").get.invoke(null, Int.box(0))
+        val another = clazz.getDeclaredMethods.find(_.getName == "another").get.invoke(null, Int.box(0))
+        val recordClass = person.getClass
+
+        assert(recordClass.isRecord)
+        assert(another.getClass eq recordClass, "same-shaped records share one generated record class")
+
+        val componentNames = recordClass.getRecordComponents.map(_.getName).toSet
+        assert(componentNames == Set("name", "age"))
+        assert(recordClass.getMethod("name").invoke(person) == "hello")
+        assert(recordClass.getMethod("age").invoke(person) == Int.box(1))
+
+        val personAgain = clazz.getDeclaredMethods.find(_.getName == "person").get.invoke(null, Int.box(0))
+        assert(person == personAgain)
+        assert(person.hashCode() == personAgain.hashCode())
+        assert(person != another)
+        assert(person.toString.contains("hello"))
+      } finally loader.close()
+    } finally deleteRecursively(output)
+  }
+
   test("generic Java types retain arguments in exported parameters and results") {
     val result = compile(
       """mod Acme.Api {

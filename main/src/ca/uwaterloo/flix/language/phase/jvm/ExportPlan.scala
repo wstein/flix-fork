@@ -9,7 +9,7 @@ package ca.uwaterloo.flix.language.phase.jvm
 import ca.uwaterloo.flix.language.ast.SimpleType
 import ca.uwaterloo.flix.language.jvm.JavaClasses
 import ca.uwaterloo.flix.language.phase.jvm.Instructions.*
-import ca.uwaterloo.flix.language.phase.jvm.classes.{GenExportedTuple, GenTag, GenTagged, GenTuple}
+import ca.uwaterloo.flix.language.phase.jvm.classes.{GenExportedRecord, GenExportedTuple, GenRecord, GenRecordExtend, GenTag, GenTagged, GenTuple}
 import org.objectweb.asm.MethodVisitor
 
 import java.lang.constant.ClassDesc
@@ -470,6 +470,43 @@ object ExportPlan {
     }
   }
 
+  /**
+    * A Flix structural record result converted to a real, generated `java.lang.Record`.
+    *
+    * Unlike a tuple, whose compiler-internal class exposes its elements by index, a record's
+    * internal representation (`GenRecord.Desc`, `GenRecordExtend`) only exposes fields by label,
+    * one lookup at a time -- so each field is read with `lookupField`, not `GETFIELD`, and
+    * `flixFields` names the field's own erased type to know which `RecordExtend$<Type>` the
+    * lookup result must be cast to before its `value` field can be read.
+    */
+  case class AsRecord(labels: List[String], elements: List[ExportPlan], flixFields: List[ClassDesc]) extends ExportPlan {
+    private val javaFields: List[(String, ClassDesc)] = labels.zip(elements.map(_.javaType))
+
+    override def flixType: ClassDesc = GenRecord.Desc
+
+    override def signature: ExportSignature = ExportSignature.Exact(GenExportedRecord.desc(javaFields))
+
+    override def emit(nextLocal: Int)(implicit mv: MethodVisitor): Unit = {
+      withName(nextLocal, GenRecord.Desc) { record =>
+        record.store()
+        NEW(GenExportedRecord.desc(javaFields))
+        DUP()
+        for (((label, element), flixField) <- labels.zip(elements).zip(flixFields)) {
+          record.load()
+          pushString(label)
+          INVOKEINTERFACE(GenRecord.LookupFieldMethod)
+          CHECKCAST(GenRecordExtend.desc(flixField))
+          GETFIELD(GenRecordExtend.ValueField(flixField))
+          element.emit(nextLocal + 1)
+          // The record field is erased to its own value type; narrow reference types the way
+          // the constructor's precise parameter type demands, since `element.emit` does not.
+          if (!element.javaType.isPrimitive) CHECKCAST(element.javaType)
+        }
+        INVOKESPECIAL(GenExportedRecord.Constructor(javaFields))
+      }
+    }
+  }
+
   /** Returns the exact boundary plan currently supported for `tpe`. */
   def exact(tpe: SimpleType): Option[ExportPlan] = tpe match {
     case SimpleType.Bool => Some(Identity(CD_boolean))
@@ -503,6 +540,7 @@ object ExportPlan {
       for (keySig <- typeArgumentPlan(key); valueSig <- typeArgumentPlan(value))
         yield ExportSignature.Applied(JavaMap, List(keySig, valueSig))
     case SimpleType.Tuple(elms) => tuplePlan(elms).map(_.signature)
+    case SimpleType.RecordEmpty | SimpleType.RecordExtend(_, _, _) => recordPlan(tpe).map(_.signature)
     case SimpleType.Native(clazz, targs) if targs.nonEmpty =>
       traverse(targs)(typeArgumentPlan).map(ExportSignature.Applied(clazz, _))
     case _ => exact(tpe).map(_.signature)
@@ -519,6 +557,7 @@ object ExportPlan {
       case SimpleType.Enum(sym, List(element)) if isSet(sym) => setPlan(element, defn.unboxedType.tpe)
       case SimpleType.Enum(sym, List(key, value)) if isMap(sym) => mapPlan(key, value, defn.unboxedType.tpe)
       case SimpleType.Tuple(elms) => tuplePlan(elms)
+      case record@(SimpleType.RecordEmpty | SimpleType.RecordExtend(_, _, _)) => recordPlan(record)
       case SimpleType.Native(clazz, targs) if targs.nonEmpty =>
         traverse(targs)(typeArgumentPlan).map(GenericNative(clazz, _))
       case declared => exact(declared)
@@ -633,6 +672,26 @@ object ExportPlan {
     */
   private def tuplePlan(elms: List[SimpleType]): Option[ExportPlan] =
     traverse(elms)(exact).map(AsTuple(_, elms.map(TypeDescs.toErasedClassDesc)))
+
+  /**
+    * Builds a structural-record conversion, one element plan per field.
+    *
+    * Every field must have an exact boundary plan of its own, for the same reason a tuple's
+    * elements do: nothing here boxes a field the way a container's type argument would, so a
+    * field that itself needs a container conversion is refused rather than nested.
+    */
+  private def recordPlan(tpe: SimpleType): Option[ExportPlan] = {
+    def fieldsOf(t: SimpleType): Option[List[(String, SimpleType)]] = t match {
+      case SimpleType.RecordEmpty => Some(Nil)
+      case SimpleType.RecordExtend(label, value, rest) => fieldsOf(rest).map((label, value) :: _)
+      case _ => None
+    }
+
+    for {
+      fields <- fieldsOf(tpe)
+      elementPlans <- traverse(fields.map(_._2))(exact)
+    } yield AsRecord(fields.map(_._1), elementPlans, fields.map(_._2).map(TypeDescs.toErasedClassDesc))
+  }
 
   /** Returns a plan for a value placed in a Java reference-only type argument position. */
   private def elementPlan(declared: SimpleType, erased: ClassDesc): Option[ExportPlan] =

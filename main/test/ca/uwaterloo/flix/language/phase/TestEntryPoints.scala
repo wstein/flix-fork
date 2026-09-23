@@ -841,6 +841,15 @@ class TestEntryPoints extends AnyFunSuite with TestUtils {
     expectSuccess(result)
   }
 
+  test("Test.ValidExportFunction.RecordResult.01") {
+    val input =
+      """
+        |mod Mod { @Export pub def id(x: Int32): {name = Int32, active = Bool} = ??? }
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibNix)
+    expectSuccess(result)
+  }
+
   test("Test.IllegalExportFunction.10") {
     val input =
       """

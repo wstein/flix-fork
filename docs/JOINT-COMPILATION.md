@@ -75,6 +75,14 @@ development lineages. It currently supports:
   every exported tuple with that shape the way the compiler's own internal tuple class is shared
   by shape. Each element must have its own exact boundary plan: an element that is itself a
   converted container is refused rather than nested.
+- Closed structural-record results as a real, generated `java.lang.Record`, built by the same
+  `GenExportedProduct` engine as tuples -- the only difference is that a record names its
+  components after its own field labels instead of `component0`-style synthetic names, since
+  `SimpleType.RecordExtend` carries the label already. An open record, one still carrying a row
+  variable, is refused: `EntryPoints.unapplyRecord` only accepts a row that peels down to
+  `RecordRowEmpty`. The compiler's own internal record representation exposes fields one lookup
+  at a time by label (`GenRecord.lookupField`), not by index, so each field is read that way
+  rather than by position.
 - Explicitly imported Java classes, including nested generic arguments in parameters and results.
 
 It refuses other Flix algebraic data types, other containers, functions, and unaccounted reference
@@ -83,8 +91,8 @@ a missing stub fails the build at generation time, while an incorrect stub compi
 with a linkage error in innocent calling code.
 
 Converted containers are result-only. `Option[t]`, `List[t]`, `Vector[t]`, `Chain[t]`, `Set[t]`,
-`Map[k, v]`, and tuples remain refused as parameters because the shim currently passes parameters
-straight into Flix and therefore has no reverse conversion.
+`Map[k, v]`, tuples, and records remain refused as parameters because the shim currently passes
+parameters straight into Flix and therefore has no reverse conversion.
 
 The tests compare generated stub declarations with the method descriptors on the facade bytecode.
 This pins the source-facing stub contract to the backend contract and catches drift between them.

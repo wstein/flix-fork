@@ -19,7 +19,7 @@ import ca.uwaterloo.flix.api.Flix
 import ca.uwaterloo.flix.language.ast.shared.Source
 import ca.uwaterloo.flix.language.ast.{ChangeSet, Name, ReadAst, SourceLocation, SyntaxTree, WeededAst}
 import ca.uwaterloo.flix.language.jvm.JavaClasses
-import ca.uwaterloo.flix.language.phase.jvm.classes.GenExportedTuple
+import ca.uwaterloo.flix.language.phase.jvm.classes.{GenExportedRecord, GenExportedTuple}
 import ca.uwaterloo.flix.language.phase.jvm.{ExportSignature, Mangle}
 import ca.uwaterloo.flix.language.phase.{Lexer, Parser2, Weeder2}
 import ca.uwaterloo.flix.util.Result
@@ -241,6 +241,19 @@ object ExportStubs {
       traverse(tpes.toList)(parameterSignatureOf(_, imps))
         .map(sigs => ExportSignature.Exact(GenExportedTuple.desc(sigs.map(_.javaType))))
 
+    case WeededAst.Type.Record(row, _) if allowConvertedResult =>
+      for {
+        fields <- peelRecordRow(row)
+        sigs <- traverse(fields) { case (label, fieldTpe) => parameterSignatureOf(fieldTpe, imps).map(label -> _) }
+      } yield ExportSignature.Exact(GenExportedRecord.desc(sigs.map { case (label, sig) => label -> sig.javaType }))
+
+    case _ => None
+  }
+
+  /** Returns the fields of a closed record row, or `None` if it still carries a row variable. */
+  private def peelRecordRow(row: WeededAst.Type): Option[List[(String, WeededAst.Type)]] = row match {
+    case WeededAst.Type.RecordRowEmpty(_) => Some(Nil)
+    case WeededAst.Type.RecordRowExtend(label, tpe, rest, _) => peelRecordRow(rest).map((label.name, tpe) :: _)
     case _ => None
   }
 

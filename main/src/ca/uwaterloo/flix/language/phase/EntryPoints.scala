@@ -438,7 +438,7 @@ object EntryPoints {
       if (isUnitType(retTpe) == Result.Ok(true)) Nil
       else unapplyMap(retTpe) match {
         case Some((k, v)) => List(k, v)
-        case None => unapplyTuple(retTpe) match {
+        case None => unapplyTuple(retTpe).orElse(unapplyRecord(retTpe)) match {
           case Some(elms) => elms
           case None => List(unapplyOption(retTpe).orElse(unapplyList(retTpe)).orElse(unapplyVector(retTpe))
             .orElse(unapplyChain(retTpe)).orElse(unapplySet(retTpe)).getOrElse(retTpe))
@@ -534,6 +534,28 @@ object EntryPoints {
   private def peelTuple(tpe: Type, args: List[Type]): Option[List[Type]] = tpe match {
     case Type.Apply(inner, arg, _) => peelTuple(inner, arg :: args)
     case Type.Cst(TypeConstructor.Tuple(arity), _) if args.lengthIs == arity => Some(args)
+    case _ => None
+  }
+
+  /**
+    * Returns the field types of a closed structural-record type, which are converted
+    * individually on return, the same way and for the same reason a tuple's elements are.
+    *
+    * An open record -- one still carrying a row variable -- fails to peel down to
+    * `RecordRowEmpty` and is refused here rather than exported with a partial field set.
+    */
+  @tailrec
+  private def unapplyRecord(tpe: Type): Option[List[Type]] = tpe match {
+    case Type.Apply(Type.Cst(TypeConstructor.Record, _), row, _) => peelRecordRow(row, Nil)
+    case Type.Alias(_, _, inner, _) => unapplyRecord(inner)
+    case _ => None
+  }
+
+  @tailrec
+  private def peelRecordRow(row: Type, fields: List[Type]): Option[List[Type]] = row match {
+    case Type.Cst(TypeConstructor.RecordRowEmpty, _) => Some(fields)
+    case Type.Apply(Type.Apply(Type.Cst(TypeConstructor.RecordRowExtend(_), _), fieldType, _), rest, _) =>
+      peelRecordRow(rest, fieldType :: fields)
     case _ => None
   }
 

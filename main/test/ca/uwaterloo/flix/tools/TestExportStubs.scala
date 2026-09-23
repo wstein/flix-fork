@@ -196,6 +196,22 @@ class TestExportStubs extends AnyFunSuite {
     assert(ExportStubs.javaSource(facades.head).contains("dev.flix.gen.Tuple$int$boolean values(int arg0)"))
   }
 
+  test("Record results are typed while Record parameters remain refused") {
+    val src =
+      """mod Acme.Api {
+        |    @Export pub def values(_x: Int32): {name = String, age = Int32} = {name = "a", age = 1}
+        |    @Export pub def consume(_x: {name = String, age = Int32}): Int32 = 0
+        |}
+        |""".stripMargin
+
+    val (facades, unsupported) = stubs(src)
+    val methods = facades.flatMap(_.methods)
+    assert(methods.map(_.name) == List("values"))
+    assert(methods.head.result.sourceName == "dev.flix.gen.Record$name$String$age$int")
+    assert(unsupported.map(_.name) == List("consume"))
+    assert(ExportStubs.javaSource(facades.head).contains("dev.flix.gen.Record$name$String$age$int values(int arg0)"))
+  }
+
   test("imported generic Java types retain arguments in both positions") {
     val src =
       """mod Acme.Api {
