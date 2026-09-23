@@ -49,6 +49,15 @@ import java.nio.charset.StandardCharsets
   *
   * Every event that names a test carries its location as well as its name, so a reader needs to keep no
   * state to make a result clickable.
+  *
+  * ==A protocol of its own==
+  *
+  * Independent of [[ca.uwaterloo.flix.api.CliContract]]'s, which negotiates a different boundary --
+  * a build tool driving `flix build`, not a client reading test results. The two version numbers move
+  * on their own schedules; reusing one for the other would make a compatible bump on either side read
+  * as a compatible bump on both, which is not what either side means by it. Stamped on `start` only,
+  * since that is the one event shape a reader must recognise before anything else in the stream means
+  * something to it.
   */
 class JsonTestSink(out: PrintStream) extends Tester.TestEventSink {
 
@@ -56,7 +65,7 @@ class JsonTestSink(out: PrintStream) extends Tester.TestEventSink {
     val entries: List[JValue] = tests.toList.map { test =>
       idFields(test.id) ~ ("skip" -> test.skip)
     }
-    emit(("event" -> "start") ~ ("tests" -> JArray(entries)))
+    emit(("event" -> "start") ~ ("protocolVersion" -> JsonTestSink.ProtocolVersion) ~ ("tests" -> JArray(entries)))
   }
 
   override def accept(event: Tester.TestEvent)(implicit flix: Flix): Unit = event match {
@@ -139,4 +148,16 @@ class JsonTestSink(out: PrintStream) extends Tester.TestEventSink {
 
   /** The longest run of output without a newline reported as one event. */
   private val MaxLine: Int = 8 * 1024
+}
+
+object JsonTestSink {
+
+  /**
+    * The version of the `start` event's shape.
+    *
+    * Bumped when a reader that understood the current shape would misread the new one -- the same
+    * rule [[ca.uwaterloo.flix.api.CliContract.ProtocolVersion]] uses, kept as a separate number
+    * because this protocol changes on its own schedule.
+    */
+  val ProtocolVersion: Int = 1
 }
