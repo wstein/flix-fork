@@ -128,6 +128,10 @@ object Instructions {
   def CHECKCAST(className: ClassDesc)(implicit mv: MethodVisitor): Unit =
     mv.visitTypeInstruction(Opcodes.CHECKCAST, className)
 
+  /** Emits the JVM `DCMPG` instruction. */
+  def DCMPG()(implicit mv: MethodVisitor): Unit =
+    mv.visitInstruction(Opcodes.DCMPG)
+
   /** Emits the JVM `DLOAD` instruction for local `index`. */
   def DLOAD(index: Int)(implicit mv: MethodVisitor): Unit =
     mv.visitVarInstruction(Opcodes.DLOAD, index)
@@ -152,6 +156,10 @@ object Instructions {
   def DUP_X2()(implicit mv: MethodVisitor): Unit =
     mv.visitInstruction(Opcodes.DUP_X2)
 
+  /** Emits the JVM `FCMPG` instruction. */
+  def FCMPG()(implicit mv: MethodVisitor): Unit =
+    mv.visitInstruction(Opcodes.FCMPG)
+
   /** Emits the JVM `GETFIELD` instruction for `field`. */
   def GETFIELD(field: InstanceField)(implicit mv: MethodVisitor): Unit =
     mv.visitFieldInstruction(Opcodes.GETFIELD, field.clazz, field.name, field.tpe)
@@ -163,6 +171,10 @@ object Instructions {
   /** Emits the JVM `IADD` instruction. */
   def IADD()(implicit mv: MethodVisitor): Unit =
     mv.visitInstruction(Opcodes.IADD)
+
+  /** Emits the JVM `IMUL` instruction. */
+  def IMUL()(implicit mv: MethodVisitor): Unit =
+    mv.visitInstruction(Opcodes.IMUL)
 
   /** Emits the JVM `ICONST_0` instruction. */
   def ICONST_0()(implicit mv: MethodVisitor): Unit =

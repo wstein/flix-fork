@@ -270,6 +270,42 @@ class TestExportedShims extends AnyFunSuite {
     } finally deleteRecursively(output)
   }
 
+  test("Tuple results cross as a generated java.lang.Record") {
+    val result = compile(
+      """mod Acme.Api {
+        |    @Export pub def pair(_x: Int32): (Int32, String) = (1, "hello")
+        |    @Export pub def another(_x: Int32): (Int32, String) = (2, "world")
+        |}
+        |""".stripMargin)
+
+    val output = Files.createTempDirectory("flix-export-tuple")
+    try {
+      writeClasses(result, output)
+      val loader = new URLClassLoader(Array(output.toUri.toURL), getClass.getClassLoader)
+      try {
+        val clazz = loader.loadClass("Acme.Api")
+        val pair = clazz.getDeclaredMethods.find(_.getName == "pair").get.invoke(null, Int.box(0))
+        val another = clazz.getDeclaredMethods.find(_.getName == "another").get.invoke(null, Int.box(0))
+        val recordClass = pair.getClass
+
+        assert(recordClass.isRecord)
+        assert(another.getClass eq recordClass, "same-shaped tuples share one generated record class")
+
+        val components = recordClass.getRecordComponents
+        assert(components.length == 2)
+        assert(recordClass.getMethod("component0").invoke(pair) == Int.box(1))
+        assert(recordClass.getMethod("component1").invoke(pair) == "hello")
+
+        val pairAgain = clazz.getDeclaredMethods.find(_.getName == "pair").get.invoke(null, Int.box(0))
+        assert(pair == pairAgain)
+        assert(pair.hashCode() == pairAgain.hashCode())
+        assert(pair != another)
+        assert(pair.toString.contains("1"))
+        assert(pair.toString.contains("hello"))
+      } finally loader.close()
+    } finally deleteRecursively(output)
+  }
+
   test("generic Java types retain arguments in exported parameters and results") {
     val result = compile(
       """mod Acme.Api {

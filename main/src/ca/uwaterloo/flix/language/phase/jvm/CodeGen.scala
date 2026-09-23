@@ -22,7 +22,7 @@ import ca.uwaterloo.flix.language.ast.{BytecodeAst, SimpleType, SourceLocation, 
 import ca.uwaterloo.flix.language.ast.JvmAst.*
 import ca.uwaterloo.flix.language.dbg.AstPrinter.DebugNoOp
 import ca.uwaterloo.flix.language.jvm.ClassDescs
-import ca.uwaterloo.flix.language.phase.jvm.classes.{GenAbstractArrow, GenArrow, GenCastError, GenEffectCall, GenExtTag, GenExtTagged, GenFlixError, GenFrame, GenFrames, GenFramesCons, GenFramesNil, GenGlobal, GenHandler, GenHoleError, GenLazy, GenMain, GenMatchError, GenNamespace, GenNullaryTag, GenRecord, GenRecordEmpty, GenRecordExtend, GenRegion, GenReifiedSourceLocation, GenResult, GenResumption, GenResumptionCons, GenResumptionNil, GenResumptionWrapper, GenStruct, GenSuspension, GenTag, GenTagged, GenThunk, GenTuple, GenUncaughtExceptionHandler, GenUnhandledEffectError, GenUnit, GenValue}
+import ca.uwaterloo.flix.language.phase.jvm.classes.{GenAbstractArrow, GenArrow, GenCastError, GenEffectCall, GenExportedTuple, GenExtTag, GenExtTagged, GenFlixError, GenFrame, GenFrames, GenFramesCons, GenFramesNil, GenGlobal, GenHandler, GenHoleError, GenLazy, GenMain, GenMatchError, GenNamespace, GenNullaryTag, GenRecord, GenRecordEmpty, GenRecordExtend, GenRegion, GenReifiedSourceLocation, GenResult, GenResumption, GenResumptionCons, GenResumptionNil, GenResumptionWrapper, GenStruct, GenSuspension, GenTag, GenTagged, GenThunk, GenTuple, GenUncaughtExceptionHandler, GenUnhandledEffectError, GenUnit, GenValue}
 import ca.uwaterloo.flix.util.InternalCompilerException
 
 import java.lang.constant.ClassDesc
@@ -82,6 +82,7 @@ object CodeGen {
     val extensibleTagClasses = getExtensibleTagTypesOf(allTypes).map(elms => JvmClass(GenExtTag.desc(elms), GenExtTag.genByteCode(elms))).toList
 
     val tupleClasses = getTupleTypesOf(allTypes).map(elms => JvmClass(GenTuple.desc(elms), GenTuple.genByteCode(elms))).toList
+    val exportedTupleClasses = getExportedTupleTypesOf(root).map(elms => JvmClass(GenExportedTuple.desc(elms), GenExportedTuple.genByteCode(elms))).toList
     val structClasses = root.structs.values.map(TypeDescs.structFields).toSet[List[ClassDesc]].toList.map(elms => JvmClass(GenStruct.desc(elms), GenStruct.genByteCode(elms)))
 
     val recordInterfaces = List(JvmClass(GenRecord.Desc, GenRecord.genByteCode()))
@@ -138,6 +139,7 @@ object CodeGen {
       extTaggedAbstractClass,
       extensibleTagClasses,
       tupleClasses,
+      exportedTupleClasses,
       structClasses,
       recordInterfaces,
       recordEmptyClasses,
@@ -230,6 +232,15 @@ object CodeGen {
       case (acc, SimpleType.Tuple(elms)) =>
         acc + elms.map(TypeDescs.toErasedClassDesc)
       case (acc, _) => acc
+    }
+
+  /** Returns the Java-facing element types of every distinct exported tuple shape in `root`. */
+  private def getExportedTupleTypesOf(root: Root): Set[List[ClassDesc]] =
+    root.defs.values.foldLeft(Set.empty[List[ClassDesc]]) {
+      case (acc, defn) => ExportPlan.ofDef(defn)(root) match {
+        case Some(tuple: ExportPlan.AsTuple) => acc + tuple.elements.map(_.javaType)
+        case _ => acc
+      }
     }
 
   /** Returns the set of record extend types in `types` without searching recursively. */

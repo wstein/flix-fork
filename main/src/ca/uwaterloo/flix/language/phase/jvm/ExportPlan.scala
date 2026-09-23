@@ -9,7 +9,7 @@ package ca.uwaterloo.flix.language.phase.jvm
 import ca.uwaterloo.flix.language.ast.SimpleType
 import ca.uwaterloo.flix.language.jvm.JavaClasses
 import ca.uwaterloo.flix.language.phase.jvm.Instructions.*
-import ca.uwaterloo.flix.language.phase.jvm.classes.{GenTag, GenTagged}
+import ca.uwaterloo.flix.language.phase.jvm.classes.{GenExportedTuple, GenTag, GenTagged, GenTuple}
 import org.objectweb.asm.MethodVisitor
 
 import java.lang.constant.ClassDesc
@@ -436,6 +436,40 @@ object ExportPlan {
     }
   }
 
+  /**
+    * A Flix tuple result converted to a real, generated `java.lang.Record`.
+    *
+    * Unlike every converted container, a tuple's Java representation is not an existing JDK
+    * type: `GenExportedTuple` generates one record class per distinct shape of Java-facing
+    * element types, shared across every exported tuple with that shape. `flixFields` names the
+    * compiler's own internal tuple class, read field by field and converted into the record's
+    * constructor arguments; there is no case to branch on and no container to walk.
+    */
+  case class AsTuple(elements: List[ExportPlan], flixFields: List[ClassDesc]) extends ExportPlan {
+    private val javaFields: List[ClassDesc] = elements.map(_.javaType)
+
+    override def flixType: ClassDesc = GenTuple.desc(flixFields)
+
+    override def signature: ExportSignature = ExportSignature.Exact(GenExportedTuple.desc(javaFields))
+
+    override def emit(nextLocal: Int)(implicit mv: MethodVisitor): Unit = {
+      withName(nextLocal, GenTuple.desc(flixFields)) { tuple =>
+        tuple.store()
+        NEW(GenExportedTuple.desc(javaFields))
+        DUP()
+        for ((element, i) <- elements.zipWithIndex) {
+          tuple.load()
+          GETFIELD(GenTuple.IndexField(flixFields, i))
+          element.emit(nextLocal + 1)
+          // The tuple's own field is erased to Object; narrow reference types the way the
+          // constructor's precise parameter type demands, since `element.emit` does not.
+          if (!element.javaType.isPrimitive) CHECKCAST(element.javaType)
+        }
+        INVOKESPECIAL(GenExportedTuple.Constructor(javaFields))
+      }
+    }
+  }
+
   /** Returns the exact boundary plan currently supported for `tpe`. */
   def exact(tpe: SimpleType): Option[ExportPlan] = tpe match {
     case SimpleType.Bool => Some(Identity(CD_boolean))
@@ -468,6 +502,7 @@ object ExportPlan {
     case SimpleType.Enum(sym, List(key, value)) if isMap(sym) =>
       for (keySig <- typeArgumentPlan(key); valueSig <- typeArgumentPlan(value))
         yield ExportSignature.Applied(JavaMap, List(keySig, valueSig))
+    case SimpleType.Tuple(elms) => tuplePlan(elms).map(_.signature)
     case SimpleType.Native(clazz, targs) if targs.nonEmpty =>
       traverse(targs)(typeArgumentPlan).map(ExportSignature.Applied(clazz, _))
     case _ => exact(tpe).map(_.signature)
@@ -483,6 +518,7 @@ object ExportPlan {
       case SimpleType.Enum(sym, List(element)) if isChain(sym) => chainPlan(element, defn.unboxedType.tpe)
       case SimpleType.Enum(sym, List(element)) if isSet(sym) => setPlan(element, defn.unboxedType.tpe)
       case SimpleType.Enum(sym, List(key, value)) if isMap(sym) => mapPlan(key, value, defn.unboxedType.tpe)
+      case SimpleType.Tuple(elms) => tuplePlan(elms)
       case SimpleType.Native(clazz, targs) if targs.nonEmpty =>
         traverse(targs)(typeArgumentPlan).map(GenericNative(clazz, _))
       case declared => exact(declared)
@@ -586,6 +622,17 @@ object ExportPlan {
     */
   private def redBlackTreeNodeFields(key: SimpleType, value: SimpleType): List[ClassDesc] =
     List(CD_Object, CD_Object, TypeDescs.toErasedClassDesc(key), TypeDescs.toErasedClassDesc(value), CD_Object)
+
+  /**
+    * Builds a tuple conversion, one element plan per component.
+    *
+    * Every component must have an exact boundary plan of its own: unlike a tuple's Java-facing
+    * record, which can declare a primitive-typed component directly, nothing here boxes a
+    * component the way a container's type argument would, so a component that itself needs a
+    * container conversion is refused rather than nested.
+    */
+  private def tuplePlan(elms: List[SimpleType]): Option[ExportPlan] =
+    traverse(elms)(exact).map(AsTuple(_, elms.map(TypeDescs.toErasedClassDesc)))
 
   /** Returns a plan for a value placed in a Java reference-only type argument position. */
   private def elementPlan(declared: SimpleType, erased: ClassDesc): Option[ExportPlan] =

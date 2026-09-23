@@ -60,6 +60,11 @@ sealed trait ClassMaker {
     case StaticField(_, name, tpe) => makeField(name, tpe, v, f, vol, IsStatic)
   }
 
+  /** Declares `name: tpe` as one component of this class's `Record` attribute. */
+  def mkRecordComponent(name: String, tpe: ClassDesc): Unit = {
+    visitor.visitRecordComponent(name, tpe.descriptorString(), null).visitEnd()
+  }
+
   protected def makeMethod(ann: List[JvmAnnotation], i: Option[MethodVisitor => Unit], methodName: String, d: MethodTypeDesc, v: Visibility, f: Final, s: Static, a: Abstract, signature: Option[String] = None): Unit = {
     val m = v.toInt + f.toInt + s.toInt + a.toInt
     val mv = visitor.visitMethod(m, methodName, d.descriptorString(), signature.orNull, null)

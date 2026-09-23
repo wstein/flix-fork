@@ -19,6 +19,7 @@ import ca.uwaterloo.flix.api.Flix
 import ca.uwaterloo.flix.language.ast.shared.Source
 import ca.uwaterloo.flix.language.ast.{ChangeSet, Name, ReadAst, SourceLocation, SyntaxTree, WeededAst}
 import ca.uwaterloo.flix.language.jvm.JavaClasses
+import ca.uwaterloo.flix.language.phase.jvm.classes.GenExportedTuple
 import ca.uwaterloo.flix.language.phase.jvm.{ExportSignature, Mangle}
 import ca.uwaterloo.flix.language.phase.{Lexer, Parser2, Weeder2}
 import ca.uwaterloo.flix.util.Result
@@ -235,6 +236,10 @@ object ExportStubs {
         case WeededAst.Type.Ambiguous(qname, _) => named(qname, args, imps, allowConvertedResult)
         case _ => None
       }
+
+    case WeededAst.Type.Tuple(tpes, _) if allowConvertedResult =>
+      traverse(tpes.toList)(parameterSignatureOf(_, imps))
+        .map(sigs => ExportSignature.Exact(GenExportedTuple.desc(sigs.map(_.javaType))))
 
     case _ => None
   }

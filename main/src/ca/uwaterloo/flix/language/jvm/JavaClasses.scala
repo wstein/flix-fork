@@ -58,6 +58,8 @@ object JavaClasses {
   val ObjFunction: ClassDesc = ClassDesc.ofInternalName("java/util/function/Function")
   val ObjPredicate: ClassDesc = ClassDesc.ofInternalName("java/util/function/Predicate")
   val Object: ClassDesc = CD_Object
+  val Objects: ClassDesc = ClassDesc.ofInternalName("java/util/Objects")
+  val Record: ClassDesc = ClassDesc.ofInternalName("java/lang/Record")
   val Regex: ClassDesc = ClassDesc.ofInternalName("java/util/regex/Pattern")
   val ReentrantLock: ClassDesc = ClassDesc.ofInternalName("java/util/concurrent/locks/ReentrantLock")
   val Runnable: ClassDesc = ClassDesc.ofInternalName("java/lang/Runnable")

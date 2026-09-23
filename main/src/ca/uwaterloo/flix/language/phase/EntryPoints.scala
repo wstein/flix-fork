@@ -438,8 +438,11 @@ object EntryPoints {
       if (isUnitType(retTpe) == Result.Ok(true)) Nil
       else unapplyMap(retTpe) match {
         case Some((k, v)) => List(k, v)
-        case None => List(unapplyOption(retTpe).orElse(unapplyList(retTpe)).orElse(unapplyVector(retTpe))
-          .orElse(unapplyChain(retTpe)).orElse(unapplySet(retTpe)).getOrElse(retTpe))
+        case None => unapplyTuple(retTpe) match {
+          case Some(elms) => elms
+          case None => List(unapplyOption(retTpe).orElse(unapplyList(retTpe)).orElse(unapplyVector(retTpe))
+            .orElse(unapplyChain(retTpe)).orElse(unapplySet(retTpe)).getOrElse(retTpe))
+        }
       }
     val types = returnTypes ::: paramTypes
     types.flatMap(tpe => {
@@ -512,6 +515,25 @@ object EntryPoints {
     case Type.Apply(Type.Apply(Type.Cst(TypeConstructor.Enum(sym, _), _), key, _), value, _)
       if sym.namespace.isEmpty && sym.text == "Map" => Some((key, value))
     case Type.Alias(_, _, inner, _) => unapplyMap(inner)
+    case _ => None
+  }
+
+  /**
+    * Returns the elements of a tuple type, which are converted individually on return.
+    *
+    * Each element still goes through `isExportableType` on its own, so a tuple nested inside
+    * another converted container, or containing one, is refused: only exact/primitive elements
+    * are admitted by this first slice of tuple export.
+    */
+  private def unapplyTuple(tpe: Type): Option[List[Type]] = tpe match {
+    case Type.Alias(_, _, inner, _) => unapplyTuple(inner)
+    case _ => peelTuple(tpe, Nil)
+  }
+
+  @tailrec
+  private def peelTuple(tpe: Type, args: List[Type]): Option[List[Type]] = tpe match {
+    case Type.Apply(inner, arg, _) => peelTuple(inner, arg :: args)
+    case Type.Cst(TypeConstructor.Tuple(arity), _) if args.lengthIs == arity => Some(args)
     case _ => None
   }
 

@@ -68,6 +68,13 @@ development lineages. It currently supports:
   besides `Leaf`). The tree's field types are computed from the exported key/value types by
   ordinary erasure rather than looked up: the wrapper's own field is itself erased to `Object` by
   the time `EntryPoints`' retention reaches it, one level short of the tree it names.
+- Tuple results as a real, generated `java.lang.Record` -- not an existing JDK type, unlike every
+  other conversion here. `GenExportedTuple` emits one record class per distinct shape of
+  Java-facing element types (synthetic component names, a canonical constructor, and hand-written
+  `equals`/`hashCode`/`toString`, since extending `Record` makes all three abstract), shared by
+  every exported tuple with that shape the way the compiler's own internal tuple class is shared
+  by shape. Each element must have its own exact boundary plan: an element that is itself a
+  converted container is refused rather than nested.
 - Explicitly imported Java classes, including nested generic arguments in parameters and results.
 
 It refuses other Flix algebraic data types, other containers, functions, and unaccounted reference
@@ -76,8 +83,8 @@ a missing stub fails the build at generation time, while an incorrect stub compi
 with a linkage error in innocent calling code.
 
 Converted containers are result-only. `Option[t]`, `List[t]`, `Vector[t]`, `Chain[t]`, `Set[t]`,
-and `Map[k, v]` parameters remain refused because the shim currently passes parameters straight
-into Flix and therefore has no reverse conversion.
+`Map[k, v]`, and tuples remain refused as parameters because the shim currently passes parameters
+straight into Flix and therefore has no reverse conversion.
 
 The tests compare generated stub declarations with the method descriptors on the facade bytecode.
 This pins the source-facing stub contract to the backend contract and catches drift between them.
