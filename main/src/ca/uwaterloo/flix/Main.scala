@@ -1605,7 +1605,8 @@ object Main {
         }
       }
     } finally {
-      quarantined.flush()
+      // Closed, not flushed: closing is what reports a last line the program never terminated.
+      quarantined.close()
       System.setOut(new PrintStream(new FileOutputStream(FileDescriptor.out), true, StandardCharsets.UTF_8))
     }
   }
