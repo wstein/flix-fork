@@ -57,7 +57,7 @@ class TestJsonTestSink extends AnyFunSuite {
     assert(linesOf(written) == List("ab"), s"the line was split across streams: ${linesOf(written)}")
   }
 
-  test("a partial line is reported when the stream is flushed") {
+  test("a partial line is reported when the stream is closed") {
     // A program that ends without a newline still said something, and a client waiting for the rest of
     // a line it will never get shows nothing at all.
     val (sink, written) = mkSink()
@@ -67,8 +67,36 @@ class TestJsonTestSink extends AnyFunSuite {
     out.write('i'.toInt)
     assert(linesOf(written).isEmpty, "a partial line was reported before it ended")
 
-    out.flush()
+    out.close()
     assert(linesOf(written) == List("hi"), s"unexpected output: ${linesOf(written)}")
+  }
+
+  test("a flush does not end a line") {
+    // The runner's `PrintStream` auto-flushes after every write, so a flush arrives in the middle of
+    // lines all the time. Ending one there split `println` into the text and an empty line.
+    val (sink, written) = mkSink()
+    val out = new PrintStream(sink.outputStream, true, StandardCharsets.UTF_8)
+
+    out.print("hi")
+    out.flush()
+    out.print("\n")
+
+    assert(linesOf(written) == List("hi"), s"a flush ended the line: ${linesOf(written)}")
+  }
+
+  test("a println through the runner's tee is one line") {
+    // What a test's `println` actually goes through: the tee that captures a test's output, writing
+    // text and newline separately into the auto-flushing stream. Every line arrived followed by an
+    // empty one.
+    val (sink, written) = mkSink()
+    val quarantined = new PrintStream(sink.outputStream, true, StandardCharsets.UTF_8)
+    val tee = new Tester.TeeOutputStream(new ByteArrayOutputStream(), quarantined)
+
+    tee.println("one")
+    tee.println("two")
+    tee.flush()
+
+    assert(linesOf(written) == List("one", "two"), s"unexpected output: ${linesOf(written)}")
   }
 
   /** A sink writing to a buffer, with the buffer. */
@@ -82,7 +110,7 @@ class TestJsonTestSink extends AnyFunSuite {
   private def linesOf(written: ByteArrayOutputStream): List[String] =
     new String(written.toByteArray, StandardCharsets.UTF_8)
       .linesIterator
-      .filter(_.nonEmpty)
+      .filter(_.nonEmpty) // blank lines of the *event* stream, not empty `line` values
       .map(JsonMethods.parse(_))
       .filter(json => (json \ "event") == JString("output"))
       .map(json => (json \ "line") match {

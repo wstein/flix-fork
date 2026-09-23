@@ -101,6 +101,12 @@ class JsonTestSink(out: PrintStream) extends Tester.TestEventSink {
     * The line is buffered as *bytes* and decoded once, at its end. A `PrintStream` encodes a character
     * before it arrives here, so reading each byte as a character is Latin-1: `héllo` becomes `hÃ©llo`,
     * and every non-ASCII character a test prints is corrupted on the way to the client.
+    *
+    * `flush` does not end a line; `close` does. The runner wraps this in an auto-flushing `PrintStream`,
+    * which flushes after *every* write -- and a `println` that reaches it as two writes, text and then
+    * newline, which is what the test runner's own tee does, would otherwise be reported as the text and
+    * then an empty line. The unterminated tail of a program that ends without a newline is still
+    * reported, when the runner closes the stream at the end of the run.
     */
   val outputStream: java.io.OutputStream = new java.io.OutputStream {
     private val line = new java.io.ByteArrayOutputStream()
@@ -119,7 +125,7 @@ class JsonTestSink(out: PrintStream) extends Tester.TestEventSink {
       }
     }
 
-    override def flush(): Unit = synchronized {
+    override def close(): Unit = synchronized {
       if (line.size() > 0) {
         emitLine()
       }
