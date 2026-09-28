@@ -409,6 +409,71 @@ class TestExportedShims extends AnyFunSuite {
     } finally deleteRecursively(output)
   }
 
+  test("data-carrying enum results cross as a sealed interface of nested records") {
+    val result = compile(
+      """mod Acme {
+        |    pub enum Shape { case Circle(Int32), case Rect(Int32, String), case Point }
+        |}
+        |mod Acme.Shape {
+        |    @Export pub def unit(_x: Int32): Acme.Shape = Acme.Shape.Circle(1)
+        |}
+        |mod Acme.Api {
+        |    @Export pub def circle(_x: Int32): Acme.Shape = Acme.Shape.Circle(5)
+        |    @Export pub def rect(_x: Int32): Acme.Shape = Acme.Shape.Rect(2, "wide")
+        |    @Export pub def point(_x: Int32): Acme.Shape = Acme.Shape.Point
+        |}
+        |""".stripMargin)
+
+    val output = Files.createTempDirectory("flix-export-sealed")
+    try {
+      writeClasses(result, output)
+      val loader = new URLClassLoader(Array(output.toUri.toURL), getClass.getClassLoader)
+      try {
+        val api = loader.loadClass("Acme.Api")
+        val shape = loader.loadClass("Acme.Shape")
+        assert(shape.isInterface && shape.isSealed)
+        assert(shape.getPermittedSubclasses.toList.map(_.getSimpleName) == List("Circle", "Rect", "Point"))
+
+        val circle = api.getMethod("circle", Integer.TYPE).invoke(null, Int.box(0))
+        assert(circle.getClass.isRecord)
+        assert(circle.getClass.getEnclosingClass eq shape)
+        assert(circle.getClass.getMethod("component0").invoke(circle) == Int.box(5))
+        val rect = api.getMethod("rect", Integer.TYPE).invoke(null, Int.box(0))
+        assert(rect.getClass.getMethod("component1").invoke(rect) == "wide")
+        val point = api.getMethod("point", Integer.TYPE).invoke(null, Int.box(0))
+        assert(point == api.getMethod("point", Integer.TYPE).invoke(null, Int.box(0)))
+        assert(shape.getMethod("unit", Integer.TYPE).invoke(null, Int.box(0)).toString == "Circle[component0=1]")
+      } finally loader.close()
+
+      // An exhaustive `switch` with no `default` compiles only against a sealed interface whose
+      // permitted records javac can see as its nested members.
+      val compiler = javax.tools.ToolProvider.getSystemJavaCompiler
+      assume(compiler != null, "test requires a JDK")
+      val javaSource = output.resolve("com/example/UsesShape.java")
+      Files.createDirectories(javaSource.getParent)
+      Files.writeString(javaSource,
+        """package com.example;
+          |import Acme.Shape;
+          |public final class UsesShape {
+          |    static String describe(Shape s) {
+          |        return switch (s) {
+          |            case Shape.Circle c -> "c" + c.component0();
+          |            case Shape.Rect(int w, String h) -> "r" + w + h;
+          |            case Shape.Point p -> "p";
+          |        };
+          |    }
+          |    public static String run() {
+          |        return describe(Acme.Api.circle(0)) + describe(Acme.Api.rect(0)) + describe(Acme.Api.point(0));
+          |    }
+          |}
+          |""".stripMargin)
+      assert(compiler.run(null, null, null, "-cp", output.toString, "-d", output.toString, javaSource.toString) == 0)
+      val javaLoader = new URLClassLoader(Array(output.toUri.toURL), getClass.getClassLoader)
+      try assert(javaLoader.loadClass("com.example.UsesShape").getMethod("run").invoke(null) == "c5r2widep")
+      finally javaLoader.close()
+    } finally deleteRecursively(output)
+  }
+
   test("generic Java types retain arguments in exported parameters and results") {
     val result = compile(
       """mod Acme.Api {

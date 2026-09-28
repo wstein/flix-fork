@@ -524,6 +524,58 @@ object ExportPlan {
     }
   }
 
+  /** One case of an exported data-carrying enum: its record's fields and how each converts. */
+  case class SealedCase(name: String, ordinal: Int, flixFields: List[ClassDesc], elements: List[ExportPlan]) {
+    /** The record components: synthetic names, as a tuple's, since a Flix case names no fields. */
+    def components: List[(String, ClassDesc)] = elements.zipWithIndex.map { case (e, i) => s"component$i" -> e.javaType }
+  }
+
+  /**
+    * A data-carrying Flix enum result converted to the nested record of its case, which
+    * implements the enum's generated sealed interface.
+    *
+    * The case is chosen by comparing ordinals in turn; the last case needs no comparison.
+    */
+  case class AsSealed(ns: List[String], cases: List[SealedCase]) extends ExportPlan {
+    override def flixType: ClassDesc = GenTagged.Desc
+
+    override def signature: ExportSignature = ExportSignature.Exact(Mangle.namespaceFacadeDesc(ns))
+
+    override def emit(nextLocal: Int)(implicit mv: MethodVisitor): Unit = {
+      withName(nextLocal, GenTagged.Desc) { value =>
+        def construct(c: SealedCase): Unit = {
+          val record = GenExportedEnum.caseDesc(javaType, c.name)
+          NEW(record)
+          DUP()
+          for ((element, i) <- c.elements.zipWithIndex) {
+            value.load()
+            CHECKCAST(GenTag.desc(c.flixFields))
+            GETFIELD(GenTag.IndexField(c.flixFields, i))
+            // The field is erased to `Object` if its declared type is a reference type.
+            if (!element.flixType.isPrimitive) CHECKCAST(element.flixType)
+            element.emit(nextLocal + 1)
+            if (!element.javaType.isPrimitive) CHECKCAST(element.javaType)
+          }
+          INVOKESPECIAL(ClassMaker.ConstructorMethod(record, c.elements.map(_.javaType)))
+        }
+
+        def select(cs: List[SealedCase]): Unit = cs match {
+          case Nil => ()
+          case last :: Nil => construct(last)
+          case c :: rest =>
+            value.load()
+            GETFIELD(GenTagged.OrdinalField)
+            pushInt(c.ordinal)
+            ifConditionElse(Condition.ICMPEQ)(construct(c))(select(rest))
+        }
+
+        value.store()
+        select(cases)
+        CHECKCAST(javaType)
+      }
+    }
+  }
+
   /** Returns the exact boundary plan currently supported for `tpe`. */
   def exact(tpe: SimpleType): Option[ExportPlan] = tpe match {
     case SimpleType.Bool => Some(Identity(CD_boolean))
@@ -584,19 +636,31 @@ object ExportPlan {
     }
 
   /**
-    * Builds a Java enum conversion for the data-free enum `sym`, reading its cases off the
-    * specialized enum retained by erasure.
+    * Builds the conversion of the enum `sym`, reading its cases off the specialized enum retained
+    * by erasure: a Java enum if no case carries data, a sealed interface of records otherwise.
     *
-    * Refuses an enum whose cases carry data or whose ordinals are not exactly `0 until n`: either
-    * would make a constant's position in the Java enum disagree with its Flix case.
+    * Refuses a data-free enum whose ordinals are not exactly `0 until n`, which would make a
+    * constant's position in the Java enum disagree with its Flix case.
     */
   private def enumPlan(sym: ca.uwaterloo.flix.language.ast.Symbol.EnumSym, erased: SimpleType)(implicit root: ca.uwaterloo.flix.language.ast.JvmAst.Root): Option[ExportPlan] = erased match {
     case SimpleType.Enum(erasedSym, Nil) =>
       val cases = root.enums(erasedSym).cases.values.toList.sortBy(_.sym.ordinal)
-      val dataFree = cases.forall(_.tpes.isEmpty)
-      val contiguous = cases.map(_.sym.ordinal) == cases.indices.toList
-      if (dataFree && contiguous) Some(AsEnum(GenExportedEnum.companionNamespace(sym), cases.map(_.sym.name)))
-      else None
+      val ns = GenExportedEnum.companionNamespace(sym)
+      if (cases.forall(_.tpes.isEmpty)) {
+        val contiguous = cases.map(_.sym.ordinal) == cases.indices.toList
+        if (contiguous) Some(AsEnum(ns, cases.map(_.sym.name))) else None
+      } else {
+        // A field is read at its erased type, which names the case's tag class, and converted from
+        // its declared type, which `root.enums` no longer has. Every field needs an exact plan of
+        // its own, as a tuple's elements do.
+        for {
+          declared <- root.exportedEnumFields.get(sym)
+          sealedCases <- traverse(cases) { c =>
+            declared.get(c.sym.name).flatMap(traverse(_)(exact))
+              .map(SealedCase(c.sym.name, c.sym.ordinal, c.tpes.map(TypeDescs.toClassDesc), _))
+          }
+        } yield AsSealed(ns, sealedCases)
+      }
     case _ => None
   }
 

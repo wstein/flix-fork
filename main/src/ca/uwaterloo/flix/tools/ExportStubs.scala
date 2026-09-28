@@ -82,6 +82,9 @@ object ExportStubs {
 
     /** An `enum` with these constants, in case-ordinal order. */
     case class Enum(constants: List[String]) extends Shape
+
+    /** A `sealed interface` with one nested `record` per case, in case-ordinal order. */
+    case class Sealed(cases: List[(String, List[(String, ExportSignature)])]) extends Shape
   }
 
   /**
@@ -110,7 +113,7 @@ object ExportStubs {
     weed(inputs) match {
       case None => (Nil, Nil)
       case Some(root) =>
-        val enums = root.units.values.flatMap(unit => enumsOf(unit.decls, Nil)).toMap
+        val enums = root.units.values.flatMap(unit => enumsOf(unit.decls, Nil, imports(unit.usesAndImports))).toMap
         val found = root.units.values.flatMap(unit => visitDecls(unit.decls, Nil, imports(unit.usesAndImports), uses(unit.usesAndImports), enums))
         val (described0, unsupported0) = partition(found.toList)
         val (described, clashes) = refuseEnumMemberClashes(described0)
@@ -151,7 +154,9 @@ object ExportStubs {
     * methods are declared on the enum itself.
     */
   private def refuseEnumMemberClashes(described: List[Described]): (List[Described], List[Unsupported]) = {
-    val enumClasses = described.flatMap(_.types).collect { case Facade(name, Shape.Enum(_), _) => name }.toSet
+    val enumClasses = described.flatMap(_.types).collect {
+      case Facade(name, Shape.Enum(_) | Shape.Sealed(_), _) => name
+    }.toSet
     val (clashing, rest) = described.partition { d =>
       enumClasses.contains(Mangle.namespaceFacadeDesc(d.ns)) && GenExportedEnum.MemberNames.contains(d.method.name)
     }
@@ -191,6 +196,7 @@ object ExportStubs {
     // imported and spelled by its simple name, unless that simple name is itself taken.
     val named = (facade.methods.flatMap(m => m.result :: m.params) ++ (facade.shape match {
       case Shape.Record(components) => components.map(_._2)
+      case Shape.Sealed(cases) => cases.flatMap(_._2.map(_._2))
       case _ => Nil
     })).flatMap(_.classes).distinct
     val shadowed = named.filter(c => ExportSignature.qualifiedName(c).startsWith(className + "."))
@@ -219,6 +225,12 @@ object ExportStubs {
       // javac gives an enum its private constructor, `values()` and `valueOf(String)` itself.
       case Shape.Enum(constants) =>
         List(s"public enum $className {") ++ constants.map(c => s"    $c,") ++ List("    ;", "")
+      // javac infers the permitted subclasses of a sealed interface from its nested records.
+      case Shape.Sealed(cases) =>
+        List(s"public sealed interface $className {", "") ++ cases.flatMap { case (name, components) =>
+          val params = components.map { case (component, sig) => s"${sig.sourceNameWith(spell)} $component" }.mkString(", ")
+          List(s"    record $name($params) implements $className {", "    }", "")
+        }
     }
     val lines = List(Marker) ++ pkg ++ imports ++ header ++ body ++ List("}")
     lines.mkString("", "\n", "\n")
@@ -266,12 +278,15 @@ object ExportStubs {
     * if the whole def can be described: a refused def must not leave a stub for a type nothing else
     * names.
     */
-  private class DefContext(val ns: List[String], val uses: Map[String, List[String]], val enums: Map[List[String], WeededAst.Declaration.Enum]) {
+  /** An enum declaration, with the Java imports in scope where it is declared. */
+  private case class EnumDecl(decl: WeededAst.Declaration.Enum, imps: Map[String, String])
+
+  private class DefContext(val ns: List[String], val uses: Map[String, List[String]], val enums: Map[List[String], EnumDecl]) {
     val types: scala.collection.mutable.ListBuffer[Facade] = scala.collection.mutable.ListBuffer.empty
   }
 
   /** Returns each exported def paired with the namespace it belongs to, or why it was refused. */
-  private def visitDecls(decls: List[WeededAst.Declaration], ns: List[String], imps: Map[String, String], uses: Map[String, List[String]], enums: Map[List[String], WeededAst.Declaration.Enum]): List[Either[Unsupported, Described]] =
+  private def visitDecls(decls: List[WeededAst.Declaration], ns: List[String], imps: Map[String, String], uses: Map[String, List[String]], enums: Map[List[String], EnumDecl]): List[Either[Unsupported, Described]] =
     decls.flatMap {
       case WeededAst.Declaration.Mod(_, _, _, qname, usesAndImports, inner, _) =>
         // Modules nest and each name may itself be dotted, so the namespace accumulates the same
@@ -393,7 +408,8 @@ object ExportStubs {
   }
 
   /**
-    * Returns the signature of the data-free enum `qname` names, declaring its Java enum.
+    * Returns the signature of the enum `qname` names, declaring its Java enum, or its sealed
+    * interface if a case carries data.
     *
     * Without a resolver, the name is looked up conservatively: through a `use` alias of its first
     * segment, then in the def's own module, then from the root. These cover how an exported enum is
@@ -405,21 +421,30 @@ object ExportStubs {
     val candidates = ctx.uses.get(parts.head).map(_ ++ parts.tail).toList ++ List(ctx.ns ++ parts, parts)
     for {
       name <- candidates.find(ctx.enums.contains)
-      enm = ctx.enums(name)
-      if enm.tparams.isEmpty && enm.cases.forall(_.tpes.isEmpty)
+      EnumDecl(enm, imps) = ctx.enums(name)
+      if enm.tparams.isEmpty
+      shape <-
+        if (enm.cases.forall(_.tpes.isEmpty)) Some(Shape.Enum(enm.cases.map(_.ident.name)))
+        else traverse(enm.cases) { c =>
+          // A field is described where the enum is declared, with that module's imports, and
+          // must cross exactly, as the compiler requires of a case field.
+          traverse(c.tpes)(parameterSignatureOf(_, imps)).map { sigs =>
+            c.ident.name -> sigs.zipWithIndex.map { case (sig, i) => s"component$i" -> sig }
+          }
+        }.map(Shape.Sealed(_))
     } yield {
       val desc = Mangle.namespaceFacadeDesc(name)
-      ctx.types += Facade(desc, Shape.Enum(enm.cases.map(_.ident.name)), Nil)
+      ctx.types += Facade(desc, shape, Nil)
       ExportSignature.Exact(desc)
     }
   }
 
   /** Returns every enum declared in `decls`, by its full name. */
-  private def enumsOf(decls: List[WeededAst.Declaration], ns: List[String]): List[(List[String], WeededAst.Declaration.Enum)] =
+  private def enumsOf(decls: List[WeededAst.Declaration], ns: List[String], imps: Map[String, String]): List[(List[String], EnumDecl)] =
     decls.flatMap {
-      case WeededAst.Declaration.Mod(_, _, _, qname, _, inner, _) =>
-        enumsOf(inner, ns ++ qname.namespace.idents.map(_.name) :+ qname.ident.name)
-      case enm: WeededAst.Declaration.Enum => List((ns :+ enm.ident.name) -> enm)
+      case WeededAst.Declaration.Mod(_, _, _, qname, usesAndImports, inner, _) =>
+        enumsOf(inner, ns ++ qname.namespace.idents.map(_.name) :+ qname.ident.name, imps ++ imports(usesAndImports))
+      case enm: WeededAst.Declaration.Enum => List((ns :+ enm.ident.name) -> EnumDecl(enm, imps))
       case _ => Nil
     }
 

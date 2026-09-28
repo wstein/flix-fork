@@ -877,12 +877,36 @@ class TestEntryPoints extends AnyFunSuite with TestUtils {
     expectSuccess(result)
   }
 
-  test("Test.IllegalExportFunction.EnumResult.01") {
+  test("Test.ValidExportFunction.EnumResult.03") {
     val input =
       """
         |mod Mod {
         |    pub enum Shape { case Circle(Int32), case Point }
         |    @Export pub def shape(x: Int32): Shape = ???
+        |}
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibNix)
+    expectSuccess(result)
+  }
+
+  test("Test.IllegalExportFunction.EnumResult.01") {
+    val input =
+      """
+        |mod Mod {
+        |    pub enum Wrapped { case Fn(Int32 -> Int32) }
+        |    @Export pub def wrapped(x: Int32): Wrapped = ???
+        |}
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibNix)
+    expectError[EntryPointError.IllegalExportType](result)
+  }
+
+  test("Test.IllegalExportFunction.EnumResult.05") {
+    val input =
+      """
+        |mod Mod {
+        |    pub enum Tree { case Leaf, case Node(Tree, Tree) }
+        |    @Export pub def tree(x: Int32): Tree = ???
         |}
         |""".stripMargin
     val result = check(input, Options.TestWithLibNix)

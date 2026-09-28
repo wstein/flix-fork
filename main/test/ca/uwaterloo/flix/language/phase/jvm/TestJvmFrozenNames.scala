@@ -67,7 +67,7 @@ class TestJvmFrozenNames extends AnyFunSuite {
       val declaration = JvmAst.Enum(Annotations.Empty, Modifiers.Empty, enumeration,
         Map(caze -> JvmAst.Case(caze, Nil, loc)), loc)
       val root = JvmAst.Root(Map.empty, Map(enumeration -> declaration), Map.empty, Map.empty,
-        Set.empty, Nil, None, Set.empty, Map.empty)
+        Set.empty, Nil, None, Set.empty, Map.empty, Map.empty)
       val error = intercept[InternalCompilerException] { CodeGen.run(root) }
       assert(error.getMessage.contains("Missing JVM naming provenance"))
       intercept[InternalCompilerException] { flix.jvmOrigins.nameTable }

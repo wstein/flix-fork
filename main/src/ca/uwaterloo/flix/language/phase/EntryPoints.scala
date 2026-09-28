@@ -450,23 +450,27 @@ object EntryPoints {
     root.defs.values.foldLeft(Map.empty[List[String], Symbol.EnumSym]) {
       case (acc, defn) if TypedAstOps.isExport(defn) =>
         unapplyExportedEnum(defn.spec.retTpe)(root) match {
-          case Some(sym) => acc + ((sym.namespace :+ sym.name) -> sym)
+          case Some((sym, _)) => acc + ((sym.namespace :+ sym.name) -> sym)
           case None => acc
         }
       case (acc, _) => acc
     }
 
   /**
-    * Returns the symbol of a data-free, non-polymorphic enum, which is converted on return to the
-    * constant of a generated Java enum.
+    * Returns the symbol of a non-polymorphic enum and the types of its cases' fields, which are
+    * converted individually on return: a data-free enum becomes a Java enum, and any other a
+    * sealed interface of one record per case.
     *
-    * An enum with a type parameter or a case carrying data has no single Java enum to become and
-    * is left to `isExportableType`, which refuses it.
+    * Each field still goes through `isExportableType` on its own, the same way and for the same
+    * reason a tuple's elements do, which also refuses a recursive enum. An enum with a type
+    * parameter is left to `isExportableType` whole, which refuses it.
     */
   @tailrec
-  private def unapplyExportedEnum(tpe: Type)(implicit root: TypedAst.Root): Option[Symbol.EnumSym] = tpe match {
+  private def unapplyExportedEnum(tpe: Type)(implicit root: TypedAst.Root): Option[(Symbol.EnumSym, List[Type])] = tpe match {
     case Type.Cst(TypeConstructor.Enum(sym, _), _) =>
-      root.enums.get(sym).filter(enm => enm.tparams.isEmpty && enm.cases.values.forall(_.tpes.isEmpty)).map(_.sym)
+      root.enums.get(sym).filter(_.tparams.isEmpty).map { enm =>
+        (enm.sym, enm.cases.values.toList.sortBy(_.sym.ordinal).flatMap(_.tpes))
+      }
     case Type.Alias(_, _, inner, _) => unapplyExportedEnum(inner)
     case _ => None
   }
@@ -480,9 +484,9 @@ object EntryPoints {
     val retTpe = defn.spec.retTpe
     val returnTypes =
       if (isUnitType(retTpe) == Result.Ok(true)) Nil
-      else if (unapplyExportedEnum(retTpe).isDefined) Nil
       else unapplyMap(retTpe) match {
         case Some((k, v)) => List(k, v)
+        case None if unapplyExportedEnum(retTpe).isDefined => unapplyExportedEnum(retTpe).toList.flatMap(_._2)
         case None => unapplyTuple(retTpe).orElse(unapplyRecord(retTpe)) match {
           case Some(elms) => elms
           case None => List(unapplyOption(retTpe).orElse(unapplyList(retTpe)).orElse(unapplyVector(retTpe))

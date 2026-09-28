@@ -90,7 +90,14 @@ development lineages. It currently supports:
   `Mod.Color`, and the exported defs of `mod Mod.Color` become static methods of that same enum
   class instead of a second class of the same name. Because of that, a companion export named
   like a method every Java enum has (`name`, `ordinal`, `values`, `valueOf`, ...) is refused with
-  `IllegalExportEnumMember`. An enum with a type parameter or a case carrying data is refused.
+  `IllegalExportEnumMember`. An enum with a type parameter is refused.
+- Non-polymorphic enum results whose cases carry data as a `sealed interface` named the same way,
+  permitting one nested `record` per case (`Shape.Circle(int component0)`), so Java 21 can
+  `switch` over it exhaustively with record patterns. Each field must have an exact boundary
+  plan, as a tuple's elements must, which also refuses a recursive enum. Specialization erases a
+  reference-typed case field to `Object`, so `Eraser` records the declared field types of every
+  exported enum in `exportedEnumFields` for the record to declare them. A case whose record class
+  would share its name with a module (`Shape.Circle`) is a compiler crash, not yet an error.
 - Explicitly imported Java classes, including nested generic arguments in parameters and results.
 
 It refuses other Flix algebraic data types, other containers, functions, and unaccounted reference
@@ -103,8 +110,9 @@ Converted containers are result-only. `Option[t]`, `List[t]`, `Vector[t]`, `Chai
 parameters straight into Flix and therefore has no reverse conversion.
 
 Stubs declare every class an exported signature names that the compiler generates too: a tuple or
-record result's class becomes a Java `record` with the same components, and a data-free enum
-becomes a Java `enum` carrying its companion module's methods, as the real class does. A record's
+record result's class becomes a Java `record` with the same components, a data-free enum becomes a
+Java `enum`, and any other enum a `sealed interface` of nested records, each carrying its companion
+module's methods, as the real type does. A record's
 components are in label order, since monomorphisation sorts a record's row and the generated class
 is named after it. Stub generation cannot resolve names, so it finds an enum through a `use` alias,
 the exporting module, or the root, and refuses a def whose enum it cannot find that way.

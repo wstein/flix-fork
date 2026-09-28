@@ -47,8 +47,28 @@ object Eraser {
     // Specializations must happen after all other types and expressions are visited.
     val newEnums = specializeEnums(ctx.getEnumSpecializations)
     val newStructs = specializeStructs(ctx.getStructSpecializations)
-    ErasedAst.Root(newDefs, newEnums, newStructs, newEffects, root.mainEntryPoint, root.entryPoints, root.sources)
+    ErasedAst.Root(newDefs, newEnums, newStructs, newEffects, root.mainEntryPoint, root.entryPoints, root.sources, exportedEnumFields(root))
   }(DebugNoOp())
+
+  /**
+    * Returns the declared field types of every case of every enum an export returns, by case name.
+    *
+    * Specialization erases a reference-typed field to `Object`, the representation every Flix
+    * value shares. A Java record generated for an exported enum's case must declare the field's
+    * real type instead, and this is the last phase that still knows it.
+    */
+  private def exportedEnumFields(root: ReducedAst.Root): Map[Symbol.EnumSym, Map[String, List[SimpleType]]] =
+    root.defs.values.foldLeft(Map.empty[Symbol.EnumSym, Map[String, List[SimpleType]]]) {
+      case (acc, defn) if defn.ann.isExport => defn.unboxedType.tpe match {
+        case SimpleType.Enum(sym, Nil) =>
+          root.enums.get(sym).filter(_.tparams.isEmpty) match {
+            case Some(enm) => acc + (sym -> enm.cases.values.map(c => c.sym.name -> c.tpes.map(Simplifier.toSimpleType)).toMap)
+            case None => acc
+          }
+        case _ => acc
+      }
+      case (acc, _) => acc
+    }
 
   private def visitDef(defn: ReducedAst.Def)(implicit ctx: SharedContext, flix: Flix): ErasedAst.Def = defn match {
     case ReducedAst.Def(ann, mod, sym, cparams, fparams, exp, tpe, originalTpe, loc) =>

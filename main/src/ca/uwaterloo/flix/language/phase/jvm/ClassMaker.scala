@@ -60,6 +60,25 @@ sealed trait ClassMaker {
     case StaticField(_, name, tpe) => makeField(name, tpe, v, f, vol, IsStatic)
   }
 
+  /**
+    * Declares `inner` as the member class `simpleName` of `outer`, in this class's `InnerClasses`
+    * attribute. Both the outer and the inner class must declare it for javac to read `inner` as
+    * `Outer.SimpleName`.
+    */
+  def mkInnerClass(inner: ClassDesc, outer: ClassDesc, simpleName: String): Unit = {
+    val access = Opcodes.ACC_PUBLIC + Opcodes.ACC_STATIC + Opcodes.ACC_FINAL
+    visitor.visitInnerClass(ClassDescs.internalNameOf(inner), ClassDescs.internalNameOf(outer), simpleName, access)
+  }
+
+  /** Declares `host` as the nest host of this class. */
+  def mkNestHost(host: ClassDesc): Unit = visitor.visitNestHost(ClassDescs.internalNameOf(host))
+
+  /** Declares `member` as a member of the nest this class hosts. */
+  def mkNestMember(member: ClassDesc): Unit = visitor.visitNestMember(ClassDescs.internalNameOf(member))
+
+  /** Declares `subclass` as permitted to extend this sealed class or interface. */
+  def mkPermittedSubclass(subclass: ClassDesc): Unit = visitor.visitPermittedSubclass(ClassDescs.internalNameOf(subclass))
+
   /** Declares `name: tpe` as one component of this class's `Record` attribute. */
   def mkRecordComponent(name: String, tpe: ClassDesc): Unit = {
     visitor.visitRecordComponent(name, tpe.descriptorString(), null).visitEnd()
@@ -172,6 +191,11 @@ object ClassMaker {
 
     def mkDefaultMethod(m: DefaultMethod, v: Visibility, f: Final, ins: MethodVisitor => Unit): Unit = {
       makeMethod(Nil, Some(ins), m.name, m.d, v, f, NotStatic, NotAbstract)
+    }
+
+    /** Declares a public static method, which on an interface must not be final. */
+    def mkStaticMethod(m: StaticMethod, ins: MethodVisitor => Unit, signature: Option[String]): Unit = {
+      makeMethod(Nil, Some(ins), m.name, m.d, IsPublic, NotFinal, IsStatic, NotAbstract, signature)
     }
   }
 

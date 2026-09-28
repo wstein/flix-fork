@@ -306,6 +306,14 @@ object Simplifier {
     *   - Flattening schema- and record rows into types without their Schema/Record constructor.
     *   - Converting set/caseset/bool formulas into Unit.
     */
+  /**
+    * Returns the [[SimpleType]] of the monomorphic type `tpe`.
+    *
+    * `Eraser` uses this for the fields of an exported enum's cases, which reach it still as
+    * [[Type]]s and are otherwise only ever erased.
+    */
+  private[phase] def toSimpleType(tpe: Type): SimpleType = visitType(tpe)
+
   private def visitType(tpe: Type): SimpleType = {
     val base = tpe.typeConstructor
     base match {

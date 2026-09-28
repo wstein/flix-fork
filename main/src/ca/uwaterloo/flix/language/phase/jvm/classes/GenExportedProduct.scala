@@ -43,7 +43,22 @@ object GenExportedProduct {
 
   def genByteCode(desc: ClassDesc, components: List[(String, ClassDesc)])(implicit flix: Flix): Array[Byte] = {
     val cm = ClassMaker.mkClass(desc, IsFinal, superClass = JavaClasses.Record)
+    genMembers(cm, desc, desc.displayName(), components)
+  }
 
+  /**
+    * Returns a record `desc` declared as the member `simpleName` of the sealed interface `outer`,
+    * which it implements: one case of an exported data-carrying enum.
+    */
+  def genNestedByteCode(desc: ClassDesc, outer: ClassDesc, simpleName: String, components: List[(String, ClassDesc)])(implicit flix: Flix): Array[Byte] = {
+    val cm = ClassMaker.mkClass(desc, IsFinal, superClass = JavaClasses.Record, interfaces = List(outer))
+    cm.mkNestHost(outer)
+    cm.mkInnerClass(desc, outer, simpleName)
+    genMembers(cm, desc, simpleName, components)
+  }
+
+  /** Adds a record's fields, components and methods to `cm`, and closes it. */
+  private def genMembers(cm: ClassMaker.InstanceClassMaker, desc: ClassDesc, displayName: String, components: List[(String, ClassDesc)]): Array[Byte] = {
     for ((name, tpe) <- components) {
       cm.mkField(IndexField(desc, name, tpe), IsPrivate, IsFinal, NotVolatile)
       cm.mkRecordComponent(name, tpe)
@@ -54,7 +69,7 @@ object GenExportedProduct {
     }
     cm.mkMethod(Nil, EqualsMethod(desc), IsPublic, IsFinal, equalsIns(desc, components)(_))
     cm.mkMethod(Nil, HashCodeMethod(desc), IsPublic, IsFinal, hashCodeIns(desc, components)(_))
-    cm.mkMethod(Nil, ToStringMethod(desc), IsPublic, IsFinal, toStringIns(desc, components)(_))
+    cm.mkMethod(Nil, ToStringMethod(desc), IsPublic, IsFinal, toStringIns(desc, displayName, components)(_))
 
     cm.closeClassMaker()
   }
@@ -173,12 +188,12 @@ object GenExportedProduct {
   }
 
   /** `[] --> return` */
-  private def toStringIns(desc: ClassDesc, components: List[(String, ClassDesc)])(implicit mv: MethodVisitor): Unit = {
+  private def toStringIns(desc: ClassDesc, displayName: String, components: List[(String, ClassDesc)])(implicit mv: MethodVisitor): Unit = {
     val StringBuilder = JavaClasses.StringBuilder
     NEW(StringBuilder)
     DUP()
     INVOKESPECIAL(ConstructorMethod(StringBuilder, Nil))
-    appendConst(desc.displayName() + "[")
+    appendConst(displayName + "[")
     for (((name, tpe), i) <- components.zipWithIndex) {
       if (i > 0) appendConst(", ")
       appendConst(s"$name=")

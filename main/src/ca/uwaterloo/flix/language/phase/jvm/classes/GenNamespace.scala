@@ -17,13 +17,14 @@
 package ca.uwaterloo.flix.language.phase.jvm.classes
 
 import ca.uwaterloo.flix.api.Flix
-import ca.uwaterloo.flix.language.ast.{JvmAst, SimpleType}
+import ca.uwaterloo.flix.language.ast.{JvmAst, SimpleType, SourceLocation}
 import ca.uwaterloo.flix.language.phase.jvm.ClassMaker.Final.IsFinal
 import ca.uwaterloo.flix.language.phase.jvm.ClassMaker.Visibility.IsPublic
 import ca.uwaterloo.flix.language.phase.jvm.ClassMaker.{ConstructorMethod, InstanceField, StaticMethod}
 import ca.uwaterloo.flix.language.phase.jvm.Instructions.*
 import ca.uwaterloo.flix.language.phase.jvm.MethodTypeDescs.mkDescriptor
 import ca.uwaterloo.flix.language.phase.jvm.{ClassConstants, ClassMaker, ExportPlan, ExportSignature, GenFunAndClosureClasses, JvmNames, Mangle, TypeDescs}
+import ca.uwaterloo.flix.util.InternalCompilerException
 import org.objectweb.asm.MethodVisitor
 
 import java.lang.constant.ClassDesc
@@ -48,12 +49,20 @@ object GenNamespace {
   /**
     * Adds the shim methods of `defs` to `cm`, which must be making the class [[desc]]`(ns)`.
     *
-    * `GenExportedEnum` calls this too: an exported enum's Java class is named like its companion
-    * module's namespace class, so it is the class that carries that module's shims.
+    * `GenExportedEnum` calls this too: an exported enum's Java class or interface is named like its
+    * companion module's namespace class, so it is the type that carries that module's shims.
     */
-  def mkShims(cm: ClassMaker.InstanceClassMaker, ns: List[String], defs: List[JvmAst.Def])(implicit root: JvmAst.Root, flix: Flix): Unit =
+  def mkShims(cm: ClassMaker, ns: List[String], defs: List[JvmAst.Def])(implicit root: JvmAst.Root, flix: Flix): Unit =
     for (defn <- defs) {
-      cm.mkStaticMethod(ShimMethod(ns, defn), IsPublic, IsFinal, shimIns(defn)(_, root, flix), methodSignature(defn))
+      cm match {
+        case c: ClassMaker.InstanceClassMaker =>
+          c.mkStaticMethod(ShimMethod(ns, defn), IsPublic, IsFinal, shimIns(defn)(_, root, flix), methodSignature(defn))
+        // A sealed interface generated for a data-carrying enum.
+        case i: ClassMaker.InterfaceMaker =>
+          i.mkStaticMethod(ShimMethod(ns, defn), shimIns(defn)(_, root, flix), methodSignature(defn))
+        case _: ClassMaker.AbstractClassMaker =>
+          throw InternalCompilerException(s"Unexpected abstract namespace class for '$ns'", SourceLocation.Unknown)
+      }
     }
 
   private def Constructor(ns: List[String]): ConstructorMethod = ConstructorMethod(desc(ns), Nil)

@@ -238,6 +238,30 @@ class TestExportStubs extends AnyFunSuite {
     assert(runStaged(flixSrc, javaSrc) == "g1Red")
   }
 
+  test("staged: a data-carrying enum result is declared as a sealed interface of records") {
+    val flixSrc =
+      """mod Acme {
+        |    pub enum Shape { case Circle(Int32), case Rect(Int32, String), case Point }
+        |}
+        |mod Acme.Shape {
+        |    @Export pub def unit(_x: Int32): Acme.Shape = Acme.Shape.Circle(1)
+        |}
+        |mod Acme.Api {
+        |    use Acme.Shape
+        |    @Export pub def rect(_x: Int32): Shape = Shape.Rect(2, "wide")
+        |}
+        |""".stripMargin
+    val javaSrc =
+      """java.util.function.Function<Acme.Shape, String> describe = s -> switch (s) {
+        |    case Acme.Shape.Circle c -> "c" + c.component0();
+        |    case Acme.Shape.Rect(int w, String h) -> "r" + w + h;
+        |    case Acme.Shape.Point p -> "p";
+        |};
+        |return describe.apply(Acme.Api.rect(0)) + describe.apply(Acme.Shape.unit(0)) + describe.apply(new Acme.Shape.Point());
+        |""".stripMargin
+    assert(runStaged(flixSrc, javaSrc) == "r2widec1p")
+  }
+
   test("an enum the stub generator cannot find unambiguously is refused") {
     val src =
       """mod Acme.Model {

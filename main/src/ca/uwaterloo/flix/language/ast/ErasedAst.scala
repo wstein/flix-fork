@@ -30,7 +30,8 @@ object ErasedAst {
                   effects: Map[Symbol.EffSym, Effect],
                   mainEntryPoint: Option[Symbol.DefnSym],
                   entryPoints: Set[Symbol.DefnSym],
-                  sources: Map[Source, SourceLocation])
+                  sources: Map[Source, SourceLocation],
+                  exportedEnumFields: Map[Symbol.EnumSym, Map[String, List[SimpleType]]])
 
   /** `exportedReturnType` retains the declared type arguments needed by the Java boundary. */
   case class Def(ann: Annotations, mod: Modifiers, sym: Symbol.DefnSym, cparams: List[FormalParam], fparams: List[FormalParam], exp: Expr, tpe: SimpleType, unboxedType: UnboxedType, exportedReturnType: Option[SimpleType], loc: SourceLocation) {
