@@ -83,6 +83,15 @@ development lineages. It currently supports:
   `RecordRowEmpty`. The compiler's own internal record representation exposes fields one lookup
   at a time by label (`GenRecord.lookupField`), not by index, so each field is read that way
   rather than by position.
+- Data-free, non-polymorphic enum results as a real, generated Java `enum` (`GenExportedEnum`):
+  one constant per case in case-ordinal order, with `values()`, `valueOf(String)`, and the
+  `Enum<E>` generic superclass javac needs to `switch` over it. The class is named like the
+  namespace class of the enum's companion module, so `Mod.Color` becomes the Java class
+  `Mod.Color`, and the exported defs of `mod Mod.Color` become static methods of that same enum
+  class instead of a second class of the same name. Because of that, a companion export named
+  like a method every Java enum has (`name`, `ordinal`, `values`, `valueOf`, ...) is refused with
+  `IllegalExportEnumMember`. An enum with a type parameter or a case carrying data is refused.
+  Stub generation refuses enum results for now: a stub would have to declare the enum itself.
 - Explicitly imported Java classes, including nested generic arguments in parameters and results.
 
 It refuses other Flix algebraic data types, other containers, functions, and unaccounted reference
@@ -91,7 +100,7 @@ a missing stub fails the build at generation time, while an incorrect stub compi
 with a linkage error in innocent calling code.
 
 Converted containers are result-only. `Option[t]`, `List[t]`, `Vector[t]`, `Chain[t]`, `Set[t]`,
-`Map[k, v]`, tuples, and records remain refused as parameters because the shim currently passes
+`Map[k, v]`, tuples, records, and enums remain refused as parameters because the shim currently passes
 parameters straight into Flix and therefore has no reverse conversion.
 
 The tests compare generated stub declarations with the method descriptors on the facade bytecode.

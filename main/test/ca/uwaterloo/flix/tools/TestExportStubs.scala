@@ -212,6 +212,21 @@ class TestExportStubs extends AnyFunSuite {
     assert(ExportStubs.javaSource(facades.head).contains("dev.flix.gen.Record$name$String$age$int values(int arg0)"))
   }
 
+  test("Enum results are refused until a stub can declare the enum itself") {
+    val src =
+      """mod Acme {
+        |    pub enum Color { case Red, case Green }
+        |}
+        |mod Acme.Api {
+        |    @Export pub def favorite(_x: Int32): Acme.Color = Acme.Color.Green
+        |}
+        |""".stripMargin
+
+    val (facades, unsupported) = stubs(src)
+    assert(facades.flatMap(_.methods).isEmpty)
+    assert(unsupported.map(_.name) == List("favorite"))
+  }
+
   test("imported generic Java types retain arguments in both positions") {
     val src =
       """mod Acme.Api {

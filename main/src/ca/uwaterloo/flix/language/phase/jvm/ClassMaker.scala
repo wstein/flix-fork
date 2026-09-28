@@ -112,6 +112,31 @@ object ClassMaker {
     def mkMethod(ann: List[JvmAnnotation], m: InstanceMethod, v: Visibility, f: Final, ins: MethodVisitor => Unit): Unit = {
       makeMethod(ann, Some(ins), m.name, m.d, v, f, NotStatic, NotAbstract)
     }
+
+    /** Declares `field` as one constant of this class, which must have been made by [[mkEnumClass]]. */
+    def mkEnumConstant(field: StaticField): Unit = {
+      val access = Opcodes.ACC_PUBLIC + Opcodes.ACC_STATIC + Opcodes.ACC_FINAL + Opcodes.ACC_ENUM
+      visitor.visitField(access, field.name, field.tpe.descriptorString(), null, null).visitEnd()
+    }
+
+    /** Declares a private static final field that javac hides from Java source. */
+    def mkSyntheticStaticField(field: StaticField): Unit = {
+      val access = Opcodes.ACC_PRIVATE + Opcodes.ACC_STATIC + Opcodes.ACC_FINAL + Opcodes.ACC_SYNTHETIC
+      visitor.visitField(access, field.name, field.tpe.descriptorString(), null, null).visitEnd()
+    }
+
+    /**
+      * Declares a public static method that javac hides from Java source, so generated code in
+      * other classes can call it without it becoming part of the class's Java-facing API.
+      */
+    def mkSyntheticStaticMethod(m: StaticMethod, ins: MethodVisitor => Unit): Unit = {
+      val access = Opcodes.ACC_PUBLIC + Opcodes.ACC_STATIC + Opcodes.ACC_FINAL + Opcodes.ACC_SYNTHETIC
+      val mv = visitor.visitMethod(access, m.name, m.d.descriptorString(), null, null)
+      mv.visitCode()
+      ins(mv)
+      mv.visitMaxs(999, 999)
+      mv.visitEnd()
+    }
   }
 
   class AbstractClassMaker(cw: ClassWriter) extends ClassMaker {
@@ -152,6 +177,21 @@ object ClassMaker {
 
   def mkClass(className: ClassDesc, f: Final, superClass: ClassDesc = CD_Object, interfaces: List[ClassDesc] = Nil)(implicit flix: Flix): InstanceClassMaker = {
     new InstanceClassMaker(mkClassWriter(className, IsPublic, f, NotAbstract, NotInterface, superClass, interfaces))
+  }
+
+  /**
+    * Returns a class that the JVM and javac treat as a Java `enum`: final, flagged `ACC_ENUM`, and
+    * extending `java.lang.Enum<className>`, generic signature included, since javac reads that
+    * signature to type `compareTo` and `getDeclaringClass`.
+    */
+  def mkEnumClass(className: ClassDesc)(implicit flix: Flix): InstanceClassMaker = {
+    val cw = mkClassWriter()
+    val internalName = ClassDescs.internalNameOf(className)
+    val access = Opcodes.ACC_PUBLIC + Opcodes.ACC_FINAL + Opcodes.ACC_SUPER + Opcodes.ACC_ENUM
+    val signature = s"L${ClassDescs.internalNameOf(JavaClasses.Enum)}<L$internalName;>;"
+    cw.visit(CompilerConstants.JvmTargetVersion, access, internalName, signature, ClassDescs.internalNameOf(JavaClasses.Enum), Array.empty)
+    cw.visitSource(internalName, null)
+    new InstanceClassMaker(cw)
   }
 
   def mkAbstractClass(className: ClassDesc, superClass: ClassDesc = CD_Object, interfaces: List[ClassDesc] = Nil)(implicit flix: Flix): AbstractClassMaker = {

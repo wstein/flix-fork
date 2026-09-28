@@ -850,6 +850,87 @@ class TestEntryPoints extends AnyFunSuite with TestUtils {
     expectSuccess(result)
   }
 
+  test("Test.ValidExportFunction.EnumResult.01") {
+    val input =
+      """
+        |mod Mod {
+        |    pub enum Color { case Red, case Green }
+        |    @Export pub def favorite(x: Int32): Color = ???
+        |}
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibNix)
+    expectSuccess(result)
+  }
+
+  test("Test.ValidExportFunction.EnumResult.02") {
+    val input =
+      """
+        |mod Mod {
+        |    pub enum Color { case Red, case Green }
+        |    @Export pub def favorite(x: Int32): Color = ???
+        |}
+        |mod Mod.Color {
+        |    @Export pub def parse(s: String): Mod.Color = ???
+        |}
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibNix)
+    expectSuccess(result)
+  }
+
+  test("Test.IllegalExportFunction.EnumResult.01") {
+    val input =
+      """
+        |mod Mod {
+        |    pub enum Shape { case Circle(Int32), case Point }
+        |    @Export pub def shape(x: Int32): Shape = ???
+        |}
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibNix)
+    expectError[EntryPointError.IllegalExportType](result)
+  }
+
+  test("Test.IllegalExportFunction.EnumResult.02") {
+    val input =
+      """
+        |mod Mod {
+        |    pub enum Tagged[t] { case Plain }
+        |    @Export pub def tagged(x: Int32): Tagged[Int32] = ???
+        |}
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibNix)
+    expectError[EntryPointError.IllegalExportType](result)
+  }
+
+  test("Test.IllegalExportFunction.EnumResult.03") {
+    val input =
+      """
+        |mod Mod {
+        |    pub enum Color { case Red, case Green }
+        |    @Export pub def favorite(x: Int32): Color = ???
+        |}
+        |mod Mod.Color {
+        |    @Export pub def valueOf(s: String): Mod.Color = ???
+        |}
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibNix)
+    expectError[EntryPointError.IllegalExportEnumMember](result)
+  }
+
+  test("Test.IllegalExportFunction.EnumResult.04") {
+    val input =
+      """
+        |mod Mod {
+        |    pub enum Color { case Red, case Green }
+        |    @Export pub def favorite(x: Int32): Color = ???
+        |}
+        |mod Mod.Color {
+        |    @Export pub def name(x: Int32): String = ???
+        |}
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibNix)
+    expectError[EntryPointError.IllegalExportEnumMember](result)
+  }
+
   test("Test.IllegalExportFunction.10") {
     val input =
       """

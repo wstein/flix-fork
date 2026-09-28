@@ -22,7 +22,7 @@ import ca.uwaterloo.flix.language.ast.{BytecodeAst, SimpleType, SourceLocation, 
 import ca.uwaterloo.flix.language.ast.JvmAst.*
 import ca.uwaterloo.flix.language.dbg.AstPrinter.DebugNoOp
 import ca.uwaterloo.flix.language.jvm.ClassDescs
-import ca.uwaterloo.flix.language.phase.jvm.classes.{GenAbstractArrow, GenArrow, GenCastError, GenEffectCall, GenExportedRecord, GenExportedTuple, GenExtTag, GenExtTagged, GenFlixError, GenFrame, GenFrames, GenFramesCons, GenFramesNil, GenGlobal, GenHandler, GenHoleError, GenLazy, GenMain, GenMatchError, GenNamespace, GenNullaryTag, GenRecord, GenRecordEmpty, GenRecordExtend, GenRegion, GenReifiedSourceLocation, GenResult, GenResumption, GenResumptionCons, GenResumptionNil, GenResumptionWrapper, GenStruct, GenSuspension, GenTag, GenTagged, GenThunk, GenTuple, GenUncaughtExceptionHandler, GenUnhandledEffectError, GenUnit, GenValue}
+import ca.uwaterloo.flix.language.phase.jvm.classes.{GenAbstractArrow, GenArrow, GenCastError, GenEffectCall, GenExportedEnum, GenExportedRecord, GenExportedTuple, GenExtTag, GenExtTagged, GenFlixError, GenFrame, GenFrames, GenFramesCons, GenFramesNil, GenGlobal, GenHandler, GenHoleError, GenLazy, GenMain, GenMatchError, GenNamespace, GenNullaryTag, GenRecord, GenRecordEmpty, GenRecordExtend, GenRegion, GenReifiedSourceLocation, GenResult, GenResumption, GenResumptionCons, GenResumptionNil, GenResumptionWrapper, GenStruct, GenSuspension, GenTag, GenTagged, GenThunk, GenTuple, GenUncaughtExceptionHandler, GenUnhandledEffectError, GenUnit, GenValue}
 import ca.uwaterloo.flix.util.InternalCompilerException
 
 import java.lang.constant.ClassDesc
@@ -59,10 +59,20 @@ object CodeGen {
       main => JvmClass(GenMain.Desc, GenMain.genByteCode(main.sym))
     ).toList
 
-    val namespaceClasses = namespacesOf(root).map {
+    // An exported enum's class is named like its companion module's namespace class, so where
+    // that module exists the enum class takes its place and carries its shims.
+    val exportedEnums = getExportedEnumsOf(root)
+    val namespaces = namespacesOf(root)
+    val namespaceClasses = namespaces.map {
       case (ns, defs) =>
         val entrypointDefs = defs.values.toList.filter(defn => root.entryPoints.contains(defn.sym))
-        JvmClass(GenNamespace.desc(ns), GenNamespace.genByteCode(ns, entrypointDefs))
+        exportedEnums.get(ns) match {
+          case Some(constants) => JvmClass(GenNamespace.desc(ns), GenExportedEnum.genByteCode(ns, constants, entrypointDefs))
+          case None => JvmClass(GenNamespace.desc(ns), GenNamespace.genByteCode(ns, entrypointDefs))
+        }
+    }.toList
+    val companionlessEnumClasses = exportedEnums.collect {
+      case (ns, constants) if !namespaces.contains(ns) => JvmClass(GenNamespace.desc(ns), GenExportedEnum.genByteCode(ns, constants, Nil))
     }.toList
 
     // Generate function classes.
@@ -142,6 +152,7 @@ object CodeGen {
       tupleClasses,
       exportedTupleClasses,
       exportedRecordClasses,
+      companionlessEnumClasses,
       structClasses,
       recordInterfaces,
       recordEmptyClasses,
@@ -250,6 +261,15 @@ object CodeGen {
     root.defs.values.foldLeft(Set.empty[List[(String, ClassDesc)]]) {
       case (acc, defn) => ExportPlan.ofDef(defn)(root) match {
         case Some(record: ExportPlan.AsRecord) => acc + record.labels.zip(record.elements.map(_.javaType))
+        case _ => acc
+      }
+    }
+
+  /** Returns the constants of every exported enum in `root`, keyed by its companion namespace. */
+  private def getExportedEnumsOf(root: Root): Map[List[String], List[String]] =
+    root.defs.values.foldLeft(Map.empty[List[String], List[String]]) {
+      case (acc, defn) => ExportPlan.ofDef(defn)(root) match {
+        case Some(enm: ExportPlan.AsEnum) => acc + (enm.ns -> enm.constants)
         case _ => acc
       }
     }

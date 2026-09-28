@@ -9,7 +9,7 @@ package ca.uwaterloo.flix.language.phase.jvm
 import ca.uwaterloo.flix.language.ast.SimpleType
 import ca.uwaterloo.flix.language.jvm.JavaClasses
 import ca.uwaterloo.flix.language.phase.jvm.Instructions.*
-import ca.uwaterloo.flix.language.phase.jvm.classes.{GenExportedRecord, GenExportedTuple, GenRecord, GenRecordExtend, GenTag, GenTagged, GenTuple}
+import ca.uwaterloo.flix.language.phase.jvm.classes.{GenExportedEnum, GenExportedRecord, GenExportedTuple, GenRecord, GenRecordExtend, GenTag, GenTagged, GenTuple}
 import org.objectweb.asm.MethodVisitor
 
 import java.lang.constant.ClassDesc
@@ -507,6 +507,23 @@ object ExportPlan {
     }
   }
 
+  /**
+    * A data-free Flix enum result converted to the constant of its generated Java enum.
+    *
+    * `constants` are the case names in ordinal order. A case's Flix ordinal is its Java constant's
+    * ordinal, so the conversion is one array read and needs no per-case branch.
+    */
+  case class AsEnum(ns: List[String], constants: List[String]) extends ExportPlan {
+    override def flixType: ClassDesc = GenTagged.Desc
+
+    override def signature: ExportSignature = ExportSignature.Exact(Mangle.namespaceFacadeDesc(ns))
+
+    override def emit(nextLocal: Int)(implicit mv: MethodVisitor): Unit = {
+      GETFIELD(GenTagged.OrdinalField)
+      INVOKESTATIC(GenExportedEnum.OfOrdinalMethod(javaType))
+    }
+  }
+
   /** Returns the exact boundary plan currently supported for `tpe`. */
   def exact(tpe: SimpleType): Option[ExportPlan] = tpe match {
     case SimpleType.Bool => Some(Identity(CD_boolean))
@@ -543,6 +560,8 @@ object ExportPlan {
     case SimpleType.RecordEmpty | SimpleType.RecordExtend(_, _, _) => recordPlan(tpe).map(_.signature)
     case SimpleType.Native(clazz, targs) if targs.nonEmpty =>
       traverse(targs)(typeArgumentPlan).map(ExportSignature.Applied(clazz, _))
+    // Only a data-free enum reaches here: `EntryPoints` refuses every other enum an export names.
+    case SimpleType.Enum(sym, Nil) => Some(ExportSignature.Exact(GenExportedEnum.desc(sym)))
     case _ => exact(tpe).map(_.signature)
   }
 
@@ -560,8 +579,26 @@ object ExportPlan {
       case record@(SimpleType.RecordEmpty | SimpleType.RecordExtend(_, _, _)) => recordPlan(record)
       case SimpleType.Native(clazz, targs) if targs.nonEmpty =>
         traverse(targs)(typeArgumentPlan).map(GenericNative(clazz, _))
+      case SimpleType.Enum(sym, Nil) => enumPlan(sym, defn.unboxedType.tpe)
       case declared => exact(declared)
     }
+
+  /**
+    * Builds a Java enum conversion for the data-free enum `sym`, reading its cases off the
+    * specialized enum retained by erasure.
+    *
+    * Refuses an enum whose cases carry data or whose ordinals are not exactly `0 until n`: either
+    * would make a constant's position in the Java enum disagree with its Flix case.
+    */
+  private def enumPlan(sym: ca.uwaterloo.flix.language.ast.Symbol.EnumSym, erased: SimpleType)(implicit root: ca.uwaterloo.flix.language.ast.JvmAst.Root): Option[ExportPlan] = erased match {
+    case SimpleType.Enum(erasedSym, Nil) =>
+      val cases = root.enums(erasedSym).cases.values.toList.sortBy(_.sym.ordinal)
+      val dataFree = cases.forall(_.tpes.isEmpty)
+      val contiguous = cases.map(_.sym.ordinal) == cases.indices.toList
+      if (dataFree && contiguous) Some(AsEnum(GenExportedEnum.companionNamespace(sym), cases.map(_.sym.name)))
+      else None
+    case _ => None
+  }
 
   /** Builds an Optional conversion from the specialized enum retained by erasure. */
   private def optionPlan(element: SimpleType, erased: SimpleType)(implicit root: ca.uwaterloo.flix.language.ast.JvmAst.Root): Option[ExportPlan] = erased match {

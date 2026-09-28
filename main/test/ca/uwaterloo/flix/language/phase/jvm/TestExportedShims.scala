@@ -341,6 +341,72 @@ class TestExportedShims extends AnyFunSuite {
     } finally deleteRecursively(output)
   }
 
+  test("data-free enum results cross as a generated Java enum that hosts its companion module") {
+    val result = compile(
+      """mod Acme {
+        |    pub enum Color { case Red, case Green, case Blue }
+        |}
+        |mod Acme.Color {
+        |    pub def isWarm(c: Acme.Color): Bool = match c {
+        |        case Acme.Color.Red => true
+        |        case _ => false
+        |    }
+        |    @Export pub def parse(s: String): Acme.Color = if (s == "green") Acme.Color.Green else Acme.Color.Blue
+        |}
+        |mod Acme.Api {
+        |    @Export pub def favorite(_x: Int32): Acme.Color = Acme.Color.Green
+        |    @Export pub def warm(_x: Int32): Bool = Acme.Color.isWarm(Acme.Color.Red)
+        |}
+        |""".stripMargin)
+
+    val output = Files.createTempDirectory("flix-export-enum")
+    try {
+      writeClasses(result, output)
+      val loader = new URLClassLoader(Array(output.toUri.toURL), getClass.getClassLoader)
+      try {
+        val api = loader.loadClass("Acme.Api")
+        val color = loader.loadClass("Acme.Color")
+
+        assert(color.isEnum)
+        assert(color.getGenericSuperclass.getTypeName == "java.lang.Enum<Acme.Color>")
+        assert(color.getEnumConstants.toList.map(_.asInstanceOf[java.lang.Enum[?]].name()) == List("Red", "Green", "Blue"))
+
+        val green = color.getField("Green").get(null)
+        val blue = color.getField("Blue").get(null)
+        assert(api.getMethod("favorite", Integer.TYPE).getReturnType eq color)
+        assert(api.getMethod("favorite", Integer.TYPE).invoke(null, Int.box(0)) eq green)
+        assert(color.getMethod("valueOf", classOf[String]).invoke(null, "Blue") eq blue)
+
+        // The companion module's facade is the enum class itself, not a second class of that name.
+        assert(color.getMethod("parse", classOf[String]).invoke(null, "green") eq green)
+        assert(api.getMethod("warm", Integer.TYPE).invoke(null, Int.box(0)) == true)
+      } finally loader.close()
+
+      // javac's `switch` over an enum reads the class's `ACC_ENUM` flags and its `values()`.
+      val compiler = javax.tools.ToolProvider.getSystemJavaCompiler
+      assume(compiler != null, "test requires a JDK")
+      val javaSource = output.resolve("com/example/UsesColor.java")
+      Files.createDirectories(javaSource.getParent)
+      Files.writeString(javaSource,
+        """package com.example;
+          |import Acme.Color;
+          |public final class UsesColor {
+          |    public static String describe() {
+          |        return switch (Acme.Api.favorite(0)) {
+          |            case Red -> "red";
+          |            case Green -> "green";
+          |            case Blue -> "blue";
+          |        } + Color.parse("x").ordinal();
+          |    }
+          |}
+          |""".stripMargin)
+      assert(compiler.run(null, null, null, "-cp", output.toString, "-d", output.toString, javaSource.toString) == 0)
+      val javaLoader = new URLClassLoader(Array(output.toUri.toURL), getClass.getClassLoader)
+      try assert(javaLoader.loadClass("com.example.UsesColor").getMethod("describe").invoke(null) == "green2")
+      finally javaLoader.close()
+    } finally deleteRecursively(output)
+  }
+
   test("generic Java types retain arguments in exported parameters and results") {
     val result = compile(
       """mod Acme.Api {

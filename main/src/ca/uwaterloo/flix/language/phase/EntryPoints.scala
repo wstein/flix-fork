@@ -162,8 +162,8 @@ object EntryPoints {
     * removed (removed as the main function in root or have its annotation removed).
     */
   private def checkEntryPoints(root: TypedAst.Root)(implicit flix: Flix): (TypedAst.Root, List[EntryPointError]) = {
-    implicit val sctx: SharedContext = SharedContext.mk()
     implicit val r: TypedAst.Root = root
+    implicit val sctx: SharedContext = SharedContext.mk(exportedEnumCompanions(root))
 
     ParOps.parMapValues(root.defs)(defn => flix.profile(defn.sym, defn.loc)(visitDef(defn)))
 
@@ -269,7 +269,8 @@ object EntryPoints {
     }) ++
       checkNonRootNamespace(defn) ++
       checkPub(defn) ++
-      checkValidJavaName(defn)
+      checkValidJavaName(defn) ++
+      checkEnumMemberName(defn)
     if (errs.isEmpty) {
       defn
     } else {
@@ -427,8 +428,60 @@ object EntryPoints {
     else Some(EntryPointError.IllegalExportName(defn.sym.loc))
   }
 
+  /**
+    * The methods every Java enum has, whether declared by `java.lang.Enum`, inherited from
+    * `Object`, or generated alongside the constants. A static method of the same name on the
+    * generated enum class either fails to load or hides the inherited one from Java callers.
+    */
+  private val EnumMemberNames: Set[String] = Set(
+    "values", "valueOf", "name", "ordinal", "compareTo", "getDeclaringClass", "describeConstable",
+    "equals", "hashCode", "toString", "getClass", "notify", "notifyAll", "wait", "clone", "finalize"
+  )
+
+  /**
+    * Returns an error if `defn` is in the companion module of an exported enum and has the name of
+    * a method every Java enum already has: the companion's shims live on the enum's own class.
+    */
+  private def checkEnumMemberName(defn: TypedAst.Def)(implicit sctx: SharedContext): Option[EntryPointError] =
+    sctx.enumCompanions.get(defn.sym.namespace) match {
+      case Some(enumSym) if EnumMemberNames.contains(defn.sym.name) =>
+        Some(EntryPointError.IllegalExportEnumMember(defn.sym.name, enumSym, defn.sym.loc))
+      case _ => None
+    }
+
+  /**
+    * Returns every enum some export returns, keyed by the namespace of its companion module.
+    *
+    * Found before any def is checked, since whether an export's name is legal depends on another
+    * export elsewhere returning the enum whose companion module it is in.
+    */
+  private def exportedEnumCompanions(root: TypedAst.Root): Map[List[String], Symbol.EnumSym] =
+    root.defs.values.foldLeft(Map.empty[List[String], Symbol.EnumSym]) {
+      case (acc, defn) if TypedAstOps.isExport(defn) =>
+        unapplyExportedEnum(defn.spec.retTpe)(root) match {
+          case Some(sym) => acc + ((sym.namespace :+ sym.name) -> sym)
+          case None => acc
+        }
+      case (acc, _) => acc
+    }
+
+  /**
+    * Returns the symbol of a data-free, non-polymorphic enum, which is converted on return to the
+    * constant of a generated Java enum.
+    *
+    * An enum with a type parameter or a case carrying data has no single Java enum to become and
+    * is left to `isExportableType`, which refuses it.
+    */
+  @tailrec
+  private def unapplyExportedEnum(tpe: Type)(implicit root: TypedAst.Root): Option[Symbol.EnumSym] = tpe match {
+    case Type.Cst(TypeConstructor.Enum(sym, _), _) =>
+      root.enums.get(sym).filter(enm => enm.tparams.isEmpty && enm.cases.values.forall(_.tpes.isEmpty)).map(_.sym)
+    case Type.Alias(_, _, inner, _) => unapplyExportedEnum(inner)
+    case _ => None
+  }
+
   /** Returns an error for each type in `defn` that is not valid in Java. */
-  private def checkJavaTypes(defn: TypedAst.Def)(implicit flix: Flix): List[EntryPointError] = {
+  private def checkJavaTypes(defn: TypedAst.Def)(implicit root: TypedAst.Root, flix: Flix): List[EntryPointError] = {
     val paramTypes = defn.spec.fparams.toList.map(_.tpe) match {
       case List(tpe) if isUnitType(tpe) == Result.Ok(true) => Nil
       case tpes => tpes
@@ -436,6 +489,7 @@ object EntryPoints {
     val retTpe = defn.spec.retTpe
     val returnTypes =
       if (isUnitType(retTpe) == Result.Ok(true)) Nil
+      else if (unapplyExportedEnum(retTpe).isDefined) Nil
       else unapplyMap(retTpe) match {
         case Some((k, v)) => List(k, v)
         case None => unapplyTuple(retTpe).orElse(unapplyRecord(retTpe)) match {
@@ -605,18 +659,20 @@ object EntryPoints {
 
   private object SharedContext {
     /** Returns a fresh shared context. */
-    def mk(): SharedContext = new SharedContext(
+    def mk(enumCompanions: Map[List[String], Symbol.EnumSym]): SharedContext = new SharedContext(
       new ConcurrentLinkedQueue(),
-      new AtomicBoolean(false)
+      new AtomicBoolean(false),
+      enumCompanions
     )
   }
 
   /**
     * A global shared context. Must be thread-safe.
     *
-    * @param errors      the [[EntryPointError]]s in the AST, if any.
-    * @param invalidMain marks the main entrypoint as invalid.
+    * @param errors         the [[EntryPointError]]s in the AST, if any.
+    * @param invalidMain    marks the main entrypoint as invalid.
+    * @param enumCompanions the enums some export returns, keyed by their companion namespace.
     */
-  private case class SharedContext(errors: ConcurrentLinkedQueue[EntryPointError], invalidMain: AtomicBoolean)
+  private case class SharedContext(errors: ConcurrentLinkedQueue[EntryPointError], invalidMain: AtomicBoolean, enumCompanions: Map[List[String], Symbol.EnumSym])
 
 }
