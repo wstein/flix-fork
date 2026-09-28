@@ -64,8 +64,22 @@ import java.nio.file.{Files, Path}
   */
 object ExportStubs {
 
-  /** A generated facade: one Java class standing in for one Flix module's exported defs. */
-  case class Facade(name: ClassDesc, methods: List[Method])
+  /**
+    * One generated Java type: a Flix module's facade of exported defs, or a type an exported
+    * signature names that the compiler generates too, such as a tuple's record class.
+    */
+  case class Facade(name: ClassDesc, shape: Shape, methods: List[Method])
+
+  /** What kind of Java type a [[Facade]] declares. */
+  sealed trait Shape
+
+  object Shape {
+    /** A final class holding only static methods. */
+    case object Plain extends Shape
+
+    /** A `record` with these components, the stand-in of a generated `java.lang.Record`. */
+    case class Record(components: List[(String, ExportSignature)]) extends Shape
+  }
 
   /**
     * One `public static` method on a facade.
@@ -94,13 +108,12 @@ object ExportStubs {
       case None => (Nil, Nil)
       case Some(root) =>
         val found = root.units.values.flatMap(unit => visitDecls(unit.decls, Nil, imports(unit.usesAndImports)))
-        val (methods, unsupported) = partition(found.toList)
-        val facades = methods
-          .groupBy(_._1)
-          .map { case (ns, ms) => Facade(Mangle.namespaceFacadeDesc(ns), ms.map(_._2)) }
+        val (described, unsupported) = partition(found.toList)
+        val modules = described
+          .groupBy(_.ns)
+          .map { case (ns, ds) => Facade(Mangle.namespaceFacadeDesc(ns), Shape.Plain, ds.map(_.method)) }
           .toList
-          .sortBy(f => binaryName(f.name))
-        (facades, unsupported)
+        (merge(modules ++ described.flatMap(_.types)), unsupported)
     }
   }
 
@@ -127,6 +140,18 @@ object ExportStubs {
     Result.Ok(())
   }
 
+  /**
+    * Returns one facade per class name, sorted by name.
+    *
+    * Several defs may name the same generated type, and each describes it the same way, since the
+    * name is derived from exactly what the declaration holds.
+    */
+  private def merge(facades: List[Facade]): List[Facade] =
+    facades.groupBy(_.name).values.map(_.reduce { (f1, f2) =>
+      val shape = if (f1.shape == Shape.Plain) f2.shape else f1.shape
+      Facade(f1.name, shape, (f1.methods ++ f2.methods).distinct)
+    }).toList.sortBy(f => binaryName(f.name))
+
   /** Deletes `path` and everything below it. */
   private def deleteRecursively(path: Path): Unit = {
     if (Files.isDirectory(path)) {
@@ -144,15 +169,23 @@ object ExportStubs {
     val pkg = if (split < 0) Nil else List(s"package ${binary.substring(0, split)};", "")
     val className = if (split < 0) binary else binary.substring(split + 1)
     val body = facade.methods.sortBy(_.name).flatMap(javaMethod)
-    // `final` with a private constructor: a facade holds only static methods, and letting a caller
-    // extend or instantiate the stub would let it compile code the real facade rejects.
-    val lines = List(Marker) ++ pkg ++ List(
-      s"public final class $className {",
-      "",
-      s"    private $className() {",
-      "    }",
-      ""
-    ) ++ body ++ List("}")
+    val header = facade.shape match {
+      // `final` with a private constructor: a facade holds only static methods, and letting a
+      // caller extend or instantiate the stub would let it compile code the real facade rejects.
+      case Shape.Plain => List(
+        s"public final class $className {",
+        "",
+        s"    private $className() {",
+        "    }",
+        ""
+      )
+      // A Java record declares the same canonical constructor, accessors, and `equals`,
+      // `hashCode` and `toString` the generated class does.
+      case Shape.Record(components) =>
+        val params = components.map { case (name, sig) => s"${sig.sourceName} $name" }.mkString(", ")
+        List(s"public record $className($params) {", "")
+    }
+    val lines = List(Marker) ++ pkg ++ header ++ body ++ List("}")
     lines.mkString("", "\n", "\n")
   }
 
@@ -184,8 +217,24 @@ object ExportStubs {
     result
   }
 
+  /**
+    * An exported def that can be described: its facade method, the namespace of that facade, and
+    * every generated type its signature names.
+    */
+  private case class Described(ns: List[String], method: Method, types: List[Facade])
+
+  /**
+    * Collects the generated types a signature names while it is being described.
+    *
+    * One per def, and kept only if the whole def can be described: a refused def must not leave a
+    * stub for a type nothing else names.
+    */
+  private class Declared {
+    val types: scala.collection.mutable.ListBuffer[Facade] = scala.collection.mutable.ListBuffer.empty
+  }
+
   /** Returns each exported def paired with the namespace it belongs to, or why it was refused. */
-  private def visitDecls(decls: List[WeededAst.Declaration], ns: List[String], imps: Map[String, String]): List[Either[Unsupported, (List[String], Method)]] =
+  private def visitDecls(decls: List[WeededAst.Declaration], ns: List[String], imps: Map[String, String]): List[Either[Unsupported, Described]] =
     decls.flatMap {
       case WeededAst.Declaration.Mod(_, _, _, qname, usesAndImports, inner, _) =>
         // Modules nest and each name may itself be dotted, so the namespace accumulates the same
@@ -199,8 +248,10 @@ object ExportStubs {
     }
 
   /** Returns the facade method for `defn`, or why it cannot be described. */
-  private def visitDef(defn: WeededAst.Declaration.Def, ns: List[String], imps: Map[String, String]): Either[Unsupported, (List[String], Method)] = {
+  private def visitDef(defn: WeededAst.Declaration.Def, ns: List[String], imps: Map[String, String]): Either[Unsupported, Described] = {
     def refuse(what: String) = Left(Unsupported(defn.ident.name, what, defn.loc))
+
+    implicit val found: Declared = new Declared
 
     val declared = defn.fparams.flatMap(_.tpe)
 
@@ -212,7 +263,7 @@ object ExportStubs {
         case Some(ps) =>
           resultSignatureOf(defn.tpe, imps) match {
             case None => refuse("the return type cannot be described in Java")
-            case Some(r) => Right((ns, Method(defn.ident.name, r, ps)))
+            case Some(r) => Right(Described(ns, Method(defn.ident.name, r, ps), found.types.toList))
           }
       }
   }
@@ -225,7 +276,7 @@ object ExportStubs {
     * in `TestExportStubs`; that test is what makes this safe to rely on, because nothing in the
     * types stops them drifting.
     */
-  private def signatureOf(tpe: WeededAst.Type, imps: Map[String, String], allowConvertedResult: Boolean): Option[ExportSignature] = tpe match {
+  private def signatureOf(tpe: WeededAst.Type, imps: Map[String, String], allowConvertedResult: Boolean)(implicit declared: Declared): Option[ExportSignature] = tpe match {
     case WeededAst.Type.Var(_, _) => None
 
     case WeededAst.Type.Ambiguous(qname, _) => named(qname, Nil, imps, allowConvertedResult)
@@ -238,8 +289,11 @@ object ExportStubs {
       }
 
     case WeededAst.Type.Tuple(tpes, _) if allowConvertedResult =>
-      traverse(tpes.toList)(parameterSignatureOf(_, imps))
-        .map(sigs => ExportSignature.Exact(GenExportedTuple.desc(sigs.map(_.javaType))))
+      traverse(tpes.toList)(parameterSignatureOf(_, imps)).map { sigs =>
+        val desc = GenExportedTuple.desc(sigs.map(_.javaType))
+        declared.types += Facade(desc, Shape.Record(sigs.zipWithIndex.map { case (sig, i) => s"component$i" -> sig }), Nil)
+        ExportSignature.Exact(desc)
+      }
 
     case WeededAst.Type.Record(row, _) if allowConvertedResult =>
       for {
@@ -247,7 +301,11 @@ object ExportStubs {
         // generated class takes its name and components from.
         fields <- peelRecordRow(row).map(_.sortBy(_._1))
         sigs <- traverse(fields) { case (label, fieldTpe) => parameterSignatureOf(fieldTpe, imps).map(label -> _) }
-      } yield ExportSignature.Exact(GenExportedRecord.desc(sigs.map { case (label, sig) => label -> sig.javaType }))
+      } yield {
+        val desc = GenExportedRecord.desc(sigs.map { case (label, sig) => label -> sig.javaType })
+        declared.types += Facade(desc, Shape.Record(sigs), Nil)
+        ExportSignature.Exact(desc)
+      }
 
     case _ => None
   }
@@ -260,15 +318,15 @@ object ExportStubs {
   }
 
   /** Parameters are passed through unchanged, so converted containers are not accepted here. */
-  private def parameterSignatureOf(tpe: WeededAst.Type, imps: Map[String, String]): Option[ExportSignature] =
+  private def parameterSignatureOf(tpe: WeededAst.Type, imps: Map[String, String])(implicit declared: Declared): Option[ExportSignature] =
     signatureOf(tpe, imps, allowConvertedResult = false)
 
   /** Results may use conversions implemented by the namespace shim. */
-  private def resultSignatureOf(tpe: WeededAst.Type, imps: Map[String, String]): Option[ExportSignature] =
+  private def resultSignatureOf(tpe: WeededAst.Type, imps: Map[String, String])(implicit declared: Declared): Option[ExportSignature] =
     signatureOf(tpe, imps, allowConvertedResult = true)
 
   /** Returns how the type named `qname` and applied to `args` crosses the boundary. */
-  private def named(qname: Name.QName, args: List[WeededAst.Type], imps: Map[String, String], allowConvertedResult: Boolean): Option[ExportSignature] = {
+  private def named(qname: Name.QName, args: List[WeededAst.Type], imps: Map[String, String], allowConvertedResult: Boolean)(implicit declared: Declared): Option[ExportSignature] = {
     (simpleName(qname, imps), args) match {
       case (Some(name), Nil) => builtin(name).orElse(imported(name, imps).map(ExportSignature.Exact(_)))
       case (Some("Option"), List(element)) if allowConvertedResult =>
@@ -296,7 +354,7 @@ object ExportStubs {
   }
 
   /** Returns the signature of a value used as a Java generic type argument, boxing primitives. */
-  private def typeArgumentSignatureOf(tpe: WeededAst.Type, imps: Map[String, String]): Option[ExportSignature] =
+  private def typeArgumentSignatureOf(tpe: WeededAst.Type, imps: Map[String, String])(implicit declared: Declared): Option[ExportSignature] =
     parameterSignatureOf(tpe, imps).map {
       case ExportSignature.Exact(tpe0) if tpe0 == CD_boolean => ExportSignature.Boxed(tpe0, ClassDesc.ofInternalName("java/lang/Boolean"))
       case ExportSignature.Exact(tpe0) if tpe0 == CD_char => ExportSignature.Boxed(tpe0, ClassDesc.ofInternalName("java/lang/Character"))
@@ -360,7 +418,7 @@ object ExportStubs {
     }
 
   /** Splits the described defs from the refused ones. */
-  private def partition(xs: List[Either[Unsupported, (List[String], Method)]]): (List[(List[String], Method)], List[Unsupported]) =
+  private def partition(xs: List[Either[Unsupported, Described]]): (List[Described], List[Unsupported]) =
     (xs.collect { case Right(x) => x }, xs.collect { case Left(x) => x })
 
   /** Returns the binary class name represented by `desc`. */

@@ -359,6 +359,86 @@ class TestExportStubs extends AnyFunSuite {
     } finally deleteRecursively(root)
   }
 
+  test("staged: a tuple result's class is declared by the stubs and links to the real one") {
+    val flixSrc =
+      """mod Acme.Api {
+        |    @Export pub def pair(_x: Int32): (Int32, String) = (1, "hi")
+        |}
+        |""".stripMargin
+    val javaSrc =
+      """var p = Acme.Api.pair(0);
+        |return p.component0() + p.component1() + p.equals(new dev.flix.gen.Tuple$int$String(1, "hi"));
+        |""".stripMargin
+    assert(runStaged(flixSrc, javaSrc) == "1hitrue")
+  }
+
+  test("staged: a record result's class is declared by the stubs and links to the real one") {
+    val flixSrc =
+      """mod Acme.Api {
+        |    @Export pub def person(_x: Int32): {name = String, age = Int32} = {name = "ada", age = 36}
+        |}
+        |""".stripMargin
+    val javaSrc =
+      """var p = Acme.Api.person(0);
+        |return p.name() + p.age();
+        |""".stripMargin
+    assert(runStaged(flixSrc, javaSrc) == "ada36")
+  }
+
+  /**
+    * Compiles `javaBody`, the body of a `static String run()`, against the stubs of `flixSrc`
+    * alone, then runs it against the real classes compiled from `flixSrc`, with no stub on the
+    * classpath. A stub that disagrees with the real bytecode fails here, not in a user's build.
+    */
+  private def runStaged(flixSrc: String, javaBody: String): AnyRef = {
+    val (facades, unsupported) = stubs(flixSrc)
+    assert(unsupported.isEmpty, s"every export must have a stub: $unsupported")
+    val root = Files.createTempDirectory("flix-staged")
+    try {
+      val stubRoot = root.resolve("stubs")
+      val javaClasses = root.resolve("java-classes")
+      val flixClasses = root.resolve("flix-classes")
+      val mainSource = root.resolve("src/com/example/Main.java")
+      ExportStubs.write(facades, stubRoot).unsafeGet
+      Files.createDirectories(mainSource.getParent)
+      Files.writeString(mainSource,
+        s"""package com.example;
+           |public final class Main {
+           |    public static String run() {
+           |        $javaBody
+           |    }
+           |}
+           |""".stripMargin)
+      Files.createDirectories(javaClasses)
+      val compiler = ToolProvider.getSystemJavaCompiler
+      assume(compiler != null, "test requires a JDK")
+      val diagnostics = new java.io.ByteArrayOutputStream()
+      // `-implicit:none` reads the stubs to type-check `Main` without emitting a class for them.
+      val status = compiler.run(null, null, diagnostics,
+        "-sourcepath", stubRoot.toString, "-implicit:none", "-d", javaClasses.toString, mainSource.toString)
+      assert(status == 0, s"javac rejected the caller against the stubs:\n$diagnostics")
+
+      val flix = new Flix().setOptions(Options.DefaultTest)
+      flix.addSource(sourcePath, flixSrc, sctx)
+      val result = flix.compile() match {
+        case Result.Ok(r) => r
+        case Result.Err(errors) => fail(s"fixture must compile: $errors")
+      }
+      for ((desc, clazz) <- result.getClasses) {
+        val target = flixClasses.resolve(desc.descriptorString().stripPrefix("L").stripSuffix(";") + ".class")
+        Files.createDirectories(target.getParent)
+        Files.write(target, clazz.bytecode)
+      }
+
+      val loader = new URLClassLoader(Array(flixClasses.toUri.toURL, javaClasses.toUri.toURL), getClass.getClassLoader)
+      try loader.loadClass("com.example.Main").getMethod("run").invoke(null)
+      // A stub that disagrees with the real class surfaces as a `LinkageError`, which would abort
+      // the whole suite if rethrown rather than failing this one test.
+      catch { case e: java.lang.reflect.InvocationTargetException => fail(s"the caller failed against the real classes: ${e.getCause}", e.getCause) }
+      finally loader.close()
+    } finally deleteRecursively(root)
+  }
+
   private def stubs(text: String): (List[ExportStubs.Facade], List[ExportStubs.Unsupported]) = {
     implicit val flix: Flix = new Flix().setOptions(Options.DefaultTest)
     val source = Source.fromString(SourceName.PathName(sourcePath), Origin.User, sctx, text)
