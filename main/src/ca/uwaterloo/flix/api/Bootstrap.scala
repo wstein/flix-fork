@@ -1113,7 +1113,13 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
     * The packages and JARs are fixed for the lifetime of the instance. Later changes to the
     * source files are picked up by [[applyFileChanges]].
     */
-  def mkFlix(options: Options, formatter: Formatter, additionalJars: List[Path] = Nil): Flix = {
+  def mkFlix(options: Options, formatter: Formatter): Flix = mkFlix(options, formatter, Nil)
+
+  /**
+    * Returns a new Flix instance as [[mkFlix]] does, also compiling against `additionalJars`,
+    * such as the `--lib` jars a build tool names: jars the build produced, which no manifest lists.
+    */
+  def mkFlix(options: Options, formatter: Formatter, additionalJars: List[Path]): Flix = {
     val flix = new Flix(pkgs = files.pkgs, jars = files.jars ::: additionalJars, mounts = optManifest.map(_.mounts).getOrElse(Map.empty))
     flix.setOptions(options)
     flix.setFormatter(formatter)

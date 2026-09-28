@@ -386,7 +386,7 @@ object Main {
               }
             }
           } else {
-            val flix = mkFlixWithFiles(cmdOpts.files, options)
+            val flix = mkFlixWithFiles(cmdOpts.files, options, Nil)
             val (optRoot, errors) = flix.check()
             if (errors.isEmpty) {
               HtmlDocumentor.run(optRoot.get, docOrigin(cmdOpts), Bootstrap.getDocumentationDirectory(cwd))(flix)
@@ -403,7 +403,7 @@ object Main {
               }
             }
           }
-          val flix = mkFlixWithFiles(cmdOpts.files, options)
+          val flix = mkFlixWithFiles(cmdOpts.files, options, Nil)
           val (optRoot, errors) = flix.check()
           if (errors.isEmpty) {
             val syntaxTree = flix.getParsedAst
@@ -440,7 +440,7 @@ object Main {
               }
             }
           } else {
-            val flix = mkFlixWithFiles(cmdOpts.files, options.copy(progress = false))
+            val flix = mkFlixWithFiles(cmdOpts.files, options.copy(progress = false), Nil)
             flix.compile() match {
               case Result.Ok(compilationResult) =>
                 val loaded = JvmLoader.load(compilationResult)
@@ -1085,7 +1085,7 @@ object Main {
   }
 
 
-  private def mkFlixWithFiles(files: Seq[File], options: Options, jars: List[Path] = Nil)(implicit formatter: Formatter): Flix = {
+  private def mkFlixWithFiles(files: Seq[File], options: Options, jars: List[Path])(implicit formatter: Formatter): Flix = {
     val flix = new Flix(jars = jars).setFormatter(formatter)
     flix.setOptions(options)
     val sctx: SecurityContext = SecurityContext.Unrestricted
