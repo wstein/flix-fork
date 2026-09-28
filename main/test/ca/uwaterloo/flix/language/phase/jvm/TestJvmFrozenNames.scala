@@ -54,7 +54,7 @@ class TestJvmFrozenNames extends AnyFunSuite {
       flix.jvmOrigins.symbols.register(definition, GeneratedJvmKey("definition", List("example")))
       intercept[InternalCompilerException] { GenFunAndClosureClasses.defnDesc(definition) }
       flix.jvmOrigins.freeze(List(definition))
-      assert(GenFunAndClosureClasses.defnDesc(definition).descriptorString() == "LDef$example;")
+      assert(GenFunAndClosureClasses.defnDesc(definition).descriptorString() == "Ldev/flix/gen/Def$example;")
     }
     intercept[InternalCompilerException] { GenFunAndClosureClasses.defnDesc(definition) }
   }
@@ -67,7 +67,7 @@ class TestJvmFrozenNames extends AnyFunSuite {
       val declaration = JvmAst.Enum(Annotations.Empty, Modifiers.Empty, enumeration,
         Map(caze -> JvmAst.Case(caze, Nil, loc)), loc)
       val root = JvmAst.Root(Map.empty, Map(enumeration -> declaration), Map.empty, Map.empty,
-        Set.empty, Nil, None, Set.empty, Map.empty)
+        Set.empty, Nil, None, Set.empty, Map.empty, Map.empty, Map.empty)
       val error = intercept[InternalCompilerException] { CodeGen.run(root) }
       assert(error.getMessage.contains("Missing JVM naming provenance"))
       intercept[InternalCompilerException] { flix.jvmOrigins.nameTable }

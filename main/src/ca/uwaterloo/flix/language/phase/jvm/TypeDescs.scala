@@ -63,7 +63,7 @@ object TypeDescs {
     case SimpleType.RecordExtend(_, _, _) => GenRecord.Desc
     case SimpleType.ExtensibleEmpty => GenExtTagged.Desc
     case SimpleType.ExtensibleExtend(_, _, _) => GenExtTagged.Desc
-    case SimpleType.Native(clazz) => clazz
+    case SimpleType.Native(clazz, _) => clazz
     case SimpleType.Enum(_, _) => throw InternalCompilerException(s"Unexpected type '$tpe0'", SourceLocation.Unknown)
     case SimpleType.Struct(_, _) => throw InternalCompilerException(s"Unexpected type '$tpe0'", SourceLocation.Unknown)
   }
@@ -87,7 +87,7 @@ object TypeDescs {
          SimpleType.String | SimpleType.Regex | SimpleType.Array(_) | SimpleType.Lazy(_) |
          SimpleType.Tuple(_) | SimpleType.Enum(_, _) | SimpleType.Struct(_, _) | SimpleType.Arrow(_, _) |
          SimpleType.RecordEmpty | SimpleType.RecordExtend(_, _, _) |
-         SimpleType.ExtensibleExtend(_, _, _) | SimpleType.ExtensibleEmpty | SimpleType.Native(_) |
+         SimpleType.ExtensibleExtend(_, _, _) | SimpleType.ExtensibleEmpty | SimpleType.Native(_, _) |
          SimpleType.Region | SimpleType.Null =>
       CD_Object
   }

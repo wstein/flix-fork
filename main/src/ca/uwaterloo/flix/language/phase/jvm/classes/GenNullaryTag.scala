@@ -23,14 +23,13 @@ import ca.uwaterloo.flix.language.phase.jvm.ClassMaker.Visibility.IsPublic
 import ca.uwaterloo.flix.language.phase.jvm.ClassMaker.Volatility.NotVolatile
 import ca.uwaterloo.flix.language.phase.jvm.ClassMaker.{ConstructorMethod, StaticConstructorMethod, StaticField}
 import ca.uwaterloo.flix.language.phase.jvm.Instructions.*
-import ca.uwaterloo.flix.language.phase.jvm.Mangle.mkDesc
 import ca.uwaterloo.flix.language.phase.jvm.{ClassMaker, JvmNames, Mangle}
 import org.objectweb.asm.MethodVisitor
 
 import java.lang.constant.ClassDesc
 
 /**
-  * The class of a nullary enum case, e.g. `A/B/Case$Color$Red` for `case Red` of
+  * The class of a nullary enum case, e.g. `A/B$Case$Color$Red` for `case Red` of
   * `enum A.B.Color`.
   *
   * A nullary case carries no values, so the class has a single instance held in
@@ -52,7 +51,7 @@ object GenNullaryTag {
     * `Struct$Obj`.
     */
   def desc(sym: Symbol.CaseSym)(implicit flix: Flix): ClassDesc =
-    mkDesc(sym.enumSym.namespace, Mangle.mkClassName("Case", List(JvmNames.enumName(sym.enumSym), sym.name)))
+    Mangle.mkNamespacedDesc(sym.enumSym.namespace, "Case", List(JvmNames.enumName(sym.enumSym), sym.name).mkString(Flix.Delimiter))
 
   def genByteCode(sym: Symbol.CaseSym)(implicit flix: Flix): Array[Byte] = {
     val d = desc(sym)

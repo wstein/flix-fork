@@ -17,9 +17,9 @@
 package ca.uwaterloo.flix
 
 import ca.uwaterloo.flix.api.lsp.{LspServer, VSCodeLspServer, FormatterLsp as LspFormatter}
-import ca.uwaterloo.flix.api.{Bootstrap, BootstrapError, Flix, Version}
+import ca.uwaterloo.flix.api.{Bootstrap, BootstrapError, CliContract, Flix, Version}
 import ca.uwaterloo.flix.language.CompilationMessage
-import ca.uwaterloo.flix.language.ast.shared.{Origin, SecurityContext}
+import ca.uwaterloo.flix.language.ast.shared.{Origin, SecurityContext, Source, SourceName}
 import ca.uwaterloo.flix.language.ast.{Symbol, TypedAst}
 import ca.uwaterloo.flix.language.phase.HtmlDocumentor
 import ca.uwaterloo.flix.language.phase.unification.zhegalkin.ZhegalkinPerf
@@ -32,7 +32,7 @@ import org.json4s.native.JsonMethods
 
 import java.io.{File, PrintStream}
 import java.net.BindException
-import java.nio.file.{Path, Paths}
+import java.nio.file.{Files, Path, Paths}
 import scala.collection.mutable
 import scala.util.matching.Regex
 
@@ -233,16 +233,73 @@ object Main {
           }
           exitOnResult(Bootstrap.init(cwd))
 
+        case Command.Capabilities =>
+          // The same document `flix/initializeBuild` will return over a connection. Offering it
+          // one-shot is what lets a build tool negotiate *before* deciding whether a daemon is
+          // available -- and keeps the one-shot path a first-class fallback rather than a
+          // degraded mode that skips the handshake.
+          val (compatible, document) = CliContract.describe(cmdOpts.clientContractVersion)
+          Console.out.println(JsonMethods.pretty(JsonMethods.render(document)))
+          System.exit(if (compatible) 0 else 1)
+
+        case Command.Stubs =>
+          // Pass 0 of joint compilation. It exists to run *before* anything is compiled, on a
+          // program that cannot yet compile: a Flix module calling a Java class that does not
+          // exist because that class calls back into this module. So it must not bootstrap the
+          // project or resolve dependencies -- it reads sources and nothing else.
+          val destination = Paths.get(cmdOpts.stubsOut.getOrElse("build/stubs"))
+          val sources = stubSourcePaths(cwd, cmdOpts.files) match {
+            case Result.Ok(paths) => paths
+            case Result.Err(message) =>
+              Console.err.println(message)
+              System.exit(1)
+              Nil
+          }
+
+          implicit val sctx: SecurityContext = SecurityContext.Unrestricted
+          implicit val flix: Flix = new Flix().setFormatter(formatter).setOptions(options)
+          val inputs = sources.map { path =>
+            Source.fromString(SourceName.PathName(path), Origin.User, sctx, Files.readString(path))
+          }
+          val (facades, unsupported) = ExportStubs.run(inputs)
+
+          if (unsupported.nonEmpty) {
+            // Refusing is the conservative outcome, not the convenient one: a wrong stub compiles,
+            // and the caller meets the mistake as a linkage error at run time.
+            Console.err.println("Cannot describe these exported defs in Java:")
+            for (u <- unsupported) Console.err.println(s"  ${u.loc.format}: ${u.name} -- ${u.reason}")
+            Console.err.println("Import the Java types they name, or give them a type that can cross the boundary.")
+            System.exit(1)
+          }
+
+          ExportStubs.write(facades, destination) match {
+            case Result.Ok(_) =>
+              println(s"Wrote ${facades.length} stub(s) to $destination")
+              System.exit(0)
+            case Result.Err(error) =>
+              Console.err.println(error.message)
+              System.exit(1)
+          }
+
         case Command.Check =>
-          if (cmdOpts.files.isEmpty) {
+          if (cmdOpts.files.nonEmpty && cmdOpts.jsonDiagnostics) {
+            exitWithJson(checkFiles(cmdOpts.files, options, libPaths(cmdOpts.libs)))
+          } else if (cmdOpts.jsonDiagnostics) {
+            exitWithJson {
+              Bootstrap.bootstrap(cwd, options.githubToken).flatMap { bootstrap =>
+                val flix = bootstrap.mkFlix(options, formatter, libPaths(cmdOpts.libs))
+                bootstrap.check(flix)
+              }
+            }
+          } else if (cmdOpts.files.isEmpty) {
             exitOnResult {
               Bootstrap.bootstrap(cwd, options.githubToken).flatMap { bootstrap =>
-                val flix = bootstrap.mkFlix(options, formatter)
+                val flix = bootstrap.mkFlix(options, formatter, libPaths(cmdOpts.libs))
                 bootstrap.check(flix)
               }
             }
           } else {
-            val flix = mkFlixWithFiles(cmdOpts.files, options)
+            val flix = mkFlixWithFiles(cmdOpts.files, options, libPaths(cmdOpts.libs))
             val (optRoot, errors) = flix.check()
             if (errors.isEmpty) System.exit(0)
             else exitWithErrors(flix, errors, optRoot)
@@ -253,12 +310,13 @@ object Main {
             println("The 'build' command does not support file arguments.")
             System.exit(1)
           }
-          exitOnResult {
+          val runBuild = () => {
             Bootstrap.bootstrap(cwd, options.githubToken).flatMap { bootstrap =>
-              val flix = bootstrap.mkFlix(options, formatter)
+              val flix = bootstrap.mkFlix(options, formatter, libPaths(cmdOpts.libs))
               bootstrap.buildIfNeeded(flix)
             }
           }
+          if (cmdOpts.jsonDiagnostics) exitWithJson(runBuild()) else exitOnResult(runBuild())
 
         case Command.BuildClasses =>
           if (cmdOpts.files.nonEmpty) {
@@ -556,6 +614,10 @@ object Main {
     */
   case class CmdOpts(
     command: Command = Command.None,
+                     stubsOut: Option[String] = None,
+                     libs: Seq[String] = Seq.empty,
+                     jsonDiagnostics: Boolean = false,
+                     clientContractVersion: Option[Int] = None,
     args: List[String] = Nil,
     testFilters: List[String] = Nil,
     testEventsJson: Boolean = false,
@@ -620,6 +682,10 @@ object Main {
     case object Doc extends Command
 
     case object Format extends Command
+
+    case object Stubs extends Command
+
+    case object Capabilities extends Command
 
     case object Run extends Command
 
@@ -691,9 +757,29 @@ object Main {
       // Command
       cmd("init").action((_, c) => c.copy(command = Command.Init)).text("  creates a new project in the current directory.")
 
-      cmd("check").action((_, c) => c.copy(command = Command.Check)).text("  checks the current project for errors.")
+      cmd("check").action((_, c) => c.copy(command = Command.Check)).text("  checks the current project for errors.").children(
+        opt[String]("lib").unbounded().action((arg, c) => c.copy(libs = c.libs :+ arg)).
+          text("adds a jar to the classpath. Repeatable."),
+        opt[Unit]("diagnostics-json").action((_, c) => c.copy(jsonDiagnostics = true)).
+          text("writes diagnostics to stdout as JSON, for a build tool to read."),
+      )
 
-      cmd("build").action((_, c) => c.copy(command = Command.Build)).text("  builds (i.e. compiles) the current project.")
+      cmd("capabilities").action((_, c) => c.copy(command = Command.Capabilities)).text("  reports the tooling contract this compiler speaks.").children(
+        opt[Int]("contract-version").action((arg, c) => c.copy(clientContractVersion = Some(arg))).
+          text("the contract version the caller speaks. Exits non-zero if it cannot be served."),
+      )
+
+      cmd("stubs").action((_, c) => c.copy(command = Command.Stubs)).text("  writes compile-only Java stubs for the @Export-ed defs.").children(
+        opt[String]("out").action((arg, c) => c.copy(stubsOut = Some(arg))).
+          text("where to write the stubs. Defaults to 'build/stubs'."),
+      )
+
+      cmd("build").action((_, c) => c.copy(command = Command.Build)).text("  builds (i.e. compiles) the current project.").children(
+        opt[String]("lib").unbounded().action((arg, c) => c.copy(libs = c.libs :+ arg)).
+          text("adds a jar to the classpath. Repeatable."),
+        opt[Unit]("diagnostics-json").action((_, c) => c.copy(jsonDiagnostics = true)).
+          text("writes diagnostics to stdout as JSON, for a build tool to read."),
+      )
 
       cmd("build-classes").action((_, c) => c.copy(command = Command.BuildClasses)).text("  builds the current project and writes the class files to the build directory.")
 
@@ -941,8 +1027,66 @@ object Main {
   /**
     * Creates a fresh Flix instance configured with the given options and source files.
     */
-  private def mkFlixWithFiles(files: Seq[File], options: Options)(implicit formatter: Formatter): Flix = {
-    val flix = new Flix().setFormatter(formatter)
+  /**
+    * Adds each `--lib` jar to `flix`, or exits naming the one that could not be used.
+    *
+    * A project's own dependencies are declared in `flix.toml` and land under `lib/cache` and
+    * `lib/external`, which the package managers own. That leaves no way to compile against a jar
+    * the *build* just produced -- which is the ordinary case once Java and Flix are built together,
+    * since the Java classes exist only as build output. This is that seam: the caller names the
+    * classpath instead of the compiler inferring it from a directory it manages.
+    *
+    * The immutable dependency list must be supplied when the compiler instance is constructed.
+    */
+  private def libPaths(libs: Seq[String]): List[Path] = libs.map(Paths.get(_)).toList
+
+  /**
+    * Writes `result` as a build-protocol document on stdout and exits.
+    *
+    * Nothing else may be written there: progress and prompts already go to stderr, and a single
+    * stray `println` turns a parseable document into a parse error for the caller. Exit status is
+    * still the primary signal -- a build tool should not have to parse anything to learn that a
+    * build failed.
+    */
+  private def exitWithJson[T](result: Result[T, BootstrapError]): Unit = {
+    val errors = result match {
+      case Result.Ok(_) => Nil
+      case Result.Err(error) => List(error)
+    }
+    Console.out.println(JsonMethods.pretty(JsonMethods.render(CliContract.result(errors, None))))
+    System.exit(if (errors.isEmpty) 0 else 1)
+  }
+
+  /**
+    * Checks exactly `files` and returns structured compiler errors for machine-readable clients.
+    *
+    * This deliberately bypasses project bootstrapping. An explicit file list is the complete input
+    * contract even when the caller asks for JSON diagnostics; otherwise adding an output-format
+    * option would silently change which program is checked.
+    */
+  private[flix] def checkFiles(files: Seq[File], options: Options, jars: List[Path])(implicit formatter: Formatter): Result[Unit, BootstrapError] = {
+    val flix = mkFlixWithFiles(files, options, jars)
+    val (optRoot, errors) = flix.check()
+    if (errors.isEmpty) Result.Ok(())
+    else Result.Err(BootstrapError.CompilationErrors(errors, optRoot))
+  }
+
+  /** Returns the explicit stub inputs, or discovers project sources with a useful missing-root error. */
+  private[flix] def stubSourcePaths(cwd: Path, files: Seq[File]): Result[List[Path], String] = {
+    if (files.nonEmpty) {
+      Result.Ok(files.toList.map(_.toPath))
+    } else {
+      val sourceDirectory = cwd.resolve("src")
+      if (!Files.isDirectory(sourceDirectory))
+        Result.Err(s"Cannot generate stubs: source directory does not exist: $sourceDirectory")
+      else
+        Result.Ok(FileOps.getFilesWithExtIn(sourceDirectory, "flix", Int.MaxValue))
+    }
+  }
+
+
+  private def mkFlixWithFiles(files: Seq[File], options: Options, jars: List[Path] = Nil)(implicit formatter: Formatter): Flix = {
+    val flix = new Flix(jars = jars).setFormatter(formatter)
     flix.setOptions(options)
     val sctx: SecurityContext = SecurityContext.Unrestricted
     for (file <- files) {

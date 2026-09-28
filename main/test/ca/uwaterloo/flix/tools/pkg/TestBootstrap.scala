@@ -627,7 +627,7 @@ class TestBootstrap extends AnyFunSuite {
     val classDir = Bootstrap.getDevelopmentClassDirectory(p)
 
     b.build(PkgTestUtils.mkFlix(b)).unsafeGet
-    val obsolete = classDir.resolve("Def$obsolete.class")
+    val obsolete = classDir.resolve("dev/flix/gen/Def$obsolete.class")
     assert(Files.exists(obsolete), s"Expected the first build to emit $obsolete")
 
     FileOps.writeString(main, "def main(): Unit \\ IO = println(1)\n")

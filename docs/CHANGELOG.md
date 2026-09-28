@@ -1,5 +1,10 @@
 # Changelog
 
+Unreleased:
+- Compiler: Generated implementation classes now sit beside their namespace facade, allowing
+  exported Flix functions to be referenced from Scala, Kotlin, and other JVM languages without a
+  class/package name collision.
+
 Version 0.76.2:
 - Compiler: Restructure package management internals (thanks Magnus!)
 

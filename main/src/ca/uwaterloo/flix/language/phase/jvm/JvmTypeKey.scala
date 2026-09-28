@@ -89,7 +89,7 @@ object JvmTypeKey {
       case SimpleType.RecordExtend(_, _, _) => simpleRow(value, isRecord = true)
       case SimpleType.ExtensibleEmpty => node("extensible-empty")
       case SimpleType.ExtensibleExtend(_, _, _) => simpleRow(value, isRecord = false)
-      case SimpleType.Native(clazz) => node("native", clazz.descriptorString())
+      case SimpleType.Native(clazz, _) => node("native", clazz.descriptorString())
     }
 
     private def simpleRow(value: SimpleType, isRecord: Boolean): String = {

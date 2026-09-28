@@ -187,6 +187,34 @@ object EntryPointError {
   }
 
   /**
+    * An error raised to indicate that an exported function in the companion module of an exported
+    * enum has a name the generated Java type already uses.
+    *
+    * @param name    the name of the exported function.
+    * @param enumSym the enum whose generated Java type also holds the function.
+    * @param loc     the location of the defn.
+    */
+  case class IllegalExportEnumMember(name: String, enumSym: Symbol.EnumSym, loc: SourceLocation) extends EntryPointError {
+    def code: ErrorCode = ErrorCode.E3187
+
+    def summary: String = s"Exported function '$name' clashes with a method of the Java type of enum '$enumSym'."
+
+    def message(fmt: Formatter)(implicit root: Option[TypedAst.Root]): String = {
+      import fmt.*
+      s""">> Exported function '${red(name)}' clashes with a method of the Java type of enum '${cyan(enumSym.toString)}'.
+         |
+         |${highlight(loc, "name already used by the generated Java type", fmt)}
+         |
+         |${underline("Explanation:")} An exported enum becomes a Java enum, or a sealed
+         |interface if its cases carry data, and the exported functions of its companion
+         |module become static methods of that same type. Every Java enum already has
+         |methods such as 'name', 'ordinal', 'values' and 'valueOf', so an exported function
+         |cannot use one of those names. Rename it.
+         |""".stripMargin
+    }
+  }
+
+  /**
     * Error indicating an unexpected formal parameter in a runnable (test or main) entry point function.
     *
     * @param loc the location where the error occurred.

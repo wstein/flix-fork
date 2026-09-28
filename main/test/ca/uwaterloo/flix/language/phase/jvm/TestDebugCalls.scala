@@ -34,7 +34,7 @@ class TestDebugCalls extends AnyFunSuite {
       case Result.Ok(result) => result.getDebugCalls
       case Result.Err(errors) => fail(s"the test program must compile, but got: $errors")
     }
-    val map = calls.find(_.className.contains("List.Def$map$"))
+    val map = calls.find(_.className.contains("List$Def$map$"))
       .getOrElse(fail(s"the specialized List.map call was not recorded: $calls"))
 
     assert(map.label == "List.map")

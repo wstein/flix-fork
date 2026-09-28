@@ -81,7 +81,7 @@ object SimpleType {
   // Compound Types.
   //
 
-  val Object: SimpleType = Native(java.lang.constant.ConstantDescs.CD_Object)
+  val Object: SimpleType = Native(java.lang.constant.ConstantDescs.CD_Object, Nil)
 
   case class Array(tpe: SimpleType) extends SimpleType
 
@@ -103,7 +103,21 @@ object SimpleType {
 
   case class ExtensibleExtend(cons: Name.Pred, tpes: List[SimpleType], rest: SimpleType) extends SimpleType
 
-  case class Native(clazz: ClassDesc) extends SimpleType
+  /**
+    * A Java class with the source type arguments retained for export signatures.
+    *
+    * Arguments do not affect representation: `ArrayList[String]` and `ArrayList[Int32]` are the
+    * same JVM class. Equality therefore remains class-only while the arguments ride alongside as
+    * boundary metadata.
+    */
+  case class Native(clazz: ClassDesc, targs: List[SimpleType] = Nil) extends SimpleType {
+    override def equals(that: Any): Boolean = that match {
+      case Native(thatClazz, _) => clazz == thatClazz
+      case _ => false
+    }
+
+    override def hashCode(): Int = clazz.hashCode()
+  }
 
   /**
     * Smart constructor for [[SimpleType.Array]].
@@ -150,7 +164,7 @@ object SimpleType {
       case Int64 => Int64
       case Void | AnyType | Unit | BigDecimal | BigInt | String | Regex | Region | Array(_) |
            Lazy(_) | Tuple(_) | Enum(_, _) | Struct(_, _) | Arrow(_, _) | RecordEmpty |
-           RecordExtend(_, _, _) | ExtensibleEmpty | ExtensibleExtend(_, _, _) | Native(_) | Null =>
+           RecordExtend(_, _, _) | ExtensibleEmpty | ExtensibleExtend(_, _, _) | Native(_, _) | Null =>
         SimpleType.Object
     }
   }

@@ -16,8 +16,11 @@
 
 package ca.uwaterloo.flix
 
-import ca.uwaterloo.flix.util.LibLevel
+import ca.uwaterloo.flix.api.BootstrapError
+import ca.uwaterloo.flix.util.{Formatter, LibLevel, Options, Result}
 import org.scalatest.funsuite.AnyFunSuite
+
+import java.nio.file.Files
 
 class TestMain extends AnyFunSuite {
 
@@ -174,6 +177,27 @@ class TestMain extends AnyFunSuite {
     assert(opts.files.length == 2)
   }
 
+  test("structured check compiles the explicitly named files") {
+    val source = Files.createTempFile("flix-check-json", ".flix")
+    Files.writeString(source, "def main(): Unit = 42")
+
+    Main.checkFiles(Seq(source.toFile), Options.DefaultTest, Nil)(Formatter.NoFormatter) match {
+      case Result.Err(BootstrapError.CompilationErrors(errors, _)) =>
+        assert(errors.nonEmpty)
+        assert(errors.exists(_.loc.source.name == source.toString))
+      case result => fail(s"expected errors from the explicitly named file, got: $result")
+    }
+  }
+
+  test("stub discovery rejects a project without a source directory") {
+    val project = Files.createTempDirectory("flix-stubs-no-src")
+
+    Main.stubSourcePaths(project, Nil) match {
+      case Result.Err(message) => assert(message.contains(project.resolve("src").toString))
+      case Result.Ok(sources) => fail(s"expected a missing-source error, found: $sources")
+    }
+  }
+
   test("test with files") {
     val args = Array("test", "foo.flix", "bar.flix")
     val opts = Main.parseCmdOpts(args).get
@@ -292,6 +316,21 @@ class TestMain extends AnyFunSuite {
     val args = Array("--Xno-deprecated")
     val opts = Main.parseCmdOpts(args).get
     assert(opts.xnodeprecated)
+  }
+
+  test("check accepts repeatable --lib paths") {
+    val opts = Main.parseCmdOpts(Array("check", "--lib", "one.jar", "--lib", "two.jar")).get
+    assert(opts.libs == Seq("one.jar", "two.jar"))
+  }
+
+  test("build accepts repeatable --lib paths") {
+    val opts = Main.parseCmdOpts(Array("build", "--lib", "generated.jar")).get
+    assert(opts.libs == Seq("generated.jar"))
+  }
+
+  test("check and build accept structured diagnostics") {
+    assert(Main.parseCmdOpts(Array("check", "--diagnostics-json")).get.jsonDiagnostics)
+    assert(Main.parseCmdOpts(Array("build", "--diagnostics-json")).get.jsonDiagnostics)
   }
 
 }

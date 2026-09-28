@@ -60,9 +60,33 @@ sealed trait ClassMaker {
     case StaticField(_, name, tpe) => makeField(name, tpe, v, f, vol, IsStatic)
   }
 
-  protected def makeMethod(ann: List[JvmAnnotation], i: Option[MethodVisitor => Unit], methodName: String, d: MethodTypeDesc, v: Visibility, f: Final, s: Static, a: Abstract): Unit = {
+  /**
+    * Declares `inner` as the member class `simpleName` of `outer`, in this class's `InnerClasses`
+    * attribute. Both the outer and the inner class must declare it for javac to read `inner` as
+    * `Outer.SimpleName`.
+    */
+  def mkInnerClass(inner: ClassDesc, outer: ClassDesc, simpleName: String): Unit = {
+    val access = Opcodes.ACC_PUBLIC + Opcodes.ACC_STATIC + Opcodes.ACC_FINAL
+    visitor.visitInnerClass(ClassDescs.internalNameOf(inner), ClassDescs.internalNameOf(outer), simpleName, access)
+  }
+
+  /** Declares `host` as the nest host of this class. */
+  def mkNestHost(host: ClassDesc): Unit = visitor.visitNestHost(ClassDescs.internalNameOf(host))
+
+  /** Declares `member` as a member of the nest this class hosts. */
+  def mkNestMember(member: ClassDesc): Unit = visitor.visitNestMember(ClassDescs.internalNameOf(member))
+
+  /** Declares `subclass` as permitted to extend this sealed class or interface. */
+  def mkPermittedSubclass(subclass: ClassDesc): Unit = visitor.visitPermittedSubclass(ClassDescs.internalNameOf(subclass))
+
+  /** Declares `name: tpe` as one component of this class's `Record` attribute. */
+  def mkRecordComponent(name: String, tpe: ClassDesc): Unit = {
+    visitor.visitRecordComponent(name, tpe.descriptorString(), null).visitEnd()
+  }
+
+  protected def makeMethod(ann: List[JvmAnnotation], i: Option[MethodVisitor => Unit], methodName: String, d: MethodTypeDesc, v: Visibility, f: Final, s: Static, a: Abstract, signature: Option[String] = None): Unit = {
     val m = v.toInt + f.toInt + s.toInt + a.toInt
-    val mv = visitor.visitMethod(m, methodName, d.descriptorString(), null, null)
+    val mv = visitor.visitMethod(m, methodName, d.descriptorString(), signature.orNull, null)
     for (a <- ann) {
       val av = mv.visitAnnotation(a.clazz.descriptorString(), a.isRuntimeVisible)
       av.visitEnd()
@@ -96,8 +120,8 @@ object ClassMaker {
   class InstanceClassMaker(cw: ClassWriter) extends ClassMaker {
     protected val visitor: ClassWriter = cw
 
-    def mkStaticMethod(m: StaticMethod, v: Visibility, f: Final, ins: MethodVisitor => Unit): Unit = {
-      makeMethod(Nil, Some(ins), m.name, m.d, v, f, IsStatic, NotAbstract)
+    def mkStaticMethod(m: StaticMethod, v: Visibility, f: Final, ins: MethodVisitor => Unit, signature: Option[String] = None): Unit = {
+      makeMethod(Nil, Some(ins), m.name, m.d, v, f, IsStatic, NotAbstract, signature)
     }
 
     def mkConstructor(c: ConstructorMethod, v: Visibility, ins: MethodVisitor => Unit): Unit = {
@@ -106,6 +130,31 @@ object ClassMaker {
 
     def mkMethod(ann: List[JvmAnnotation], m: InstanceMethod, v: Visibility, f: Final, ins: MethodVisitor => Unit): Unit = {
       makeMethod(ann, Some(ins), m.name, m.d, v, f, NotStatic, NotAbstract)
+    }
+
+    /** Declares `field` as one constant of this class, which must have been made by [[mkEnumClass]]. */
+    def mkEnumConstant(field: StaticField): Unit = {
+      val access = Opcodes.ACC_PUBLIC + Opcodes.ACC_STATIC + Opcodes.ACC_FINAL + Opcodes.ACC_ENUM
+      visitor.visitField(access, field.name, field.tpe.descriptorString(), null, null).visitEnd()
+    }
+
+    /** Declares a private static final field that javac hides from Java source. */
+    def mkSyntheticStaticField(field: StaticField): Unit = {
+      val access = Opcodes.ACC_PRIVATE + Opcodes.ACC_STATIC + Opcodes.ACC_FINAL + Opcodes.ACC_SYNTHETIC
+      visitor.visitField(access, field.name, field.tpe.descriptorString(), null, null).visitEnd()
+    }
+
+    /**
+      * Declares a public static method that javac hides from Java source, so generated code in
+      * other classes can call it without it becoming part of the class's Java-facing API.
+      */
+    def mkSyntheticStaticMethod(m: StaticMethod, ins: MethodVisitor => Unit): Unit = {
+      val access = Opcodes.ACC_PUBLIC + Opcodes.ACC_STATIC + Opcodes.ACC_FINAL + Opcodes.ACC_SYNTHETIC
+      val mv = visitor.visitMethod(access, m.name, m.d.descriptorString(), null, null)
+      mv.visitCode()
+      ins(mv)
+      mv.visitMaxs(999, 999)
+      mv.visitEnd()
     }
   }
 
@@ -143,10 +192,30 @@ object ClassMaker {
     def mkDefaultMethod(m: DefaultMethod, v: Visibility, f: Final, ins: MethodVisitor => Unit): Unit = {
       makeMethod(Nil, Some(ins), m.name, m.d, v, f, NotStatic, NotAbstract)
     }
+
+    /** Declares a public static method, which on an interface must not be final. */
+    def mkStaticMethod(m: StaticMethod, ins: MethodVisitor => Unit, signature: Option[String]): Unit = {
+      makeMethod(Nil, Some(ins), m.name, m.d, IsPublic, NotFinal, IsStatic, NotAbstract, signature)
+    }
   }
 
   def mkClass(className: ClassDesc, f: Final, superClass: ClassDesc = CD_Object, interfaces: List[ClassDesc] = Nil)(implicit flix: Flix): InstanceClassMaker = {
     new InstanceClassMaker(mkClassWriter(className, IsPublic, f, NotAbstract, NotInterface, superClass, interfaces))
+  }
+
+  /**
+    * Returns a class that the JVM and javac treat as a Java `enum`: final, flagged `ACC_ENUM`, and
+    * extending `java.lang.Enum<className>`, generic signature included, since javac reads that
+    * signature to type `compareTo` and `getDeclaringClass`.
+    */
+  def mkEnumClass(className: ClassDesc)(implicit flix: Flix): InstanceClassMaker = {
+    val cw = mkClassWriter()
+    val internalName = ClassDescs.internalNameOf(className)
+    val access = Opcodes.ACC_PUBLIC + Opcodes.ACC_FINAL + Opcodes.ACC_SUPER + Opcodes.ACC_ENUM
+    val signature = s"L${ClassDescs.internalNameOf(JavaClasses.Enum)}<L$internalName;>;"
+    cw.visit(CompilerConstants.JvmTargetVersion, access, internalName, signature, ClassDescs.internalNameOf(JavaClasses.Enum), Array.empty)
+    cw.visitSource(internalName, null)
+    new InstanceClassMaker(cw)
   }
 
   def mkAbstractClass(className: ClassDesc, superClass: ClassDesc = CD_Object, interfaces: List[ClassDesc] = Nil)(implicit flix: Flix): AbstractClassMaker = {

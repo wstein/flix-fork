@@ -28,6 +28,8 @@ import scala.jdk.CollectionConverters.*
 
 class TestDebugLocalVariables extends AnyFunSuite {
 
+  private val RootGenerated = "dev/flix/gen/"
+
   private val Program =
     """def compute(a: Int32, b: Int32): Int32 = {
       |    let x = a + 1;
@@ -61,7 +63,7 @@ class TestDebugLocalVariables extends AnyFunSuite {
         |def main(): Unit \ IO = println(compute((41, true)))
         |""".stripMargin
       val result = compile(xdebug = true, program, newMono)
-      val bindings = result.getDebugDefinitions("Def$compute")("staticApply").map(b => b.name -> b.tpe).toMap
+      val bindings = result.getDebugDefinitions(RootGenerated + "Def$compute")("staticApply").map(b => b.name -> b.tpe).toMap
       assert(bindings.get("number").contains("Int32") && bindings.get("flag").contains("Bool"), bindings.toString)
       val locals = localEntries(result, "Def$compute", "staticApply").map(_._1).toSet
       assert(Set("number", "flag").subsetOf(locals), locals.toString)
@@ -75,7 +77,7 @@ class TestDebugLocalVariables extends AnyFunSuite {
         |def main(): Unit \ IO = println(make(40)(1))
         |""".stripMargin
       val result = compile(xdebug = true, program, newMono)
-      val closures = result.getDebugDefinitions.filter(_._1.startsWith("Clo$make$"))
+      val closures = result.getDebugDefinitions.filter(_._1.startsWith(RootGenerated + "Clo$make$"))
       assert(closures.nonEmpty)
       closures.foreach { case (clazz, methods) =>
         val bindings = methods("applyFrame").map(b => b.name -> b.tpe).toMap
@@ -92,7 +94,7 @@ class TestDebugLocalVariables extends AnyFunSuite {
         |def main(): Unit \ IO = println(compute(true))
         |""".stripMargin
       val result = compile(xdebug = true, program, newMono)
-      val bindings = result.getDebugDefinitions("Def$compute")("staticApply").filter(_.name == "value")
+      val bindings = result.getDebugDefinitions(RootGenerated + "Def$compute")("staticApply").filter(_.name == "value")
       assert(bindings.size == 2 && bindings.map(_.identity).distinct.size == 2, bindings.toString)
       val locals = localEntries(result, "Def$compute", "staticApply").filter(_._1 == "value")
       assert(locals.size == 2 && locals.forall(e => e._3 < e._4), locals.toString)
@@ -103,7 +105,7 @@ class TestDebugLocalVariables extends AnyFunSuite {
         |def main(): Unit \ IO = println(debugIdentity(42))
         |""".stripMargin
       val result = compile(xdebug = true, program, newMono)
-      val definitions = result.getDebugDefinitions.filter(_._1.startsWith("Def$debugIdentity"))
+      val definitions = result.getDebugDefinitions.filter(_._1.startsWith(RootGenerated + "Def$debugIdentity"))
       assert(definitions.nonEmpty, result.getDebugDefinitions.keys.mkString(", "))
       assert(definitions.values.forall(_.values.flatten.exists(b => b.name == "value" && b.tpe == "a")), definitions.toString)
     }
@@ -202,7 +204,7 @@ class TestDebugLocalVariables extends AnyFunSuite {
     val vm = connector.launch(args)
     try {
       val prepare = vm.eventRequestManager().createClassPrepareRequest()
-      prepare.addClassFilter("Def$compute")
+      prepare.addClassFilter("dev.flix.gen.Def$compute")
       prepare.enable()
       vm.resume()
       val observed = mutable.Set.empty[Int]
@@ -253,7 +255,7 @@ class TestDebugLocalVariables extends AnyFunSuite {
   }
 
   test("debug compilation finalizes source bindings under a stable class name") {
-    val bindings = compile(xdebug = true).getDebugDefinitions.getOrElse("Def$compute", fail("Missing debug definition for compute."))
+    val bindings = compile(xdebug = true).getDebugDefinitions.getOrElse(RootGenerated + "Def$compute", fail("Missing debug definition for compute."))
       .getOrElse(ClassMaker.StaticApplyMethodName, fail("Missing staticApply debug bindings."))
     assert(bindings.map(_.name).toSet == Set("a", "b", "x", "y"))
     assert(compile(xdebug = false).getDebugDefinitions.isEmpty)
@@ -268,7 +270,7 @@ class TestDebugLocalVariables extends AnyFunSuite {
     val names = localNames(debug, "Clo$", "applyFrame")
     assert(names.contains("prefix"), s"Expected captured source name, got: $names")
     val bindings = debug.getDebugDefinitions.collectFirst {
-      case (clazz, methods) if clazz.startsWith("Clo$make$") => methods("applyFrame").map(_.name).toSet
+      case (clazz, methods) if clazz.startsWith(RootGenerated + "Clo$make$") => methods("applyFrame").map(_.name).toSet
     }.getOrElse(fail("Expected debug scopes for an emitted closure, got: " + debug.getDebugDefinitions.keys))
     assert(bindings == Set("prefix", "value"), s"Expected closure scope names, got: $bindings")
     assert(localNames(compile(xdebug = false, program), "Clo$", "applyFrame").isEmpty)
@@ -352,7 +354,8 @@ class TestDebugLocalVariables extends AnyFunSuite {
   }
 
   private def localEntries(result: ca.uwaterloo.flix.runtime.CompilationResult, className: String, method: String): List[(String, String, Int, Int, Int)] = {
-    val clazz = result.getClasses.values.find(_.name.displayName() == className).getOrElse(fail(s"Missing $className"))
+    val displayName = className.split('/').last
+    val clazz = result.getClasses.values.find(_.name.displayName() == displayName).getOrElse(fail(s"Missing $className"))
     val offsets = new java.util.IdentityHashMap[Label, Integer]()
     val entries = mutable.ListBuffer.empty[(String, String, Int, Int, Int)]
     val reader = new ClassReader(clazz.bytecode) {

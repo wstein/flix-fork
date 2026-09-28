@@ -1113,8 +1113,8 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
     * The packages and JARs are fixed for the lifetime of the instance. Later changes to the
     * source files are picked up by [[applyFileChanges]].
     */
-  def mkFlix(options: Options, formatter: Formatter): Flix = {
-    val flix = new Flix(pkgs = files.pkgs, jars = files.jars, mounts = optManifest.map(_.mounts).getOrElse(Map.empty))
+  def mkFlix(options: Options, formatter: Formatter, additionalJars: List[Path] = Nil): Flix = {
+    val flix = new Flix(pkgs = files.pkgs, jars = files.jars ::: additionalJars, mounts = optManifest.map(_.mounts).getOrElse(Map.empty))
     flix.setOptions(options)
     flix.setFormatter(formatter)
     for (path <- files.sources) {
@@ -1140,7 +1140,7 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
     if (errors.isEmpty) {
       Ok(optRoot.get)
     } else {
-      Err(BootstrapError.GeneralError(CompilationMessage.formatAll(errors)(flix.getFormatter, optRoot)))
+      Err(BootstrapError.CompilationErrors(errors, optRoot))
     }
   }
 
@@ -1246,7 +1246,7 @@ class Bootstrap(val projectPath: Path, apiKey: Option[String]) {
     if (errors.isEmpty) {
       Ok(flix.codeGen(optRoot.get))
     } else {
-      Err(BootstrapError.GeneralError(CompilationMessage.formatAll(errors)(flix.getFormatter, optRoot)))
+      Err(BootstrapError.CompilationErrors(errors, optRoot))
     }
   }
 

@@ -31,14 +31,17 @@ object JvmAst {
                   anonClasses: List[AnonClass],
                   mainEntryPoint: Option[Symbol.DefnSym],
                   entryPoints: Set[Symbol.DefnSym],
-                  sources: Map[Source, SourceLocation])
+                  sources: Map[Source, SourceLocation],
+                  exportedEnumFields: Map[Symbol.EnumSym, Map[String, List[SimpleType]]],
+                  enumSpecializations: Map[(Symbol.EnumSym, List[SimpleType]), Symbol.EnumSym])
   {
 
     def getMain: Option[Def] = mainEntryPoint.map(defs(_))
 
   }
 
-  case class Def(ann: Annotations, mod: Modifiers, sym: Symbol.DefnSym, cparams: List[OffsetFormalParam], fparams: List[OffsetFormalParam], lparams: List[LocalParam], pcPoints: Int, expr: Expr, tpe: SimpleType, unboxedType: UnboxedType, loc: SourceLocation) {
+  /** See [[ErasedAst.Def]] for why exported return and parameter types survive erasure. */
+  case class Def(ann: Annotations, mod: Modifiers, sym: Symbol.DefnSym, cparams: List[OffsetFormalParam], fparams: List[OffsetFormalParam], lparams: List[LocalParam], pcPoints: Int, expr: Expr, tpe: SimpleType, unboxedType: UnboxedType, exportedReturnType: Option[SimpleType], exportedParamTypes: Option[List[SimpleType]], loc: SourceLocation) {
     val arrowType: SimpleType.Arrow = SimpleType.mkArrow(fparams.map(_.tpe), tpe)
   }
 

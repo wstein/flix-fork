@@ -810,7 +810,7 @@ class TestEntryPoints extends AnyFunSuite with TestUtils {
     expectError[EntryPointError.IllegalEntryPointEffect](result)
   }
 
-  test("Test.IllegalExportFunction.05") {
+  test("Test.ValidExportFunction.OptionResult.01") {
     val input =
       """
         |enum Option[t] {
@@ -820,10 +820,209 @@ class TestEntryPoints extends AnyFunSuite with TestUtils {
         |mod Mod { @Export pub def id(x: Int32): Option[Int32] = Some(x) }
         |""".stripMargin
     val result = check(input, Options.TestWithLibNix)
+    expectSuccess(result)
+  }
+
+  test("Test.ValidExportFunction.VectorResult.01") {
+    val input =
+      """
+        |mod Mod { @Export pub def id(x: Int32): Vector[Int32] = ??? }
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibNix)
+    expectSuccess(result)
+  }
+
+  test("Test.ValidExportFunction.TupleResult.01") {
+    val input =
+      """
+        |mod Mod { @Export pub def id(x: Int32): (Int32, Bool) = ??? }
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibNix)
+    expectSuccess(result)
+  }
+
+  test("Test.ValidExportFunction.RecordResult.01") {
+    val input =
+      """
+        |mod Mod { @Export pub def id(x: Int32): {name = Int32, active = Bool} = ??? }
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibNix)
+    expectSuccess(result)
+  }
+
+  test("Test.ValidExportFunction.EnumResult.01") {
+    val input =
+      """
+        |mod Mod {
+        |    pub enum Color { case Red, case Green }
+        |    @Export pub def favorite(x: Int32): Color = ???
+        |}
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibNix)
+    expectSuccess(result)
+  }
+
+  test("Test.ValidExportFunction.EnumResult.02") {
+    val input =
+      """
+        |mod Mod {
+        |    pub enum Color { case Red, case Green }
+        |    @Export pub def favorite(x: Int32): Color = ???
+        |}
+        |mod Mod.Color {
+        |    @Export pub def parse(s: String): Mod.Color = ???
+        |}
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibNix)
+    expectSuccess(result)
+  }
+
+  test("Test.ValidExportFunction.EnumResult.03") {
+    val input =
+      """
+        |mod Mod {
+        |    pub enum Shape { case Circle(Int32), case Point }
+        |    @Export pub def shape(x: Int32): Shape = ???
+        |}
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibNix)
+    expectSuccess(result)
+  }
+
+  test("Test.ValidExportFunction.NestedResult.01") {
+    val input =
+      """
+        |mod Mod {
+        |    pub enum Color { case Red }
+        |    @Export pub def a(x: Int32): List[List[Int32]] = ???
+        |    @Export pub def b(x: Int32): Option[(Int32, Color)] = ???
+        |    @Export pub def c(x: Int32): Map[String, Vector[Color]] = ???
+        |    @Export pub def d(x: Int32): (Color, {x = Int32}) = ???
+        |}
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibAll)
+    expectSuccess(result)
+  }
+
+  test("Test.IllegalExportFunction.SetParameter.01") {
+    val input =
+      """
+        |mod Mod { @Export pub def id(x: List[Set[Int32]]): Int32 = ??? }
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibAll)
     expectError[EntryPointError.IllegalExportType](result)
   }
 
-  test("Test.IllegalExportFunction.06") {
+  test("Test.IllegalExportFunction.NestedResult.01") {
+    val input =
+      """
+        |mod Mod { @Export pub def id(x: Int32): (List[Int32], Int32) = ??? }
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibAll)
+    expectError[EntryPointError.IllegalExportType](result)
+  }
+
+  test("Test.IllegalExportFunction.NestedResult.02") {
+    val input =
+      """
+        |mod Mod {
+        |    pub enum Holder { case Items(List[Int32]) }
+        |    @Export pub def id(x: Int32): Holder = ???
+        |}
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibAll)
+    expectError[EntryPointError.IllegalExportType](result)
+  }
+
+  test("Test.IllegalExportFunction.EnumResult.01") {
+    val input =
+      """
+        |mod Mod {
+        |    pub enum Wrapped { case Fn(Int32 -> Int32) }
+        |    @Export pub def wrapped(x: Int32): Wrapped = ???
+        |}
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibNix)
+    expectError[EntryPointError.IllegalExportType](result)
+  }
+
+  test("Test.IllegalExportFunction.EnumResult.05") {
+    val input =
+      """
+        |mod Mod {
+        |    pub enum Tree { case Leaf, case Node(Tree, Tree) }
+        |    @Export pub def tree(x: Int32): Tree = ???
+        |}
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibNix)
+    expectError[EntryPointError.IllegalExportType](result)
+  }
+
+  test("Test.IllegalExportFunction.EnumResult.02") {
+    val input =
+      """
+        |mod Mod {
+        |    pub enum Tagged[t] { case Plain }
+        |    @Export pub def tagged(x: Int32): Tagged[Int32] = ???
+        |}
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibNix)
+    expectError[EntryPointError.IllegalExportType](result)
+  }
+
+  test("Test.IllegalExportFunction.EnumResult.03") {
+    val input =
+      """
+        |mod Mod {
+        |    pub enum Color { case Red, case Green }
+        |    @Export pub def favorite(x: Int32): Color = ???
+        |}
+        |mod Mod.Color {
+        |    @Export pub def valueOf(s: String): Mod.Color = ???
+        |}
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibNix)
+    expectError[EntryPointError.IllegalExportEnumMember](result)
+  }
+
+  test("Test.IllegalExportFunction.EnumResult.04") {
+    val input =
+      """
+        |mod Mod {
+        |    pub enum Color { case Red, case Green }
+        |    @Export pub def favorite(x: Int32): Color = ???
+        |}
+        |mod Mod.Color {
+        |    @Export pub def name(x: Int32): String = ???
+        |}
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibNix)
+    expectError[EntryPointError.IllegalExportEnumMember](result)
+  }
+
+  test("Test.IllegalExportFunction.10") {
+    val input =
+      """
+        |enum Option[t] {
+        |  case Some(t)
+        |  case None
+        |}
+        |mod Mod { @Export pub def id(x: Int32): (Int32, Option[Int32]) = ??? }
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibNix)
+    expectError[EntryPointError.IllegalExportType](result)
+  }
+
+  test("Test.IllegalExportFunction.05") {
+    val input =
+      """
+        |mod Mod { @Export pub def id(x: Int32): Array[Int32, Static] = ??? }
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibNix)
+    expectError[EntryPointError.IllegalExportType](result)
+  }
+
+  test("Test.ValidExportFunction.OptionParameter.01") {
     val input =
       """
         |enum Option[t] {
@@ -833,7 +1032,7 @@ class TestEntryPoints extends AnyFunSuite with TestUtils {
         |mod Mod { @Export pub def id(x: Int32, _y: Option[Int32]): Int32 = x }
         |""".stripMargin
     val result = check(input, Options.TestWithLibNix)
-    expectError[EntryPointError.IllegalExportType](result)
+    expectSuccess(result)
   }
 
   test("Test.IllegalExportFunction.07") {

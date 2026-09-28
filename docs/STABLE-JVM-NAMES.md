@@ -32,6 +32,33 @@ The collision check is deliberately global across the table, including families.
 This is stricter than checking final JVM class names and avoids relying on
 generator-specific prefixes to conceal ambiguous provenance.
 
+## Namespace and package layout
+
+Stable suffixes do not make an unusable binary name usable. A Flix namespace facade is a JVM
+class, so generated implementation classes must never turn that same name into a package. Java
+tolerates a class/package collision, but Scala rejects the classpath and Kotlin resolves the package
+instead of the exported facade.
+
+Only the first namespace segment becomes a JVM package. Remaining segments are `$`-joined into
+sibling class names:
+
+```text
+mod Acme.Api              -> facade Acme.Api
+                              implementation Acme.Api$Def$get
+mod Acme.Api.Deep         -> facade Acme.Api$Deep
+                              implementation Acme.Api$Deep$Def$run
+mod List                  -> facade dev.flix.gen.List
+                              implementation dev.flix.gen.List$Def$map
+root namespace            -> facade Root$
+```
+
+Definitions, closures, effects, and nullary enum cases all use this rule. Root and one-segment
+namespaces place implementation classes below `dev.flix.gen`. The root facade retains its historical
+unqualified `Root$` name. A one-segment facade also lives below `dev.flix.gen`; leaving it unqualified
+would make it collide with the package used by any deeper namespace sharing its first segment. Tests
+assert both the concrete names and the stronger invariant that no emitted class name is also a package
+prefix of another emitted class, including namespaces one through four segments deep.
+
 ## Semantic type keys
 
 `JvmTypeKey` encodes types structurally, retaining argument order and effects.

@@ -50,7 +50,7 @@ object Reducer {
     val types = allTypes(root, ctx.getDefTypes)
     val anonClasses = ctx.getAnonClasses
 
-    JvmAst.Root(defs, enums, structs, effects, types, anonClasses, root.mainEntryPoint, root.entryPoints, root.sources)
+    JvmAst.Root(defs, enums, structs, effects, types, anonClasses, root.mainEntryPoint, root.entryPoints, root.sources, root.exportedEnumFields, root.enumSpecializations)
   }
 
   /** Returns all types of `root`. */
@@ -63,7 +63,7 @@ object Reducer {
   }
 
   private def visitDef(d: ErasedAst.Def)(implicit root: ErasedAst.Root, ctx: SharedContext): JvmAst.Def = d match {
-    case ErasedAst.Def(ann, mod, sym, cparams0, fparams0, exp, tpe, unboxedType0, loc) =>
+    case ErasedAst.Def(ann, mod, sym, cparams0, fparams0, exp, tpe, unboxedType0, exportedReturnType, exportedParamTypes, loc) =>
       implicit val lctx: LocalContext = new LocalContext(isControlImpure = Purity.isControlImpure(exp.purity))
 
       // It is important to visit parameters and variables in the order the backend expects: cparams, fparams, then lparams.
@@ -85,7 +85,7 @@ object Reducer {
 
       val pcPoints = lctx.getPcPoints
 
-      JvmAst.Def(ann, mod, sym, cparams, fparams, ls, pcPoints, e, tpe, unboxedType, loc)
+      JvmAst.Def(ann, mod, sym, cparams, fparams, ls, pcPoints, e, tpe, unboxedType, exportedReturnType, exportedParamTypes, loc)
   }
 
   private def visitEnum(enm: ErasedAst.Enum): JvmAst.Enum = {
@@ -386,7 +386,7 @@ object Reducer {
         val taskList1 = tpe match {
           case Void | AnyType | Unit | Bool | Char | Float32 | Float64 | BigDecimal | Int8 | Int16 |
                Int32 | Int64 | BigInt | String | Regex | Region | RecordEmpty | ExtensibleEmpty |
-               Native(_) | Null => taskList
+               Native(_, _) | Null => taskList
           case Array(elm) => taskList.enqueue(elm)
           case Lazy(elm) => taskList.enqueue(elm)
           case Tuple(elms) => taskList.enqueueAll(elms)
