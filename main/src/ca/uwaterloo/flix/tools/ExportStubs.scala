@@ -155,7 +155,8 @@ object ExportStubs {
     */
   private def refuseEnumMemberClashes(described: List[Described]): (List[Described], List[Unsupported]) = {
     val enumClasses = described.flatMap(_.types).collect {
-      case Facade(name, Shape.Enum(_) | Shape.Sealed(_), _) => name
+      case Facade(name, Shape.Enum(_), _) => name
+      case Facade(name, Shape.Sealed(_), _) => name
     }.toSet
     val (clashing, rest) = described.partition { d =>
       enumClasses.contains(Mangle.namespaceFacadeDesc(d.ns)) && GenExportedEnum.MemberNames.contains(d.method.name)

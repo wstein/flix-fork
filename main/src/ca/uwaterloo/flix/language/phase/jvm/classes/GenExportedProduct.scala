@@ -144,9 +144,13 @@ object GenExportedProduct {
       IRETURN()
     }
 
+  /** The primitives the JVM compares as `int`s. */
+  private val IntLike: Set[ClassDesc] = Set(CD_boolean, CD_char, CD_byte, CD_short, CD_int)
+
   /** `[self: tpe, other: tpe] --> []`, running `notEqualBranch` when the two are unequal. */
   private def notEqual(tpe: ClassDesc)(notEqualBranch: => Unit)(implicit mv: MethodVisitor): Unit = tpe match {
-    case CD_boolean | CD_char | CD_byte | CD_short | CD_int =>
+    // Every primitive narrower than `long` is compared as an `int`.
+    case prim if IntLike.contains(prim) =>
       ifCondition(Condition.ICMPNE)(notEqualBranch)
     case CD_long =>
       LCMP()
@@ -217,7 +221,9 @@ object GenExportedProduct {
     val argument = tpe match {
       case CD_boolean => CD_boolean
       case CD_char => CD_char
-      case CD_byte | CD_short | CD_int => CD_int
+      case CD_byte => CD_int
+      case CD_short => CD_int
+      case CD_int => CD_int
       case CD_long => CD_long
       case CD_float => CD_float
       case CD_double => CD_double

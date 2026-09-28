@@ -612,7 +612,11 @@ object ExportPlan {
     case AsTuple(elements, _) => elements.flatMap(allOf)
     case AsRecord(_, elements, _) => elements.flatMap(allOf)
     case AsSealed(_, cases) => cases.flatMap(_.elements).flatMap(allOf)
-    case Identity(_) | ToVoid | GenericNative(_, _) | Boxed(_, _) | AsEnum(_, _) => Nil
+    case Identity(_) => Nil
+    case ToVoid => Nil
+    case GenericNative(_, _) => Nil
+    case Boxed(_, _) => Nil
+    case AsEnum(_, _) => Nil
   })
 
   /**
@@ -651,16 +655,27 @@ object ExportPlan {
       case SimpleType.Native(clazz, targs) if container && targs.nonEmpty => applied(clazz, targs)
       case SimpleType.Tuple(elms) =>
         traverse(elms)(signatureAt(_, Position.Component)).map(sigs => ExportSignature.Exact(GenExportedTuple.desc(sigs.map(_.javaType))))
-      case SimpleType.RecordEmpty | SimpleType.RecordExtend(_, _, _) =>
-        for {
-          fields <- recordFieldsOf(tpe)
-          sigs <- traverse(fields.map(_._2))(signatureAt(_, Position.Component))
-        } yield ExportSignature.Exact(GenExportedRecord.desc(fields.map(_._1).zip(sigs.map(_.javaType))))
+      case SimpleType.RecordEmpty => recordSignature(tpe)
+      case SimpleType.RecordExtend(_, _, _) => recordSignature(tpe)
       // Only a monomorphic enum reaches here: `EntryPoints` refuses every other enum an export names.
       case SimpleType.Enum(sym, Nil) => Some(ExportSignature.Exact(GenExportedEnum.desc(sym)))
       case _ => exact(tpe).map(_.signature)
     }
   }
+
+  /** The signature of the generated record class of the closed record type `tpe`. */
+  private def recordSignature(tpe: SimpleType): Option[ExportSignature] =
+    for {
+      fields <- recordFieldsOf(tpe)
+      sigs <- traverse(fields.map(_._2))(signatureAt(_, Position.Component))
+    } yield ExportSignature.Exact(GenExportedRecord.desc(fields.map(_._1).zip(sigs.map(_.javaType))))
+
+  /** The plan converting the closed record type `tpe` to its generated record class. */
+  private def recordPlan(tpe: SimpleType)(implicit root: ca.uwaterloo.flix.language.ast.JvmAst.Root): Option[ExportPlan] =
+    for {
+      fields <- recordFieldsOf(tpe)
+      elementPlans <- traverse(fields.map(_._2))(planAt(_, Position.Component))
+    } yield AsRecord(fields.map(_._1), elementPlans, fields.map(_._2).map(TypeDescs.toErasedClassDesc))
 
   /** The signature of `clazz` applied to the signatures of `targs`, as type arguments. */
   private def applied(clazz: ClassDesc, targs: List[SimpleType]): Option[ExportSignature] =
@@ -705,11 +720,8 @@ object ExportPlan {
       case SimpleType.Enum(sym, List(key, value)) if container && isMap(sym) => mapPlan(key, value)
       case SimpleType.Native(clazz, targs) if container && targs.nonEmpty => traverse(targs)(typeArgumentSignature).map(GenericNative(clazz, _))
       case SimpleType.Tuple(elms) => traverse(elms)(planAt(_, Position.Component)).map(AsTuple(_, elms.map(TypeDescs.toErasedClassDesc)))
-      case SimpleType.RecordEmpty | SimpleType.RecordExtend(_, _, _) =>
-        for {
-          fields <- recordFieldsOf(tpe)
-          elementPlans <- traverse(fields.map(_._2))(planAt(_, Position.Component))
-        } yield AsRecord(fields.map(_._1), elementPlans, fields.map(_._2).map(TypeDescs.toErasedClassDesc))
+      case SimpleType.RecordEmpty => recordPlan(tpe)
+      case SimpleType.RecordExtend(_, _, _) => recordPlan(tpe)
       case SimpleType.Enum(sym, Nil) => enumPlan(sym)
       case _ => exact(tpe)
     }

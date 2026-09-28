@@ -391,17 +391,21 @@ object ArgumentPlan {
         } yield FromChain(elementPlan, empty, one, List(TypeDescs.toErasedClassDesc(element)), chain, List(CD_Object, CD_Object))
       case SimpleType.Tuple(elms) =>
         traverse(elms)(planAt(_, component = true)).map(FromTuple(_, elms.map(TypeDescs.toErasedClassDesc)))
-      case SimpleType.RecordEmpty | SimpleType.RecordExtend(_, _, _) =>
-        for {
-          fields <- recordFieldsOf(tpe)
-          elementPlans <- traverse(fields.map(_._2))(planAt(_, component = true))
-        } yield FromRecord(fields.map(_._1), elementPlans, fields.map(_._2).map(TypeDescs.toErasedClassDesc))
+      case SimpleType.RecordEmpty => recordPlan(tpe)
+      case SimpleType.RecordExtend(_, _, _) => recordPlan(tpe)
       case SimpleType.Enum(sym, Nil) => enumPlan(sym)
       case SimpleType.Native(_, targs) if container && targs.nonEmpty =>
         ExportPlan.signatureOf(tpe).map(Identity(_))
       case _ => ExportPlan.exact(tpe).filter(_ != ExportPlan.ToVoid).map(p => Identity(p.signature))
     }
   }
+
+  /** The plan converting a generated record to the closed record type `tpe`. */
+  private def recordPlan(tpe: SimpleType)(implicit root: JvmAst.Root, flix: Flix): Option[ArgumentPlan] =
+    for {
+      fields <- recordFieldsOf(tpe)
+      elementPlans <- traverse(fields.map(_._2))(planAt(_, component = true))
+    } yield FromRecord(fields.map(_._1), elementPlans, fields.map(_._2).map(TypeDescs.toErasedClassDesc))
 
   /** Returns a plan for a value in a Java reference-only type argument position, unboxing a primitive. */
   private def elementPlan(tpe: SimpleType)(implicit root: JvmAst.Root, flix: Flix): Option[ArgumentPlan] = {
