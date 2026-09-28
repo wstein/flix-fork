@@ -105,7 +105,8 @@ object Tester {
         session, handle, partial = cancellation.isCancelled, filters.map(_.regex))))
       sink.accept(TestEvent.Finished(runner.elapsed))
     } finally {
-      redirectedOut.foreach(_.flush())
+      // Closed, not flushed: closing is what reports a last line the program never terminated.
+      redirectedOut.foreach(_.close())
       System.setOut(oldOut)
     }
 

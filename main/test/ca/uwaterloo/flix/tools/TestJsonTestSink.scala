@@ -104,15 +104,58 @@ class TestJsonTestSink extends AnyFunSuite {
     assert(outputLines(written) == List("ab"))
   }
 
-  test("flush reports a partial line") {
+  test("flush does not end a line") {
+    val (sink, written) = mkSink()
+    sink.outputStream.get.write('a')
+    sink.outputStream.get.flush()
+    sink.outputStream.get.write('b')
+    sink.outputStream.get.write('\n')
+
+    assert(outputLines(written) == List("ab"))
+  }
+
+  test("close reports a partial line") {
     val (sink, written) = mkSink()
     sink.outputStream.get.write('h')
     sink.outputStream.get.write('i')
+    sink.outputStream.get.flush()
     assert(outputLines(written).isEmpty)
 
-    sink.outputStream.get.flush()
+    sink.outputStream.get.close()
 
     assert(outputLines(written) == List("hi"))
+  }
+
+  test("a line printed in pieces is one output event, and an unterminated last line is still reported") {
+    // `Console`'s default handler flushes after every call, so a line printed in pieces reaches the
+    // sink as text, flush, text, flush: no flush may end the line.
+    implicit val flix: Flix = new Flix().setOptions(Options.DefaultTest)
+    implicit val sctx: SecurityContext = SecurityContext.Unrestricted
+    flix.addSource(
+      CompilerConstants.VirtualTestFile,
+      """mod Json.Pieces {
+        |    use Sys.Console
+        |    @Test def pieces(): Unit \ Console = {
+        |        Console.print("a");
+        |        Console.print("b");
+        |        Console.println("c");
+        |        Console.print("tail")
+        |    }
+        |}
+        |""".stripMargin,
+      sctx,
+    )
+    val compilationResult = flix.compile() match {
+      case Result.Ok(result) => result
+      case Result.Err(errors) => fail(errors.map(_.summary).mkString(", "))
+    }
+    val (sink, written) = mkSink()
+
+    val loaded = JvmLoader.load(compilationResult)
+    val result = Tester.run(Nil, loaded, sink, Tester.CancellationToken.Never, None)
+
+    assert(result == Result.Ok(()))
+    assert(outputLines(written) == List("abc", "tail"))
   }
 
   private def mkSink(): (JsonTestSink, ByteArrayOutputStream) = {

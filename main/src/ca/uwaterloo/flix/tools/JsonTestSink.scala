@@ -55,7 +55,10 @@ class JsonTestSink(out: PrintStream) extends Tester.TestEventSink {
       }
     }
 
-    override def flush(): Unit = synchronized {
+    // `flush` does not end a line; `close` does. `Console`'s default handler flushes after every
+    // `print`, so ending a line on a flush would report one line printed in pieces as several.
+    // A last line the program never terminated is reported when the runner closes the stream.
+    override def close(): Unit = synchronized {
       if (line.size() > 0) emitLine()
     }
 
