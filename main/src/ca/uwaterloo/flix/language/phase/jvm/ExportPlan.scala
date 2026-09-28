@@ -30,6 +30,16 @@ sealed trait ExportPlan {
 
   /** Converts the Flix value currently on the operand stack to its Java representation. */
   def emit(nextLocal: Int)(implicit mv: MethodVisitor): Unit
+
+  /**
+    * Converts a Flix value held at its erased type, as every container, tuple, record, and case
+    * field holds a reference-typed value: as `Object`. The value is cast to [[flixType]] first,
+    * which a nested plan needs and an exact one tolerates.
+    */
+  final def emitErased(nextLocal: Int)(implicit mv: MethodVisitor): Unit = {
+    if (!flixType.isPrimitive && flixType != CD_Object) CHECKCAST(flixType)
+    emit(nextLocal)
+  }
 }
 
 object ExportPlan {
@@ -100,7 +110,7 @@ object ExportPlan {
       } {
         CHECKCAST(GenTag.desc(someFields))
         GETFIELD(GenTag.IndexField(someFields, 0))
-        element.emit(nextLocal)
+        element.emitErased(nextLocal)
         INVOKESTATIC(Optional, "ofNullable", MethodTypeDescs.mkDescriptor(CD_Object)(Optional))
       }
     }
@@ -132,7 +142,7 @@ object ExportPlan {
             cursor.load()
             CHECKCAST(GenTag.desc(consFields))
             GETFIELD(GenTag.IndexField(consFields, 0))
-            element.emit(nextLocal + 2)
+            element.emitErased(nextLocal + 2)
             INVOKEVIRTUAL(ArrayList, "add", MethodTypeDescs.mkDescriptor(CD_Object)(CD_boolean))
             POP()
             cursor.load()
@@ -182,7 +192,7 @@ object ExportPlan {
               arr.load()
               index.load()
               xArrayLoad(component)
-              element.emit(nextLocal + 3)
+              element.emitErased(nextLocal + 3)
               INVOKEVIRTUAL(ArrayList, "add", MethodTypeDescs.mkDescriptor(CD_Object)(CD_boolean))
               POP()
               index.load()
@@ -255,7 +265,7 @@ object ExportPlan {
                   node.load()
                   CHECKCAST(GenTag.desc(oneFields))
                   GETFIELD(GenTag.IndexField(oneFields, 0))
-                  element.emit(nextLocal + 3)
+                  element.emitErased(nextLocal + 3)
                   INVOKEVIRTUAL(ArrayList, "add", MethodTypeDescs.mkDescriptor(CD_Object)(CD_boolean))
                   POP()
                 } {
@@ -334,7 +344,7 @@ object ExportPlan {
                   node.load()
                   CHECKCAST(GenTag.desc(nodeFields))
                   GETFIELD(GenTag.IndexField(nodeFields, 2))
-                  element.emit(nextLocal + 4)
+                  element.emitErased(nextLocal + 4)
                   INVOKEVIRTUAL(HashSet, "add", MethodTypeDescs.mkDescriptor(CD_Object)(CD_boolean))
                   POP()
                   stack.load()
@@ -406,11 +416,11 @@ object ExportPlan {
                   node.load()
                   CHECKCAST(GenTag.desc(nodeFields))
                   GETFIELD(GenTag.IndexField(nodeFields, 2))
-                  key.emit(nextLocal + 4)
+                  key.emitErased(nextLocal + 4)
                   node.load()
                   CHECKCAST(GenTag.desc(nodeFields))
                   GETFIELD(GenTag.IndexField(nodeFields, 3))
-                  value.emit(nextLocal + 4)
+                  value.emitErased(nextLocal + 4)
                   INVOKEVIRTUAL(HashMap, "put", MethodTypeDescs.mkDescriptor(CD_Object, CD_Object)(CD_Object))
                   POP()
                   stack.load()
@@ -460,7 +470,7 @@ object ExportPlan {
         for ((element, i) <- elements.zipWithIndex) {
           tuple.load()
           GETFIELD(GenTuple.IndexField(flixFields, i))
-          element.emit(nextLocal + 1)
+          element.emitErased(nextLocal + 1)
           // The tuple's own field is erased to Object; narrow reference types the way the
           // constructor's precise parameter type demands, since `element.emit` does not.
           if (!element.javaType.isPrimitive) CHECKCAST(element.javaType)
@@ -497,7 +507,7 @@ object ExportPlan {
           INVOKEINTERFACE(GenRecord.LookupFieldMethod)
           CHECKCAST(GenRecordExtend.desc(flixField))
           GETFIELD(GenRecordExtend.ValueField(flixField))
-          element.emit(nextLocal + 1)
+          element.emitErased(nextLocal + 1)
           // The record field is erased to its own value type; narrow reference types the way
           // the constructor's precise parameter type demands, since `element.emit` does not.
           if (!element.javaType.isPrimitive) CHECKCAST(element.javaType)
@@ -551,9 +561,7 @@ object ExportPlan {
             value.load()
             CHECKCAST(GenTag.desc(c.flixFields))
             GETFIELD(GenTag.IndexField(c.flixFields, i))
-            // The field is erased to `Object` if its declared type is a reference type.
-            if (!element.flixType.isPrimitive) CHECKCAST(element.flixType)
-            element.emit(nextLocal + 1)
+            element.emitErased(nextLocal + 1)
             if (!element.javaType.isPrimitive) CHECKCAST(element.javaType)
           }
           INVOKESPECIAL(ClassMaker.ConstructorMethod(record, c.elements.map(_.javaType)))
@@ -593,99 +601,176 @@ object ExportPlan {
     case _ => None
   }
 
-  /** Returns the caller-visible signature derivable without compilation state. */
-  def signatureOf(tpe: SimpleType): Option[ExportSignature] = tpe match {
-    case SimpleType.Enum(sym, List(element)) if isOption(sym) =>
-      typeArgumentPlan(element).map(sig => ExportSignature.Applied(Optional, List(sig)))
-    case SimpleType.Enum(sym, List(element)) if isList(sym) =>
-      typeArgumentPlan(element).map(sig => ExportSignature.Applied(JavaList, List(sig)))
-    case SimpleType.Array(element) =>
-      typeArgumentPlan(element).map(sig => ExportSignature.Applied(JavaList, List(sig)))
-    case SimpleType.Enum(sym, List(element)) if isChain(sym) =>
-      typeArgumentPlan(element).map(sig => ExportSignature.Applied(JavaCollection, List(sig)))
-    case SimpleType.Enum(sym, List(element)) if isSet(sym) =>
-      typeArgumentPlan(element).map(sig => ExportSignature.Applied(JavaSet, List(sig)))
-    case SimpleType.Enum(sym, List(key, value)) if isMap(sym) =>
-      for (keySig <- typeArgumentPlan(key); valueSig <- typeArgumentPlan(value))
-        yield ExportSignature.Applied(JavaMap, List(keySig, valueSig))
-    case SimpleType.Tuple(elms) => tuplePlan(elms).map(_.signature)
-    case SimpleType.RecordEmpty | SimpleType.RecordExtend(_, _, _) => recordPlan(tpe).map(_.signature)
-    case SimpleType.Native(clazz, targs) if targs.nonEmpty =>
-      traverse(targs)(typeArgumentPlan).map(ExportSignature.Applied(clazz, _))
-    // Only a data-free enum reaches here: `EntryPoints` refuses every other enum an export names.
-    case SimpleType.Enum(sym, Nil) => Some(ExportSignature.Exact(GenExportedEnum.desc(sym)))
-    case _ => exact(tpe).map(_.signature)
+  /** Returns `plan` and every plan nested in it, each of which may name a class to generate. */
+  def allOf(plan: ExportPlan): List[ExportPlan] = plan :: (plan match {
+    case AsOptional(element, _, _) => allOf(element)
+    case AsList(element, _, _) => allOf(element)
+    case AsVector(element, _) => allOf(element)
+    case AsChain(element, _, _, _, _) => allOf(element)
+    case AsSet(element, _, _, _) => allOf(element)
+    case AsMap(key, value, _, _, _) => allOf(key) ++ allOf(value)
+    case AsTuple(elements, _) => elements.flatMap(allOf)
+    case AsRecord(_, elements, _) => elements.flatMap(allOf)
+    case AsSealed(_, cases) => cases.flatMap(_.elements).flatMap(allOf)
+    case Identity(_) | ToVoid | GenericNative(_, _) | Boxed(_, _) | AsEnum(_, _) => Nil
+  })
+
+  /**
+    * Where a converted value sits, which decides what it may be.
+    *
+    * A container is refused as a [[Position.Component]]: the record class generated for a tuple,
+    * record, or enum case is shared by the erased shape of its components, so a `List<Integer>`
+    * component would reach Java as a raw `List`. Anything else nests.
+    */
+  private sealed trait Position
+
+  private object Position {
+    /** An export's own result, the only place `Unit` crosses, as `void`. */
+    case object Result extends Position
+
+    /** A container's type argument, where a primitive is boxed. */
+    case object Argument extends Position
+
+    /** A tuple element, a record field, or an enum case's field. */
+    case object Component extends Position
   }
+
+  /** Returns the caller-visible signature derivable without compilation state. */
+  def signatureOf(tpe: SimpleType): Option[ExportSignature] = signatureAt(tpe, Position.Result)
+
+  private def signatureAt(tpe: SimpleType, pos: Position): Option[ExportSignature] = {
+    val container = pos != Position.Component
+    tpe match {
+      case SimpleType.Unit if pos != Position.Result => None
+      case SimpleType.Enum(sym, List(element)) if container && isOption(sym) => applied(Optional, List(element))
+      case SimpleType.Enum(sym, List(element)) if container && isList(sym) => applied(JavaList, List(element))
+      case SimpleType.Array(element) if container => applied(JavaList, List(element))
+      case SimpleType.Enum(sym, List(element)) if container && isChain(sym) => applied(JavaCollection, List(element))
+      case SimpleType.Enum(sym, List(element)) if container && isSet(sym) => applied(JavaSet, List(element))
+      case SimpleType.Enum(sym, List(key, value)) if container && isMap(sym) => applied(JavaMap, List(key, value))
+      case SimpleType.Native(clazz, targs) if container && targs.nonEmpty => applied(clazz, targs)
+      case SimpleType.Tuple(elms) =>
+        traverse(elms)(signatureAt(_, Position.Component)).map(sigs => ExportSignature.Exact(GenExportedTuple.desc(sigs.map(_.javaType))))
+      case SimpleType.RecordEmpty | SimpleType.RecordExtend(_, _, _) =>
+        for {
+          fields <- recordFieldsOf(tpe)
+          sigs <- traverse(fields.map(_._2))(signatureAt(_, Position.Component))
+        } yield ExportSignature.Exact(GenExportedRecord.desc(fields.map(_._1).zip(sigs.map(_.javaType))))
+      // Only a monomorphic enum reaches here: `EntryPoints` refuses every other enum an export names.
+      case SimpleType.Enum(sym, Nil) => Some(ExportSignature.Exact(GenExportedEnum.desc(sym)))
+      case _ => exact(tpe).map(_.signature)
+    }
+  }
+
+  /** The signature of `clazz` applied to the signatures of `targs`, as type arguments. */
+  private def applied(clazz: ClassDesc, targs: List[SimpleType]): Option[ExportSignature] =
+    traverse(targs)(typeArgumentSignature).map(ExportSignature.Applied(clazz, _))
+
+  private def typeArgumentSignature(tpe: SimpleType): Option[ExportSignature] =
+    Wrappers.get(TypeDescs.toErasedClassDesc(tpe)).map(ExportSignature.Boxed(TypeDescs.toErasedClassDesc(tpe), _))
+      .orElse(signatureAt(tpe, Position.Argument))
 
   /** Returns the executable conversion plan for an exported definition's result. */
   def ofDef(defn: ca.uwaterloo.flix.language.ast.JvmAst.Def)(implicit root: ca.uwaterloo.flix.language.ast.JvmAst.Root): Option[ExportPlan] =
     if (!defn.ann.isExport) None
-    else defn.exportedReturnType.flatMap {
-      case SimpleType.Enum(sym, List(element)) if isOption(sym) => optionPlan(element, defn.unboxedType.tpe)
-      case SimpleType.Enum(sym, List(element)) if isList(sym) => listPlan(element, defn.unboxedType.tpe)
-      case SimpleType.Array(element) => vectorPlan(element)
-      case SimpleType.Enum(sym, List(element)) if isChain(sym) => chainPlan(element, defn.unboxedType.tpe)
-      case SimpleType.Enum(sym, List(element)) if isSet(sym) => setPlan(element, defn.unboxedType.tpe)
-      case SimpleType.Enum(sym, List(key, value)) if isMap(sym) => mapPlan(key, value, defn.unboxedType.tpe)
-      case SimpleType.Tuple(elms) => tuplePlan(elms)
-      case record@(SimpleType.RecordEmpty | SimpleType.RecordExtend(_, _, _)) => recordPlan(record)
-      case SimpleType.Native(clazz, targs) if targs.nonEmpty =>
-        traverse(targs)(typeArgumentPlan).map(GenericNative(clazz, _))
-      case SimpleType.Enum(sym, Nil) => enumPlan(sym, defn.unboxedType.tpe)
-      case declared => exact(declared)
-    }
+    else defn.exportedReturnType.flatMap(planAt(_, Position.Result))
 
   /**
-    * Builds the conversion of the enum `sym`, reading its cases off the specialized enum retained
-    * by erasure: a Java enum if no case carries data, a sealed interface of records otherwise.
+    * Returns the plan converting a Flix value whose declared type is `tpe`.
     *
-    * Refuses a data-free enum whose ordinals are not exactly `0 until n`, which would make a
-    * constant's position in the Java enum disagree with its Flix case.
+    * Plans are built from the declared type, never from a specialized enum, since a value nested
+    * inside another has none recorded: an `Option[Int32]` inside a `List` is known only as the
+    * list's element type. A tag class's fields follow from erasure alone -- a reference-typed
+    * field is `Object`, a primitive one stays primitive -- and a case's ordinal from its
+    * declaration, which every specialization shares.
     */
-  private def enumPlan(sym: ca.uwaterloo.flix.language.ast.Symbol.EnumSym, erased: SimpleType)(implicit root: ca.uwaterloo.flix.language.ast.JvmAst.Root): Option[ExportPlan] = erased match {
-    case SimpleType.Enum(erasedSym, Nil) =>
-      val cases = root.enums(erasedSym).cases.values.toList.sortBy(_.sym.ordinal)
+  private def planAt(tpe: SimpleType, pos: Position)(implicit root: ca.uwaterloo.flix.language.ast.JvmAst.Root): Option[ExportPlan] = {
+    val container = pos != Position.Component
+    tpe match {
+      case SimpleType.Unit => if (pos == Position.Result) Some(ToVoid) else None
+      case SimpleType.Enum(sym, List(element)) if container && isOption(sym) => optionPlan(element)
+      case SimpleType.Enum(sym, List(element)) if container && isList(sym) => listPlan(element)
+      case SimpleType.Array(element) if container => vectorPlan(element)
+      case SimpleType.Enum(sym, List(element)) if container && isChain(sym) => chainPlan(element)
+      case SimpleType.Enum(sym, List(element)) if container && isSet(sym) => setPlan(element)
+      case SimpleType.Enum(sym, List(key, value)) if container && isMap(sym) => mapPlan(key, value)
+      case SimpleType.Native(clazz, targs) if container && targs.nonEmpty => traverse(targs)(typeArgumentSignature).map(GenericNative(clazz, _))
+      case SimpleType.Tuple(elms) => traverse(elms)(planAt(_, Position.Component)).map(AsTuple(_, elms.map(TypeDescs.toErasedClassDesc)))
+      case SimpleType.RecordEmpty | SimpleType.RecordExtend(_, _, _) =>
+        for {
+          fields <- recordFieldsOf(tpe)
+          elementPlans <- traverse(fields.map(_._2))(planAt(_, Position.Component))
+        } yield AsRecord(fields.map(_._1), elementPlans, fields.map(_._2).map(TypeDescs.toErasedClassDesc))
+      case SimpleType.Enum(sym, Nil) => enumPlan(sym)
+      case _ => exact(tpe)
+    }
+  }
+
+  /** Returns a plan for a value in a Java reference-only type argument position, boxing a primitive. */
+  private def elementPlan(tpe: SimpleType)(implicit root: ca.uwaterloo.flix.language.ast.JvmAst.Root): Option[ExportPlan] = {
+    val erased = TypeDescs.toErasedClassDesc(tpe)
+    Wrappers.get(erased).map(Boxed(erased, _)).orElse(planAt(tpe, Position.Argument))
+  }
+
+  /** Returns the fields of a closed record type in row order, which monomorphisation has sorted. */
+  private def recordFieldsOf(tpe: SimpleType): Option[List[(String, SimpleType)]] = tpe match {
+    case SimpleType.RecordEmpty => Some(Nil)
+    case SimpleType.RecordExtend(label, value, rest) => recordFieldsOf(rest).map((label, value) :: _)
+    case _ => None
+  }
+
+  /**
+    * Builds the conversion of the monomorphic enum `sym`: a Java enum if no case carries data, a
+    * sealed interface of records otherwise.
+    *
+    * A monomorphic enum is its own only specialization. Its fields are read at their erased
+    * types, which name the case's tag class, and converted from their declared types, which
+    * `root.enums` no longer has and `root.exportedEnumFields` keeps. Refuses a data-free enum
+    * whose ordinals are not exactly `0 until n`, which would make a constant's position in the
+    * Java enum disagree with its Flix case.
+    */
+  private def enumPlan(sym: ca.uwaterloo.flix.language.ast.Symbol.EnumSym)(implicit root: ca.uwaterloo.flix.language.ast.JvmAst.Root): Option[ExportPlan] =
+    root.enums.get(sym).flatMap { enm =>
+      val cases = enm.cases.values.toList.sortBy(_.sym.ordinal)
       val ns = GenExportedEnum.companionNamespace(sym)
       if (cases.forall(_.tpes.isEmpty)) {
         val contiguous = cases.map(_.sym.ordinal) == cases.indices.toList
         if (contiguous) Some(AsEnum(ns, cases.map(_.sym.name))) else None
       } else {
-        // A field is read at its erased type, which names the case's tag class, and converted from
-        // its declared type, which `root.enums` no longer has. Every field needs an exact plan of
-        // its own, as a tuple's elements do.
         for {
           declared <- root.exportedEnumFields.get(sym)
           sealedCases <- traverse(cases) { c =>
-            declared.get(c.sym.name).flatMap(traverse(_)(exact))
+            declared.get(c.sym.name).flatMap(traverse(_)(planAt(_, Position.Component)))
               .map(SealedCase(c.sym.name, c.sym.ordinal, c.tpes.map(TypeDescs.toClassDesc), _))
           }
         } yield AsSealed(ns, sealedCases)
       }
-    case _ => None
+    }
+
+  /** Returns the ordinals of the cases of the standard library's enum `name`, by case name. */
+  private def ordinalsOf(name: String)(implicit root: ca.uwaterloo.flix.language.ast.JvmAst.Root): Map[String, Int] =
+    root.enums.values.find(e => e.sym.namespace.isEmpty && e.sym.text == name)
+      .map(_.cases.values.map(c => c.sym.name -> c.sym.ordinal).toMap)
+      .getOrElse(Map.empty)
+
+  /** Builds an Optional conversion; `Some(t)` holds `t` erased. */
+  private def optionPlan(element: SimpleType)(implicit root: ca.uwaterloo.flix.language.ast.JvmAst.Root): Option[ExportPlan] = {
+    val ordinals = ordinalsOf("Option")
+    for {
+      none <- ordinals.get("None")
+      _ <- ordinals.get("Some")
+      elementPlan <- elementPlan(element)
+    } yield AsOptional(elementPlan, none, List(TypeDescs.toErasedClassDesc(element)))
   }
 
-  /** Builds an Optional conversion from the specialized enum retained by erasure. */
-  private def optionPlan(element: SimpleType, erased: SimpleType)(implicit root: ca.uwaterloo.flix.language.ast.JvmAst.Root): Option[ExportPlan] = erased match {
-    case SimpleType.Enum(sym, Nil) =>
-      val cases = root.enums(sym).cases.values
-      for {
-        none <- cases.find(_.sym.name == "None")
-        some <- cases.find(c => c.sym.name == "Some" && c.tpes.lengthCompare(1) == 0)
-        elementPlan <- elementPlan(element, TypeDescs.toClassDesc(some.tpes.head))
-      } yield AsOptional(elementPlan, none.sym.ordinal, some.tpes.map(TypeDescs.toClassDesc))
-    case _ => None
-  }
-
-  /** Builds a List conversion from the specialized enum retained by erasure. */
-  private def listPlan(element: SimpleType, erased: SimpleType)(implicit root: ca.uwaterloo.flix.language.ast.JvmAst.Root): Option[ExportPlan] = erased match {
-    case SimpleType.Enum(sym, Nil) =>
-      val cases = root.enums(sym).cases.values
-      for {
-        nil <- cases.find(_.sym.name == "Nil")
-        cons <- cases.find(c => c.sym.name == "Cons" && c.tpes.lengthCompare(2) == 0)
-        elementPlan <- elementPlan(element, TypeDescs.toClassDesc(cons.tpes.head))
-      } yield AsList(elementPlan, nil.sym.ordinal, cons.tpes.map(TypeDescs.toClassDesc))
-    case _ => None
+  /** Builds a List conversion; `Cons(t, List[t])` holds `t` erased and the tail as `Object`. */
+  private def listPlan(element: SimpleType)(implicit root: ca.uwaterloo.flix.language.ast.JvmAst.Root): Option[ExportPlan] = {
+    val ordinals = ordinalsOf("List")
+    for {
+      nil <- ordinals.get("Nil")
+      _ <- ordinals.get("Cons")
+      elementPlan <- elementPlan(element)
+    } yield AsList(elementPlan, nil, List(TypeDescs.toErasedClassDesc(element), CD_Object))
   }
 
   /**
@@ -695,112 +780,67 @@ object ExportPlan {
     * keeps a mutable, region-scoped `Array` from ever reaching this plan.
     */
   private def vectorPlan(element: SimpleType)(implicit root: ca.uwaterloo.flix.language.ast.JvmAst.Root): Option[ExportPlan] =
-    elementPlan(element, TypeDescs.toClassDesc(element)).map(AsVector(_, TypeDescs.toClassDesc(element)))
+    elementPlan(element).map(AsVector(_, runtimeDesc(element)))
 
-  /** Builds a Chain conversion from the specialized enum retained by erasure. */
-  private def chainPlan(element: SimpleType, erased: SimpleType)(implicit root: ca.uwaterloo.flix.language.ast.JvmAst.Root): Option[ExportPlan] = erased match {
-    case SimpleType.Enum(sym, Nil) =>
-      val cases = root.enums(sym).cases.values
-      for {
-        empty <- cases.find(_.sym.name == "Empty")
-        one <- cases.find(c => c.sym.name == "One" && c.tpes.lengthCompare(1) == 0)
-        chain <- cases.find(c => c.sym.name == "Chain" && c.tpes.lengthCompare(2) == 0)
-        elementPlan <- elementPlan(element, TypeDescs.toClassDesc(one.tpes.head))
-      } yield AsChain(elementPlan, empty.sym.ordinal, one.sym.ordinal, one.tpes.map(TypeDescs.toClassDesc), chain.tpes.map(TypeDescs.toClassDesc))
-    case _ => None
+  /**
+    * Returns the JVM type a value of the declared type `tpe` has at run time, as an array element.
+    *
+    * `TypeDescs.toClassDesc` reads a specialized type, in which every enum has lost its type
+    * arguments; a declared one still has them, and every enum value is `Tagged` either way.
+    */
+  private def runtimeDesc(tpe: SimpleType)(implicit root: ca.uwaterloo.flix.language.ast.JvmAst.Root): ClassDesc = tpe match {
+    case SimpleType.Enum(_, _) => GenTagged.Desc
+    case SimpleType.Array(element) => runtimeDesc(element).arrayType()
+    case _ => TypeDescs.toClassDesc(tpe)
+  }
+
+  /** Builds a Chain conversion; `One(t)` holds `t` erased and `Chain(l, r)` its halves as `Object`. */
+  private def chainPlan(element: SimpleType)(implicit root: ca.uwaterloo.flix.language.ast.JvmAst.Root): Option[ExportPlan] = {
+    val ordinals = ordinalsOf("Chain")
+    for {
+      empty <- ordinals.get("Empty")
+      one <- ordinals.get("One")
+      _ <- ordinals.get("Chain")
+      elementPlan <- elementPlan(element)
+    } yield AsChain(elementPlan, empty, one, List(TypeDescs.toErasedClassDesc(element)), List(CD_Object, CD_Object))
   }
 
   /**
     * Builds a Set conversion by unwrapping the standard library's single-case `Set` wrapper and
-    * the `RedBlackTree` it carries.
+    * the `RedBlackTree` it carries, whose lone field is erased to `Object`.
     */
-  private def setPlan(element: SimpleType, erased: SimpleType)(implicit root: ca.uwaterloo.flix.language.ast.JvmAst.Root): Option[ExportPlan] = erased match {
-    case SimpleType.Enum(sym, Nil) =>
-      for {
-        wrapper <- root.enums(sym).cases.values.find(_.sym.name == "Set")
-        nodeOrdinal <- redBlackTreeNodeOrdinal
-        elementPlan <- elementPlan(element, TypeDescs.toErasedClassDesc(element))
-      } yield AsSet(elementPlan, wrapper.tpes.map(TypeDescs.toClassDesc), nodeOrdinal, redBlackTreeNodeFields(element, SimpleType.Unit))
-    case _ => None
-  }
+  private def setPlan(element: SimpleType)(implicit root: ca.uwaterloo.flix.language.ast.JvmAst.Root): Option[ExportPlan] =
+    for {
+      nodeOrdinal <- redBlackTreeNodeOrdinal
+      elementPlan <- elementPlan(element)
+    } yield AsSet(elementPlan, List(CD_Object), nodeOrdinal, redBlackTreeNodeFields(element, SimpleType.Unit))
 
   /**
     * Builds a Map conversion by unwrapping the standard library's single-case `Map` wrapper and
-    * the `RedBlackTree` it carries.
+    * the `RedBlackTree` it carries, whose lone field is erased to `Object`.
     */
-  private def mapPlan(key: SimpleType, value: SimpleType, erased: SimpleType)(implicit root: ca.uwaterloo.flix.language.ast.JvmAst.Root): Option[ExportPlan] = erased match {
-    case SimpleType.Enum(sym, Nil) =>
-      for {
-        wrapper <- root.enums(sym).cases.values.find(_.sym.name == "Map")
-        nodeOrdinal <- redBlackTreeNodeOrdinal
-        keyPlan <- elementPlan(key, TypeDescs.toErasedClassDesc(key))
-        valuePlan <- elementPlan(value, TypeDescs.toErasedClassDesc(value))
-      } yield AsMap(keyPlan, valuePlan, wrapper.tpes.map(TypeDescs.toClassDesc), nodeOrdinal, redBlackTreeNodeFields(key, value))
-    case _ => None
-  }
+  private def mapPlan(key: SimpleType, value: SimpleType)(implicit root: ca.uwaterloo.flix.language.ast.JvmAst.Root): Option[ExportPlan] =
+    for {
+      nodeOrdinal <- redBlackTreeNodeOrdinal
+      keyPlan <- elementPlan(key)
+      valuePlan <- elementPlan(value)
+    } yield AsMap(keyPlan, valuePlan, List(CD_Object), nodeOrdinal, redBlackTreeNodeFields(key, value))
 
   /**
     * Returns the `Node` ordinal shared by every `RedBlackTree` specialization.
     *
-    * A `Set`/`Map` wrapper's lone field is erased to `Object` by the time `root.enums` retains
-    * it: only fields at the export boundary itself keep a concrete type, and the wrapped tree is
-    * one level further in. There is no symbol here to look up the tree's own field types from,
-    * only its ordinals, which every specialization of the same source declaration shares.
+    * There is no symbol here to look up the tree's own field types from, only its ordinals,
+    * which every specialization of the same source declaration shares.
     */
   private def redBlackTreeNodeOrdinal(implicit root: ca.uwaterloo.flix.language.ast.JvmAst.Root): Option[Int] =
-    root.enums.values.find(_.sym.text == "RedBlackTree")
-      .flatMap(_.cases.values.find(c => c.sym.name == "Node" && c.tpes.lengthCompare(5) == 0))
-      .map(_.sym.ordinal)
+    ordinalsOf("RedBlackTree").get("Node")
 
   /**
     * Returns the field types of `RedBlackTree`'s `Node(color, left, key, value, right)` case for
-    * the given key and value types.
-    *
-    * These are computed, not looked up: a tree's fields are erased the same way any value outside
-    * the export boundary is, so this mirrors ordinary erasure rather than reading a declaration
-    * this code has no reliable path to.
+    * the given key and value types, computed by ordinary erasure like every other tag's fields.
     */
   private def redBlackTreeNodeFields(key: SimpleType, value: SimpleType): List[ClassDesc] =
     List(CD_Object, CD_Object, TypeDescs.toErasedClassDesc(key), TypeDescs.toErasedClassDesc(value), CD_Object)
-
-  /**
-    * Builds a tuple conversion, one element plan per component.
-    *
-    * Every component must have an exact boundary plan of its own: unlike a tuple's Java-facing
-    * record, which can declare a primitive-typed component directly, nothing here boxes a
-    * component the way a container's type argument would, so a component that itself needs a
-    * container conversion is refused rather than nested.
-    */
-  private def tuplePlan(elms: List[SimpleType]): Option[ExportPlan] =
-    traverse(elms)(exact).map(AsTuple(_, elms.map(TypeDescs.toErasedClassDesc)))
-
-  /**
-    * Builds a structural-record conversion, one element plan per field.
-    *
-    * Every field must have an exact boundary plan of its own, for the same reason a tuple's
-    * elements do: nothing here boxes a field the way a container's type argument would, so a
-    * field that itself needs a container conversion is refused rather than nested.
-    */
-  private def recordPlan(tpe: SimpleType): Option[ExportPlan] = {
-    def fieldsOf(t: SimpleType): Option[List[(String, SimpleType)]] = t match {
-      case SimpleType.RecordEmpty => Some(Nil)
-      case SimpleType.RecordExtend(label, value, rest) => fieldsOf(rest).map((label, value) :: _)
-      case _ => None
-    }
-
-    for {
-      fields <- fieldsOf(tpe)
-      elementPlans <- traverse(fields.map(_._2))(exact)
-    } yield AsRecord(fields.map(_._1), elementPlans, fields.map(_._2).map(TypeDescs.toErasedClassDesc))
-  }
-
-  /** Returns a plan for a value placed in a Java reference-only type argument position. */
-  private def elementPlan(declared: SimpleType, erased: ClassDesc): Option[ExportPlan] =
-    Wrappers.get(erased).map(Boxed(erased, _)).orElse(exact(declared))
-
-  private def typeArgumentPlan(tpe: SimpleType): Option[ExportSignature] =
-    Wrappers.get(TypeDescs.toErasedClassDesc(tpe)).map(ExportSignature.Boxed(TypeDescs.toErasedClassDesc(tpe), _))
-      .orElse(signatureOf(tpe))
 
   private def traverse[A, B](xs: List[A])(f: A => Option[B]): Option[List[B]] =
     xs.foldRight(Option(List.empty[B])) {

@@ -262,6 +262,58 @@ class TestExportStubs extends AnyFunSuite {
     assert(runStaged(flixSrc, javaSrc) == "r2widec1p")
   }
 
+  test("staged: conversions nest inside containers, and products and enums inside products") {
+    val flixSrc =
+      """mod Acme {
+        |    pub enum Color { case Red, case Green }
+        |    pub enum Shape { case Dot((Int32, Int32)), case Tinted(Color) }
+        |}
+        |mod Acme.Api {
+        |    use Acme.Color
+        |    use Acme.Shape
+        |    @Export pub def grid(_x: Int32): List[List[Int32]] = (1 :: 2 :: Nil) :: (3 :: Nil) :: Nil
+        |    @Export pub def pairs(_x: Int32): Option[(Int32, String)] = Some((1, "a"))
+        |    @Export pub def colors(_x: Int32): Vector[Color] = Vector#{Color.Red, Color.Green}
+        |    @Export pub def index(_x: Int32): Map[String, List[Int32]] = Map#{"a" => 7 :: Nil}
+        |    @Export pub def nested(_x: Int32): (Color, {x = Int32, y = Int32}) = (Color.Green, {x = 1, y = 2})
+        |    @Export pub def shapes(_x: Int32): List[Shape] = Shape.Dot((1, 2)) :: Shape.Tinted(Color.Red) :: Nil
+        |    @Export pub def maybe(_x: Int32): Option[Option[Int32]] = Some(None)
+        |}
+        |""".stripMargin
+    val javaSrc =
+      """java.util.List<java.util.List<Integer>> g = Acme.Api.grid(0);
+        |int sum = 0;
+        |for (java.util.List<Integer> row : g) for (int v : row) sum += v;
+        |var p = Acme.Api.pairs(0).get();
+        |String s = sum + ":" + p.component0() + p.component1();
+        |java.util.List<Acme.Color> cs = Acme.Api.colors(0);
+        |s += cs.get(1).name();
+        |java.util.Map<String, java.util.List<Integer>> idx = Acme.Api.index(0);
+        |s += idx.get("a").get(0);
+        |var n = Acme.Api.nested(0);
+        |s += n.component0().name() + n.component1().x() + n.component1().y();
+        |for (Acme.Shape sh : Acme.Api.shapes(0)) {
+        |    s += switch (sh) {
+        |        case Acme.Shape.Dot(var t) -> "d" + t.component0() + t.component1();
+        |        case Acme.Shape.Tinted(var c) -> "t" + c.name();
+        |    };
+        |}
+        |java.util.Optional<java.util.Optional<Integer>> m = Acme.Api.maybe(0);
+        |return s + m.get().isPresent();
+        |""".stripMargin
+    assert(runStaged(flixSrc, javaSrc) == "6:1aGreen7Green12d12tRedfalse")
+  }
+
+  test("a container inside a tuple, record, or enum case is refused") {
+    val src =
+      """mod Acme.Api {
+        |    @Export pub def tuple(_x: Int32): (List[Int32], Int32) = (Nil, 0)
+        |}
+        |""".stripMargin
+    val (_, unsupported) = stubs(src)
+    assert(unsupported.map(_.name) == List("tuple"))
+  }
+
   test("an enum the stub generator cannot find unambiguously is refused") {
     val src =
       """mod Acme.Model {

@@ -113,7 +113,7 @@ object ExportStubs {
     weed(inputs) match {
       case None => (Nil, Nil)
       case Some(root) =>
-        val enums = root.units.values.flatMap(unit => enumsOf(unit.decls, Nil, imports(unit.usesAndImports))).toMap
+        val enums = root.units.values.flatMap(unit => enumsOf(unit.decls, Nil, imports(unit.usesAndImports), uses(unit.usesAndImports))).toMap
         val found = root.units.values.flatMap(unit => visitDecls(unit.decls, Nil, imports(unit.usesAndImports), uses(unit.usesAndImports), enums))
         val (described0, unsupported0) = partition(found.toList)
         val (described, clashes) = refuseEnumMemberClashes(described0)
@@ -278,11 +278,30 @@ object ExportStubs {
     * if the whole def can be described: a refused def must not leave a stub for a type nothing else
     * names.
     */
-  /** An enum declaration, with the Java imports in scope where it is declared. */
-  private case class EnumDecl(decl: WeededAst.Declaration.Enum, imps: Map[String, String])
+  /** An enum declaration, with the imports and uses in scope where it is declared. */
+  private case class EnumDecl(decl: WeededAst.Declaration.Enum, imps: Map[String, String], uses: Map[String, List[String]])
 
-  private class DefContext(val ns: List[String], val uses: Map[String, List[String]], val enums: Map[List[String], EnumDecl]) {
+  private class DefContext(var ns: List[String], var uses: Map[String, List[String]], val enums: Map[List[String], EnumDecl]) {
     val types: scala.collection.mutable.ListBuffer[Facade] = scala.collection.mutable.ListBuffer.empty
+
+    /** The enums whose fields are being described, by full name. */
+    val visiting: scala.collection.mutable.Set[List[String]] = scala.collection.mutable.Set.empty
+
+    /**
+      * Returns `body`, evaluated as if inside the declaration of the enum `name`, whose case
+      * fields name types relative to where the enum is declared, not where the def is.
+      */
+    def within[A](name: List[String], enumUses: Map[String, List[String]])(body: => A): A = {
+      val (outerNs, outerUses) = (ns, uses)
+      ns = name.init
+      uses = enumUses
+      visiting += name
+      try body finally {
+        ns = outerNs
+        uses = outerUses
+        visiting -= name
+      }
+    }
   }
 
   /** Returns each exported def paired with the namespace it belongs to, or why it was refused. */
@@ -326,31 +345,31 @@ object ExportStubs {
     * in `TestExportStubs`; that test is what makes this safe to rely on, because nothing in the
     * types stops them drifting.
     */
-  private def signatureOf(tpe: WeededAst.Type, imps: Map[String, String], allowConvertedResult: Boolean)(implicit ctx: DefContext): Option[ExportSignature] = tpe match {
+  private def signatureOf(tpe: WeededAst.Type, imps: Map[String, String], pos: Position)(implicit ctx: DefContext): Option[ExportSignature] = tpe match {
     case WeededAst.Type.Var(_, _) => None
 
-    case WeededAst.Type.Ambiguous(qname, _) => named(qname, Nil, imps, allowConvertedResult)
+    case WeededAst.Type.Ambiguous(qname, _) => named(qname, Nil, imps, pos)
 
     case WeededAst.Type.Apply(_, _, _) =>
       val (head, args) = flatten(tpe)
       head match {
-        case WeededAst.Type.Ambiguous(qname, _) => named(qname, args, imps, allowConvertedResult)
+        case WeededAst.Type.Ambiguous(qname, _) => named(qname, args, imps, pos)
         case _ => None
       }
 
-    case WeededAst.Type.Tuple(tpes, _) if allowConvertedResult =>
-      traverse(tpes.toList)(parameterSignatureOf(_, imps)).map { sigs =>
+    case WeededAst.Type.Tuple(tpes, _) if pos != Position.Parameter =>
+      traverse(tpes.toList)(signatureOf(_, imps, Position.Component)).map { sigs =>
         val desc = GenExportedTuple.desc(sigs.map(_.javaType))
         ctx.types += Facade(desc, Shape.Record(sigs.zipWithIndex.map { case (sig, i) => s"component$i" -> sig }), Nil)
         ExportSignature.Exact(desc)
       }
 
-    case WeededAst.Type.Record(row, _) if allowConvertedResult =>
+    case WeededAst.Type.Record(row, _) if pos != Position.Parameter =>
       for {
         // Sorted as `Canonicalization` sorts a row during monomorphisation, which is the order the
         // generated class takes its name and components from.
         fields <- peelRecordRow(row).map(_.sortBy(_._1))
-        sigs <- traverse(fields) { case (label, fieldTpe) => parameterSignatureOf(fieldTpe, imps).map(label -> _) }
+        sigs <- traverse(fields) { case (label, fieldTpe) => signatureOf(fieldTpe, imps, Position.Component).map(label -> _) }
       } yield {
         val desc = GenExportedRecord.desc(sigs.map { case (label, sig) => label -> sig.javaType })
         ctx.types += Facade(desc, Shape.Record(sigs), Nil)
@@ -367,43 +386,67 @@ object ExportStubs {
     case _ => None
   }
 
+  /**
+    * Where a type sits in an exported signature, which decides what it may be.
+    *
+    * These mirror the positions `EntryPoints` and `ExportPlan` check and convert.
+    */
+  private sealed trait Position
+
+  private object Position {
+    /** A parameter, passed through unchanged: nothing is converted. */
+    case object Parameter extends Position
+
+    /** The result itself. */
+    case object Result extends Position
+
+    /** A converted container's type argument. */
+    case object Argument extends Position
+
+    /** A tuple element, record field, or enum case field: anything a result may be but a container. */
+    case object Component extends Position
+  }
+
   /** Parameters are passed through unchanged, so converted containers are not accepted here. */
   private def parameterSignatureOf(tpe: WeededAst.Type, imps: Map[String, String])(implicit ctx: DefContext): Option[ExportSignature] =
-    signatureOf(tpe, imps, allowConvertedResult = false)
+    signatureOf(tpe, imps, Position.Parameter)
 
   /** Results may use conversions implemented by the namespace shim. */
   private def resultSignatureOf(tpe: WeededAst.Type, imps: Map[String, String])(implicit ctx: DefContext): Option[ExportSignature] =
-    signatureOf(tpe, imps, allowConvertedResult = true)
+    signatureOf(tpe, imps, Position.Result)
 
   /** Returns how the type named `qname` and applied to `args` crosses the boundary. */
-  private def named(qname: Name.QName, args: List[WeededAst.Type], imps: Map[String, String], allowConvertedResult: Boolean)(implicit ctx: DefContext): Option[ExportSignature] = {
+  private def named(qname: Name.QName, args: List[WeededAst.Type], imps: Map[String, String], pos: Position)(implicit ctx: DefContext): Option[ExportSignature] = {
+    val allowConvertedResult = pos == Position.Result || pos == Position.Argument
     (simpleName(qname, imps), args) match {
       case (Some(name), Nil) => builtin(name).orElse(imported(name, imps).map(ExportSignature.Exact(_)))
       case (Some("Option"), List(element)) if allowConvertedResult =>
-        typeArgumentSignatureOf(element, imps).map(sig => ExportSignature.Applied(ClassDesc.ofInternalName("java/util/Optional"), List(sig)))
+        typeArgumentSignatureOf(element, imps, Position.Argument).map(sig => ExportSignature.Applied(ClassDesc.ofInternalName("java/util/Optional"), List(sig)))
       case (Some("List"), List(element)) if allowConvertedResult =>
-        typeArgumentSignatureOf(element, imps).map(sig => ExportSignature.Applied(ClassDesc.ofInternalName("java/util/List"), List(sig)))
+        typeArgumentSignatureOf(element, imps, Position.Argument).map(sig => ExportSignature.Applied(ClassDesc.ofInternalName("java/util/List"), List(sig)))
       case (Some("Vector"), List(element)) if allowConvertedResult =>
-        typeArgumentSignatureOf(element, imps).map(sig => ExportSignature.Applied(ClassDesc.ofInternalName("java/util/List"), List(sig)))
+        typeArgumentSignatureOf(element, imps, Position.Argument).map(sig => ExportSignature.Applied(ClassDesc.ofInternalName("java/util/List"), List(sig)))
       case (Some("Chain"), List(element)) if allowConvertedResult =>
-        typeArgumentSignatureOf(element, imps).map(sig => ExportSignature.Applied(ClassDesc.ofInternalName("java/util/Collection"), List(sig)))
+        typeArgumentSignatureOf(element, imps, Position.Argument).map(sig => ExportSignature.Applied(ClassDesc.ofInternalName("java/util/Collection"), List(sig)))
       case (Some("Set"), List(element)) if allowConvertedResult =>
-        typeArgumentSignatureOf(element, imps).map(sig => ExportSignature.Applied(ClassDesc.ofInternalName("java/util/Set"), List(sig)))
+        typeArgumentSignatureOf(element, imps, Position.Argument).map(sig => ExportSignature.Applied(ClassDesc.ofInternalName("java/util/Set"), List(sig)))
       case (Some("Map"), List(key, value)) if allowConvertedResult =>
         for {
-          keySig <- typeArgumentSignatureOf(key, imps)
-          valueSig <- typeArgumentSignatureOf(value, imps)
+          keySig <- typeArgumentSignatureOf(key, imps, Position.Argument)
+          valueSig <- typeArgumentSignatureOf(value, imps, Position.Argument)
         } yield ExportSignature.Applied(ClassDesc.ofInternalName("java/util/Map"), List(keySig, valueSig))
-      case (Some(name), targs) if targs.nonEmpty =>
+      // A product's shared record class cannot carry a component's generic signature.
+      case (Some(name), targs) if targs.nonEmpty && pos != Position.Component =>
         for {
           clazz <- imported(name, imps)
-          signatures <- traverse(targs)(typeArgumentSignatureOf(_, imps))
+          // A Java object's contents are never converted, so its type arguments must be exact.
+          signatures <- traverse(targs)(typeArgumentSignatureOf(_, imps, Position.Parameter))
         } yield ExportSignature.Applied(clazz, signatures)
       case _ => None
     }
   }.orElse {
     // Only a name no import accounts for can be an enum: an imported Java class shadows it.
-    if (allowConvertedResult && args.isEmpty && !imps.contains(qname.toString)) enumSignatureOf(qname)
+    if (pos != Position.Parameter && args.isEmpty && !imps.contains(qname.toString)) enumSignatureOf(qname)
     else None
   }
 
@@ -421,17 +464,20 @@ object ExportStubs {
     val candidates = ctx.uses.get(parts.head).map(_ ++ parts.tail).toList ++ List(ctx.ns ++ parts, parts)
     for {
       name <- candidates.find(ctx.enums.contains)
-      EnumDecl(enm, imps) = ctx.enums(name)
+      // A recursive enum is refused, as the compiler refuses it.
+      if !ctx.visiting.contains(name)
+      EnumDecl(enm, imps, uses) = ctx.enums(name)
       if enm.tparams.isEmpty
       shape <-
         if (enm.cases.forall(_.tpes.isEmpty)) Some(Shape.Enum(enm.cases.map(_.ident.name)))
-        else traverse(enm.cases) { c =>
-          // A field is described where the enum is declared, with that module's imports, and
-          // must cross exactly, as the compiler requires of a case field.
-          traverse(c.tpes)(parameterSignatureOf(_, imps)).map { sigs =>
-            c.ident.name -> sigs.zipWithIndex.map { case (sig, i) => s"component$i" -> sig }
-          }
-        }.map(Shape.Sealed(_))
+        else ctx.within(name, uses) {
+          traverse(enm.cases) { c =>
+            // A field is described where the enum is declared, with that module's names in scope.
+            traverse(c.tpes)(signatureOf(_, imps, Position.Component)).map { sigs =>
+              c.ident.name -> sigs.zipWithIndex.map { case (sig, i) => s"component$i" -> sig }
+            }
+          }.map(Shape.Sealed(_))
+        }
     } yield {
       val desc = Mangle.namespaceFacadeDesc(name)
       ctx.types += Facade(desc, shape, Nil)
@@ -440,17 +486,17 @@ object ExportStubs {
   }
 
   /** Returns every enum declared in `decls`, by its full name. */
-  private def enumsOf(decls: List[WeededAst.Declaration], ns: List[String], imps: Map[String, String]): List[(List[String], EnumDecl)] =
+  private def enumsOf(decls: List[WeededAst.Declaration], ns: List[String], imps: Map[String, String], uses: Map[String, List[String]]): List[(List[String], EnumDecl)] =
     decls.flatMap {
       case WeededAst.Declaration.Mod(_, _, _, qname, usesAndImports, inner, _) =>
-        enumsOf(inner, ns ++ qname.namespace.idents.map(_.name) :+ qname.ident.name, imps ++ imports(usesAndImports))
-      case enm: WeededAst.Declaration.Enum => List((ns :+ enm.ident.name) -> EnumDecl(enm, imps))
+        enumsOf(inner, ns ++ qname.namespace.idents.map(_.name) :+ qname.ident.name, imps ++ imports(usesAndImports), uses ++ this.uses(usesAndImports))
+      case enm: WeededAst.Declaration.Enum => List((ns :+ enm.ident.name) -> EnumDecl(enm, imps, uses))
       case _ => Nil
     }
 
   /** Returns the signature of a value used as a Java generic type argument, boxing primitives. */
-  private def typeArgumentSignatureOf(tpe: WeededAst.Type, imps: Map[String, String])(implicit ctx: DefContext): Option[ExportSignature] =
-    parameterSignatureOf(tpe, imps).map {
+  private def typeArgumentSignatureOf(tpe: WeededAst.Type, imps: Map[String, String], pos: Position)(implicit ctx: DefContext): Option[ExportSignature] =
+    signatureOf(tpe, imps, pos).map {
       case ExportSignature.Exact(tpe0) if tpe0 == CD_boolean => ExportSignature.Boxed(tpe0, ClassDesc.ofInternalName("java/lang/Boolean"))
       case ExportSignature.Exact(tpe0) if tpe0 == CD_char => ExportSignature.Boxed(tpe0, ClassDesc.ofInternalName("java/lang/Character"))
       case ExportSignature.Exact(tpe0) if tpe0 == CD_byte => ExportSignature.Boxed(tpe0, ClassDesc.ofInternalName("java/lang/Byte"))

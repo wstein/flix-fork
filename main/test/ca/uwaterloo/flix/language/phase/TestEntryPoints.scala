@@ -889,6 +889,42 @@ class TestEntryPoints extends AnyFunSuite with TestUtils {
     expectSuccess(result)
   }
 
+  test("Test.ValidExportFunction.NestedResult.01") {
+    val input =
+      """
+        |mod Mod {
+        |    pub enum Color { case Red }
+        |    @Export pub def a(x: Int32): List[List[Int32]] = ???
+        |    @Export pub def b(x: Int32): Option[(Int32, Color)] = ???
+        |    @Export pub def c(x: Int32): Map[String, Vector[Color]] = ???
+        |    @Export pub def d(x: Int32): (Color, {x = Int32}) = ???
+        |}
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibAll)
+    expectSuccess(result)
+  }
+
+  test("Test.IllegalExportFunction.NestedResult.01") {
+    val input =
+      """
+        |mod Mod { @Export pub def id(x: Int32): (List[Int32], Int32) = ??? }
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibAll)
+    expectError[EntryPointError.IllegalExportType](result)
+  }
+
+  test("Test.IllegalExportFunction.NestedResult.02") {
+    val input =
+      """
+        |mod Mod {
+        |    pub enum Holder { case Items(List[Int32]) }
+        |    @Export pub def id(x: Int32): Holder = ???
+        |}
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibAll)
+    expectError[EntryPointError.IllegalExportType](result)
+  }
+
   test("Test.IllegalExportFunction.EnumResult.01") {
     val input =
       """

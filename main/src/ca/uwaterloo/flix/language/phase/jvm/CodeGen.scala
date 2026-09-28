@@ -262,33 +262,24 @@ object CodeGen {
       case (acc, _) => acc
     }
 
+  /** Returns every plan of every export in `root`, including the plans nested in them. */
+  private def getExportPlansOf(root: Root): List[ExportPlan] =
+    root.defs.values.toList.flatMap(defn => ExportPlan.ofDef(defn)(root).toList.flatMap(ExportPlan.allOf))
+
   /** Returns the Java-facing element types of every distinct exported tuple shape in `root`. */
   private def getExportedTupleTypesOf(root: Root): Set[List[ClassDesc]] =
-    root.defs.values.foldLeft(Set.empty[List[ClassDesc]]) {
-      case (acc, defn) => ExportPlan.ofDef(defn)(root) match {
-        case Some(tuple: ExportPlan.AsTuple) => acc + tuple.elements.map(_.javaType)
-        case _ => acc
-      }
-    }
+    getExportPlansOf(root).collect { case tuple: ExportPlan.AsTuple => tuple.elements.map(_.javaType) }.toSet
 
   /** Returns the Java-facing fields of every distinct exported record shape in `root`. */
   private def getExportedRecordTypesOf(root: Root): Set[List[(String, ClassDesc)]] =
-    root.defs.values.foldLeft(Set.empty[List[(String, ClassDesc)]]) {
-      case (acc, defn) => ExportPlan.ofDef(defn)(root) match {
-        case Some(record: ExportPlan.AsRecord) => acc + record.labels.zip(record.elements.map(_.javaType))
-        case _ => acc
-      }
-    }
+    getExportPlansOf(root).collect { case record: ExportPlan.AsRecord => record.labels.zip(record.elements.map(_.javaType)) }.toSet
 
   /** Returns the plan of every exported enum in `root`, keyed by its companion namespace. */
   private def getExportedEnumsOf(root: Root): Map[List[String], ExportPlan] =
-    root.defs.values.foldLeft(Map.empty[List[String], ExportPlan]) {
-      case (acc, defn) => ExportPlan.ofDef(defn)(root) match {
-        case Some(enm: ExportPlan.AsEnum) => acc + (enm.ns -> enm)
-        case Some(enm: ExportPlan.AsSealed) => acc + (enm.ns -> enm)
-        case _ => acc
-      }
-    }
+    getExportPlansOf(root).collect {
+      case enm: ExportPlan.AsEnum => enm.ns -> enm
+      case enm: ExportPlan.AsSealed => enm.ns -> enm
+    }.toMap
 
   /** Returns the Java enum or sealed interface of an exported enum, carrying the shims of `defs`. */
   private def genExportedEnum(plan: ExportPlan, defs: List[Def])(implicit root: Root, flix: Flix): Array[Byte] = plan match {

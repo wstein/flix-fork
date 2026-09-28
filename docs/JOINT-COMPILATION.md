@@ -73,8 +73,7 @@ development lineages. It currently supports:
   Java-facing element types (synthetic component names, a canonical constructor, and hand-written
   `equals`/`hashCode`/`toString`, since extending `Record` makes all three abstract), shared by
   every exported tuple with that shape the way the compiler's own internal tuple class is shared
-  by shape. Each element must have its own exact boundary plan: an element that is itself a
-  converted container is refused rather than nested.
+  by shape. An element may be any convertible type but a container (see "Nesting" below).
 - Closed structural-record results as a real, generated `java.lang.Record`, built by the same
   `GenExportedProduct` engine as tuples -- the only difference is that a record names its
   components after its own field labels instead of `component0`-style synthetic names, since
@@ -93,12 +92,31 @@ development lineages. It currently supports:
   `IllegalExportEnumMember`. An enum with a type parameter is refused.
 - Non-polymorphic enum results whose cases carry data as a `sealed interface` named the same way,
   permitting one nested `record` per case (`Shape.Circle(int component0)`), so Java 21 can
-  `switch` over it exhaustively with record patterns. Each field must have an exact boundary
-  plan, as a tuple's elements must, which also refuses a recursive enum. Specialization erases a
+  `switch` over it exhaustively with record patterns. A field may be anything a tuple element may
+  be; a recursive enum is refused. Specialization erases a
   reference-typed case field to `Object`, so `Eraser` records the declared field types of every
   exported enum in `exportedEnumFields` for the record to declare them. A case whose record class
   would share its name with a module (`Shape.Circle`) is a compiler crash, not yet an error.
 - Explicitly imported Java classes, including nested generic arguments in parameters and results.
+
+### Nesting
+
+Conversions nest. A container's type argument may be any type a result may be, so
+`List[List[Int32]]`, `Option[(Int32, String)]`, `Map[String, Vector[Color]]` and `List[Shape]`
+cross as `List<List<Integer>>`, `Optional<Tuple$int$String>`, `Map<String, List<Color>>` and
+`List<Shape>`. A tuple element, record field, or enum case field may be a tuple, record, or enum,
+but not a container: the record class generated for a product is shared by the erased shape of its
+components, so a `List<Integer>` component would reach Java as a raw `List`. For the same reason
+an applied Java type such as `ArrayList[String]` is refused as a component, and a Java type's own
+type arguments must be exact, since the contents of a Java object are never converted.
+`EntryPoints` checks, `ExportPlan` converts, and `ExportStubs` describes these three positions --
+result, type argument, component -- by the same rules.
+
+Every conversion is planned from the declared type, never from a specialized enum: a value nested
+inside another has no specialization recorded, only its declared type. A tag class's fields follow
+from erasure alone (a reference-typed field is `Object`, a primitive field stays primitive), and a
+case's ordinal from its declaration, which every specialization shares. Every element is read at
+its erased type and cast to its plan's Flix type before it is converted.
 
 It refuses other Flix algebraic data types, other containers, functions, and unaccounted reference
 types because `EntryPoints` refuses those exports on this branch. Refusal is intentional:
