@@ -22,7 +22,7 @@ import ca.uwaterloo.flix.language.ast.shared.{Origin, SecurityContext, Source, S
 import ca.uwaterloo.flix.language.fmt.FormatType
 import ca.uwaterloo.flix.language.jvm.ClassDescs
 import ca.uwaterloo.flix.language.phase.Lexer
-import ca.uwaterloo.flix.language.phase.jvm.{ClassMaker, DebugScopes}
+import ca.uwaterloo.flix.language.phase.jvm.{ClassMaker, DebugScopes, Mangle}
 import ca.uwaterloo.flix.util.Options
 
 import java.nio.file.{Files, Path, Paths}
@@ -367,7 +367,8 @@ object DebugEvalProvider {
         // The generated wrapper is deliberately in the root namespace and has a unique fixed
         // source name. Match its definition class exactly: lifted closures inherit the enclosing
         // name (`Clo$flixDebugEvalWrapper$...`) and must never become the static entry point.
-        val entryClass = s"Def$$$WrapperName"
+        // `Mangle` decides where a root-namespace def's class lives, so the name is asked of it.
+        val entryClass = binaryNameOf(ClassDescs.classFileNameOf(Mangle.mkNamespacedDesc(Nil, "Def", WrapperName)))
         artifactSizeError(classes) match {
           case Some(reason) => Left(reason)
           case None => classes.map(_._1).find(_ == entryClass) match {

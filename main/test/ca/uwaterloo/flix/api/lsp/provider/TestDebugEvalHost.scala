@@ -76,7 +76,7 @@ class TestDebugEvalHost extends AnyFunSuite {
        |    println(boom(0))
        |""".stripMargin
 
-  private val Describe = ScopeId("Def$describe", "staticApply")
+  private val Describe = ScopeId("dev.flix.gen.Def$describe", "staticApply")
 
   test("the evaluation host is a debug-only compilation product") {
     def names(xdebug: Boolean): Set[String] = {

@@ -57,7 +57,7 @@ class TestDebugEvalProvider extends AnyFunSuite {
        |""".stripMargin
 
   /** The frame a debugger would be paused in inside `describe`. */
-  private val Describe = ScopeId("Def$describe", "staticApply")
+  private val Describe = ScopeId("dev.flix.gen.Def$describe", "staticApply")
 
   test("a parameter's type comes back as it was written, not as it was erased") {
     // The claim. In the class file `at` is `Ldev/flix/gen/Tagged$;` and in the scope table it is
@@ -76,7 +76,7 @@ class TestDebugEvalProvider extends AnyFunSuite {
   test("a referenced binding may contain lexer-supported name punctuation") {
     val project = build()
 
-    assertOk(evaluate(project, "value!", frame = ScopeId("Def$punctuated", "staticApply")), "Int32", "Pure")
+    assertOk(evaluate(project, "value!", frame = ScopeId("dev.flix.gen.Def$punctuated", "staticApply")), "Int32", "Pure")
   }
 
   test("a frame name in ordinary string text is not declared as an unused parameter") {
@@ -120,7 +120,7 @@ class TestDebugEvalProvider extends AnyFunSuite {
   test("a frame the build never recorded is refused, not guessed at") {
     val project = build()
 
-    evaluate(project, "at", frame = ScopeId("Def$nobody", "staticApply")) match {
+    evaluate(project, "at", frame = ScopeId("dev.flix.gen.Def$nobody", "staticApply")) match {
       case Answer.Rejected(reason) => assert(reason.contains("Def$nobody"), s"the refusal is unspecific: $reason")
       case other => fail(s"an unknown frame was answered: $other")
     }
@@ -257,7 +257,7 @@ class TestDebugEvalProvider extends AnyFunSuite {
     // it must fail rather than pick up a parameter of the same name from elsewhere.
     val project = build()
 
-    evaluate(project, "at", frame = ScopeId("Def$main", "staticApply")) match {
+    evaluate(project, "at", frame = ScopeId("dev.flix.gen.Def$main", "staticApply")) match {
       case Answer.Rejected(_) | Answer.Failed(_) => ()
       case other => fail(s"a name outside the frame resolved: $other")
     }

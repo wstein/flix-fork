@@ -26,7 +26,7 @@ class TestDebugEvalSidecar extends AnyFunSuite {
       |def main(): Unit \ IO = println(describe(1))
       |""".stripMargin
 
-  private val Describe = ScopeId("Def$describe", "staticApply")
+  private val Describe = ScopeId("dev.flix.gen.Def$describe", "staticApply")
 
   test("the same expression reuses its answer and compiler") {
     DebugEvalSidecar.evict()
