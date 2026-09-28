@@ -41,13 +41,20 @@ object GenNamespace {
     val cm = ClassMaker.mkClass(desc(ns), IsFinal)
 
     cm.mkConstructor(Constructor(ns), IsPublic, nullarySuperConstructor(ClassConstants.Object.Constructor)(_))
+    mkShims(cm, ns, defs)
+    cm.closeClassMaker()
+  }
 
+  /**
+    * Adds the shim methods of `defs` to `cm`, which must be making the class [[desc]]`(ns)`.
+    *
+    * `GenExportedEnum` calls this too: an exported enum's Java class is named like its companion
+    * module's namespace class, so it is the class that carries that module's shims.
+    */
+  def mkShims(cm: ClassMaker.InstanceClassMaker, ns: List[String], defs: List[JvmAst.Def])(implicit root: JvmAst.Root, flix: Flix): Unit =
     for (defn <- defs) {
       cm.mkStaticMethod(ShimMethod(ns, defn), IsPublic, IsFinal, shimIns(defn)(_, root, flix), methodSignature(defn))
     }
-
-    cm.closeClassMaker()
-  }
 
   private def Constructor(ns: List[String]): ConstructorMethod = ConstructorMethod(desc(ns), Nil)
 
