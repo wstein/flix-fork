@@ -23,7 +23,7 @@ import ca.uwaterloo.flix.language.phase.jvm.ClassMaker.Visibility.IsPublic
 import ca.uwaterloo.flix.language.phase.jvm.ClassMaker.{ConstructorMethod, InstanceField, StaticMethod}
 import ca.uwaterloo.flix.language.phase.jvm.Instructions.*
 import ca.uwaterloo.flix.language.phase.jvm.MethodTypeDescs.mkDescriptor
-import ca.uwaterloo.flix.language.phase.jvm.{ClassConstants, ClassMaker, ExportPlan, ExportSignature, GenFunAndClosureClasses, JvmNames, Mangle, TypeDescs}
+import ca.uwaterloo.flix.language.phase.jvm.{ArgumentPlan, ClassConstants, ClassMaker, ExportPlan, ExportSignature, GenFunAndClosureClasses, JvmNames, Mangle, TypeDescs}
 import ca.uwaterloo.flix.util.InternalCompilerException
 import org.objectweb.asm.MethodVisitor
 
@@ -75,8 +75,21 @@ object GenNamespace {
       case fps => fps
     }
 
+  /**
+    * The signatures of the parameters a Java caller passes: of each declared type for an export,
+    * which may be converted, and of the historical erased type otherwise.
+    */
+  private def callerSignatures(defn: JvmAst.Def): List[ExportSignature] = {
+    val declared = defn.exportedParamTypes.filter(_ => defn.ann.isExport).getOrElse(defn.fparams.map(_.tpe))
+    val erased = defn.fparams.map(fp => ExportSignature.Exact(TypeDescs.toErasedClassDesc(fp.tpe)))
+    val all = if (!defn.ann.isExport) erased else declared.zip(erased).map {
+      case (tpe, fallback) => ExportPlan.signatureOf(tpe).getOrElse(fallback)
+    }
+    all.take(callerParams(defn).length)
+  }
+
   def ShimMethod(ns: List[String], defn: JvmAst.Def)(implicit flix: Flix): StaticMethod = {
-    val erasedArgs = callerParams(defn).map(_.tpe).map(boundaryType(defn.ann.isExport, _))
+    val erasedArgs = callerSignatures(defn).map(_.javaType)
     val erasedResult =
       if (defn.ann.isExport) defn.exportedReturnType.flatMap(ExportPlan.signatureOf).map(_.javaType).getOrElse(TypeDescs.toErasedClassDesc(defn.unboxedType.tpe))
       else TypeDescs.toErasedClassDesc(defn.unboxedType.tpe)
@@ -89,8 +102,10 @@ object GenNamespace {
   private def shimIns(defn: JvmAst.Def)(implicit mv: MethodVisitor, root: JvmAst.Root, flix: Flix): Unit = {
     val defnDesc = GenFunAndClosureClasses.defnDesc(defn.sym)
     val params = callerParams(defn)
-    val facadeParamTypes = params.map(fp => boundaryType(defn.ann.isExport, fp.tpe))
+    val facadeParamTypes = callerSignatures(defn).map(_.javaType)
     val fieldTypes = defn.fparams.map(fp => TypeDescs.toErasedClassDesc(fp.tpe))
+    // Present only for an export; each converts one Java argument to the Flix value it stands for.
+    val argumentPlans = ArgumentPlan.ofDef(defn)
     withNames(0, facadeParamTypes) {
       case (nextLocal, args) =>
         val resultPlan = ExportPlan.ofDef(defn)
@@ -102,6 +117,7 @@ object GenNamespace {
         for ((arg, index) <- args.zipWithIndex) {
           DUP()
           arg.load()
+          argumentPlans.foreach(plans => plans(index).emit(nextLocal))
           PUTFIELD(InstanceField(defnDesc, s"arg$index", fieldTypes(index)))
         }
         if (params.isEmpty && defn.fparams.nonEmpty) {
@@ -116,16 +132,11 @@ object GenNamespace {
     }
   }
 
-  /** Returns the caller-facing type for an export and the historical erased type otherwise. */
-  private def boundaryType(isExport: Boolean, tpe: ca.uwaterloo.flix.language.ast.SimpleType): ClassDesc =
-    if (isExport) ExportPlan.signatureOf(tpe).map(_.javaType).getOrElse(TypeDescs.toErasedClassDesc(tpe))
-    else TypeDescs.toErasedClassDesc(tpe)
-
-  /** Returns the generic method signature when the exported result carries type arguments. */
+  /** Returns the generic method signature when an exported result or parameter carries type arguments. */
   private def methodSignature(defn: JvmAst.Def): Option[String] = {
     if (!defn.ann.isExport) None
     else defn.exportedReturnType.flatMap(ExportPlan.signatureOf).flatMap { result =>
-      val params = callerParams(defn).map(fp => ExportPlan.signatureOf(fp.tpe).getOrElse(ExportSignature.Exact(TypeDescs.toErasedClassDesc(fp.tpe))))
+      val params = callerSignatures(defn)
       val needsSignature = result.typeArgument != result.javaType.descriptorString() || params.exists(p => p.typeArgument != p.javaType.descriptorString())
       if (!needsSignature) None
       else {

@@ -676,6 +676,15 @@ object ExportPlan {
     else defn.exportedReturnType.flatMap(planAt(_, Position.Result))
 
   /**
+    * Returns the plan converting a Flix value of the declared type `tpe` to Java, as if returned.
+    *
+    * `CodeGen` plans an exported parameter's type this way too: the Java classes a parameter
+    * names are the ones a result of the same type would, and must be generated the same way.
+    */
+  def ofType(tpe: SimpleType)(implicit root: ca.uwaterloo.flix.language.ast.JvmAst.Root): Option[ExportPlan] =
+    planAt(tpe, Position.Result)
+
+  /**
     * Returns the plan converting a Flix value whose declared type is `tpe`.
     *
     * Plans are built from the declared type, never from a specialized enum, since a value nested

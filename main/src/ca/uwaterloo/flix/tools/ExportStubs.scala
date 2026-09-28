@@ -284,6 +284,9 @@ object ExportStubs {
   private class DefContext(var ns: List[String], var uses: Map[String, List[String]], val enums: Map[List[String], EnumDecl]) {
     val types: scala.collection.mutable.ListBuffer[Facade] = scala.collection.mutable.ListBuffer.empty
 
+    /** Whether a parameter is being described, in which `Set` and `Map` are refused. */
+    var inParameter: Boolean = false
+
     /** The enums whose fields are being described, by full name. */
     val visiting: scala.collection.mutable.Set[List[String]] = scala.collection.mutable.Set.empty
 
@@ -357,14 +360,14 @@ object ExportStubs {
         case _ => None
       }
 
-    case WeededAst.Type.Tuple(tpes, _) if pos != Position.Parameter =>
+    case WeededAst.Type.Tuple(tpes, _) if pos != Position.Exact =>
       traverse(tpes.toList)(signatureOf(_, imps, Position.Component)).map { sigs =>
         val desc = GenExportedTuple.desc(sigs.map(_.javaType))
         ctx.types += Facade(desc, Shape.Record(sigs.zipWithIndex.map { case (sig, i) => s"component$i" -> sig }), Nil)
         ExportSignature.Exact(desc)
       }
 
-    case WeededAst.Type.Record(row, _) if pos != Position.Parameter =>
+    case WeededAst.Type.Record(row, _) if pos != Position.Exact =>
       for {
         // Sorted as `Canonicalization` sorts a row during monomorphisation, which is the order the
         // generated class takes its name and components from.
@@ -394,8 +397,8 @@ object ExportStubs {
   private sealed trait Position
 
   private object Position {
-    /** A parameter, passed through unchanged: nothing is converted. */
-    case object Parameter extends Position
+    /** A Java type's own type argument, never converted, since a Java object's contents are not. */
+    case object Exact extends Position
 
     /** The result itself. */
     case object Result extends Position
@@ -407,9 +410,15 @@ object ExportStubs {
     case object Component extends Position
   }
 
-  /** Parameters are passed through unchanged, so converted containers are not accepted here. */
-  private def parameterSignatureOf(tpe: WeededAst.Type, imps: Map[String, String])(implicit ctx: DefContext): Option[ExportSignature] =
-    signatureOf(tpe, imps, Position.Parameter)
+  /**
+    * Parameters convert from Java by the rules results convert to it, but for `Set` and `Map`,
+    * anywhere in the parameter: the compiler builds Flix values directly and cannot build their
+    * balanced trees.
+    */
+  private def parameterSignatureOf(tpe: WeededAst.Type, imps: Map[String, String])(implicit ctx: DefContext): Option[ExportSignature] = {
+    ctx.inParameter = true
+    try signatureOf(tpe, imps, Position.Result) finally ctx.inParameter = false
+  }
 
   /** Results may use conversions implemented by the namespace shim. */
   private def resultSignatureOf(tpe: WeededAst.Type, imps: Map[String, String])(implicit ctx: DefContext): Option[ExportSignature] =
@@ -428,9 +437,9 @@ object ExportStubs {
         typeArgumentSignatureOf(element, imps, Position.Argument).map(sig => ExportSignature.Applied(ClassDesc.ofInternalName("java/util/List"), List(sig)))
       case (Some("Chain"), List(element)) if allowConvertedResult =>
         typeArgumentSignatureOf(element, imps, Position.Argument).map(sig => ExportSignature.Applied(ClassDesc.ofInternalName("java/util/Collection"), List(sig)))
-      case (Some("Set"), List(element)) if allowConvertedResult =>
+      case (Some("Set"), List(element)) if allowConvertedResult && !ctx.inParameter =>
         typeArgumentSignatureOf(element, imps, Position.Argument).map(sig => ExportSignature.Applied(ClassDesc.ofInternalName("java/util/Set"), List(sig)))
-      case (Some("Map"), List(key, value)) if allowConvertedResult =>
+      case (Some("Map"), List(key, value)) if allowConvertedResult && !ctx.inParameter =>
         for {
           keySig <- typeArgumentSignatureOf(key, imps, Position.Argument)
           valueSig <- typeArgumentSignatureOf(value, imps, Position.Argument)
@@ -440,13 +449,13 @@ object ExportStubs {
         for {
           clazz <- imported(name, imps)
           // A Java object's contents are never converted, so its type arguments must be exact.
-          signatures <- traverse(targs)(typeArgumentSignatureOf(_, imps, Position.Parameter))
+          signatures <- traverse(targs)(typeArgumentSignatureOf(_, imps, Position.Exact))
         } yield ExportSignature.Applied(clazz, signatures)
       case _ => None
     }
   }.orElse {
     // Only a name no import accounts for can be an enum: an imported Java class shadows it.
-    if (pos != Position.Parameter && args.isEmpty && !imps.contains(qname.toString)) enumSignatureOf(qname)
+    if (pos != Position.Exact && args.isEmpty && !imps.contains(qname.toString)) enumSignatureOf(qname)
     else None
   }
 

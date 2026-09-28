@@ -45,14 +45,18 @@ object Eraser {
     val newDefs = ParOps.parMapValues(root.defs)(defn => flix.profile(defn.sym, defn.loc)(visitDef(defn)))
     val newEffects = ParOps.parMapValues(root.effects)(visitEffect)
     // Specializations must happen after all other types and expressions are visited.
-    val newEnums = specializeEnums(ctx.getEnumSpecializations)
+    val enumSpecializations = ctx.getEnumSpecializations
+    val newEnums = specializeEnums(enumSpecializations)
     val newStructs = specializeStructs(ctx.getStructSpecializations)
-    ErasedAst.Root(newDefs, newEnums, newStructs, newEffects, root.mainEntryPoint, root.entryPoints, root.sources, exportedEnumFields(root))
+    // An exported def's parameter conversion builds enum values, and needs the specialization
+    // whose nullary singletons to use for each declared, erased type.
+    val specializations = enumSpecializations.map { case (sym, targs, newSym) => (sym, targs) -> newSym }.toMap
+    ErasedAst.Root(newDefs, newEnums, newStructs, newEffects, root.mainEntryPoint, root.entryPoints, root.sources, exportedEnumFields(root), specializations)
   }(DebugNoOp())
 
   /**
-    * Returns the declared field types of every case of every monomorphic enum an export returns,
-    * directly or nested in its result, by case name.
+    * Returns the declared field types of every case of every monomorphic enum an export returns
+    * or takes, directly or nested, by case name.
     *
     * Specialization erases a reference-typed field to `Object`, the representation every Flix
     * value shares. A Java record generated for an exported enum's case must declare the field's
@@ -78,7 +82,10 @@ object Eraser {
       case _ => ()
     }
 
-    for (defn <- root.defs.values if defn.ann.isExport) visit(defn.unboxedType.tpe)
+    for (defn <- root.defs.values if defn.ann.isExport) {
+      visit(defn.unboxedType.tpe)
+      defn.fparams.foreach(fp => visit(fp.tpe))
+    }
     found.toMap
   }
 
@@ -90,7 +97,22 @@ object Eraser {
       // calls still use `tpe` above, and non-exported entry points keep their historical erasure.
       val unboxedType = if (ann.isExport) visitType(originalTpe.tpe) else erase(originalTpe.tpe)
       val exportedReturnType = if (ann.isExport) Some(originalTpe.tpe) else None
-      ErasedAst.Def(ann, mod, sym, cparams.map(visitParam), fparams.map(visitParam), e, box(tpe), ErasedAst.UnboxedType(unboxedType), exportedReturnType, loc)
+      val exportedParamTypes = if (ann.isExport) Some(fparams.map(_.tpe)) else None
+      // A parameter's conversion builds values of every enum nested in its type, and a nullary
+      // case's value is the singleton of one specialization: make sure each is generated.
+      if (ann.isExport) fparams.foreach(fp => registerNestedEnums(fp.tpe))
+      ErasedAst.Def(ann, mod, sym, cparams.map(visitParam), fparams.map(visitParam), e, box(tpe), ErasedAst.UnboxedType(unboxedType), exportedReturnType, exportedParamTypes, loc)
+  }
+
+  /** Registers the specialization of every enum nested anywhere in `tpe`, as `visitType` does for `tpe` itself. */
+  private def registerNestedEnums(tpe: SimpleType)(implicit ctx: SharedContext, flix: Flix): Unit = tpe match {
+    case SimpleType.Enum(sym, targs) =>
+      ctx.getSpecializedEnumName(sym, targs.map(erase))
+      targs.foreach(registerNestedEnums)
+    case SimpleType.Tuple(elms) => elms.foreach(registerNestedEnums)
+    case SimpleType.RecordExtend(_, value, rest) => registerNestedEnums(value); registerNestedEnums(rest)
+    case SimpleType.Array(element) => registerNestedEnums(element)
+    case _ => ()
   }
 
   private def specializeEnums(specializations: List[(Symbol.EnumSym, List[SimpleType], Symbol.EnumSym)])(implicit root: ReducedAst.Root, flix: Flix): Map[Symbol.EnumSym, ErasedAst.Enum] = {

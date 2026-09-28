@@ -441,17 +441,19 @@ object EntryPoints {
     }
 
   /**
-    * Returns every enum some export returns, keyed by the namespace of its companion module.
+    * Returns every enum some export returns or takes, keyed by the namespace of its companion module.
     *
     * Found before any def is checked, since whether an export's name is legal depends on another
     * export elsewhere returning the enum whose companion module it is in.
     */
   private def exportedEnumCompanions(root: TypedAst.Root): Map[List[String], Symbol.EnumSym] =
     root.defs.values.filter(TypedAstOps.isExport).foldLeft(Set.empty[Symbol.EnumSym]) {
-      case (acc, defn) => exportedEnumsIn(defn.spec.retTpe, acc)(root)
+      case (acc, defn) => (defn.spec.retTpe :: defn.spec.fparams.toList.map(_.tpe)).foldLeft(acc) {
+        case (a, tpe) => exportedEnumsIn(tpe, a)(root)
+      }
     }.map(sym => (sym.namespace :+ sym.name) -> sym).toMap
 
-  /** Returns `acc` and every enum a result of type `tpe` converts, directly or nested. */
+  /** Returns `acc` and every enum a value of type `tpe` converts, directly or nested. */
   private def exportedEnumsIn(tpe: Type, acc: Set[Symbol.EnumSym])(implicit root: TypedAst.Root): Set[Symbol.EnumSym] =
     unapplyExportedEnum(tpe) match {
       case Some((sym, _)) if acc.contains(sym) => acc
@@ -488,7 +490,8 @@ object EntryPoints {
       case List(tpe) if isUnitType(tpe) == Result.Ok(true) => Nil
       case tpes => tpes
     }
-    resultErrors(defn.spec.retTpe, Position.Result, Set.empty) ::: paramTypes.flatMap(exactErrors(_, Position.Result))
+    conversionErrors(defn.spec.retTpe, Position.Result, Set.empty, inParameter = false) :::
+      paramTypes.flatMap(conversionErrors(_, Position.Result, Set.empty, inParameter = true))
   }
 
   /**
@@ -514,24 +517,30 @@ object EntryPoints {
   }
 
   /**
-    * Returns an error for each part of the result type `tpe` that cannot be converted at `pos`.
+    * Returns an error for each part of the type `tpe` that cannot be converted at `pos`.
     *
     * Conversions nest: a container's type arguments may be anything a result may be, and a
-    * product's components anything but a container. `visiting` holds the enums whose fields are
+    * product's components anything but a container. A parameter is converted the other way, from
+    * Java, by building Flix values directly, so `inParameter` refuses `Set` and `Map`, whose
+    * balanced trees only the standard library builds. `visiting` holds the enums whose fields are
     * being checked, so a recursive enum is refused rather than checked forever.
     */
-  private def resultErrors(tpe: Type, pos: Position, visiting: Set[Symbol.EnumSym])(implicit root: TypedAst.Root, flix: Flix): List[EntryPointError] = {
+  private def conversionErrors(tpe: Type, pos: Position, visiting: Set[Symbol.EnumSym], inParameter: Boolean)(implicit root: TypedAst.Root, flix: Flix): List[EntryPointError] = {
+    def errors(t: Type, p: Position, v: Set[Symbol.EnumSym]): List[EntryPointError] = conversionErrors(t, p, v, inParameter)
+
     val container = pos != Position.Component
+    val tree = unapplyMap(tpe).isDefined || unapplySet(tpe).isDefined
     val element = unapplyOption(tpe).orElse(unapplyList(tpe)).orElse(unapplyVector(tpe)).orElse(unapplyChain(tpe)).orElse(unapplySet(tpe))
     if (pos == Position.Result && isUnitType(tpe) == Result.Ok(true)) Nil
+    else if (inParameter && tree) List(EntryPointError.IllegalExportType(tpe, tpe.loc))
     else (unapplyMap(tpe), element) match {
-      case (Some((k, v)), _) if container => resultErrors(k, Position.Argument, visiting) ::: resultErrors(v, Position.Argument, visiting)
-      case (None, Some(elm)) if container => resultErrors(elm, Position.Argument, visiting)
+      case (Some((k, v)), _) if container => errors(k, Position.Argument, visiting) ::: errors(v, Position.Argument, visiting)
+      case (None, Some(elm)) if container => errors(elm, Position.Argument, visiting)
       case _ => unapplyTuple(tpe).orElse(unapplyRecord(tpe)) match {
-        case Some(elms) => elms.flatMap(resultErrors(_, Position.Component, visiting))
+        case Some(elms) => elms.flatMap(errors(_, Position.Component, visiting))
         case None => unapplyExportedEnum(tpe) match {
           case Some((sym, _)) if visiting.contains(sym) => List(EntryPointError.IllegalExportType(tpe, tpe.loc))
-          case Some((sym, fields)) => fields.flatMap(resultErrors(_, Position.Component, visiting + sym))
+          case Some((sym, fields)) => fields.flatMap(errors(_, Position.Component, visiting + sym))
           case None => exactErrors(tpe, pos)
         }
       }

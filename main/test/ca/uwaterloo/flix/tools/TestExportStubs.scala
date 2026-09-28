@@ -69,11 +69,11 @@ class TestExportStubs extends AnyFunSuite {
     assert(facades.head.methods.map(_.name) == List("twice"))
   }
 
-  test("String is described exactly while unsupported generic exports are refused") {
+  test("String is described exactly while a Set parameter is refused") {
     val src =
       """mod Acme.Api {
         |    @Export pub def text(x: String): String = x
-        |    @Export pub def list(x: List[Int32]): List[Int32] = x
+        |    @Export pub def set(x: Set[Int32]): Int32 = 0
         |}
         |""".stripMargin
 
@@ -81,10 +81,10 @@ class TestExportStubs extends AnyFunSuite {
     assert(facades.flatMap(_.methods).map(_.name) == List("text"))
     assert(facades.head.methods.head.params.head.sourceName == "java.lang.String")
     assert(facades.head.methods.head.result.sourceName == "java.lang.String")
-    assert(unsupported.map(_.name) == List("list"))
+    assert(unsupported.map(_.name) == List("set"))
   }
 
-  test("Option results are typed while Option parameters remain refused") {
+  test("Option results and parameters are typed alike") {
     val src =
       """mod Acme.Api {
         |    @Export pub def maybe(_x: Int32): Option[String] = None
@@ -94,13 +94,14 @@ class TestExportStubs extends AnyFunSuite {
 
     val (facades, unsupported) = stubs(src)
     val methods = facades.flatMap(_.methods)
-    assert(methods.map(_.name) == List("maybe"))
+    assert(methods.map(_.name) == List("maybe", "consume"))
     assert(methods.head.result.sourceName == "java.util.Optional<java.lang.String>")
-    assert(unsupported.map(_.name) == List("consume"))
+    assert(unsupported.isEmpty)
+    assert(methods(1).params.head.sourceName == methods.head.result.sourceName)
     assert(ExportStubs.javaSource(facades.head).contains("java.util.Optional<java.lang.String> maybe(int arg0)"))
   }
 
-  test("List results are typed while List parameters remain refused") {
+  test("List results and parameters are typed alike") {
     val src =
       """mod Acme.Api {
         |    @Export pub def values(_x: Int32): List[Int32] = Nil
@@ -110,13 +111,14 @@ class TestExportStubs extends AnyFunSuite {
 
     val (facades, unsupported) = stubs(src)
     val methods = facades.flatMap(_.methods)
-    assert(methods.map(_.name) == List("values"))
+    assert(methods.map(_.name) == List("values", "consume"))
     assert(methods.head.result.sourceName == "java.util.List<java.lang.Integer>")
-    assert(unsupported.map(_.name) == List("consume"))
+    assert(unsupported.isEmpty)
+    assert(methods(1).params.head.sourceName == methods.head.result.sourceName)
     assert(ExportStubs.javaSource(facades.head).contains("java.util.List<java.lang.Integer> values(int arg0)"))
   }
 
-  test("Vector results are typed while Vector parameters remain refused") {
+  test("Vector results and parameters are typed alike") {
     val src =
       """mod Acme.Api {
         |    @Export pub def values(_x: Int32): Vector[Int32] = Vector#{}
@@ -126,13 +128,14 @@ class TestExportStubs extends AnyFunSuite {
 
     val (facades, unsupported) = stubs(src)
     val methods = facades.flatMap(_.methods)
-    assert(methods.map(_.name) == List("values"))
+    assert(methods.map(_.name) == List("values", "consume"))
     assert(methods.head.result.sourceName == "java.util.List<java.lang.Integer>")
-    assert(unsupported.map(_.name) == List("consume"))
+    assert(unsupported.isEmpty)
+    assert(methods(1).params.head.sourceName == methods.head.result.sourceName)
     assert(ExportStubs.javaSource(facades.head).contains("java.util.List<java.lang.Integer> values(int arg0)"))
   }
 
-  test("Chain results are typed while Chain parameters remain refused") {
+  test("Chain results and parameters are typed alike") {
     val src =
       """mod Acme.Api {
         |    @Export pub def values(_x: Int32): Chain[Int32] = Chain.empty()
@@ -142,9 +145,10 @@ class TestExportStubs extends AnyFunSuite {
 
     val (facades, unsupported) = stubs(src)
     val methods = facades.flatMap(_.methods)
-    assert(methods.map(_.name) == List("values"))
+    assert(methods.map(_.name) == List("values", "consume"))
     assert(methods.head.result.sourceName == "java.util.Collection<java.lang.Integer>")
-    assert(unsupported.map(_.name) == List("consume"))
+    assert(unsupported.isEmpty)
+    assert(methods(1).params.head.sourceName == methods.head.result.sourceName)
     assert(ExportStubs.javaSource(facades.head).contains("java.util.Collection<java.lang.Integer> values(int arg0)"))
   }
 
@@ -180,7 +184,7 @@ class TestExportStubs extends AnyFunSuite {
     assert(ExportStubs.javaSource(facades.head).contains("java.util.Map<java.lang.Integer, java.lang.Integer> values(int arg0)"))
   }
 
-  test("Tuple results are typed while Tuple parameters remain refused") {
+  test("Tuple results and parameters are typed alike") {
     val src =
       """mod Acme.Api {
         |    @Export pub def values(_x: Int32): (Int32, Bool) = (1, true)
@@ -190,13 +194,14 @@ class TestExportStubs extends AnyFunSuite {
 
     val (facades, unsupported) = stubs(src)
     val methods = facades.flatMap(_.methods)
-    assert(methods.map(_.name) == List("values"))
+    assert(methods.map(_.name) == List("values", "consume"))
     assert(methods.head.result.sourceName == "dev.flix.gen.Tuple$int$boolean")
-    assert(unsupported.map(_.name) == List("consume"))
+    assert(unsupported.isEmpty)
+    assert(methods(1).params.head.sourceName == methods.head.result.sourceName)
     assert(ExportStubs.javaSource(facades.head).contains("dev.flix.gen.Tuple$int$boolean values(int arg0)"))
   }
 
-  test("Record results are typed while Record parameters remain refused") {
+  test("Record results and parameters are typed alike") {
     val src =
       """mod Acme.Api {
         |    @Export pub def values(_x: Int32): {name = String, age = Int32} = {name = "a", age = 1}
@@ -206,10 +211,11 @@ class TestExportStubs extends AnyFunSuite {
 
     val (facades, unsupported) = stubs(src)
     val methods = facades.flatMap(_.methods)
-    assert(methods.map(_.name) == List("values"))
+    assert(methods.map(_.name) == List("values", "consume"))
     // Monomorphisation sorts a record's fields by label, and the generated class is named after them.
     assert(methods.head.result.sourceName == "dev.flix.gen.Record$age$int$name$String")
-    assert(unsupported.map(_.name) == List("consume"))
+    assert(unsupported.isEmpty)
+    assert(methods(1).params.head.sourceName == methods.head.result.sourceName)
     assert(ExportStubs.javaSource(facades.head).contains("dev.flix.gen.Record$age$int$name$String values(int arg0)"))
   }
 
@@ -312,6 +318,69 @@ class TestExportStubs extends AnyFunSuite {
         |""".stripMargin
     val (_, unsupported) = stubs(src)
     assert(unsupported.map(_.name) == List("tuple"))
+  }
+
+  test("staged: parameters convert from Java, nested, the reverse of results") {
+    val flixSrc =
+      """mod Acme {
+        |    pub enum Color { case Red, case Green }
+        |    pub enum Shape { case Circle(Int32), case Point }
+        |}
+        |mod Acme.Api {
+        |    use Acme.Color
+        |    use Acme.Shape
+        |    @Export pub def sum(xs: List[Int32]): Int32 = List.sum(xs)
+        |    @Export pub def orZero(x: Option[Int32]): Int32 = Option.getWithDefault(0, x)
+        |    @Export pub def total(v: Vector[Int32]): Int32 = Vector.sum(v)
+        |    @Export pub def size(c: Chain[String]): Int32 = Chain.length(c)
+        |    @Export pub def swap(p: (Int32, String)): (String, Int32) = { let (a, b) = p; (b, a) }
+        |    @Export pub def area(r: {w = Int32, h = Int32}): Int32 = r#w * r#h
+        |    @Export pub def isRed(c: Color): Bool = match c {
+        |        case Color.Red => true
+        |        case _ => false
+        |    }
+        |    @Export pub def radius(s: Shape): Int32 = match s {
+        |        case Shape.Circle(r) => r
+        |        case Shape.Point => 0
+        |    }
+        |    @Export pub def weigh(xs: List[Option[(Int32, Color)]]): Int32 =
+        |        List.foldLeft((acc, o) -> acc + match o {
+        |            case Some((n, Color.Red)) => n
+        |            case Some((n, _)) => n * 10
+        |            case None => 0
+        |        }, 0, xs)
+        |    @Export pub def names(xs: List[String]): List[String] = List.reverse(xs)
+        |}
+        |""".stripMargin
+    val javaSrc =
+      """String s = "" + Acme.Api.sum(java.util.List.of(1, 2, 3));
+        |s += Acme.Api.orZero(java.util.Optional.of(4)) + Acme.Api.orZero(java.util.Optional.empty());
+        |s += "," + Acme.Api.total(java.util.List.of(5, 6));
+        |s += "," + Acme.Api.size(java.util.List.of("a", "b", "c"));
+        |var sw = Acme.Api.swap(new dev.flix.gen.Tuple$int$String(1, "x"));
+        |s += "," + sw.component0() + sw.component1();
+        |s += "," + Acme.Api.area(new dev.flix.gen.Record$h$int$w$int(2, 3));
+        |s += "," + Acme.Api.isRed(Acme.Color.Red) + Acme.Api.isRed(Acme.Color.Green);
+        |s += "," + Acme.Api.radius(new Acme.Shape.Circle(7)) + Acme.Api.radius(new Acme.Shape.Point());
+        |s += "," + Acme.Api.weigh(java.util.List.of(
+        |    java.util.Optional.of(new dev.flix.gen.Tuple$int$Color(1, Acme.Color.Red)),
+        |    java.util.Optional.empty(),
+        |    java.util.Optional.of(new dev.flix.gen.Tuple$int$Color(2, Acme.Color.Green))));
+        |s += "," + Acme.Api.names(java.util.List.of("a", "b"));
+        |return s;
+        |""".stripMargin
+    assert(runStaged(flixSrc, javaSrc) == "64,11,3,x1,6,truefalse,70,21,[b, a]")
+  }
+
+  test("Set and Map parameters are refused") {
+    val src =
+      """mod Acme.Api {
+        |    @Export pub def set(_x: Set[Int32]): Int32 = 0
+        |    @Export pub def map(_x: Map[Int32, Int32]): Int32 = 0
+        |}
+        |""".stripMargin
+    val (_, unsupported) = stubs(src)
+    assert(unsupported.map(_.name).sorted == List("map", "set"))
   }
 
   test("an enum the stub generator cannot find unambiguously is refused") {

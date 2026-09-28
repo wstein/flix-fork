@@ -904,6 +904,15 @@ class TestEntryPoints extends AnyFunSuite with TestUtils {
     expectSuccess(result)
   }
 
+  test("Test.IllegalExportFunction.SetParameter.01") {
+    val input =
+      """
+        |mod Mod { @Export pub def id(x: List[Set[Int32]]): Int32 = ??? }
+        |""".stripMargin
+    val result = check(input, Options.TestWithLibAll)
+    expectError[EntryPointError.IllegalExportType](result)
+  }
+
   test("Test.IllegalExportFunction.NestedResult.01") {
     val input =
       """
@@ -1013,7 +1022,7 @@ class TestEntryPoints extends AnyFunSuite with TestUtils {
     expectError[EntryPointError.IllegalExportType](result)
   }
 
-  test("Test.IllegalExportFunction.06") {
+  test("Test.ValidExportFunction.OptionParameter.01") {
     val input =
       """
         |enum Option[t] {
@@ -1023,7 +1032,7 @@ class TestEntryPoints extends AnyFunSuite with TestUtils {
         |mod Mod { @Export pub def id(x: Int32, _y: Option[Int32]): Int32 = x }
         |""".stripMargin
     val result = check(input, Options.TestWithLibNix)
-    expectError[EntryPointError.IllegalExportType](result)
+    expectSuccess(result)
   }
 
   test("Test.IllegalExportFunction.07") {

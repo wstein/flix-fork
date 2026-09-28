@@ -123,9 +123,27 @@ types because `EntryPoints` refuses those exports on this branch. Refusal is int
 a missing stub fails the build at generation time, while an incorrect stub compiles and later fails
 with a linkage error in innocent calling code.
 
-Converted containers are result-only. `Option[t]`, `List[t]`, `Vector[t]`, `Chain[t]`, `Set[t]`,
-`Map[k, v]`, tuples, records, and enums remain refused as parameters because the shim currently passes
-parameters straight into Flix and therefore has no reverse conversion.
+### Parameters
+
+Parameters convert from Java by the same rules and to the same Java types results convert to, so
+a caller passes back exactly what it was given: `java.util.Optional<T>` for `Option[t]`,
+`java.util.List<T>` for `List[t]` and `Vector[t]`, `java.util.Collection<T>` for `Chain[t]`, the
+generated records for tuples, records, and enum cases, and the generated Java enum constants.
+`ArgumentPlan` is the reverse of `ExportPlan`: the shim converts each argument before storing it
+in the def's argument field. `null` is never a valid argument.
+
+The shim builds Flix values directly -- tags, tuples, record extensions -- rather than calling
+Flix code, so `Set[t]` and `Map[k, v]` are refused anywhere in a parameter: their balanced
+`RedBlackTree`s are the standard library's to build. A `List` is consed up from its last element,
+a `Chain` built as `Chain(One(x1), Chain(One(x2), ... One(xn)))`, and a `Vector` copied into a new
+array.
+
+Building a value needs classes Flix code may never name, since a def need not look inside what it
+is passed. A nullary case such as `None` is the singleton of one enum specialization, so `Eraser`
+registers the specialization of every enum nested in an exported parameter and records them all
+in `enumSpecializations`; and `CodeGen` generates the internal tuple and record classes of every
+tuple and record nested in an exported parameter. The declared parameter types themselves survive
+erasure as `exportedParamTypes`, as the declared result type does as `exportedReturnType`.
 
 Stubs declare every class an exported signature names that the compiler generates too: a tuple or
 record result's class becomes a Java `record` with the same components, a data-free enum becomes a

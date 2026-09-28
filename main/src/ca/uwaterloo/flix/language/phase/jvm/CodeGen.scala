@@ -53,7 +53,7 @@ object CodeGen {
       SimpleType.Arrow(List(SimpleType.Float64), SimpleType.Object), // by resumptionWrappers
       SimpleType.Arrow(List(SimpleType.Object), SimpleType.Object), // by resumptionWrappers
     )
-    val allTypes = root.types ++ requiredTypes
+    val allTypes = root.types ++ requiredTypes ++ getExportedParamShapesOf(root)
 
     val mainClass = root.getMain.map(
       main => JvmClass(GenMain.Desc, GenMain.genByteCode(main.sym))
@@ -262,9 +262,34 @@ object CodeGen {
       case (acc, _) => acc
     }
 
-  /** Returns every plan of every export in `root`, including the plans nested in them. */
+  /**
+    * Returns every plan of every export in `root`, including the plans nested in them, and those
+    * of its parameters' types, whose Java classes are the same a result of that type names.
+    */
   private def getExportPlansOf(root: Root): List[ExportPlan] =
-    root.defs.values.toList.flatMap(defn => ExportPlan.ofDef(defn)(root).toList.flatMap(ExportPlan.allOf))
+    root.defs.values.toList.flatMap { defn =>
+      val params = if (defn.ann.isExport) defn.exportedParamTypes.getOrElse(Nil).flatMap(ExportPlan.ofType(_)(root)) else Nil
+      (ExportPlan.ofDef(defn)(root).toList ++ params).flatMap(ExportPlan.allOf)
+    }
+
+  /**
+    * Returns every tuple and record type nested in an exported parameter's type.
+    *
+    * A parameter's conversion builds these from Java values, so their classes must exist even if
+    * no Flix code names the type: a def may never look inside what it is passed.
+    */
+  private def getExportedParamShapesOf(root: Root): Set[SimpleType] = {
+    def visit(tpe: SimpleType): List[SimpleType] = tpe match {
+      case t@SimpleType.Tuple(elms) => t :: elms.flatMap(visit)
+      case t@SimpleType.RecordExtend(_, value, rest) => t :: visit(value) ++ visit(rest)
+      case SimpleType.Enum(_, targs) => targs.flatMap(visit)
+      case SimpleType.Array(element) => visit(element)
+      case _ => Nil
+    }
+    val declared = root.defs.values.filter(_.ann.isExport).flatMap(_.exportedParamTypes.getOrElse(Nil))
+    val enumFields = root.exportedEnumFields.values.flatMap(_.values.flatten)
+    (declared ++ enumFields).flatMap(visit).toSet
+  }
 
   /** Returns the Java-facing element types of every distinct exported tuple shape in `root`. */
   private def getExportedTupleTypesOf(root: Root): Set[List[ClassDesc]] =
