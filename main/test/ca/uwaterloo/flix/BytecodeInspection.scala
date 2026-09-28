@@ -19,6 +19,8 @@ package ca.uwaterloo.flix
 import ca.uwaterloo.flix.api.{CompilerConstants, Flix}
 import ca.uwaterloo.flix.language.ast.Symbol
 import ca.uwaterloo.flix.language.ast.shared.SecurityContext
+import ca.uwaterloo.flix.language.jvm.ClassDescs
+import ca.uwaterloo.flix.language.phase.jvm.Mangle
 import ca.uwaterloo.flix.util.{LibLevel, Options, Result}
 import org.objectweb.asm.{ClassReader, ClassVisitor, MethodVisitor, Opcodes}
 import org.scalatest.Assertions
@@ -104,13 +106,13 @@ object BytecodeInspection {
       * `Clo$<name>$<id>` for closures), so the lookup is by prefix rather than by exact name.
       */
     def classesOfDef(namespace: String, name: String): Set[String] =
-      classes.filter(c => c.startsWith(s"$namespace/Def$$$name$$") || c.startsWith(s"$namespace/Clo$$$name$$"))
+      classes.filter(c => c.startsWith(defClassPrefix(namespace, "Def", name)) || c.startsWith(defClassPrefix(namespace, "Clo", name)))
 
     /**
       * Returns the classes generated for `namespace` and everything nested inside it.
       */
     def classesOfNamespace(namespace: String): Set[String] =
-      classes.filter(c => c == namespace || c.startsWith(namespace + "/"))
+      classes.filter(inNamespace(_, namespace))
 
     /**
       * Returns the thread-spawning call sites, optionally restricted to `namespace`.
@@ -121,7 +123,7 @@ object BytecodeInspection {
     def spawnSites(namespace: Option[String] = None): Set[(String, String, String)] =
       calls.filter {
         case (caller, owner, name) =>
-          namespace.forall(ns => caller.startsWith(ns + "/")) &&
+          namespace.forall(ns => inNamespace(caller, ns)) &&
             ((owner == "dev/flix/runtime/Region$" && name == "spawn") || name == "startVirtualThread")
       }
 
@@ -140,13 +142,35 @@ object BytecodeInspection {
   }
 
   /**
+    * Returns the prefix of every class generated for the def (`kind` `Def`) or closure (`Clo`)
+    * `name` of the `/`-separated `namespace`, one per specialization.
+    *
+    * The layout is `Mangle`'s: a one-segment namespace's classes are `dev/flix/gen/Ns$Def$name$..`,
+    * a deeper one's `First/Rest$Def$name$..`, beside its facade.
+    */
+  def defClassPrefix(namespace: String, kind: String, name: String): String =
+    ClassDescs.internalNameOf(Mangle.mkNamespacedDesc(namespace.split('/').toList, kind, name)) + "$"
+
+  /** Returns `true` if `clazz` was generated for `namespace` or a namespace nested inside it. */
+  def inNamespace(clazz: String, namespace: String): Boolean = {
+    val segments = namespace.split('/').toList
+    val facade = ClassDescs.internalNameOf(Mangle.namespaceFacadeDesc(segments))
+    val implementations = ClassDescs.internalNameOf(Mangle.mkDesc(Mangle.packageOfNamespace(segments), Mangle.classPrefixOfNamespace(segments)))
+    // A namespace nested in a one-segment namespace takes that segment as its package.
+    val nested = if (segments.lengthIs == 1) segments.head + "/" else facade + "$"
+    clazz == facade || clazz.startsWith(implementations) || clazz.startsWith(nested)
+  }
+
+  /**
     * Returns the source-level definition name encoded in the generated class name `clazz`.
     *
-    * For example, `Fixpoint3/Interpreter/Def$interpret$1234` yields `interpret`.
+    * For example, `Fixpoint3/Interpreter$Def$interpret$1234` yields `interpret`.
     */
-  def defNameOf(clazz: String): String =
-    clazz.split('/').last.split('$') match {
-      case Array(_, name, _*) => name
+  def defNameOf(clazz: String): String = {
+    val parts = clazz.split('/').last.split('$')
+    parts.indexWhere(p => p == "Def" || p == "Clo") match {
+      case i if i >= 0 && i + 1 < parts.length => parts(i + 1)
       case _ => clazz
     }
+  }
 }

@@ -18,6 +18,8 @@ package ca.uwaterloo.flix.language.phase
 
 import ca.uwaterloo.flix.BytecodeInspection.Bytecode
 import ca.uwaterloo.flix.{BytecodeInspection, TestUtils}
+import ca.uwaterloo.flix.language.jvm.ClassDescs
+import ca.uwaterloo.flix.language.phase.jvm.Mangle
 import ca.uwaterloo.flix.util.{ExecutionMode, Options}
 import org.scalatest.funsuite.AnyFunSuite
 
@@ -162,7 +164,8 @@ class TestSequentialReachability extends AnyFunSuite with TestUtils with Bytecod
       val res = compileAndScan(DebugHelperProgram, Sequential.copy(xdebug = true, xnewmono = newMono))
 
       assert(
-        res.classes.contains("Def$tiny"),
+        // A root-namespace def's class sits beside the root facade, where `Mangle` places it.
+        res.classes.contains(ClassDescs.internalNameOf(Mangle.mkNamespacedDesc(Nil, "Def", "tiny"))),
         s"Expected debug build to retain a class for 'tiny' with xnewmono=$newMono, got: ${res.classes.filter(_.contains("tiny"))}"
       )
       assert(
