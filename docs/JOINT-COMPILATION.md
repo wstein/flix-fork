@@ -45,8 +45,41 @@ generation.
 
 ## Export ABI boundary
 
-Stub generation follows the export ABI implemented by this branch, not the richer ABI on other
-development lineages. It currently supports:
+### What crosses the boundary
+
+An `@Export`ed def becomes a `public static` method on its module's facade class. Its result and
+parameters cross as follows; a type not listed is refused with `IllegalExportType`.
+
+| Flix type | Java type | Result | Parameter |
+|---|---|---|---|
+| `Bool`, `Char`, `Int8`–`Int64`, `Float32`, `Float64` | `boolean`, `char`, `byte`–`long`, `float`, `double` | yes | yes |
+| `String` | `java.lang.String` | yes | yes |
+| `Unit` | `void` (result), no parameter (a lone `Unit` parameter) | yes | yes |
+| an imported Java class, generic or not | that class, with its type arguments | yes | yes |
+| `Option[t]` | `java.util.Optional<T>` | yes | yes |
+| `List[t]` | `java.util.List<T>` (an unmodifiable copy) | yes | yes |
+| `Vector[t]` | `java.util.List<T>` (an unmodifiable copy) | yes | yes |
+| `Chain[t]` | `java.util.Collection<T>` (an unmodifiable copy) | yes | yes |
+| `Set[t]` | `java.util.Set<T>` (an unmodifiable copy) | yes | no |
+| `Map[k, v]` | `java.util.Map<K, V>` (an unmodifiable copy) | yes | no |
+| `(t1, ..., tn)` | a generated record `dev.flix.gen.Tuple$T1$...$Tn` with `component0()`... | yes | yes |
+| `{l1 = t1, ...}` (closed) | a generated record `dev.flix.gen.Record$...` with accessors named by label | yes | yes |
+| `enum E` without data | a generated Java `enum E`, named like the module `E` | yes | yes |
+| `enum E` with data | a generated `sealed interface E` with one nested `record` per case | yes | yes |
+
+- A container's type argument may be any type in the table; a primitive is boxed there.
+- A tuple element, record field, or enum case field may be any type in the table except a
+  container or a generic Java class, since the generated record class is shared by shape.
+- An enum with a type parameter, a recursive enum, an open record, an `Array`, a function, and any
+  other Flix type are refused.
+- An exported enum's companion module (`mod E`) has its exported defs as static methods on the
+  enum's own Java type, so none of them may be named like a method every Java enum has (`name`,
+  `ordinal`, `values`, `valueOf`, ...): that is refused with `IllegalExportEnumMember`.
+- Record components are in label order. `null` is never a valid argument.
+
+### How each conversion works
+
+Stub generation and codegen follow the same boundary, and the notes below explain each case:
 
 - `Bool`, `Char`, `Int8`, `Int16`, `Int32`, `Int64`, `Float32`, and `Float64`.
 - `String`, whose exported descriptor is `java.lang.String` rather than erased `Object`.
