@@ -243,7 +243,9 @@ object ExportStubs {
 
     case WeededAst.Type.Record(row, _) if allowConvertedResult =>
       for {
-        fields <- peelRecordRow(row)
+        // Sorted as `Canonicalization` sorts a row during monomorphisation, which is the order the
+        // generated class takes its name and components from.
+        fields <- peelRecordRow(row).map(_.sortBy(_._1))
         sigs <- traverse(fields) { case (label, fieldTpe) => parameterSignatureOf(fieldTpe, imps).map(label -> _) }
       } yield ExportSignature.Exact(GenExportedRecord.desc(sigs.map { case (label, sig) => label -> sig.javaType }))
 

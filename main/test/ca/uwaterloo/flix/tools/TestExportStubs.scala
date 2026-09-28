@@ -207,9 +207,10 @@ class TestExportStubs extends AnyFunSuite {
     val (facades, unsupported) = stubs(src)
     val methods = facades.flatMap(_.methods)
     assert(methods.map(_.name) == List("values"))
-    assert(methods.head.result.sourceName == "dev.flix.gen.Record$name$String$age$int")
+    // Monomorphisation sorts a record's fields by label, and the generated class is named after them.
+    assert(methods.head.result.sourceName == "dev.flix.gen.Record$age$int$name$String")
     assert(unsupported.map(_.name) == List("consume"))
-    assert(ExportStubs.javaSource(facades.head).contains("dev.flix.gen.Record$name$String$age$int values(int arg0)"))
+    assert(ExportStubs.javaSource(facades.head).contains("dev.flix.gen.Record$age$int$name$String values(int arg0)"))
   }
 
   test("Enum results are refused until a stub can declare the enum itself") {

@@ -327,8 +327,10 @@ class TestExportedShims extends AnyFunSuite {
         assert(recordClass.isRecord)
         assert(another.getClass eq recordClass, "same-shaped records share one generated record class")
 
-        val componentNames = recordClass.getRecordComponents.map(_.getName).toSet
-        assert(componentNames == Set("name", "age"))
+        // In label order, not source order: monomorphisation sorts a record's row, and the stub
+        // generator must declare the same order to name the same class.
+        assert(recordClass.getRecordComponents.map(_.getName).toList == List("age", "name"))
+        assert(recordClass.getName == "dev.flix.gen.Record$age$int$name$String")
         assert(recordClass.getMethod("name").invoke(person) == "hello")
         assert(recordClass.getMethod("age").invoke(person) == Int.box(1))
 
