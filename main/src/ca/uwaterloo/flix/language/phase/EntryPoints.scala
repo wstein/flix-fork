@@ -21,6 +21,7 @@ import ca.uwaterloo.flix.language.ast.shared.*
 import ca.uwaterloo.flix.language.ast.{Kind, SourceLocation, Symbol, Type, TypeConstructor, TypedAst}
 import ca.uwaterloo.flix.language.dbg.AstPrinter.*
 import ca.uwaterloo.flix.language.errors.EntryPointError
+import ca.uwaterloo.flix.language.phase.jvm.classes.GenExportedEnum
 import ca.uwaterloo.flix.runtime.shell.Shell
 import ca.uwaterloo.flix.util.collection.{CofiniteSet, Nel}
 import ca.uwaterloo.flix.util.{ParOps, Result}
@@ -429,22 +430,12 @@ object EntryPoints {
   }
 
   /**
-    * The methods every Java enum has, whether declared by `java.lang.Enum`, inherited from
-    * `Object`, or generated alongside the constants. A static method of the same name on the
-    * generated enum class either fails to load or hides the inherited one from Java callers.
-    */
-  private val EnumMemberNames: Set[String] = Set(
-    "values", "valueOf", "name", "ordinal", "compareTo", "getDeclaringClass", "describeConstable",
-    "equals", "hashCode", "toString", "getClass", "notify", "notifyAll", "wait", "clone", "finalize"
-  )
-
-  /**
     * Returns an error if `defn` is in the companion module of an exported enum and has the name of
     * a method every Java enum already has: the companion's shims live on the enum's own class.
     */
   private def checkEnumMemberName(defn: TypedAst.Def)(implicit sctx: SharedContext): Option[EntryPointError] =
     sctx.enumCompanions.get(defn.sym.namespace) match {
-      case Some(enumSym) if EnumMemberNames.contains(defn.sym.name) =>
+      case Some(enumSym) if GenExportedEnum.MemberNames.contains(defn.sym.name) =>
         Some(EntryPointError.IllegalExportEnumMember(defn.sym.name, enumSym, defn.sym.loc))
       case _ => None
     }

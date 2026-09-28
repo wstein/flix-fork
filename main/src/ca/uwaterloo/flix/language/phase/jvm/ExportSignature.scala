@@ -25,7 +25,18 @@ sealed trait ExportSignature {
   def typeArgument: String
 
   /** The spelling used in generated Java source. */
-  def sourceName: String
+  final def sourceName: String = sourceNameWith(ExportSignature.qualifiedName)
+
+  /**
+    * The spelling used in generated Java source, with every class spelled by `spell`.
+    *
+    * A class may have to be spelled other than by its qualified name: inside a class `Acme`, the
+    * name `Acme.Color` means a member of that class, never the package `Acme`.
+    */
+  def sourceNameWith(spell: ClassDesc => String): String
+
+  /** Every class this signature names, type arguments included. */
+  def classes: List[ClassDesc]
 }
 
 object ExportSignature {
@@ -34,7 +45,9 @@ object ExportSignature {
   case class Exact(javaType: ClassDesc) extends ExportSignature {
     override def typeArgument: String = javaType.descriptorString()
 
-    override def sourceName: String = sourceNameOf(javaType)
+    override def sourceNameWith(spell: ClassDesc => String): String = sourceNameOf(javaType, spell)
+
+    override def classes: List[ClassDesc] = classesOf(javaType)
   }
 
   /** A primitive in a reference-only position, represented by its Java box. */
@@ -43,7 +56,9 @@ object ExportSignature {
 
     override def typeArgument: String = boxed.descriptorString()
 
-    override def sourceName: String = sourceNameOf(boxed)
+    override def sourceNameWith(spell: ClassDesc => String): String = sourceNameOf(boxed, spell)
+
+    override def classes: List[ClassDesc] = classesOf(boxed)
   }
 
   /** A Java class whose descriptor erases, but whose source and generic signature retain, arguments. */
@@ -56,14 +71,28 @@ object ExportSignature {
       else descriptor.stripSuffix(";") + targs.map(_.typeArgument).mkString("<", "", ">;")
     }
 
-    override def sourceName: String = {
-      val name = sourceNameOf(clazz)
-      if (targs.isEmpty) name else s"$name<${targs.map(_.sourceName).mkString(", ")}>"
+    override def sourceNameWith(spell: ClassDesc => String): String = {
+      val name = sourceNameOf(clazz, spell)
+      if (targs.isEmpty) name else s"$name<${targs.map(_.sourceNameWith(spell)).mkString(", ")}>"
     }
+
+    override def classes: List[ClassDesc] = classesOf(clazz) ++ targs.flatMap(_.classes)
   }
 
-  /** Converts a JVM class descriptor to its Java-source spelling. */
-  private def sourceNameOf(tpe: ClassDesc): String = tpe.descriptorString() match {
+  /** Returns the class `tpe` names, if any: none for a primitive, its element's for an array. */
+  private def classesOf(tpe: ClassDesc): List[ClassDesc] =
+    if (tpe.isPrimitive) Nil
+    else if (tpe.isArray) classesOf(tpe.componentType())
+    else List(tpe)
+
+  /** Returns the qualified Java-source name of the class `tpe`, such as `java.util.List`. */
+  def qualifiedName(tpe: ClassDesc): String = {
+    val descriptor = tpe.descriptorString()
+    descriptor.substring(1, descriptor.length - 1).replace('/', '.')
+  }
+
+  /** Converts a JVM type descriptor to its Java-source spelling, with classes spelled by `spell`. */
+  private def sourceNameOf(tpe: ClassDesc, spell: ClassDesc => String): String = tpe.descriptorString() match {
     case "Z" => "boolean"
     case "C" => "char"
     case "B" => "byte"
@@ -73,9 +102,8 @@ object ExportSignature {
     case "F" => "float"
     case "D" => "double"
     case "V" => "void"
-    case descriptor if descriptor.startsWith("[") => sourceNameOf(tpe.componentType()) + "[]"
-    case descriptor if descriptor.startsWith("L") && descriptor.endsWith(";") =>
-      descriptor.substring(1, descriptor.length - 1).replace('/', '.')
+    case descriptor if descriptor.startsWith("[") => sourceNameOf(tpe.componentType(), spell) + "[]"
+    case descriptor if descriptor.startsWith("L") && descriptor.endsWith(";") => spell(tpe)
     case descriptor => throw new IllegalArgumentException(s"Unsupported JVM type descriptor: $descriptor")
   }
 }

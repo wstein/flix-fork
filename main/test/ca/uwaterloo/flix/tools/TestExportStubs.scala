@@ -213,19 +213,60 @@ class TestExportStubs extends AnyFunSuite {
     assert(ExportStubs.javaSource(facades.head).contains("dev.flix.gen.Record$age$int$name$String values(int arg0)"))
   }
 
-  test("Enum results are refused until a stub can declare the enum itself") {
-    val src =
+  test("staged: a data-free enum result is declared by the stubs, merged with its companion module") {
+    val flixSrc =
       """mod Acme {
-        |    pub enum Color { case Red, case Green }
+        |    pub enum Color { case Red, case Green, case Blue }
+        |    @Export pub def warmest(_x: Int32): Color = Color.Red
+        |}
+        |mod Acme.Color {
+        |    @Export pub def parse(s: String): Acme.Color = if (s == "green") Acme.Color.Green else Acme.Color.Blue
         |}
         |mod Acme.Api {
-        |    @Export pub def favorite(_x: Int32): Acme.Color = Acme.Color.Green
+        |    use Acme.Color
+        |    @Export pub def favorite(_x: Int32): Color = Color.Green
+        |}
+        |""".stripMargin
+    val javaSrc =
+      """String s = switch (Acme.Api.favorite(0)) {
+        |    case Red -> "r";
+        |    case Green -> "g";
+        |    case Blue -> "b";
+        |};
+        |return s + Acme.Color.parse("green").ordinal() + dev.flix.gen.Acme.warmest(0);
+        |""".stripMargin
+    assert(runStaged(flixSrc, javaSrc) == "g1Red")
+  }
+
+  test("an enum the stub generator cannot find unambiguously is refused") {
+    val src =
+      """mod Acme.Model {
+        |    pub enum Color { case Red }
+        |}
+        |mod Acme.Api {
+        |    @Export pub def favorite(_x: Int32): Color = ???
         |}
         |""".stripMargin
 
     val (facades, unsupported) = stubs(src)
     assert(facades.flatMap(_.methods).isEmpty)
     assert(unsupported.map(_.name) == List("favorite"))
+  }
+
+  test("a companion export named like a Java enum method is refused, as the compiler refuses it") {
+    val src =
+      """mod Acme {
+        |    pub enum Color { case Red }
+        |    @Export pub def favorite(_x: Int32): Color = Color.Red
+        |}
+        |mod Acme.Color {
+        |    @Export pub def valueOf(_s: String): Acme.Color = Acme.Color.Red
+        |}
+        |""".stripMargin
+
+    val (facades, unsupported) = stubs(src)
+    assert(unsupported.map(_.name) == List("valueOf"))
+    assert(facades.flatMap(_.methods).map(_.name) == List("favorite"))
   }
 
   test("imported generic Java types retain arguments in both positions") {

@@ -30,6 +30,16 @@ import java.lang.constant.ConstantDescs.{CD_Class, CD_int}
   */
 object GenExportedEnum {
 
+  /**
+    * The methods every Java enum has, whether declared by `java.lang.Enum`, inherited from
+    * `Object`, or generated alongside the constants. A companion export of the same name would
+    * either fail to load or hide the inherited method from Java callers.
+    */
+  val MemberNames: Set[String] = Set(
+    "values", "valueOf", "name", "ordinal", "compareTo", "getDeclaringClass", "describeConstable",
+    "equals", "hashCode", "toString", "getClass", "notify", "notifyAll", "wait", "clone", "finalize"
+  )
+
   /** Returns the Java enum class of the Flix enum `sym`. */
   def desc(sym: Symbol.EnumSym): ClassDesc = Mangle.namespaceFacadeDesc(companionNamespace(sym))
 

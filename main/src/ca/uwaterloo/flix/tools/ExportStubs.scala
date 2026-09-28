@@ -19,7 +19,7 @@ import ca.uwaterloo.flix.api.Flix
 import ca.uwaterloo.flix.language.ast.shared.Source
 import ca.uwaterloo.flix.language.ast.{ChangeSet, Name, ReadAst, SourceLocation, SyntaxTree, WeededAst}
 import ca.uwaterloo.flix.language.jvm.JavaClasses
-import ca.uwaterloo.flix.language.phase.jvm.classes.{GenExportedRecord, GenExportedTuple}
+import ca.uwaterloo.flix.language.phase.jvm.classes.{GenExportedEnum, GenExportedRecord, GenExportedTuple}
 import ca.uwaterloo.flix.language.phase.jvm.{ExportSignature, Mangle}
 import ca.uwaterloo.flix.language.phase.{Lexer, Parser2, Weeder2}
 import ca.uwaterloo.flix.util.Result
@@ -79,6 +79,9 @@ object ExportStubs {
 
     /** A `record` with these components, the stand-in of a generated `java.lang.Record`. */
     case class Record(components: List[(String, ExportSignature)]) extends Shape
+
+    /** An `enum` with these constants, in case-ordinal order. */
+    case class Enum(constants: List[String]) extends Shape
   }
 
   /**
@@ -107,13 +110,15 @@ object ExportStubs {
     weed(inputs) match {
       case None => (Nil, Nil)
       case Some(root) =>
-        val found = root.units.values.flatMap(unit => visitDecls(unit.decls, Nil, imports(unit.usesAndImports)))
-        val (described, unsupported) = partition(found.toList)
+        val enums = root.units.values.flatMap(unit => enumsOf(unit.decls, Nil)).toMap
+        val found = root.units.values.flatMap(unit => visitDecls(unit.decls, Nil, imports(unit.usesAndImports), uses(unit.usesAndImports), enums))
+        val (described0, unsupported0) = partition(found.toList)
+        val (described, clashes) = refuseEnumMemberClashes(described0)
         val modules = described
           .groupBy(_.ns)
           .map { case (ns, ds) => Facade(Mangle.namespaceFacadeDesc(ns), Shape.Plain, ds.map(_.method)) }
           .toList
-        (merge(modules ++ described.flatMap(_.types)), unsupported)
+        (merge(modules ++ described.flatMap(_.types)), unsupported0 ++ clashes)
     }
   }
 
@@ -138,6 +143,19 @@ object ExportStubs {
       Files.writeString(file, javaSource(facade))
     }
     Result.Ok(())
+  }
+
+  /**
+    * Splits off the exports of an exported enum's companion module whose names the Java enum
+    * already has, which the compiler refuses with `IllegalExportEnumMember`: the companion's
+    * methods are declared on the enum itself.
+    */
+  private def refuseEnumMemberClashes(described: List[Described]): (List[Described], List[Unsupported]) = {
+    val enumClasses = described.flatMap(_.types).collect { case Facade(name, Shape.Enum(_), _) => name }.toSet
+    val (clashing, rest) = described.partition { d =>
+      enumClasses.contains(Mangle.namespaceFacadeDesc(d.ns)) && GenExportedEnum.MemberNames.contains(d.method.name)
+    }
+    (rest, clashing.map(d => Unsupported(d.method.name, "the name is already a method of the Java enum of its module", d.loc)))
   }
 
   /**
@@ -168,7 +186,21 @@ object ExportStubs {
     val split = binary.lastIndexOf('.')
     val pkg = if (split < 0) Nil else List(s"package ${binary.substring(0, split)};", "")
     val className = if (split < 0) binary else binary.substring(split + 1)
-    val body = facade.methods.sortBy(_.name).flatMap(javaMethod)
+    // Inside the class, a qualified name whose first segment is the class's own simple name means a
+    // member of the class, and Java has no syntax that names the package instead. Such a class is
+    // imported and spelled by its simple name, unless that simple name is itself taken.
+    val named = (facade.methods.flatMap(m => m.result :: m.params) ++ (facade.shape match {
+      case Shape.Record(components) => components.map(_._2)
+      case _ => Nil
+    })).flatMap(_.classes).distinct
+    val shadowed = named.filter(c => ExportSignature.qualifiedName(c).startsWith(className + "."))
+    val imported = shadowed.groupBy(simpleNameOf).collect {
+      case (simple, List(clazz)) if simple != className => clazz
+    }.toList.sortBy(ExportSignature.qualifiedName)
+    val spell: ClassDesc => String = c => if (imported.contains(c)) simpleNameOf(c) else ExportSignature.qualifiedName(c)
+    val imports = if (imported.isEmpty) Nil else imported.map(c => s"import ${ExportSignature.qualifiedName(c)};") :+ ""
+
+    val body = facade.methods.sortBy(_.name).flatMap(javaMethod(_, spell))
     val header = facade.shape match {
       // `final` with a private constructor: a facade holds only static methods, and letting a
       // caller extend or instantiate the stub would let it compile code the real facade rejects.
@@ -182,17 +214,20 @@ object ExportStubs {
       // A Java record declares the same canonical constructor, accessors, and `equals`,
       // `hashCode` and `toString` the generated class does.
       case Shape.Record(components) =>
-        val params = components.map { case (name, sig) => s"${sig.sourceName} $name" }.mkString(", ")
+        val params = components.map { case (name, sig) => s"${sig.sourceNameWith(spell)} $name" }.mkString(", ")
         List(s"public record $className($params) {", "")
+      // javac gives an enum its private constructor, `values()` and `valueOf(String)` itself.
+      case Shape.Enum(constants) =>
+        List(s"public enum $className {") ++ constants.map(c => s"    $c,") ++ List("    ;", "")
     }
-    val lines = List(Marker) ++ pkg ++ header ++ body ++ List("}")
+    val lines = List(Marker) ++ pkg ++ imports ++ header ++ body ++ List("}")
     lines.mkString("", "\n", "\n")
   }
 
   /** Returns `method` as the lines of a Java method declaration. */
-  private def javaMethod(method: Method): List[String] = {
-    val result = method.result.sourceName
-    val params = method.params.zipWithIndex.map { case (p, i) => s"${p.sourceName} arg$i" }.mkString(", ")
+  private def javaMethod(method: Method, spell: ClassDesc => String): List[String] = {
+    val result = method.result.sourceNameWith(spell)
+    val params = method.params.zipWithIndex.map { case (p, i) => s"${p.sourceNameWith(spell)} arg$i" }.mkString(", ")
     // The body is unreachable by construction, but it has to satisfy definite assignment, and
     // throwing says what has gone wrong if a stub is ever on a runtime classpath.
     List(
@@ -221,37 +256,37 @@ object ExportStubs {
     * An exported def that can be described: its facade method, the namespace of that facade, and
     * every generated type its signature names.
     */
-  private case class Described(ns: List[String], method: Method, types: List[Facade])
+  private case class Described(ns: List[String], method: Method, types: List[Facade], loc: SourceLocation)
 
   /**
-    * Collects the generated types a signature names while it is being described.
+    * What describing one def's signature needs to know, and collects the generated types it names.
     *
-    * One per def, and kept only if the whole def can be described: a refused def must not leave a
-    * stub for a type nothing else names.
+    * `ns` and `uses` are where the def is and which names a `use` brings into scope there; `enums`
+    * is every enum declared in the sources, by its full name. `types` is one per def and kept only
+    * if the whole def can be described: a refused def must not leave a stub for a type nothing else
+    * names.
     */
-  private class Declared {
+  private class DefContext(val ns: List[String], val uses: Map[String, List[String]], val enums: Map[List[String], WeededAst.Declaration.Enum]) {
     val types: scala.collection.mutable.ListBuffer[Facade] = scala.collection.mutable.ListBuffer.empty
   }
 
   /** Returns each exported def paired with the namespace it belongs to, or why it was refused. */
-  private def visitDecls(decls: List[WeededAst.Declaration], ns: List[String], imps: Map[String, String]): List[Either[Unsupported, Described]] =
+  private def visitDecls(decls: List[WeededAst.Declaration], ns: List[String], imps: Map[String, String], uses: Map[String, List[String]], enums: Map[List[String], WeededAst.Declaration.Enum]): List[Either[Unsupported, Described]] =
     decls.flatMap {
       case WeededAst.Declaration.Mod(_, _, _, qname, usesAndImports, inner, _) =>
         // Modules nest and each name may itself be dotted, so the namespace accumulates the same
         // way `Namer.visitMod` accumulates it. Diverging here would put the facade in the wrong
         // package, which is the one mistake a caller cannot work around.
         val nested = ns ++ qname.namespace.idents.map(_.name) :+ qname.ident.name
-        visitDecls(inner, nested, imps ++ imports(usesAndImports))
+        visitDecls(inner, nested, imps ++ imports(usesAndImports), uses ++ this.uses(usesAndImports), enums)
       case defn: WeededAst.Declaration.Def if defn.ann.isExport =>
-        List(visitDef(defn, ns, imps))
+        List(visitDef(defn, imps)(new DefContext(ns, uses, enums)))
       case _ => Nil
     }
 
   /** Returns the facade method for `defn`, or why it cannot be described. */
-  private def visitDef(defn: WeededAst.Declaration.Def, ns: List[String], imps: Map[String, String]): Either[Unsupported, Described] = {
+  private def visitDef(defn: WeededAst.Declaration.Def, imps: Map[String, String])(implicit ctx: DefContext): Either[Unsupported, Described] = {
     def refuse(what: String) = Left(Unsupported(defn.ident.name, what, defn.loc))
-
-    implicit val found: Declared = new Declared
 
     val declared = defn.fparams.flatMap(_.tpe)
 
@@ -263,7 +298,7 @@ object ExportStubs {
         case Some(ps) =>
           resultSignatureOf(defn.tpe, imps) match {
             case None => refuse("the return type cannot be described in Java")
-            case Some(r) => Right(Described(ns, Method(defn.ident.name, r, ps), found.types.toList))
+            case Some(r) => Right(Described(ctx.ns, Method(defn.ident.name, r, ps), ctx.types.toList, defn.loc))
           }
       }
   }
@@ -276,7 +311,7 @@ object ExportStubs {
     * in `TestExportStubs`; that test is what makes this safe to rely on, because nothing in the
     * types stops them drifting.
     */
-  private def signatureOf(tpe: WeededAst.Type, imps: Map[String, String], allowConvertedResult: Boolean)(implicit declared: Declared): Option[ExportSignature] = tpe match {
+  private def signatureOf(tpe: WeededAst.Type, imps: Map[String, String], allowConvertedResult: Boolean)(implicit ctx: DefContext): Option[ExportSignature] = tpe match {
     case WeededAst.Type.Var(_, _) => None
 
     case WeededAst.Type.Ambiguous(qname, _) => named(qname, Nil, imps, allowConvertedResult)
@@ -291,7 +326,7 @@ object ExportStubs {
     case WeededAst.Type.Tuple(tpes, _) if allowConvertedResult =>
       traverse(tpes.toList)(parameterSignatureOf(_, imps)).map { sigs =>
         val desc = GenExportedTuple.desc(sigs.map(_.javaType))
-        declared.types += Facade(desc, Shape.Record(sigs.zipWithIndex.map { case (sig, i) => s"component$i" -> sig }), Nil)
+        ctx.types += Facade(desc, Shape.Record(sigs.zipWithIndex.map { case (sig, i) => s"component$i" -> sig }), Nil)
         ExportSignature.Exact(desc)
       }
 
@@ -303,7 +338,7 @@ object ExportStubs {
         sigs <- traverse(fields) { case (label, fieldTpe) => parameterSignatureOf(fieldTpe, imps).map(label -> _) }
       } yield {
         val desc = GenExportedRecord.desc(sigs.map { case (label, sig) => label -> sig.javaType })
-        declared.types += Facade(desc, Shape.Record(sigs), Nil)
+        ctx.types += Facade(desc, Shape.Record(sigs), Nil)
         ExportSignature.Exact(desc)
       }
 
@@ -318,15 +353,15 @@ object ExportStubs {
   }
 
   /** Parameters are passed through unchanged, so converted containers are not accepted here. */
-  private def parameterSignatureOf(tpe: WeededAst.Type, imps: Map[String, String])(implicit declared: Declared): Option[ExportSignature] =
+  private def parameterSignatureOf(tpe: WeededAst.Type, imps: Map[String, String])(implicit ctx: DefContext): Option[ExportSignature] =
     signatureOf(tpe, imps, allowConvertedResult = false)
 
   /** Results may use conversions implemented by the namespace shim. */
-  private def resultSignatureOf(tpe: WeededAst.Type, imps: Map[String, String])(implicit declared: Declared): Option[ExportSignature] =
+  private def resultSignatureOf(tpe: WeededAst.Type, imps: Map[String, String])(implicit ctx: DefContext): Option[ExportSignature] =
     signatureOf(tpe, imps, allowConvertedResult = true)
 
   /** Returns how the type named `qname` and applied to `args` crosses the boundary. */
-  private def named(qname: Name.QName, args: List[WeededAst.Type], imps: Map[String, String], allowConvertedResult: Boolean)(implicit declared: Declared): Option[ExportSignature] = {
+  private def named(qname: Name.QName, args: List[WeededAst.Type], imps: Map[String, String], allowConvertedResult: Boolean)(implicit ctx: DefContext): Option[ExportSignature] = {
     (simpleName(qname, imps), args) match {
       case (Some(name), Nil) => builtin(name).orElse(imported(name, imps).map(ExportSignature.Exact(_)))
       case (Some("Option"), List(element)) if allowConvertedResult =>
@@ -351,10 +386,45 @@ object ExportStubs {
         } yield ExportSignature.Applied(clazz, signatures)
       case _ => None
     }
+  }.orElse {
+    // Only a name no import accounts for can be an enum: an imported Java class shadows it.
+    if (allowConvertedResult && args.isEmpty && !imps.contains(qname.toString)) enumSignatureOf(qname)
+    else None
   }
 
+  /**
+    * Returns the signature of the data-free enum `qname` names, declaring its Java enum.
+    *
+    * Without a resolver, the name is looked up conservatively: through a `use` alias of its first
+    * segment, then in the def's own module, then from the root. These cover how an exported enum is
+    * ordinarily named; a name found none of those ways, such as one declared in a sibling module
+    * and written unqualified, is refused rather than guessed, which fails the stub build loudly.
+    */
+  private def enumSignatureOf(qname: Name.QName)(implicit ctx: DefContext): Option[ExportSignature] = {
+    val parts = qname.namespace.idents.map(_.name) :+ qname.ident.name
+    val candidates = ctx.uses.get(parts.head).map(_ ++ parts.tail).toList ++ List(ctx.ns ++ parts, parts)
+    for {
+      name <- candidates.find(ctx.enums.contains)
+      enm = ctx.enums(name)
+      if enm.tparams.isEmpty && enm.cases.forall(_.tpes.isEmpty)
+    } yield {
+      val desc = Mangle.namespaceFacadeDesc(name)
+      ctx.types += Facade(desc, Shape.Enum(enm.cases.map(_.ident.name)), Nil)
+      ExportSignature.Exact(desc)
+    }
+  }
+
+  /** Returns every enum declared in `decls`, by its full name. */
+  private def enumsOf(decls: List[WeededAst.Declaration], ns: List[String]): List[(List[String], WeededAst.Declaration.Enum)] =
+    decls.flatMap {
+      case WeededAst.Declaration.Mod(_, _, _, qname, _, inner, _) =>
+        enumsOf(inner, ns ++ qname.namespace.idents.map(_.name) :+ qname.ident.name)
+      case enm: WeededAst.Declaration.Enum => List((ns :+ enm.ident.name) -> enm)
+      case _ => Nil
+    }
+
   /** Returns the signature of a value used as a Java generic type argument, boxing primitives. */
-  private def typeArgumentSignatureOf(tpe: WeededAst.Type, imps: Map[String, String])(implicit declared: Declared): Option[ExportSignature] =
+  private def typeArgumentSignatureOf(tpe: WeededAst.Type, imps: Map[String, String])(implicit ctx: DefContext): Option[ExportSignature] =
     parameterSignatureOf(tpe, imps).map {
       case ExportSignature.Exact(tpe0) if tpe0 == CD_boolean => ExportSignature.Boxed(tpe0, ClassDesc.ofInternalName("java/lang/Boolean"))
       case ExportSignature.Exact(tpe0) if tpe0 == CD_char => ExportSignature.Boxed(tpe0, ClassDesc.ofInternalName("java/lang/Character"))
@@ -403,6 +473,12 @@ object ExportStubs {
       case WeededAst.UseOrImport.Import(name, alias, _) => alias.name -> name.fqn.mkString(".")
     }.toMap
 
+  /** Returns the alias-to-full-name table a `use` list establishes. */
+  private def uses(usesAndImports: List[WeededAst.UseOrImport]): Map[String, List[String]] =
+    usesAndImports.collect {
+      case WeededAst.UseOrImport.Use(qname, alias, _) => alias.name -> (qname.namespace.idents.map(_.name) :+ qname.ident.name)
+    }.toMap
+
   /** Returns the head of a type application together with its arguments, left to right. */
   private def flatten(tpe: WeededAst.Type): (WeededAst.Type, List[WeededAst.Type]) = tpe match {
     case WeededAst.Type.Apply(tpe1, tpe2, _) =>
@@ -420,6 +496,12 @@ object ExportStubs {
   /** Splits the described defs from the refused ones. */
   private def partition(xs: List[Either[Unsupported, Described]]): (List[Described], List[Unsupported]) =
     (xs.collect { case Right(x) => x }, xs.collect { case Left(x) => x })
+
+  /** Returns the simple name of the class `desc`, the part after its package. */
+  private def simpleNameOf(desc: ClassDesc): String = {
+    val qualified = ExportSignature.qualifiedName(desc)
+    qualified.substring(qualified.lastIndexOf('.') + 1)
+  }
 
   /** Returns the binary class name represented by `desc`. */
   private def binaryName(desc: ClassDesc): String =

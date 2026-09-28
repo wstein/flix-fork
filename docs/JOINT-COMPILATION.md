@@ -91,7 +91,6 @@ development lineages. It currently supports:
   class instead of a second class of the same name. Because of that, a companion export named
   like a method every Java enum has (`name`, `ordinal`, `values`, `valueOf`, ...) is refused with
   `IllegalExportEnumMember`. An enum with a type parameter or a case carrying data is refused.
-  Stub generation refuses enum results for now: a stub would have to declare the enum itself.
 - Explicitly imported Java classes, including nested generic arguments in parameters and results.
 
 It refuses other Flix algebraic data types, other containers, functions, and unaccounted reference
@@ -103,7 +102,16 @@ Converted containers are result-only. `Option[t]`, `List[t]`, `Vector[t]`, `Chai
 `Map[k, v]`, tuples, records, and enums remain refused as parameters because the shim currently passes
 parameters straight into Flix and therefore has no reverse conversion.
 
+Stubs declare every class an exported signature names that the compiler generates too: a tuple or
+record result's class becomes a Java `record` with the same components, and a data-free enum
+becomes a Java `enum` carrying its companion module's methods, as the real class does. A record's
+components are in label order, since monomorphisation sorts a record's row and the generated class
+is named after it. Stub generation cannot resolve names, so it finds an enum through a `use` alias,
+the exporting module, or the root, and refuses a def whose enum it cannot find that way.
+
 The tests compare generated stub declarations with the method descriptors on the facade bytecode.
+The staged tests go further: they compile a Java caller against the stubs alone and run it against
+the real classes with no stub on the classpath.
 This pins the source-facing stub contract to the backend contract and catches drift between them.
 
 ## JVM names
