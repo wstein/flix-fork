@@ -108,6 +108,8 @@ or the compiler jar. The compiler suites additionally test a genuine Java-first 
 ABI mismatch rejection, CLI JSON diagnostics, LSP edit/close behavior, opaque type checks,
 default handlers, generic collection signatures, and transitive region rejection.
 Temporary artifacts are retained for inspection; the script prints their directory.
+The full compiler suite and native-image build are not run; opaque class-file resources are
+registered in native-image metadata, but native execution is not part of this validation claim.
 
 Start with a new consumer and a pinned experimental compiler build. Existing generated
 tuple/record/enum consumers remain on the archived export-enabled build until phase 2

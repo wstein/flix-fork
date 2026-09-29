@@ -149,7 +149,7 @@ instance JavaResult[List[a]] with JavaResult[a] {
 }
 ```
 
-Leaf instances delegate to `ToJava`/`ToFlix` where those already do the right thing. The
+Leaf instances reuse the existing boxing/unboxing operations without changing `ToJava`/`ToFlix`. The
 `flix-lab` prototype established that `JList[JavaResult.Out[a]]` and its recursive conversion
 work within an instance constrained by `JavaResult[a]`. It did **not** establish that a concrete
 application such as `JavaResult.Out[List[Int32]]` works: Flix rejects it because an associated
@@ -159,7 +159,8 @@ the checked trait and equality environments, including recursive containers and 
 Its internal projections are not new source syntax. Missing evidence, unresolved projections,
 cycles, unbound variables, and invalid equality constraints are rejected. A two-pass test renders
 the selected native type into a wrapper, rechecks it with the ordinary frontend, and executes
-the conversion. Generic classfile signatures remain a separate facade-emission gate.
+the conversion. The named facade and source-contract suites now also validate emitted generic
+classfile signatures and the pre-codegen recorded-ABI gate.
 A resolver-only spike had admitted unresolved and self-referential applications; it was reverted.
 Simply removing the resolver restriction is not a safe phase-1 implementation.
 
@@ -292,8 +293,9 @@ type-checking, so an instance can name them. That is phase 2.
 Java has not compiled yet cannot be type-checked, so a typed `--emit-java-api` cannot break the
 joint-compilation cycle. The old `ExportStubs` is gone; the new generator must read
 `export mod ... as` declarations before resolution, using the declared Java name. Syntax alone
-does not provide validated user-instance reductions; an explicit concrete API signature or a
-restricted bootstrap elaboration may be needed. This choice is not settled by the current proof.
+does not provide validated user-instance reductions. The agreed Phase 1 choice is an explicit
+concrete API contract: syntax-only stubs use its signatures, and checked instance reductions
+must match class names, descriptors, and generic signatures before runnable code is generated.
 Phase 3 removes the cycle itself for projects whose contract is a Java interface.
 
 ## The ABI gate, in phase 1
