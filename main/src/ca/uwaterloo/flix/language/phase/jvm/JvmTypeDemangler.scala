@@ -14,10 +14,14 @@ object JvmTypeDemangler {
       return if (parts.length >= 4) Right(parts(1) + "[" + parts.slice(2, parts.length - 1).mkString(", ") + "]." + parts.last)
       else Left("Not a mangled case class name.")
     }
-    val prefix = if (simple.startsWith("Def$")) "Def$" else if (simple.startsWith("Clo$")) "Clo$" else ""
-    if (prefix.isEmpty) return Left("Expected a Def$, Clo$, or Case$ class name.")
-    val marker = simple.indexOf("$I", prefix.length)
-    if (marker < 0) return Left("This class has no mangled type arguments.")
+    val prefix = if (simple.startsWith("Def$")) "Def$" else if (simple.startsWith("Clo$")) "Clo$"
+      else if (simple.startsWith("Anon$")) "Anon$" else ""
+    if (prefix.isEmpty) return Left("Expected a Def$, Clo$, Anon$, or Case$ class name.")
+    val marker = simple.lastIndexOf("$I")
+    if (marker < prefix.length) {
+      return if (prefix == "Anon$") Right("anonymous at " + simple.stripPrefix(prefix).replace('$', '.'))
+      else Left("This class has no mangled type arguments.")
+    }
     val owner = simple.substring(prefix.length, marker)
     val parser = new Parser(simple.substring(marker + 1))
     parser.arguments() match {

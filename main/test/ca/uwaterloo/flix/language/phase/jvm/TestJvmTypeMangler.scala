@@ -77,6 +77,7 @@ class TestJvmTypeMangler extends AnyFunSuite {
     assert(JvmTypeDemangler.demangle("Def$index$I3MapI6String4ListI5Int32EEE") ==
       Right("index(Map[String, List[Int32]])"))
     assert(JvmTypeDemangler.demangle("Case$Option$Obj$None") == Right("Option[Obj].None"))
+    assert(JvmTypeDemangler.demangle("Anon$Shop$price$0") == Right("anonymous at Shop.price.0"))
     assert(JvmTypeDemangler.demangle("Def$twice$IF3_I4PureF2_IS_5Int32S0_ES0_S0_EE").isRight)
     assert(JvmTypeDemangler.demangle("Def$map$$$$$abc$$$$$tail").isLeft)
     val effect = builtin(TypeConstructor.Effect(Symbol.mkEffSym("Example.First"), Kind.Eff))

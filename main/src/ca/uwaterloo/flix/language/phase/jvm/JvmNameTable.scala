@@ -24,10 +24,7 @@ object JvmNameTable {
   /** The fallback and compaction hash width, in base-36 digits, used by default. */
   val DefaultWidth: Int = 12
 
-  /**
-    * The widest suffix a SHA-256 digest fills: `36^49 < 2^256 < 36^50`, so a 50th digit would be
-    * a constant, not information.
-    */
+  /** Policy cap for abbreviated hashes. A full SHA-256 value can require 50 base-36 digits. */
   val MaxWidth: Int = 49
 
   /**

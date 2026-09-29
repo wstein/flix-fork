@@ -29,8 +29,8 @@ one symbol, one key assigned to distinct symbols, and different keys producing
 the same suffix. Repeated registration of the same symbol and key is allowed.
 Missing lookups fail with an internal compiler error.
 
-The width runs from 1 to 49 digits; 49 is the most a SHA-256 digest fills,
-since 36^49 < 2^256 < 36^50. A narrower suffix is shorter and more likely to
+The width runs from 1 to 49 digits by policy. A full SHA-256 digest can require
+50 base-36 digits because 36^49 < 2^256 < 36^50. A narrower suffix is shorter and more likely to
 collide: below the default, a collision is expected and its error names the
 flag and says to widen it; at or above the default, 36^width names make an
 accidental collision implausible, so the error reports a provenance defect. A

@@ -155,8 +155,8 @@ splits in two:
 | `--Xsymbol-names stable\|counter` | provenance names, or upstream's counter ids | `stable` |
 
 `--Xsymbol-hash-length` sets the compaction hash and the fallback hash of a nested class whose
-readable spelling is not unique; 49 digits is the most a SHA-256 digest fills, since
-36^49 < 2^256 < 36^50. `--Xsymbol-names counter` names each class by its internal counter as
+readable spelling is not unique; 49 digits is a policy cap, not the full digest width (which can
+be 50 digits because 36^49 < 2^256 < 36^50). `--Xsymbol-names counter` names each class by its internal counter as
 upstream Flix does, for comparing against upstream and for ruling the naming out when chasing a
 defect; it ignores `--Xsymbol-hash-length`. Provenance is still required in either mode.
 
