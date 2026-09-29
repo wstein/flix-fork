@@ -57,6 +57,10 @@ ids of different kinds of symbol may coincide without their classes colliding.
 types use `S_`, `S0_`, and so on, numbered in depth-first postorder. `erasedSymbol` stores the
 flat primitive-or-`Obj` shape used for enum and struct classes, for example
 `Case$Option$Obj$None`. A nested class of a specialized def uses that def's mangled suffix.
+The classic monomorphizer spells declared type arguments, while retaining the full
+call-site type as its provenance key. Definitions without declared quantifiers,
+such as trait members specialized by an instance head, spell the full signature
+to keep distinct instances distinct.
 
 The grammar escapes identifier bytes before measuring length, and canonicalizes commutative
 effects and row labels the same way as the identity key. Less common forms use an `X` production
@@ -69,6 +73,8 @@ The namespace's directories do not count toward that component limit. Compaction
 ends around `$$$$<fixed-width-SHA-256-base36>$$$$`; a duplicate final class name fails at
 codegen with advice about `--Xsymbol-hash-length`. Counter mode uses the default compaction
 hash width regardless of that flag.
+Codegen also rejects names that differ only in case, since they would address the
+same class file on common case-insensitive file systems.
 
 ## Readable names for nested classes
 
@@ -85,9 +91,12 @@ The provenance key stays the identity. Keys hash every level of their path at
 capture, so a readable path cannot be read back from one; `JvmLexicalOrigins`
 records a `JvmReadableOrigin` beside each key instead -- the `let` binders,
 local definitions, and methods between the definition and the class, then its
-name or its source-order ordinal among its kind in that scope. The path follows
-an expression through `transfer`, and through `specialize`, which tags it with
-the specialized owner; an Inliner clone or a synthetic expression has none,
+name or its source-order ordinal among its kind in that scope.
+Source-written binder names are used only when the symbol's location contains
+that exact identifier; compiler-generated binders use a scope-local ordinal,
+so scheduling-dependent generated argument numbers cannot enter class names.
+The path follows an expression through `transfer`, and through `specialize`,
+which tags it with the specialized owner; an Inliner clone or a synthetic expression has none,
 and `derivedSymbol` hands a lifted lambda or local definition its source's.
 
 `JvmNameTable` uses the readable spelling only if no class it could collide
