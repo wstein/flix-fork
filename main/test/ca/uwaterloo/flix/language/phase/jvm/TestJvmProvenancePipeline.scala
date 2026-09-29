@@ -14,6 +14,21 @@ import scala.collection.concurrent.TrieMap
 class TestJvmProvenancePipeline extends AnyFunSuite {
   private case class Emission(suffixes: Map[String, Set[String]], descriptors: Set[String])
 
+  test("enums differing only in case cannot emit colliding class files") {
+    implicit val security: SecurityContext = SecurityContext.Unrestricted
+    val flix = new Flix().setOptions(Options.TestWithLibNix)
+    flix.addVirtualPath(CompilerConstants.VirtualTestFile,
+      "enum Color { case Red }\nenum COLOR { case Red }\npub def first(): Color = Color.Red\npub def second(): COLOR = COLOR.Red")
+    val (checked, errors) = flix.check()
+    assert(errors.isEmpty, errors.mkString("\n"))
+    val root = checked.get
+    val entryPoints = root.defs.values.filter(_.spec.mod.isPublic).map(_.sym).toSet
+    val error = intercept[InternalCompilerException] { flix.codeGen(root.copy(entryPoints = entryPoints)) }
+    assert(error.getMessage.contains("differ only in case"))
+    assert(error.getMessage.contains("Case$Color$Red"))
+    assert(error.getMessage.contains("Case$COLOR$Red"))
+  }
+
   private def emitted(source: String, newMono: Boolean, threads: Int, checkRuntime: Boolean = false, fullLibrary: Boolean = false): Emission = {
     implicit val security: SecurityContext = SecurityContext.Unrestricted
     val options = if (fullLibrary) Options.TestWithLibAll else Options.TestWithLibMin

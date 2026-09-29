@@ -181,6 +181,14 @@ object CodeGen {
       throw InternalCompilerException(s"Duplicate JVM class names: $names.$advice", SourceLocation.Unknown)
     }
 
+    // Class files with names differing only in case overwrite each other on common
+    // case-insensitive file systems, even though their JVM descriptors are distinct.
+    val caseCollisions = allClasses.groupBy(clazz => ClassDescs.internalNameOf(clazz.name).toLowerCase(java.util.Locale.ROOT))
+      .values.collect { case classes if classes.map(_.name).distinct.length > 1 => classes.map(c => ClassDescs.internalNameOf(c.name)).sorted }
+    if (caseCollisions.nonEmpty) {
+      throw InternalCompilerException(s"JVM class names differ only in case: ${caseCollisions.map(_.mkString(" and ")).mkString(", ")}.", SourceLocation.Unknown)
+    }
+
     val classMap = allClasses.map(clazz => clazz.name -> clazz).toMap
 
     val tests = MapOps.mapValues(root.defs.filter(_._2.ann.isTest)) {
