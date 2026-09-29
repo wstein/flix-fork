@@ -263,6 +263,8 @@ object Library {
     "Time/TimeUnit.flix" -> LocalResource.get("/src/library/Time/TimeUnit.flix"),
     "ToFlix.flix" -> LocalResource.get("/src/library/ToFlix.flix"),
     "ToJava.flix" -> LocalResource.get("/src/library/ToJava.flix"),
+    "Java.flix" -> LocalResource.get("/src/library/Java.flix"),
+    "Java/Boundary.flix" -> LocalResource.get("/src/library/Java/Boundary.flix"),
     "Traversable.flix" -> LocalResource.get("/src/library/Traversable.flix"),
     "UnorderedFoldable.flix" -> LocalResource.get("/src/library/UnorderedFoldable.flix"),
     "Validation.flix" -> LocalResource.get("/src/library/Validation.flix"),
