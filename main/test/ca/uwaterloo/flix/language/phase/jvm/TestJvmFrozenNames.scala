@@ -20,7 +20,7 @@ class TestJvmFrozenNames extends AnyFunSuite {
       symbols.zip(List("definition", "enum", "anonymous")).foreach { case (sym, family) =>
         flix.jvmOrigins.symbols.register(sym, GeneratedJvmKey(family, List("semantic-origin")))
       }
-      flix.jvmOrigins.freeze(symbols)
+      flix.jvmOrigins.freeze(symbols, JvmNameTable.DefaultWidth)
       List(
         GenFunAndClosureClasses.defnDesc(definition),
         GenFunAndClosureClasses.closureDesc(definition),
@@ -37,7 +37,7 @@ class TestJvmFrozenNames extends AnyFunSuite {
   test("descriptor lookups reject absent frozen mappings instead of using counters") {
     implicit val flix: Flix = new Flix()
     flix.withJvmOrigins(TypedAst.empty) {
-      flix.jvmOrigins.freeze(Nil)
+      flix.jvmOrigins.freeze(Nil, JvmNameTable.DefaultWidth)
       val definition = new Symbol.DefnSym(Some(123), Nil, "missing", loc)
       val enumeration = new Symbol.EnumSym(Some(123), Nil, "Missing", loc)
       intercept[InternalCompilerException] { GenFunAndClosureClasses.defnDesc(definition) }
@@ -53,7 +53,7 @@ class TestJvmFrozenNames extends AnyFunSuite {
     flix.withJvmOrigins(TypedAst.empty) {
       flix.jvmOrigins.symbols.register(definition, GeneratedJvmKey("definition", List("example")))
       intercept[InternalCompilerException] { GenFunAndClosureClasses.defnDesc(definition) }
-      flix.jvmOrigins.freeze(List(definition))
+      flix.jvmOrigins.freeze(List(definition), JvmNameTable.DefaultWidth)
       assert(GenFunAndClosureClasses.defnDesc(definition).descriptorString() == "LDef$example;")
     }
     intercept[InternalCompilerException] { GenFunAndClosureClasses.defnDesc(definition) }

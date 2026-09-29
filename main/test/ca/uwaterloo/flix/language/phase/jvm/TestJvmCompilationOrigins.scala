@@ -20,13 +20,13 @@ class TestJvmCompilationOrigins extends AnyFunSuite {
     origins.symbols.register(sym, owner)
     origins.symbols.register(discarded, GeneratedJvmKey("discarded", Nil))
     intercept[InternalCompilerException] { origins.nameTable }
-    origins.freeze(List(sym))
-    assert(origins.nameTable.suffix(sym) == JvmNameTable.build(List(sym -> owner)).suffix(sym))
+    origins.freeze(List(sym), JvmNameTable.DefaultWidth)
+    assert(origins.nameTable.suffix(sym) == JvmNameTable.build(List(sym -> owner), JvmNameTable.DefaultWidth).suffix(sym))
     intercept[InternalCompilerException] { origins.nameTable.suffix(discarded) }
     intercept[InternalCompilerException] { origins.symbols.origin(sym) }
     intercept[InternalCompilerException] { origins.expression(source) }
     intercept[InternalCompilerException] { origins.record(source, owner) }
-    intercept[InternalCompilerException] { origins.freeze(List(sym)) }
+    intercept[InternalCompilerException] { origins.freeze(List(sym), JvmNameTable.DefaultWidth) }
     origins.close()
     intercept[InternalCompilerException] { origins.nameTable }
   }
@@ -36,11 +36,11 @@ class TestJvmCompilationOrigins extends AnyFunSuite {
     val sym = new Symbol.DefnSym(Some(1), Nil, "missing", loc)
     val source = literal(0)
     origins.record(source, owner)
-    intercept[InternalCompilerException] { origins.freeze(List(sym)) }
+    intercept[InternalCompilerException] { origins.freeze(List(sym), JvmNameTable.DefaultWidth) }
     intercept[InternalCompilerException] { origins.nameTable }
     intercept[InternalCompilerException] { origins.expression(source) }
     intercept[InternalCompilerException] { origins.record(source, owner) }
-    intercept[InternalCompilerException] { origins.freeze(Nil) }
+    intercept[InternalCompilerException] { origins.freeze(Nil, JvmNameTable.DefaultWidth) }
     origins.close()
   }
 
@@ -129,7 +129,7 @@ class TestJvmCompilationOrigins extends AnyFunSuite {
     val origins = new JvmCompilationOrigins(new JvmProvenance)
     val source = literal(0)
     origins.record(source, owner)
-    origins.symbols.freeze(Nil)
+    origins.symbols.freeze(Nil, JvmNameTable.DefaultWidth)
     origins.close()
     origins.close()
     intercept[InternalCompilerException] { origins.expression(source) }

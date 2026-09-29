@@ -26,11 +26,12 @@ final class JvmProvenance {
     origins = mutable.Map.from(origins.iterator.filter { case (sym, _) => live.contains(sym) })
   }
 
-  def freeze(required: Iterable[Symbol]): JvmNameTable = synchronized {
+  /** Returns the name table of `required`, with suffixes `width` base-36 digits wide (see [[JvmNameTable.build]]). */
+  def freeze(required: Iterable[Symbol], width: Int): JvmNameTable = synchronized {
     requireOpen()
     frozen = true
     try {
-      JvmNameTable.build(required.iterator.map(sym => sym -> origin(sym)).toList)
+      JvmNameTable.build(required.iterator.map(sym => sym -> origin(sym)).toList, width)
     } finally {
       origins = mutable.Map.empty
     }

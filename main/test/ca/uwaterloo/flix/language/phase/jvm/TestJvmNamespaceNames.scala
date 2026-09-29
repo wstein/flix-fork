@@ -24,7 +24,7 @@ class TestJvmNamespaceNames extends AnyFunSuite {
     flix.withJvmOrigins(TypedAst.empty) {
       val defn = definition(id, exported)
       flix.jvmOrigins.symbols.register(defn.sym, origin)
-      flix.jvmOrigins.freeze(List(defn.sym))
+      flix.jvmOrigins.freeze(List(defn.sym), JvmNameTable.DefaultWidth)
       val method = GenNamespace.ShimMethod(namespace, defn)
       assert(method.d.descriptorString() == "()I")
       if (!exported) {
@@ -49,7 +49,7 @@ class TestJvmNamespaceNames extends AnyFunSuite {
   test("all namespace shims require frozen mappings including exports and idless definitions") {
     implicit val flix: Flix = new Flix()
     flix.withJvmOrigins(TypedAst.empty) {
-      flix.jvmOrigins.freeze(Nil)
+      flix.jvmOrigins.freeze(Nil, JvmNameTable.DefaultWidth)
       for (id <- List(None, Some(123)); exported <- List(false, true)) {
         val defn = definition(id, exported)
         val error = intercept[InternalCompilerException] {

@@ -17,11 +17,11 @@ final class JvmCompilationOrigins(val symbols: JvmProvenance) {
     frozenNames.getOrElse(fail("JVM names are not available outside frozen code generation."))
   }
 
-  def freeze(required: Iterable[Symbol]): Unit = synchronized {
+  def freeze(required: Iterable[Symbol], width: Int): Unit = synchronized {
     requireOpen()
     freezeStarted = true
     try {
-      frozenNames = Some(symbols.freeze(required))
+      frozenNames = Some(symbols.freeze(required, width))
     } finally {
       expressions = new IdentityHashMap[AnyRef, GeneratedJvmKey]()
     }

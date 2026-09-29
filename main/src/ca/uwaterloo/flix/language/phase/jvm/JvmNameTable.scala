@@ -14,13 +14,18 @@ final class JvmNameTable private (names: Map[Symbol, String]) {
 
 object JvmNameTable {
 
-  private val Width = 12
-  private val NamespaceSize = BigInt(36).pow(Width)
+  /** The suffix width, in base-36 digits, that code generation uses. */
+  val DefaultWidth: Int = 12
 
-  def build(entries: Iterable[(Symbol, GeneratedJvmKey)]): JvmNameTable =
-    buildWithDigest(entries, key => BigInt(1, MessageDigest.getInstance("SHA-256").digest(key.bytes)))
+  /**
+    * Returns the table naming each symbol in `entries` after its provenance, with suffixes of
+    * `width` base-36 digits.
+    */
+  def build(entries: Iterable[(Symbol, GeneratedJvmKey)], width: Int): JvmNameTable =
+    buildWithDigest(entries, width, key => BigInt(1, MessageDigest.getInstance("SHA-256").digest(key.bytes)))
 
-  private[jvm] def buildWithDigest(entries: Iterable[(Symbol, GeneratedJvmKey)], digest: GeneratedJvmKey => BigInt): JvmNameTable = {
+  private[jvm] def buildWithDigest(entries: Iterable[(Symbol, GeneratedJvmKey)], width: Int, digest: GeneratedJvmKey => BigInt): JvmNameTable = {
+    val namespaceSize = BigInt(36).pow(width)
     val provenance = mutable.Map.empty[Symbol, GeneratedJvmKey]
     val owners = mutable.Map.empty[GeneratedJvmKey, Symbol]
     val claims = mutable.Map.empty[String, GeneratedJvmKey]
@@ -33,8 +38,8 @@ object JvmNameTable {
           throw InternalCompilerException(s"Duplicate JVM naming provenance '$key' for '$previous' and '$sym'.", SourceLocation.Unknown)
         }
       }
-      val digits = (digest(key) mod NamespaceSize).toString(36)
-      val name = "0" * (Width - digits.length) + digits
+      val digits = (digest(key) mod namespaceSize).toString(36)
+      val name = "0" * (width - digits.length) + digits
       claims.get(name).foreach { previous =>
         if (previous != key) {
           throw InternalCompilerException(s"Stable JVM name collision on '$name': '$previous' and '$key'.", SourceLocation.Unknown)
