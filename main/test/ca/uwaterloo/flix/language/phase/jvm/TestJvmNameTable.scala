@@ -162,4 +162,29 @@ class TestJvmNameTable extends AnyFunSuite {
     intercept[InternalCompilerException] { JvmNameTable.build(Nil, JvmNameTable.MaxWidth + 1) }
   }
 
+  test("generated class names use the configured width end to end") {
+    import ca.uwaterloo.flix.api.Flix
+    import ca.uwaterloo.flix.util.{Options, Result}
+    val program =
+      """@DontInline
+        |def twice(f: a -> a, x: a): a = f(f(x))
+        |def main(): Unit \ IO = { println(twice(x -> x + 1, 1)); println(twice(s -> s + "!", "a")) }
+        |""".stripMargin
+    def suffixesOf(width: Int): Set[String] = {
+      val flix = new Flix().setOptions(Options.TestWithLibMin.copy(xstableNameLength = width))
+      flix.addVirtualPath(ca.uwaterloo.flix.api.CompilerConstants.VirtualTestFile, program)(ca.uwaterloo.flix.language.ast.shared.SecurityContext.Unrestricted)
+      val result = flix.compile() match {
+        case Result.Ok(r) => r
+        case Result.Err(errors) => fail(errors.map(_.summary).mkString(", "))
+      }
+      val names = result.getClasses.keys.map(_.displayName()).toSet
+      val suffixes = names.collect { case name if name.startsWith("Def$twice$") => name.stripPrefix("Def$twice$") }
+      assert(suffixes.nonEmpty, s"no specialization of twice among ${names.filter(_.contains("twice"))}")
+      suffixes
+    }
+    val wide = suffixesOf(20)
+    assert(wide.nonEmpty && wide.forall(_.matches("[0-9a-z]{20}")), wide)
+    val counters = suffixesOf(0)
+    assert(counters.nonEmpty && counters.forall(_.matches("[0-9]+")), counters)
+  }
 }

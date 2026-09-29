@@ -22,6 +22,7 @@ import ca.uwaterloo.flix.language.CompilationMessage
 import ca.uwaterloo.flix.language.ast.shared.SecurityContext
 import ca.uwaterloo.flix.language.ast.{Symbol, TypedAst}
 import ca.uwaterloo.flix.language.phase.HtmlDocumentor
+import ca.uwaterloo.flix.language.phase.jvm.JvmNameTable
 import ca.uwaterloo.flix.language.phase.unification.zhegalkin.ZhegalkinPerf
 import ca.uwaterloo.flix.runtime.JvmLoader
 import ca.uwaterloo.flix.runtime.shell.Shell
@@ -89,6 +90,7 @@ object Main {
       xnodeprecated = cmdOpts.xnodeprecated,
       xsubeffecting = cmdOpts.xsubeffecting,
       xnewmono = cmdOpts.xnewmono,
+      xstableNameLength = cmdOpts.xstableNameLength,
       XPerfFrontend = cmdOpts.XPerfFrontend,
       XPerfPar = cmdOpts.XPerfPar,
       XPerfN = cmdOpts.XPerfN,
@@ -536,6 +538,7 @@ object Main {
     xverify: Boolean = false,
     xsubeffecting: Set[Subeffecting] = Set.empty,
     xnewmono: Boolean = false,
+    xstableNameLength: Int = JvmNameTable.DefaultWidth,
     XPerfN: Option[Int] = None,
     XPerfFrontend: Boolean = false,
     XPerfPar: Boolean = false,
@@ -783,6 +786,15 @@ object Main {
       // Xnewmono
       opt[Unit]("Xnewmono").action((_, c) => c.copy(xnewmono = true)).
         text("[experimental] uses the constraint-based monomorphization pipeline instead of the demand-driven one.")
+
+      // Xstable-name-length
+      opt[Int]("Xstable-name-length").action((width, c) => c.copy(xstableNameLength = width)).
+        validate { width =>
+          if (width < 0 || width > JvmNameTable.MaxWidth) failure(s"Xstable-name-length must be between 0 and ${JvmNameTable.MaxWidth}")
+          else success
+        }.
+        text("[experimental] the width, in base-36 digits, of the suffix naming a generated class after its provenance; " +
+          s"0 names it by its internal counter instead, as upstream Flix does (default: ${JvmNameTable.DefaultWidth}).")
 
       note("")
 

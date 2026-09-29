@@ -27,6 +27,17 @@ class TestMain extends AnyFunSuite {
     assert(opts.command == Main.Command.Init)
   }
 
+  test("--Xstable-name-length sets the generated-name width") {
+    assert(Main.parseCmdOpts(Array("build", "--Xstable-name-length", "8")).get.xstableNameLength == 8)
+    assert(Main.parseCmdOpts(Array("build", "--Xstable-name-length", "0")).get.xstableNameLength == 0)
+    assert(Main.parseCmdOpts(Array("build")).get.xstableNameLength == ca.uwaterloo.flix.language.phase.jvm.JvmNameTable.DefaultWidth)
+  }
+
+  test("--Xstable-name-length outside its range is refused") {
+    assert(Main.parseCmdOpts(Array("build", "--Xstable-name-length", "-1")).isEmpty)
+    assert(Main.parseCmdOpts(Array("build", "--Xstable-name-length", "50")).isEmpty)
+  }
+
   test("build") {
     val args = Array("build")
     val opts = Main.parseCmdOpts(args).get

@@ -36,7 +36,7 @@ object CodeGen {
     val namedSymbols: Set[Symbol] = root.defs.keySet.map(sym => sym: Symbol) ++
       root.enums.values.flatMap(getNullaryTagsOf).map(_.sym.enumSym) ++
       root.anonClasses.map(_.sym)
-    flix.jvmOrigins.freeze(namedSymbols, JvmNameTable.DefaultWidth)
+    flix.jvmOrigins.freeze(namedSymbols, flix.options.xstableNameLength)
     implicit val r: Root = root
 
     // Types/classes required for Flix runtime.
