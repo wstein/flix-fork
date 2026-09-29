@@ -167,18 +167,9 @@ Rated for readability, stability, and cost (★ low to ★★★★★ high).
 | Plain `$`-separated type names (`Def$map$Map$String$List$Int32`) | ★★★★★ | ★★★★★ | low | Rejected: not injective, arity and nesting are lost |
 | Faithful Itanium, builtins as letters (`Def$map$IiiE`) | ★★ | ★★★★★ | low | Rejected: injective but cryptic for no gain |
 | **Itanium-style, builtins as words, Scala-style compaction with SHA-256** | ★★★★ | ★★★★★ | medium | **Proposed** |
-| Compaction hashed with MurmurHash3, 32 bits | -- | -- | -- | Rejected, see below |
 | Compaction hashed with MD5 as Scala does | -- | ★★★★ | low | Rejected: no reason to prefer it over the SHA-256 already in use, and variable-width formatting |
 | Hash encoded as base64url | ★★★ | ★★ | low | Rejected, see below |
 | One flag, `--Xstable-name-length`, with `0` as the counter mode | -- | -- | none | Rejected: a mode is not a length, see §4 |
-
-**Why not MurmurHash3 at 32 bits.** Scala uses MurmurHash3 for `hashCode`, where a collision
-costs a slower lookup; it compacts names with MD5. Here a collision fails the build, since the
-table refuses two keys that spell the same name. Among *n* hashed names the chance of some
-collision is about `1 - e^(-n^2 / 2^33)` at 32 bits: 1.2 % for 10,000 names and 69 % for 100,000.
-Twelve base-36 digits, about 2^62, give 10^-11 and 10^-9. Speed does not argue for it: SHA-256 from
-the JDK costs microseconds for a few hundred bytes, the whole naming scheme measured at -0.4 %
-Xperf in flix/flix#13043, and under this decision only overlong names are hashed at all.
 
 **Why not base64url.** Denser, at six bits a character, but it mixes cases, which a case-insensitive
 file system folds together (see §3), and it contains `-`, which the JVM accepts in a class name but
