@@ -135,6 +135,14 @@ class TestJvmNameTable extends AnyFunSuite {
     entries.foreach { case (sym, _) => assert(wide.suffix(sym).endsWith(narrow.suffix(sym))) }
   }
 
+  test("width zero names a symbol by its own counter, as upstream does") {
+    val defn = symbol(42)
+    val anon = new Symbol.AnonClassSym(7, SourceLocation.Unknown)
+    val table = JvmNameTable.build(List(defn -> key("a"), anon -> GeneratedJvmKey("anonymous-class", List("b"))), 0)
+    assert(table.suffix(defn) == "42")
+    assert(table.suffix(anon) == "7")
+  }
+
   test("a collision names the flag, and says whether the width is below the supported one") {
     val entries = List(symbol(1) -> key("first"), symbol(2) -> key("second"))
     val narrow = intercept[InternalCompilerException] {
@@ -150,7 +158,7 @@ class TestJvmNameTable extends AnyFunSuite {
   }
 
   test("a width outside the supported range is refused") {
-    intercept[InternalCompilerException] { JvmNameTable.build(Nil, 0) }
+    intercept[InternalCompilerException] { JvmNameTable.build(Nil, -1) }
     intercept[InternalCompilerException] { JvmNameTable.build(Nil, JvmNameTable.MaxWidth + 1) }
   }
 

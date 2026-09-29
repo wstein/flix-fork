@@ -27,14 +27,17 @@ object JvmNameTable {
     * Returns the table naming each symbol in `entries` after its provenance, with suffixes of
     * `width` base-36 digits.
     *
-    * `width` is `--Xstable-name-length`.
+    * `width` is `--Xstable-name-length`. Zero opts out of provenance naming: each symbol is named
+    * by its own counter id, as upstream Flix names it, so its name changes whenever an unrelated
+    * edit shifts the counter. Provenance is still required, so the opt-out cannot hide a
+    * symbol that would fail to be named otherwise.
     */
   def build(entries: Iterable[(Symbol, GeneratedJvmKey)], width: Int): JvmNameTable =
     buildWithDigest(entries, width, key => BigInt(1, MessageDigest.getInstance("SHA-256").digest(key.bytes)))
 
   private[jvm] def buildWithDigest(entries: Iterable[(Symbol, GeneratedJvmKey)], width: Int, digest: GeneratedJvmKey => BigInt): JvmNameTable = {
-    if (width < 1 || width > MaxWidth) {
-      throw InternalCompilerException(s"Stable JVM name width $width is outside 1 to $MaxWidth.", SourceLocation.Unknown)
+    if (width < 0 || width > MaxWidth) {
+      throw InternalCompilerException(s"Stable JVM name width $width is outside 0 to $MaxWidth.", SourceLocation.Unknown)
     }
     val namespaceSize = BigInt(36).pow(width)
     val provenance = mutable.Map.empty[Symbol, GeneratedJvmKey]
@@ -49,9 +52,15 @@ object JvmNameTable {
           throw InternalCompilerException(s"Duplicate JVM naming provenance '$key' for '$previous' and '$sym'.", SourceLocation.Unknown)
         }
       }
-      val digits = (digest(key) mod namespaceSize).toString(36)
-      val name = "0" * (width - digits.length) + digits
-      claims.get(name).foreach { previous =>
+      val name =
+        if (width == 0) counterOf(sym)
+        else {
+          val digits = (digest(key) mod namespaceSize).toString(36)
+          "0" * (width - digits.length) + digits
+        }
+      // A counter id is unique to its symbol by construction, and ids of different kinds of
+      // symbol may coincide without their classes colliding, so only a digest is checked.
+      claims.get(name).filter(_ => width > 0).foreach { previous =>
         if (previous != key) {
           throw InternalCompilerException(s"Stable JVM name collision on '$name': '$previous' and '$key'." + collisionAdvice(width), SourceLocation.Unknown)
         }
@@ -63,6 +72,15 @@ object JvmNameTable {
     }
 
     new JvmNameTable(names.toMap)
+  }
+
+  /** Returns the counter id `sym` was minted with, or its text if it has none. */
+  private def counterOf(sym: Symbol): String = sym match {
+    case s: Symbol.DefnSym => s.id.map(_.toString).getOrElse(s.text)
+    case s: Symbol.EnumSym => s.id.map(_.toString).getOrElse(s.text)
+    case s: Symbol.StructSym => s.id.map(_.toString).getOrElse(s.text)
+    case s: Symbol.AnonClassSym => s.id.toString
+    case other => throw InternalCompilerException(s"Unexpected symbol '$other' in the JVM name table.", SourceLocation.Unknown)
   }
 
   /**
