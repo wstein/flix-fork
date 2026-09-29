@@ -13,7 +13,7 @@ import ca.uwaterloo.flix.language.dbg.AstPrinter
 import ca.uwaterloo.flix.language.fmt.FormatOptions
 import ca.uwaterloo.flix.language.jvm.{ByteBuddyJavaTypeProvider, DependencyClassPath, ExternalJarLoader, JavaTypeProvider}
 import ca.uwaterloo.flix.language.phase.*
-import ca.uwaterloo.flix.language.phase.jvm.{CodeGen, JvmCompilationOrigins}
+import ca.uwaterloo.flix.language.phase.jvm.{CodeGen, JavaBoundaryApi, JvmCompilationOrigins}
 import ca.uwaterloo.flix.language.phase.monomorph.Specialization
 import ca.uwaterloo.flix.language.phase.monomorph2.Monomorpher2
 import ca.uwaterloo.flix.language.phase.optimizer.{LambdaDrop, Optimizer}
@@ -635,6 +635,22 @@ class Flix(pkgs: List[InstalledPackage] = Nil, jars: List[Path] = Nil, mounts: M
     */
   def codeGen(typedAst: TypedAst.Root): CompilationResult = withJvmOrigins(typedAst) {
     codeGenWithOrigins(typedAst)
+  }
+
+  /** Experimental ADR 3 API: expose checked concrete wrappers through an explicitly named facade. */
+  def codeGenWithJavaApi(typedAst: TypedAst.Root, api: JavaBoundaryApi.Declaration): Result[CompilationResult, JavaBoundaryApi.Error] = {
+    implicit val flix: Flix = this
+    JavaBoundaryApi.prepare(api, typedAst).flatMap { plan =>
+      val retained = typedAst.copy(entryPoints = typedAst.entryPoints ++ plan.entryPoints)
+      withJvmOrigins(retained) {
+        val compiled = codeGenWithOrigins(retained)
+        JavaBoundaryApi.facade(plan, compiled.getClasses).map { facade =>
+          new CompilationResult(compiled.root.copy(classes = compiled.getClasses + (facade.name -> facade)),
+            compiled.totalTime, compiled.codeSize + facade.bytecode.length, this,
+            compiled.debugDefinitions, compiled.debugCalls, compiled.coverageSession)
+        }
+      }
+    }
   }
 
   private def codeGenWithOrigins(typedAst: TypedAst.Root): CompilationResult = try {
