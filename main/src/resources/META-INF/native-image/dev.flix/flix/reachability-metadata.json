@@ -1,6 +1,8 @@
 {
   "resources": [
     { "glob": "src/**" },
+    { "glob": "dev/flix/runtime/OpaqueHandle.class" },
+    { "glob": "dev/flix/runtime/OpaqueHandleBridge.class" },
     { "glob": "doc/**" },
     { "glob": "benchmark/**" }
   ],
