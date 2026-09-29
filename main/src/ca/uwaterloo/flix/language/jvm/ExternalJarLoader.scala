@@ -16,6 +16,10 @@ object ExternalJarLoader {
   /** The class file name of the `Global` class, i.e. `dev/flix/runtime/Global.class`. */
   private val GlobalClassFileName: String = ClassDescs.classFileNameOf(FlixClasses.Global)
 
+  /** JDK-only boundary support, explicitly visible without exposing the compiler classpath. */
+  private val BoundaryBinaryNames: Set[String] = Set("dev.flix.runtime.OpaqueHandle", "dev.flix.runtime.OpaqueHandleBridge")
+  private val BoundaryClassFileNames: Set[String] = BoundaryBinaryNames.map(_.replace('.', '/') + ".class")
+
   /** The prefix shared by the binary names of the test classes, i.e. `dev.flix.test.`. */
   private val TestBinaryNamePrefix: String = FlixClasses.TestPackage.mkString("", ".", ".")
 
@@ -42,7 +46,7 @@ class ExternalJarLoader(urls: Array[URL]) extends URLClassLoader(urls, ClassLoad
         // Special case for the Global class.
         // This is never used at runtime, but we need to be able to load it at compile
         // time in order to check method signatures
-        if (name == GlobalBinaryName)
+        if (name == GlobalBinaryName || BoundaryBinaryNames.contains(name))
           super.findSystemClass(name)
         // Special case for testing to allow us to load test classes
         else if (name.startsWith(TestBinaryNamePrefix))
@@ -57,7 +61,7 @@ class ExternalJarLoader(urls: Array[URL]) extends URLClassLoader(urls, ClassLoad
     val resource = super.findResource(name)
     if (resource != null) {
       resource
-    } else if (name == GlobalClassFileName || name.startsWith(TestClassFileNamePrefix)) {
+    } else if (name == GlobalClassFileName || BoundaryClassFileNames.contains(name) || name.startsWith(TestClassFileNamePrefix)) {
       ClassLoader.getSystemResource(name)
     } else {
       null

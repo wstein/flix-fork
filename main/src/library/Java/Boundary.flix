@@ -6,6 +6,9 @@
  */
 
 pub mod Java.Boundary {
+    import java.lang.Object
+    import dev.flix.runtime.OpaqueHandle
+    import dev.flix.runtime.OpaqueHandleBridge
     import java.lang.Boolean
     import java.lang.Character
     import java.lang.Byte
@@ -18,6 +21,17 @@ pub mod Java.Boundary {
     import java.util.LinkedHashSet
     import java.util.LinkedHashMap
     import java.util.{List => JList, Collection => JCollection, Set => JSet, Map => JMap}
+
+    /// Explicit opaque crossing. Only the compiler supplies the stable type tag at the boundary.
+    pub enum Opaque[t] { case Opaque(t) }
+
+    /// Compiler-internal tagged conversion, not an implicit missing-instance fallback.
+    pub def pack(key: String, name: String, value: Opaque[a]): OpaqueHandle[Object] \ IO =
+        OpaqueHandleBridge.wrap(key, name, unchecked_cast(value as Object))
+
+    /// Checks the type tag before the cast, including when a caller returns a different handle.
+    pub def unpack(key: String, name: String, value: OpaqueHandle[Object]): Opaque[a] \ IO =
+        unchecked_cast(OpaqueHandleBridge.unwrap(key, name, value) as Opaque[a])
 
     /// Deep result conversion; primitive instances box only when a container asks for them.
     pub trait JavaResult[t: Type] {

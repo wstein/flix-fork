@@ -644,9 +644,11 @@ class Flix(pkgs: List[InstalledPackage] = Nil, jars: List[Path] = Nil, mounts: M
       val retained = typedAst.copy(entryPoints = typedAst.entryPoints ++ plan.entryPoints)
       withJvmOrigins(retained) {
         val compiled = codeGenWithOrigins(retained)
-        JavaBoundaryApi.facade(plan, compiled.getClasses).map { facade =>
-          new CompilationResult(compiled.root.copy(classes = compiled.getClasses + (facade.name -> facade)),
-            compiled.totalTime, compiled.codeSize + facade.bytecode.length, this,
+        val support = ca.uwaterloo.flix.language.phase.interop.JavaBoundaryRuntime.classes
+        val classes = compiled.getClasses ++ support.map(clazz => clazz.name -> clazz)
+        JavaBoundaryApi.facade(plan, classes).map { facade =>
+          new CompilationResult(compiled.root.copy(classes = classes + (facade.name -> facade)),
+            compiled.totalTime, compiled.codeSize + facade.bytecode.length + support.map(_.bytecode.length).sum, this,
             compiled.debugDefinitions, compiled.debugCalls, compiled.coverageSession)
         }
       }

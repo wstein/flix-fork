@@ -49,6 +49,16 @@ class TestJavaBoundaryLibrary extends AnyFunSuite with TestUtils {
                          |    }
                          |    pub def converted(): ResultOnly = ResultOnly.Only
                          |    pub def missing(x: ResultOnly): Unit = match x { case ResultOnly.Only => () }
+                         |    pub enum Model { case Model(Int32) }
+                         |    pub enum Order { case Order(Int32) }
+                         |    pub def model(): Java.Boundary.Opaque[Model] = Java.Boundary.Opaque.Opaque(Model.Model(42))
+                         |    pub def order(): Java.Boundary.Opaque[Order] = Java.Boundary.Opaque.Opaque(Order.Order(7))
+                         |    pub def readModel(x: Java.Boundary.Opaque[Model]): Int32 = match x {
+                         |        case Java.Boundary.Opaque.Opaque(Model.Model(n)) => n
+                         |    }
+                         |    pub enum Hidden { case Hidden(Array[Int32, Static]) }
+                         |    pub def hidden(): Java.Boundary.Opaque[Hidden] \ IO =
+                         |        Java.Boundary.Opaque.Opaque(Hidden.Hidden(Array#{} @ Static))
                          |}
                          |""".stripMargin
   private val traits = Traits(Symbol.mkTraitSym("Java.Boundary.JavaResult"), Symbol.mkTraitSym("Java.Boundary.JavaArgument"))
@@ -67,7 +77,7 @@ class TestJavaBoundaryLibrary extends AnyFunSuite with TestUtils {
 
   test("packaged deep conversions and default handlers pass a staged Java caller") {
     implicit val flix: Flix = new Flix()
-    val output = compileMembers(List("values", "nested", "optional", "vector", "chain", "set", "map", "bools", "chars", "checked", "converted", "primitive")).unsafeGet
+    val output = compileMembers(List("values", "nested", "optional", "vector", "chain", "set", "map", "bools", "chars", "checked", "converted", "primitive", "model", "order", "readModel")).unsafeGet
     val signatures = output.plan.methods.map(method => method.member.name -> method.signature).toMap
     assert(signatures("map") == "()Ljava/util/Map<Ljava/lang/Integer;Ljava/util/List<Ljava/lang/Integer;>;>;")
     assert(signatures("chain") == "(Ljava/util/Collection<Ljava/lang/Integer;>;)Ljava/util/Collection<Ljava/lang/Integer;>;")
@@ -77,7 +87,7 @@ class TestJavaBoundaryLibrary extends AnyFunSuite with TestUtils {
       val runtime = dir.resolve("runtime")
       val callers = dir.resolve("callers")
       Files.createDirectories(callers)
-      List(stubs -> List(JavaBoundaryApi.stub(output.plan)), runtime -> output.compilation.getClasses.values).foreach { case (dest, classes) =>
+      List(stubs -> (JavaBoundaryApi.stub(output.plan) :: JavaBoundaryRuntime.classes), runtime -> output.compilation.getClasses.values).foreach { case (dest, classes) =>
         classes.foreach { clazz =>
           val file = dest.resolve(clazz.name.descriptorString().drop(1).dropRight(1) + ".class")
           Files.createDirectories(file.getParent)
@@ -99,6 +109,7 @@ class TestJavaBoundaryLibrary extends AnyFunSuite with TestUtils {
       val input = dir.resolve("LibraryCaller.java")
       Files.writeString(input, """import java.util.*;
                                   |import com.acme.LibraryApi;
+                                  |import dev.flix.runtime.OpaqueHandle;
                                   |public class LibraryCaller {
                                   |  public static void main(String[] args) {
                                   |    List<Integer> xs = LibraryApi.values();
@@ -119,6 +130,16 @@ class TestJavaBoundaryLibrary extends AnyFunSuite with TestUtils {
                                   |    if (!failed) throw new AssertionError("missing failure");
                                   |    if (!LibraryApi.converted().equals("only")) throw new AssertionError("conversion effect");
                                   |    if (LibraryApi.primitive(9) != 9) throw new AssertionError("primitive effects");
+                                  |    OpaqueHandle<Object> model = LibraryApi.model();
+                                  |    if (LibraryApi.readModel(model) != 42) throw new AssertionError("opaque round trip");
+                                  |    if (!model.equals(model) || model.equals(LibraryApi.model())) throw new AssertionError("opaque identity");
+                                  |    if (!model.toString().contains("Model") || model.toString().contains("42")) throw new AssertionError("opaque display");
+                                  |    try { LibraryApi.readModel(LibraryApi.order()); throw new AssertionError("wrong opaque accepted"); }
+                                  |    catch (IllegalArgumentException expected) {
+                                  |      if (!expected.getMessage().contains("Model") || !expected.getMessage().contains("Order")) throw expected;
+                                  |    }
+                                  |    try { LibraryApi.readModel(null); throw new AssertionError("null opaque accepted"); }
+                                  |    catch (IllegalArgumentException expected) { }
                                   |  }
                                   |}
                                   |""".stripMargin)
@@ -151,6 +172,13 @@ class TestJavaBoundaryLibrary extends AnyFunSuite with TestUtils {
     compileMembers(List("missing")) match {
       case Result.Err(BoundaryError(_: BoundaryTypeElaborator.MissingInstance, _)) => ()
       case other => fail(s"Expected missing argument evidence, found $other")
+    }
+  }
+
+  test("opaque crossing cannot hide a region-bound nominal payload") {
+    compileMembers(List("hidden")) match {
+      case Result.Err(Invalid(message, _)) => assert(message.contains("Region-bound"))
+      case other => fail(s"Expected region rejection, found $other")
     }
   }
 }

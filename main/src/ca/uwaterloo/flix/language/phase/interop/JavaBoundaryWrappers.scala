@@ -12,6 +12,8 @@ import ca.uwaterloo.flix.language.CompilationMessage
 import ca.uwaterloo.flix.language.ast.{SourceLocation, Symbol, Type, TypeConstructor, TypedAst}
 import ca.uwaterloo.flix.language.ast.shared.{SecurityContext, SourceName}
 import ca.uwaterloo.flix.language.phase.jvm.JavaBoundaryApi
+import ca.uwaterloo.flix.language.phase.jvm.JvmTypeKey
+import ca.uwaterloo.flix.language.fmt.FormatType
 import ca.uwaterloo.flix.runtime.CompilationResult
 import ca.uwaterloo.flix.util.Result
 import ca.uwaterloo.flix.util.Result.{Err, Ok}
@@ -134,10 +136,19 @@ object JavaBoundaryWrappers {
   private def conversion(tpe: Type, trt: Symbol.TraitSym, associated: String, method: String,
                          root: TypedAst.Root, loc: SourceLocation)(implicit flix: Flix): Result[Conversion, Error] = tpe match {
     case Type.Alias(_, _, expanded, _) => conversion(expanded, trt, associated, method, root, loc)
-    case _ if tpe.typeConstructors.exists {
-      case TypeConstructor.Array | TypeConstructor.ArrayWithoutRegion | _: TypeConstructor.Struct => true
+    case _ if containsRegionBound(tpe, root, Set.empty) =>
+      Err(Invalid("Region-bound values cannot cross the boundary, including inside opaque or nominal types.", loc))
+    case _ if (tpe.baseType match {
+      case Type.Cst(TypeConstructor.Enum(sym, _), _) => sym.namespace == List("Java", "Boundary") && sym.text == "Opaque"
       case _ => false
-    } => Err(Invalid("Region-bound arrays and mutable structs cannot cross the boundary.", loc))
+    }) =>
+      val valueType = tpe.typeArguments.head
+      val key = JvmTypeKey.encode(valueType, Nil)
+      val name = FormatType.formatType(valueType).replace("\\", "\\\\").replace("\"", "\\\"")
+      val handle = Type.mkApply(Type.mkNative(ClassDesc.of("dev.flix.runtime.OpaqueHandle"), 1, loc),
+        List(Type.mkNative(ClassDesc.of("java.lang.Object"), 0, loc)), loc)
+      val operation = if (associated == "In") "unpack" else "pack"
+      Ok(Conversion(handle, Type.IO, Some(s"(value -> Java.Boundary.$operation(\"$key\", \"$name\", value))")))
     case _ if isDirect(tpe) => JavaBoundaryApi.validateBoundaryType(tpe)
       .mapErr(cause => Invalid(cause.message, loc)).map(_ => Conversion(tpe, Type.Pure, None))
     case _ =>
@@ -148,6 +159,17 @@ object JavaBoundaryWrappers {
         _ <- JavaBoundaryApi.validateBoundaryType(result).mapErr(cause => Invalid(cause.message, loc))
         eff <- BoundaryTypeElaborator.elaborate(effect, tpe, root).mapErr(BoundaryError(_, loc))
       } yield Conversion(result, eff, Some((trt.namespace :+ trt.name :+ method).mkString(".")))
+  }
+
+  /** Conservatively inspect nominal payloads too: Opaque[Model] must not hide a regional array. */
+  private def containsRegionBound(tpe: Type, root: TypedAst.Root, visited: Set[Symbol.EnumSym]): Boolean = {
+    tpe.typeConstructors.exists {
+      case TypeConstructor.Array | TypeConstructor.ArrayWithoutRegion | TypeConstructor.RegionToStar |
+           TypeConstructor.RegionWithoutRegion | _: TypeConstructor.Region | _: TypeConstructor.Struct => true
+      case TypeConstructor.Enum(sym, _) if !visited.contains(sym) =>
+        root.enums.get(sym).exists(_.cases.values.exists(_.tpes.exists(containsRegionBound(_, root, visited + sym))))
+      case _ => false
+    }
   }
 
   private def isDirect(tpe: Type): Boolean = tpe.baseType match {
