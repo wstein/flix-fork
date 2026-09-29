@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed; prototyped on `feat/itanium-generated-names`, with an edit-resistance finding still open.
+Proposed; prototyped on `feat/itanium-generated-names`, with the edit-resistance finding resolved.
 Scoped to the *spelling* of generated JVM class names: what a specialization, a lambda,
 a local definition, and an anonymous class are called. Their *identity* -- the provenance keys
 `JvmProvenance` records and `JvmNameTable` checks -- is unchanged. Numbered 4 in the fork's series:
@@ -289,11 +289,15 @@ programmer can rename one of two identifiers that differ only in case.
   collision guard reports a collision instead of silently overwriting a generated enum name.
 - The separate `flix-stable-naming-lab/Corpus.flix` compiles with the prototype and emits two
   distinct, demangleable `ToString` specializations for `Shape[Int32]` and `Shape[String]`.
-- **Acceptance remains open:** the lab's `edit-resistance --assert-stable-names` run found one
-  nested `Clo$lowerStmt…$newTests$arg$<number>$0` name that changes between sequential and
-  parallel builds and after unrelated edits. The readable path appears to include an internal
-  generated argument number; its exact cause and fix still need confirmation. Neither the
-  fixture snapshots nor the demangler tests establish edit stability for that class.
+- **Edit-resistance gate passed:** `JvmLexicalOrigins` now accepts a binder name in a readable
+  path only when its source location spells that identifier; generated binders use a scope-local
+  ordinal. The lab's `edit-resistance --assert-stable-names` run retains 100% of class names
+  between sequential and 12-thread builds and after every tested unrelated edit, under both
+  monomorphizers. A focused regression changes `kept$arg$42` to `kept$arg$62948` without
+  changing the nested lambda path. The 175 JVM naming tests pass.
+- **Case-only collision gate passed:** CodeGen compares case-folded class names after its exact
+  duplicate check and rejects distinct names that would address the same class file on common
+  case-insensitive file systems. A regression test uses `Case$Color$Red` and `Case$COLOR$Red`.
 
 ## Alternatives considered
 
