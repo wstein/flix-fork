@@ -156,12 +156,20 @@ For example:
   "formatVersion": 2,
   "sources": {
     "/work/src/Bench.flix": [
-      {"range":[72,22,72,39],"name":"List.range","target":{"className":"List.Def$range"}},
-      {"range":[73,32,73,80],"name":"List.map","target":{"className":"List.Def$map$evsb8gnwxvwt"}}
+      {"range":[72,22,72,39],"name":"List.range","target":{"className":"dev.flix.gen.List$Def$range"}},
+      {"range":[73,32,73,80],"name":"List.map","target":{"className":"dev.flix.gen.List$Def$map$evsb8gnwxvwt"}}
     ]
   }
 }
 ```
+
+Consumers migrating from the old generated-class layout should use each sidecar's binary
+`className` as emitted. A root definition is now under `dev.flix.gen` (for example,
+`dev.flix.gen.Def$foo`), and a one-segment namespace uses a sibling implementation class
+such as `dev.flix.gen.List$Def$map`. Do not prepend or strip packages when resolving a
+breakpoint or Smart Step Into target. These are implementation names, not the exported
+Java facade names; the [joint-compilation guide](JOINT-COMPILATION.md#migrating-jvm-consumers)
+covers callers of `@Export`ed definitions.
 
 Lambda parameters are captured from the typed source and joined by their source name
 and declaration location when lifted. Parameterized types such as `Option[Int32]`
@@ -226,9 +234,10 @@ never used as a fallback because it may contain a newer or partial build. No tem
 class directory or project output is modified. Raw artifact class bytes are capped at
 16 MiB before Base64 expansion, preventing an expression from creating an unbounded
 JSON-RPC/JDI payload; a larger specialization set is rejected with a specific remedy.
-The artifact entry is the exact root definition class `Def$flixDebugEvalWrapper`.
+The artifact entry is the exact root definition class
+`dev.flix.gen.Def$flixDebugEvalWrapper`.
 Lifted lambdas inherit that source name in classes such as
-`Clo$flixDebugEvalWrapper$...`; substring matching is therefore forbidden because it
+`dev.flix.gen.Clo$flixDebugEvalWrapper$...`; substring matching is therefore forbidden because it
 could select an `applyFrame` closure as the declared `staticApply` entry point.
 
 Debug builds include `dev.flix.runtime.DebugEvalHost` and its private child loader as

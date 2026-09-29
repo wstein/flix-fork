@@ -206,6 +206,27 @@ layout:
 Implementation classes remain siblings of these facades and are not part of the public interop
 contract.
 
+## Migrating JVM consumers
+
+Rebuild Java and Flix outputs together when moving from the old generated-class layout. A Java or
+Kotlin caller should import the exported facade named above, not an implementation `Def$...` class.
+The facade's source signature comes from `stubs`; the real class comes from the Flix build. Keep
+the stub classes off the runtime classpath.
+
+| Old assumption | Current layout or contract | Consumer action |
+| --- | --- | --- |
+| A root definition lives in `Def$foo` | It lives in `dev.flix.gen.Def$foo`; the root facade remains `Root$` | Recompile and remove direct implementation-class references |
+| A one-segment definition lives in `List.Def$map` | It lives in `dev.flix.gen.List$Def$map`; an exported facade for that namespace would be `dev.flix.gen.List` | Use the facade for exported calls; use emitted metadata for debugger targets |
+| A Java caller needs the real Flix classes at compile time | `stubs` emits compile-only facades before Java compilation | Generate stubs, compile and jar Java, then compile Flix with `build --lib <java.jar>` |
+| A launch classpath can be assembled from guessed output directories | `build/development/build.json` format 4 records `launch.runtimeClasspath` | Read that ordered list after `build`; do not infer paths from generated names |
+
+For a debugger, the binary class names in `debug-index.json`, `debug-scopes.json`, and
+`debug-calls.json` describe the current build. Treat them as emitted values rather than translating
+old `Def$` prefixes. Rebuild the sidecars with `build --Xdebug` before consuming them; see
+[the debugger guide](idea-debugging.md#build-sidecars) for their versions and source identities.
+The build manifest remains format 4, but a cached sidecar or class name from a prior build is not
+a migration input.
+
 ## Stale output
 
 The stub writer owns its destination directory. Each run replaces the generated set, so deleting an

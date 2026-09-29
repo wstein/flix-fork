@@ -58,6 +58,11 @@ it breaks builds this repository cannot see.
 | `flix build --diagnostics-json --lib J` | the same, plus build-produced jars on the classpath |
 | `flix stubs --out D` | Java facades for `@Export`ed defs, before anything is compiled |
 
+Consumers moving from direct generated-class references to the export facade should follow the
+[JVM consumer migration steps](JOINT-COMPILATION.md#migrating-jvm-consumers). Debugger consumers
+must also read the current build's sidecar class names; the
+[debugger guide](idea-debugging.md#build-sidecars) records the sidecar formats and source identity.
+
 Four rules the handshake follows:
 
 - `ProtocolVersion` says what we can do; `MinimumClientVersion` says what we have
