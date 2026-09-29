@@ -77,6 +77,12 @@ class TestJvmProvenancePipeline extends AnyFunSuite {
                           |pub def other(value: Bool): Bool = provenanceIdentity(value)
                           |""".stripMargin
 
+  test("classic monomorphizer spells quantified arguments, not the whole arrow") {
+    val result = emitted("@DontInline\npub def generic(value: a): a = value\npub def consume(): Int32 = generic(1)", newMono = false, threads = 1)
+    assert(result.suffixes("generic").exists(suffix =>
+      JvmTypeDemangler.demangle("Def$generic$" + suffix) == Right("generic(Int32)")))
+  }
+
   for (newMono <- List(false, true)) {
     test(s"monomorphizer $newMono distinguishes lazy flatMap closure copies") {
       val source = """use DelayList.{ENil, ECons, LCons, LList}
