@@ -1,17 +1,8 @@
 /*
  * Copyright 2026 Magnus Madsen
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *   http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Use of this source code is governed by the Apache 2.0 license
+ * that can be found in the LICENSE.md file.
  */
 package ca.uwaterloo.flix.tools.pkg
 
@@ -68,6 +59,21 @@ class TestGitHub extends AnyFunSuite {
     val authorized = PackageError.DownloadRefused(url, 403, None, authorized = true)
     assert(anonymous.message(Formatter.NoFormatter).contains("GITHUB_TOKEN"))
     assert(!authorized.message(Formatter.NoFormatter).contains("GITHUB_TOKEN"))
+  }
+
+  test("getReleases.04") {
+    // A release tagged in a way that is not a version of a package is passed over, rather than
+    // thrown out of the listing and taking the build with it. `microsoft/vscode` tags releases
+    // `1.138.0`, without the leading `v`, which is a common enough way to tag one that a Flix
+    // package may well depend on a repository doing it.
+    //
+    // Reading the listing at all is the test: how many of its releases are tagged as versions is
+    // that repository's business, and changes as it releases.
+    val project = GitHub.Project("microsoft", "vscode")
+    GitHub.getReleases(project, PkgTestUtils.gitHubToken) match {
+      case Ok(_) => // As expected.
+      case Err(e) => fail(s"Expected a listing, but got: ${e.message(Formatter.NoFormatter)}")
+    }
   }
 
   test("downloadReleaseAsset.01") {
@@ -176,6 +182,24 @@ class TestGitHub extends AnyFunSuite {
     val url = mkUrl("https://api.github.com/repos/flix/museum-clerk/releases")
     val req = GitHub.newRequest(url, None).GET().build()
     assert(req.headers().firstValue("Authorization").isEmpty)
+  }
+
+  test("newApiRequest.01") {
+    // An API request names the media type it expects and the version of the API it was written
+    // against, so that a later version of the API is something to move to rather than something
+    // that arrives unannounced.
+    val url = mkUrl("https://api.github.com/repos/flix/museum-clerk/releases")
+    val req = GitHub.newApiRequest(url, None).GET().build()
+    assert(req.headers().firstValue("Accept").orElse("") == "application/vnd.github+json")
+    assert(req.headers().firstValue("X-GitHub-Api-Version").orElse("") == "2022-11-28")
+  }
+
+  test("newApiRequest.02") {
+    // A file is fetched from an address, and what it is is not the API's to say.
+    val url = mkUrl("https://github.com/flix/museum-clerk/releases/download/v1.1.0/flix.toml")
+    val req = GitHub.newRequest(url, None).GET().build()
+    assert(req.headers().firstValue("Accept").isEmpty)
+    assert(req.headers().firstValue("X-GitHub-Api-Version").isEmpty)
   }
 
   /**

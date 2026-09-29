@@ -27,22 +27,26 @@ class TestManifestParser extends AnyFunSuite {
     }
   }
 
+  /**
+    * Asserts that `actual` is `expected` up to the order of their dependencies, which
+    * [[Manifest.format]] sorts.
+    */
+  def assertSameUpToOrder(expected: Manifest, actual: Manifest): Unit = {
+    assertResult(expected.copy(dependencies = Nil))(actual.copy(dependencies = Nil))
+    assertResult(expected.dependencies.toSet)(actual.dependencies.toSet)
+  }
+
   val f: Formatter = Formatter.NoFormatter
   val s: String = File.separator
   val tomlCorrect: String = {
     """
       |[package]
-      |name = "hello-world"
-      |description = "A simple program"
       |version = "0.1.0"
       |repository = "github:johnDoe/hello-world"
-      |modules = ["FirstMod", "SecondMod.Foo"]
       |flix = "0.33.0"
-      |license = "Apache-2.0"
-      |authors = ["John Doe <john@example.com>"]
       |
       |[dependencies]
-      |"github:jls/tic-tac-toe" = "1.2.3"
+      |"github:jls/tic-tac-toe" = { version = "1.2.3", mount = "ticTacToe" }
       |"github:mlutze/flixball" = "3.2.1"
       |
       |[mvn-dependencies]
@@ -53,6 +57,24 @@ class TestManifestParser extends AnyFunSuite {
       |"myJar.jar" = "url:https://repo1.maven.org/maven2/org/apache/commons/commons-lang3/3.12.0/commons-lang3-3.12.0.jar"
       |
       |""".stripMargin
+  }
+
+  test("Ok.named-by-its-repository") {
+    // A package is named by the repository it is published as, which is what a dependent
+    // addresses it by.
+    val toml =
+      """
+        |[package]
+        |version = "0.1.0"
+        |repository = "github:johnDoe/hello-world"
+        |flix = "0.33.0"
+        |""".stripMargin
+    assertResult(expected = "johnDoe/hello-world")(actual =
+      ManifestParser.parse(toml, ManifestPath) match {
+        case Ok(m) => m.displayName
+        case Err(e) => e.message(f)
+      }
+    )
   }
 
   test("Ok.ignores-name") {
@@ -114,7 +136,6 @@ class TestManifestParser extends AnyFunSuite {
     val toml =
       """
         |[package]
-        |name = "hello-world"
         |version = "0.1.0"
         |flix = "0.33.0"
         |""".stripMargin
@@ -169,11 +190,8 @@ class TestManifestParser extends AnyFunSuite {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |""".stripMargin
     }
@@ -195,8 +213,8 @@ class TestManifestParser extends AnyFunSuite {
   }
 
   test("Ok.dependencies") {
-    assertResult(expected = List(Dependency.FlixDependency(PackageId(Repository.GitHub, "jls", "tic-tac-toe"), SemVer(1, 2, 3), None, SecurityContext.Plain),
-      Dependency.FlixDependency(PackageId(Repository.GitHub, "mlutze", "flixball"), SemVer(3, 2, 1), None, SecurityContext.Plain),
+    assertResult(expected = List(Dependency.FlixDependency(PackageId(Repository.GitHub, "jls", "tic-tac-toe"), SemVer(1, 2, 3), Some(Mountpoint("ticTacToe")), SecurityContext.Plain, DependencyStyle.Table),
+      Dependency.FlixDependency(PackageId(Repository.GitHub, "mlutze", "flixball"), SemVer(3, 2, 1), None, SecurityContext.Plain, DependencyStyle.VersionOnly),
       Dependency.MavenDependency("org.postgresql", "postgresql", "1.2.3.4"),
       Dependency.MavenDependency("org.eclipse.jetty", "jetty-server", "4.7.0-M1"),
       Dependency.JarDependency("https://repo1.maven.org/maven2/org/apache/commons/commons-lang3/3.12.0/commons-lang3-3.12.0.jar", "myJar.jar")))(actual = {
@@ -211,12 +229,8 @@ class TestManifestParser extends AnyFunSuite {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |[mvn-dependencies]
         |"org.postgresql:postgresql" = "1.2.3"
@@ -235,12 +249,8 @@ class TestManifestParser extends AnyFunSuite {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |[mvn-dependencies]
         |"org.postgresql:postgresql" = "1.2.3"
@@ -259,12 +269,8 @@ class TestManifestParser extends AnyFunSuite {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |[mvn-dependencies]
         |"org.postgresql:postgresql" = "1.2.3"
@@ -283,12 +289,8 @@ class TestManifestParser extends AnyFunSuite {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |[mvn-dependencies]
         |"org.postgresql:postgresql" = "1.2.3"
@@ -307,12 +309,8 @@ class TestManifestParser extends AnyFunSuite {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |[mvn-dependencies]
         |"org.postgresql:postgresql" = "1.2.3"
@@ -331,14 +329,11 @@ class TestManifestParser extends AnyFunSuite {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |[dependencies]
-        |"github:jls/tic-tac-toe" = "1.2.3"
+        |"github:jls/tic-tac-toe" = { version = "1.2.3", mount = "ticTacToe" }
         |""".stripMargin
     }
     assertResult(expected = SecurityContext.Plain)(actual =
@@ -357,14 +352,11 @@ class TestManifestParser extends AnyFunSuite {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |[dependencies]
-        |"github:jls/tic-tac-toe" = { version = "1.2.3" }
+        |"github:jls/tic-tac-toe" = { version = "1.2.3", mount = "ticTacToe" }
         |""".stripMargin
     }
     assertResult(expected = SecurityContext.Plain)(actual =
@@ -383,14 +375,11 @@ class TestManifestParser extends AnyFunSuite {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |[dependencies]
-        |"github:jls/tic-tac-toe" = { version = "1.2.3", security = "paranoid" }
+        |"github:jls/tic-tac-toe" = { version = "1.2.3", mount = "ticTacToe", security = "paranoid" }
         |""".stripMargin
     }
     assertResult(expected = SecurityContext.Paranoid)(actual =
@@ -409,14 +398,11 @@ class TestManifestParser extends AnyFunSuite {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |[dependencies]
-        |"github:jls/tic-tac-toe" = { version = "1.2.3", security = "plain" }
+        |"github:jls/tic-tac-toe" = { version = "1.2.3", mount = "ticTacToe", security = "plain" }
         |""".stripMargin
     }
     assertResult(expected = SecurityContext.Plain)(actual =
@@ -435,14 +421,11 @@ class TestManifestParser extends AnyFunSuite {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |[dependencies]
-        |"github:jls/tic-tac-toe" = { version = "1.2.3", security = "unrestricted" }
+        |"github:jls/tic-tac-toe" = { version = "1.2.3", mount = "ticTacToe", security = "unrestricted" }
         |""".stripMargin
     }
     assertResult(expected = SecurityContext.Unrestricted)(actual =
@@ -462,36 +445,29 @@ class TestManifestParser extends AnyFunSuite {
     val toml = tomlCorrect
     val manifest1 = ManifestParser.parse(toml, ManifestPath).unsafeGet
     val manifest2 = ManifestParser.parse(Manifest.format(manifest1), ManifestPath).unsafeGet
-    assertResult(manifest1)(manifest2)
+    assertSameUpToOrder(manifest1, manifest2)
   }
 
   test("Manifest.Identity.02") {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |""".stripMargin
     }
     val manifest1 = ManifestParser.parse(toml, ManifestPath).unsafeGet
     val manifest2 = ManifestParser.parse(Manifest.format(manifest1), ManifestPath).unsafeGet
-    assertResult(manifest1)(manifest2)
+    assertSameUpToOrder(manifest1, manifest2)
   }
 
   test("Manifest.Identity.03") {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |[mvn-dependencies]
         |"org.postgresql:postgresql" = "1.2.3"
@@ -501,19 +477,15 @@ class TestManifestParser extends AnyFunSuite {
     }
     val manifest1 = ManifestParser.parse(toml, ManifestPath).unsafeGet
     val manifest2 = ManifestParser.parse(Manifest.format(manifest1), ManifestPath).unsafeGet
-    assertResult(manifest1)(manifest2)
+    assertSameUpToOrder(manifest1, manifest2)
   }
 
   test("Manifest.Identity.04") {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |[mvn-dependencies]
         |"org.postgresql:postgresql" = "1.2.3"
@@ -523,19 +495,15 @@ class TestManifestParser extends AnyFunSuite {
     }
     val manifest1 = ManifestParser.parse(toml, ManifestPath).unsafeGet
     val manifest2 = ManifestParser.parse(Manifest.format(manifest1), ManifestPath).unsafeGet
-    assertResult(manifest1)(manifest2)
+    assertSameUpToOrder(manifest1, manifest2)
   }
 
   test("Manifest.Identity.05") {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |[mvn-dependencies]
         |"org.postgresql:postgresql" = "1.2.3"
@@ -545,19 +513,15 @@ class TestManifestParser extends AnyFunSuite {
     }
     val manifest1 = ManifestParser.parse(toml, ManifestPath).unsafeGet
     val manifest2 = ManifestParser.parse(Manifest.format(manifest1), ManifestPath).unsafeGet
-    assertResult(manifest1)(manifest2)
+    assertSameUpToOrder(manifest1, manifest2)
   }
 
   test("Manifest.Identity.06") {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |[mvn-dependencies]
         |"org.postgresql:postgresql" = "1.2.3"
@@ -567,19 +531,15 @@ class TestManifestParser extends AnyFunSuite {
     }
     val manifest1 = ManifestParser.parse(toml, ManifestPath).unsafeGet
     val manifest2 = ManifestParser.parse(Manifest.format(manifest1), ManifestPath).unsafeGet
-    assertResult(manifest1)(manifest2)
+    assertSameUpToOrder(manifest1, manifest2)
   }
 
   test("Manifest.Identity.07") {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |[mvn-dependencies]
         |"org.postgresql:postgresql" = "1.2.3"
@@ -589,121 +549,103 @@ class TestManifestParser extends AnyFunSuite {
     }
     val manifest1 = ManifestParser.parse(toml, ManifestPath).unsafeGet
     val manifest2 = ManifestParser.parse(Manifest.format(manifest1), ManifestPath).unsafeGet
-    assertResult(manifest1)(manifest2)
+    assertSameUpToOrder(manifest1, manifest2)
   }
 
   test("Manifest.Identity.08") {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |[dependencies]
-        |"github:jls/tic-tac-toe" = "1.2.3"
+        |"github:jls/tic-tac-toe" = { version = "1.2.3", mount = "ticTacToe" }
         |""".stripMargin
     }
     val manifest1 = ManifestParser.parse(toml, ManifestPath).unsafeGet
     val manifest2 = ManifestParser.parse(Manifest.format(manifest1), ManifestPath).unsafeGet
-    assertResult(manifest1)(manifest2)
+    assertSameUpToOrder(manifest1, manifest2)
   }
 
   test("Manifest.Identity.09") {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |[dependencies]
-        |"github:jls/tic-tac-toe" = { version = "1.2.3" }
+        |"github:jls/tic-tac-toe" = { version = "1.2.3", mount = "ticTacToe" }
         |""".stripMargin
     }
     val manifest1 = ManifestParser.parse(toml, ManifestPath).unsafeGet
     val manifest2 = ManifestParser.parse(Manifest.format(manifest1), ManifestPath).unsafeGet
-    assertResult(manifest1)(manifest2)
+    assertSameUpToOrder(manifest1, manifest2)
   }
 
   test("Manifest.Identity.10") {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |[dependencies]
-        |"github:jls/tic-tac-toe" = { version = "1.2.3", security = "paranoid" }
+        |"github:jls/tic-tac-toe" = { version = "1.2.3", mount = "ticTacToe", security = "paranoid" }
         |""".stripMargin
     }
     val manifest1 = ManifestParser.parse(toml, ManifestPath).unsafeGet
     val manifest2 = ManifestParser.parse(Manifest.format(manifest1), ManifestPath).unsafeGet
-    assertResult(manifest1)(manifest2)
+    assertSameUpToOrder(manifest1, manifest2)
   }
 
   test("Manifest.Identity.11") {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |[dependencies]
-        |"github:jls/tic-tac-toe" = { version = "1.2.3", security = "plain" }
+        |"github:jls/tic-tac-toe" = { version = "1.2.3", mount = "ticTacToe", security = "plain" }
         |""".stripMargin
     }
     val manifest1 = ManifestParser.parse(toml, ManifestPath).unsafeGet
     val manifest2 = ManifestParser.parse(Manifest.format(manifest1), ManifestPath).unsafeGet
-    assertResult(manifest1)(manifest2)
+    assertSameUpToOrder(manifest1, manifest2)
   }
 
   test("Manifest.Identity.12") {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |[dependencies]
-        |"github:jls/tic-tac-toe" = { version = "1.2.3", security = "unrestricted" }
+        |"github:jls/tic-tac-toe" = { version = "1.2.3", mount = "ticTacToe", security = "unrestricted" }
         |""".stripMargin
     }
     val manifest1 = ManifestParser.parse(toml, ManifestPath).unsafeGet
     val manifest2 = ManifestParser.parse(Manifest.format(manifest1), ManifestPath).unsafeGet
-    assertResult(manifest1)(manifest2)
+    assertSameUpToOrder(manifest1, manifest2)
   }
 
   test("Manifest.Identity.13") {
     val toml = {
       """
         |[package]
-        |name = "hello-world\""
-        |description = "A simple program\\\"\""
         |version = "0.1.0"
         |flix = "0.33.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |[dependencies]
-        |"github:jls/tic-tac-toe" = { version = "1.2.3", security = "unrestricted" }
+        |"github:jls/tic-tac-toe" = { version = "1.2.3", mount = "ticTacToe", security = "unrestricted" }
         |""".stripMargin
     }
     val manifest1 = ManifestParser.parse(toml, ManifestPath).unsafeGet
     val manifest2 = ManifestParser.parse(Manifest.format(manifest1), ManifestPath).unsafeGet
-    assertResult(manifest1)(manifest2)
+    assertSameUpToOrder(manifest1, manifest2)
   }
 
   /////////////
@@ -722,11 +664,8 @@ class TestManifestParser extends AnyFunSuite {
       """
         |[package]
         |mane = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |""".stripMargin
     }
@@ -740,12 +679,9 @@ class TestManifestParser extends AnyFunSuite {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
         |desciption = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |""".stripMargin
     }
@@ -758,11 +694,7 @@ class TestManifestParser extends AnyFunSuite {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |""".stripMargin
     }
@@ -774,12 +706,8 @@ class TestManifestParser extends AnyFunSuite {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |varsion = "0.1.0"
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |""".stripMargin
     }
@@ -791,12 +719,8 @@ class TestManifestParser extends AnyFunSuite {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = ["0.1.0"]
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |""".stripMargin
     }
@@ -808,12 +732,8 @@ class TestManifestParser extends AnyFunSuite {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "010"
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |""".stripMargin
     }
@@ -825,12 +745,8 @@ class TestManifestParser extends AnyFunSuite {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0.1"
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |""".stripMargin
     }
@@ -842,12 +758,8 @@ class TestManifestParser extends AnyFunSuite {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "a.1.0"
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |""".stripMargin
     }
@@ -859,12 +771,8 @@ class TestManifestParser extends AnyFunSuite {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.b.0"
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |""".stripMargin
     }
@@ -876,12 +784,8 @@ class TestManifestParser extends AnyFunSuite {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.c"
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |""".stripMargin
     }
@@ -894,13 +798,9 @@ class TestManifestParser extends AnyFunSuite {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |repsository = "github:johnDoe/hello-world"
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |""".stripMargin
     }
@@ -912,13 +812,9 @@ class TestManifestParser extends AnyFunSuite {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |repository = "hello-world"
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |""".stripMargin
     }
@@ -930,13 +826,9 @@ class TestManifestParser extends AnyFunSuite {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |repository = "johnDoe/hello-world"
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |""".stripMargin
     }
@@ -948,13 +840,9 @@ class TestManifestParser extends AnyFunSuite {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |repository = "github:github/johnDoe/hello-world"
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |""".stripMargin
     }
@@ -966,13 +854,9 @@ class TestManifestParser extends AnyFunSuite {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |repository = "github:johnDoe/"
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |""".stripMargin
     }
@@ -984,13 +868,9 @@ class TestManifestParser extends AnyFunSuite {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |repository = "github:/hello-world"
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |""".stripMargin
     }
@@ -1002,13 +882,9 @@ class TestManifestParser extends AnyFunSuite {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |repository = "github:/"
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |""".stripMargin
     }
@@ -1021,13 +897,9 @@ class TestManifestParser extends AnyFunSuite {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |modjules = ["FirsMod", "SecondMod"]
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |""".stripMargin
     }
@@ -1040,11 +912,7 @@ class TestManifestParser extends AnyFunSuite {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |""".stripMargin
     }
@@ -1056,12 +924,8 @@ class TestManifestParser extends AnyFunSuite {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flux = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |""".stripMargin
     }
@@ -1073,12 +937,8 @@ class TestManifestParser extends AnyFunSuite {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = 330
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |""".stripMargin
     }
@@ -1090,12 +950,8 @@ class TestManifestParser extends AnyFunSuite {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0330"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |""".stripMargin
     }
@@ -1107,12 +963,8 @@ class TestManifestParser extends AnyFunSuite {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0,33,0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |""".stripMargin
     }
@@ -1124,12 +976,8 @@ class TestManifestParser extends AnyFunSuite {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "?.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |""".stripMargin
     }
@@ -1141,12 +989,8 @@ class TestManifestParser extends AnyFunSuite {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.?.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |""".stripMargin
     }
@@ -1158,12 +1002,8 @@ class TestManifestParser extends AnyFunSuite {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.?"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |""".stripMargin
     }
@@ -1177,12 +1017,9 @@ class TestManifestParser extends AnyFunSuite {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.0"
         |licence = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |""".stripMargin
     }
@@ -1196,11 +1033,8 @@ class TestManifestParser extends AnyFunSuite {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.0"
-        |license = "Apache-2.0"
         |authars = ["John Doe <john@example.com>"]
         |
         |""".stripMargin
@@ -1214,12 +1048,8 @@ class TestManifestParser extends AnyFunSuite {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |[dependencies]
         |"github:jls/tic-tac-toe" = 123
@@ -1235,15 +1065,11 @@ class TestManifestParser extends AnyFunSuite {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |[depandencies]
-        |"github:jls/tic-tac-toe" = "1.2.3"
+        |"github:jls/tic-tac-toe" = { version = "1.2.3", mount = "ticTacToe" }
         |"github:mlutze/flixball" = "3.2.1"
         |
         |""".stripMargin
@@ -1255,15 +1081,11 @@ class TestManifestParser extends AnyFunSuite {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |[dependencies]
-        |"github:jls/tic-tac-toe" = "1.2.3"
+        |"github:jls/tic-tac-toe" = { version = "1.2.3", mount = "ticTacToe" }
         |"github:ml&tze/flixball" = "3.2.1"
         |
         |""".stripMargin
@@ -1276,12 +1098,8 @@ class TestManifestParser extends AnyFunSuite {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |[dependencies]
         |"github:jls/tic#tac-toe" = "1.2.3"
@@ -1297,12 +1115,8 @@ class TestManifestParser extends AnyFunSuite {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |[dependencies]
         |"github:jls/tic-tac-toe" = "123"
@@ -1318,12 +1132,8 @@ class TestManifestParser extends AnyFunSuite {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |[dependencies]
         |"github:jls/tic-tac-toe" = "1.23"
@@ -1339,12 +1149,8 @@ class TestManifestParser extends AnyFunSuite {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |[dependencies]
         |"github:jls:tic-tac-toe" = "1.2.3"
@@ -1360,12 +1166,8 @@ class TestManifestParser extends AnyFunSuite {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |[dependencies]
         |"github/jls/tic-tac-toe" = "1.2.3"
@@ -1381,15 +1183,11 @@ class TestManifestParser extends AnyFunSuite {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |[dependencies]
-        |"github:jls/tic-tac-toe" = "1.2.3"
+        |"github:jls/tic-tac-toe" = { version = "1.2.3", mount = "ticTacToe" }
         |"github:mlutze/flixball" = "a.2.1"
         |
         |""".stripMargin
@@ -1402,15 +1200,11 @@ class TestManifestParser extends AnyFunSuite {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |[dependencies]
-        |"github:jls/tic-tac-toe" = "1.2.3"
+        |"github:jls/tic-tac-toe" = { version = "1.2.3", mount = "ticTacToe" }
         |"github:mlutze/flixball" = "3.b.1"
         |
         |""".stripMargin
@@ -1423,15 +1217,11 @@ class TestManifestParser extends AnyFunSuite {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |[dependencies]
-        |"github:jls/tic-tac-toe" = "1.2.3"
+        |"github:jls/tic-tac-toe" = { version = "1.2.3", mount = "ticTacToe" }
         |"github:mlutze/flixball" = "3.2.c"
         |
         |""".stripMargin
@@ -1445,12 +1235,8 @@ class TestManifestParser extends AnyFunSuite {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |[mvn-dependencies]
         |"org.postgresql:postgresql" = "1.2.3"
@@ -1466,12 +1252,8 @@ class TestManifestParser extends AnyFunSuite {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |[mwn-dependencies]
         |"org.postgresql:postgresql" = "1.2.3"
@@ -1487,12 +1269,8 @@ class TestManifestParser extends AnyFunSuite {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |[mvn-dependencies]
         |"org.po)tgresql:postgresql" = "1.2.3"
@@ -1508,12 +1286,8 @@ class TestManifestParser extends AnyFunSuite {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |[mvn-dependencies]
         |"org.postgresql:post¤resql" = "1.2.3"
@@ -1529,12 +1303,8 @@ class TestManifestParser extends AnyFunSuite {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |[mvn-dependencies]
         |"org.postgresql:postgresql" = "1.2.3"
@@ -1550,12 +1320,8 @@ class TestManifestParser extends AnyFunSuite {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |[mvn-dependencies]
         |"org.postgresql:postgresql" = "1.2.3"
@@ -1572,12 +1338,8 @@ class TestManifestParser extends AnyFunSuite {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |[jar-dependencies]
         |"myJar.jar" = ["url:https://repo1.maven.org/maven2/org/apache/commons/commons-lang3/3.12.0/commons-lang3-3.12.0.jar"]
@@ -1592,12 +1354,8 @@ class TestManifestParser extends AnyFunSuite {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |[jar-dependences]
         |"myJar.jar" = "url:https://repo1.maven.org/maven2/org/apache/commons/commons-lang3/3.12.0/commons-lang3-3.12.0.jar"
@@ -1612,15 +1370,62 @@ class TestManifestParser extends AnyFunSuite {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |[jar-dependencies]
         |"myJar" = "url:https://repo1.maven.org/maven2/org/apache/commons/commons-lang3/3.12.0/commons-lang3-3.12.0.jar"
+        |
+        |""".stripMargin
+    }
+    val result = ManifestParser.parse(toml, ManifestPath)
+    expectError[ManifestError.JarUrlFileNameError](result)
+  }
+
+  test("ManifestError.JarUrlFileNameError.02") {
+    // A relative path would save the jar outside `lib/external/`.
+    val toml = {
+      """
+        |[package]
+        |version = "0.1.0"
+        |flix = "0.33.0"
+        |
+        |[jar-dependencies]
+        |"../../myJar.jar" = "url:https://repo1.maven.org/maven2/org/apache/commons/commons-lang3/3.12.0/commons-lang3-3.12.0.jar"
+        |
+        |""".stripMargin
+    }
+    val result = ManifestParser.parse(toml, ManifestPath)
+    expectError[ManifestError.JarUrlFileNameError](result)
+  }
+
+  test("ManifestError.JarUrlFileNameError.03") {
+    // An absolute path would save the jar outside `lib/external/`.
+    val toml = {
+      """
+        |[package]
+        |version = "0.1.0"
+        |flix = "0.33.0"
+        |
+        |[jar-dependencies]
+        |"/tmp/myJar.jar" = "url:https://repo1.maven.org/maven2/org/apache/commons/commons-lang3/3.12.0/commons-lang3-3.12.0.jar"
+        |
+        |""".stripMargin
+    }
+    val result = ManifestParser.parse(toml, ManifestPath)
+    expectError[ManifestError.JarUrlFileNameError](result)
+  }
+
+  test("ManifestError.JarUrlFileNameError.04") {
+    // A name with a drive would save the jar outside `lib/external/` on Windows.
+    val toml = {
+      """
+        |[package]
+        |version = "0.1.0"
+        |flix = "0.33.0"
+        |
+        |[jar-dependencies]
+        |"C:myJar.jar" = "url:https://repo1.maven.org/maven2/org/apache/commons/commons-lang3/3.12.0/commons-lang3-3.12.0.jar"
         |
         |""".stripMargin
     }
@@ -1632,12 +1437,8 @@ class TestManifestParser extends AnyFunSuite {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |[jar-dependencies]
         |"myJar.jsr" = "url:https://repo1.maven.org/maven2/org/apache/commons/commons-lang3/3.12.0/commons-lang3-3.12.0.jar"
@@ -1652,12 +1453,8 @@ class TestManifestParser extends AnyFunSuite {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |[jar-dependencies]
         |"myJar.jar" = "https://repo1.maven.org/maven2/org/apache/commons/commons-lang3/3.12.0/commons-lang3-3.12.0.jar"
@@ -1672,12 +1469,8 @@ class TestManifestParser extends AnyFunSuite {
     val toml = {
       """
         |[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |[jar-dependencies]
         |"myJar.jar" = "url:repo1.maven.org/maven2/org/apache/commons/commons-lang3/3.12.0/commons-lang3-3.12.0.jar"
@@ -1691,15 +1484,11 @@ class TestManifestParser extends AnyFunSuite {
   test("ManifestError.FlixUnknownSecurityValue.01") {
     val toml =
       """[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |[dependencies]
-        |"github:jls/tic-tac-toe" = { version = "1.2.3", security = "" }
+        |"github:jls/tic-tac-toe" = { version = "1.2.3", mount = "ticTacToe", security = "" }
         |""".stripMargin
     val result = ManifestParser.parse(toml, ManifestPath)
     expectError[ManifestError.FlixUnknownSecurityValue](result)
@@ -1708,15 +1497,11 @@ class TestManifestParser extends AnyFunSuite {
   test("ManifestError.FlixUnknownSecurityValue.02") {
     val toml =
       """[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |[dependencies]
-        |"github:jls/tic-tac-toe" = { version = "1.2.3", security = "abc" }
+        |"github:jls/tic-tac-toe" = { version = "1.2.3", mount = "ticTacToe", security = "abc" }
         |""".stripMargin
     val result = ManifestParser.parse(toml, ManifestPath)
     expectError[ManifestError.FlixUnknownSecurityValue](result)
@@ -1725,15 +1510,11 @@ class TestManifestParser extends AnyFunSuite {
   test("ManifestError.FlixDependencySecurityType.01") {
     val toml =
       """[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |[dependencies]
-        |"github:jls/tic-tac-toe" = { version = "1.2.3", security = [] }
+        |"github:jls/tic-tac-toe" = { version = "1.2.3", mount = "ticTacToe", security = [] }
         |""".stripMargin
     val result = ManifestParser.parse(toml, ManifestPath)
     expectError[ManifestError.FlixDependencySecurityType](result)
@@ -1742,15 +1523,11 @@ class TestManifestParser extends AnyFunSuite {
   test("ManifestError.FlixDependencySecurityType.02") {
     val toml =
       """[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |[dependencies]
-        |"github:jls/tic-tac-toe" = { version = "1.2.3", security = ["plain"] }
+        |"github:jls/tic-tac-toe" = { version = "1.2.3", mount = "ticTacToe", security = ["plain"] }
         |""".stripMargin
     val result = ManifestParser.parse(toml, ManifestPath)
     expectError[ManifestError.FlixDependencySecurityType](result)
@@ -1759,15 +1536,11 @@ class TestManifestParser extends AnyFunSuite {
   test("ManifestError.FlixDependencySecurityType.03") {
     val toml =
       """[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |[dependencies]
-        |"github:jls/tic-tac-toe" = { version = "1.2.3", security = true }
+        |"github:jls/tic-tac-toe" = { version = "1.2.3", mount = "ticTacToe", security = true }
         |""".stripMargin
     val result = ManifestParser.parse(toml, ManifestPath)
     expectError[ManifestError.FlixDependencySecurityType](result)
@@ -1776,15 +1549,11 @@ class TestManifestParser extends AnyFunSuite {
   test("ManifestError.FlixDependencySecurityType.04") {
     val toml =
       """[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |[dependencies]
-        |"github:jls/tic-tac-toe" = { version = "1.2.3", security = 42 }
+        |"github:jls/tic-tac-toe" = { version = "1.2.3", mount = "ticTacToe", security = 42 }
         |""".stripMargin
     val result = ManifestParser.parse(toml, ManifestPath)
     expectError[ManifestError.FlixDependencySecurityType](result)
@@ -1793,12 +1562,8 @@ class TestManifestParser extends AnyFunSuite {
   test("ManifestError.UnsupportedRepository.01") {
     val toml =
       """[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |[dependencies]
         |"hubgit:jls/tic-tac-toe" = "1.2.3"
@@ -1810,12 +1575,8 @@ class TestManifestParser extends AnyFunSuite {
   test("Ok.mount") {
     val toml =
       """[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |[dependencies]
         |"github:jls/tic-tac-toe" = { version = "1.2.3", mount = "Game" }
@@ -1832,12 +1593,8 @@ class TestManifestParser extends AnyFunSuite {
   test("Ok.mount.lowercase") {
     val toml =
       """[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |[dependencies]
         |"github:jls/tic-tac-toe" = { version = "1.2.3", mount = "game" }
@@ -1853,11 +1610,8 @@ class TestManifestParser extends AnyFunSuite {
   test("Manifest.Identity.Mount") {
     val toml =
       """[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |[dependencies]
         |"github:jls/tic-tac-toe" = { version = "1.2.3", mount = "Game", security = "paranoid" }
@@ -1865,19 +1619,15 @@ class TestManifestParser extends AnyFunSuite {
         |""".stripMargin
     val manifest1 = ManifestParser.parse(toml, ManifestPath).unsafeGet
     val manifest2 = ManifestParser.parse(Manifest.format(manifest1), ManifestPath).unsafeGet
-    assertResult(manifest1)(manifest2)
+    assertSameUpToOrder(manifest1, manifest2)
   }
 
   test("ManifestError.FlixDependencyDuplicateMount") {
     // Two dependencies under one mount. Without the error one of them would silently win.
     val toml =
       """[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |[dependencies]
         |"github:jls/tic-tac-toe" = { version = "1.2.3", mount = "game" }
@@ -1890,12 +1640,8 @@ class TestManifestParser extends AnyFunSuite {
   test("ManifestError.FlixDependencyIllegalMount") {
     val toml =
       """[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |[dependencies]
         |"github:jls/tic-tac-toe" = { version = "1.2.3", mount = "Foo.Bar" }
@@ -1908,12 +1654,8 @@ class TestManifestParser extends AnyFunSuite {
     // A keyword is read before a name, so it cannot be written before `::`.
     val toml =
       """[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |[dependencies]
         |"github:jls/tic-tac-toe" = { version = "1.2.3", mount = "type" }
@@ -1926,12 +1668,8 @@ class TestManifestParser extends AnyFunSuite {
     // Only the first group matters: the lexer reads `type`, `-`, `level`.
     val toml =
       """[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |[dependencies]
         |"github:jls/tic-tac-toe" = { version = "1.2.3", mount = "type-level" }
@@ -1944,12 +1682,8 @@ class TestManifestParser extends AnyFunSuite {
     // A mount begins with a letter.
     val toml =
       """[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |[dependencies]
         |"github:jls/tic-tac-toe" = { version = "1.2.3", mount = "2048" }
@@ -1962,12 +1696,8 @@ class TestManifestParser extends AnyFunSuite {
     // Every group begins with a letter.
     val toml =
       """[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |[dependencies]
         |"github:jls/tic-tac-toe" = { version = "1.2.3", mount = "utf-8" }
@@ -1980,12 +1710,8 @@ class TestManifestParser extends AnyFunSuite {
     // A trailing hyphen.
     val toml =
       """[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |[dependencies]
         |"github:jls/tic-tac-toe" = { version = "1.2.3", mount = "json-" }
@@ -1998,12 +1724,8 @@ class TestManifestParser extends AnyFunSuite {
     // A repeated hyphen.
     val toml =
       """[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |[dependencies]
         |"github:jls/tic-tac-toe" = { version = "1.2.3", mount = "flix--json" }
@@ -2016,12 +1738,8 @@ class TestManifestParser extends AnyFunSuite {
     // A hyphen anywhere in a mount.
     val toml =
       """[package]
-        |name = "hello-world"
-        |description = "A simple program"
         |version = "0.1.0"
         |flix = "0.33.0"
-        |license = "Apache-2.0"
-        |authors = ["John Doe <john@example.com>"]
         |
         |[dependencies]
         |"github:jls/tic-tac-toe" = { version = "1.2.3", mount = "tic-tac-toe" }

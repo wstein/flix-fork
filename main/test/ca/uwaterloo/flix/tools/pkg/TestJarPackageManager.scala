@@ -20,11 +20,8 @@ class TestJarPackageManager extends AnyFunSuite {
       val toml = {
         """
           |[package]
-          |name = "test"
-          |description = "test"
           |version = "0.0.0"
           |flix = "0.0.0"
-          |authors = ["Anna Blume"]
           |
           |[jar-dependencies]
           |"junit.jar" = "url:https://repo1.maven.org/maven2/org/junit/jupiter/junit-jupiter-api/5.3.1/junit-jupiter-api-5.3.1.jar"
@@ -55,11 +52,8 @@ class TestJarPackageManager extends AnyFunSuite {
       val toml = {
         s"""
           |[package]
-          |name = "test"
-          |description = "test"
           |version = "0.0.0"
           |flix = "0.0.0"
-          |authors = ["Anna Blume"]
           |
           |[jar-dependencies]
           |"$missingName" = "url:$missingUrl"

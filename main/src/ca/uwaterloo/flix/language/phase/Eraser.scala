@@ -48,7 +48,7 @@ object Eraser {
     val enumSpecializations = ctx.getEnumSpecializations
     val newEnums = specializeEnums(enumSpecializations)
     val newStructs = specializeStructs(ctx.getStructSpecializations)
-    ErasedAst.Root(newDefs, newEnums, newStructs, newEffects, root.mainEntryPoint, root.entryPoints, root.sources)
+    ErasedAst.Root(newDefs, newEnums, newStructs, newEffects, root.mainEntryPoint, root.sources)
   }(DebugNoOp())
 
   private def visitDef(defn: ReducedAst.Def)(implicit ctx: SharedContext, flix: Flix): ErasedAst.Def = defn match {

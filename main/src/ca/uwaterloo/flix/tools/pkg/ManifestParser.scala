@@ -1,17 +1,8 @@
 /*
  * Copyright 2023 Magnus Madsen
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *   http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Use of this source code is governed by the Apache 2.0 license
+ * that can be found in the LICENSE.md file.
  */
 package ca.uwaterloo.flix.tools.pkg
 
@@ -323,7 +314,7 @@ object ManifestParser {
         if (deps.isString(depKey)) {
           for (
             ver <- getFlixVersion(deps, depKey, p)
-          ) yield FlixDependency(id, ver, None, SecurityContext.Plain)
+          ) yield FlixDependency(id, ver, None, SecurityContext.Default, DependencyStyle.VersionOnly)
 
           // If the dependency maps to a table, get the version, security, and mount.
         } else if (deps.isTable(depKey)) {
@@ -337,7 +328,7 @@ object ManifestParser {
             ver <- getFlixVersion(depTbl, verKey, p);
             mount <- getMount(depTbl, mountKey, depKey, p);
             security <- getSecurity(depTbl, securityKey, p)
-          ) yield FlixDependency(id, ver, mount, security)
+          ) yield FlixDependency(id, ver, mount, security, DependencyStyle.Table)
         } else {
           Err(ManifestError.VersionTypeError(p, depKey, deps.get(depKey)))
         }
@@ -470,13 +461,19 @@ object ManifestParser {
     * Retrieves the file name for a jar dependency
     * and returns an error if it is not formatted correctly
     * or has characters that are not allowed.
+    *
+    * The jar is saved under this name in `lib/external/`, so it must be a file name and not a
+    * path: a name such as `../x.jar`, `/x.jar`, or `C:x.jar` would save it outside that directory.
     */
   private def getFileName(depName: String, p: Path): Result[String, ManifestError] = {
     val split = depName.split('.')
     if (split.length >= 2) {
       val extension = split.apply(split.length - 1)
       if (extension == "jar") {
-        checkNameCharacters(depName, p)
+        if (depName.contains('/') || depName.contains(':'))
+          Err(ManifestError.JarUrlFileNameError(p, depName))
+        else
+          checkNameCharacters(depName, p)
       } else {
         Err(ManifestError.JarUrlExtensionError(p, depName, extension))
       }

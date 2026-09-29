@@ -21,6 +21,7 @@
     --light-trait-def-color: #bfb280;
     --light-traits-color: #fc9d9a;
     --light-enum-color: #c8c8a9;
+    --light-struct-color: #9ccfcf;
     --light-op-color: #ccaeff;
     --light-eff-color: #ffaefa;
     --light-type-alias-color: #f9cdad;
@@ -49,6 +50,7 @@
     --dark-trait-def-color: #bfb280;
     --dark-traits-color: #fc9d9a;
     --dark-enum-color: #c8c8a9;
+    --dark-struct-color: #9ccfcf;
     --dark-op-color: #ccaeff;
     --dark-eff-color: #ffaefa;
     --dark-type-alias-color: #f9cdad;
@@ -77,6 +79,7 @@
     --trait-def-color: var(--light-trait-def-color);
     --traits-color: var(--light-traits-color);
     --enum-color: var(--light-enum-color);
+    --struct-color: var(--light-struct-color);
     --op-color: var(--light-op-color);
     --eff-color: var(--light-eff-color);
     --type-alias-color: var(--light-type-alias-color);
@@ -111,6 +114,7 @@
         --trait-def-color: var(--dark-trait-def-color);
         --traits-color: var(--dark-traits-color);
         --enum-color: var(--dark-enum-color);
+        --struct-color: var(--dark-struct-color);
         --op-color: var(--dark-op-color);
         --eff-color: var(--dark-eff-color);
         --type-alias-color: var(--dark-type-alias-color);
@@ -142,6 +146,7 @@
     --trait-def-color: var(--dark-trait-def-color);
     --traits-color: var(--dark-traits-color);
     --enum-color: var(--dark-enum-color);
+    --struct-color: var(--dark-struct-color);
     --op-color: var(--dark-op-color);
     --eff-color: var(--dark-eff-color);
     --type-alias-color: var(--dark-type-alias-color);
@@ -188,11 +193,14 @@ h2 {
     margin-bottom: 1.5rem;
 }
 
-h3 {
+/* Subsection headings are h2 in the document outline but keep the h3 look. */
+h3,
+.subsection h2 {
     display: inline;
     font-family: "Inter", sans-serif;
     font-size: 0.9rem;
     font-weight: 200;
+    line-height: normal;
     color: var(--heading-color);
 }
 
@@ -434,6 +442,9 @@ nav .Traits li::before {
 nav .Enums li::before {
     color: var(--enum-color);
 }
+nav .Structs li::before {
+    color: var(--struct-color);
+}
 nav .Operations li::before {
     color: var(--op-color);
 }
@@ -501,7 +512,7 @@ main h2 {
     margin-top: 1rem;
     padding-left: 1.5rem;
 }
-.subsection h3 {
+.subsection h2 {
     margin-left: -1.5rem;
 }
 .subsection > summary {
@@ -527,6 +538,10 @@ main h2 {
 }
 .subsection > div:not(:last-child) {
     border-bottom: var(--border);
+}
+.subsection.default-handler {
+    padding-top: 0.5rem;
+    border-top: var(--border);
 }
 
 .decl {
@@ -599,12 +614,16 @@ main h2 {
     }
 }
 
-.cases {
+.cases,
+.fields,
+.assocs {
     margin-left: 1rem;
     margin-top: 0.7rem;
     margin-bottom: 0.7rem;
 }
-.cases > code {
+.cases > code,
+.fields > code,
+.assocs > code {
     display: block;
 }
 .case-tag {
@@ -628,6 +647,17 @@ main h2 {
 }
 .box .doc code {
     color: var(--doc-code-color);
+}
+
+/* Column alignment of markdown tables, see TableCellAlignment in HtmlDocumentor. */
+td.align-left, th.align-left {
+    text-align: left;
+}
+td.align-center, th.align-center {
+    text-align: center;
+}
+td.align-right, th.align-right {
+    text-align: right;
 }
 
 .mod-doc {

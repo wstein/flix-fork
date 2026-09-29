@@ -1,17 +1,8 @@
 /*
  * Copyright 2015-2016 Magnus Madsen
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *   http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Use of this source code is governed by the Apache 2.0 license
+ * that can be found in the LICENSE.md file.
  */
 
 package ca.uwaterloo.flix
@@ -87,7 +78,21 @@ class TestMain extends AnyFunSuite {
   test("install") {
     val args = Array("install", "flix/museum-clerk")
     val opts = Main.parseCmdOpts(args).get
-    assert(opts.command == Main.Command.Install("flix/museum-clerk"))
+    assert(opts.command == Main.Command.Install(List("flix/museum-clerk")))
+  }
+
+  test("install.many") {
+    val args = Array("install", "flix/museum-clerk", "flix/museum-giftshop@2.0.2")
+    val opts = Main.parseCmdOpts(args).get
+    assert(opts.command == Main.Command.Install(List("flix/museum-clerk", "flix/museum-giftshop@2.0.2")))
+    assert(opts.files.isEmpty)
+  }
+
+  test("install.many.yes") {
+    val args = Array("install", "flix/museum-clerk", "flix/museum-giftshop", "--yes")
+    val opts = Main.parseCmdOpts(args).get
+    assert(opts.command == Main.Command.Install(List("flix/museum-clerk", "flix/museum-giftshop")))
+    assert(opts.assumeYes)
   }
 
   test("install.no-package") {
@@ -98,13 +103,37 @@ class TestMain extends AnyFunSuite {
   test("remove") {
     val args = Array("remove", "flix/museum-clerk")
     val opts = Main.parseCmdOpts(args).get
-    assert(opts.command == Main.Command.Remove("flix/museum-clerk"))
+    assert(opts.command == Main.Command.Remove(List("flix/museum-clerk")))
+  }
+
+  test("remove.many") {
+    val args = Array("remove", "flix/museum-clerk", "flix/museum-giftshop")
+    val opts = Main.parseCmdOpts(args).get
+    assert(opts.command == Main.Command.Remove(List("flix/museum-clerk", "flix/museum-giftshop")))
+  }
+
+  test("remove.no-package") {
+    val args = Array("remove")
+    assert(Main.parseCmdOpts(args).isEmpty)
   }
 
   test("upgrade") {
     val args = Array("upgrade", "flix/museum-clerk@1.1.0")
     val opts = Main.parseCmdOpts(args).get
-    assert(opts.command == Main.Command.Upgrade("flix/museum-clerk@1.1.0"))
+    assert(opts.command == Main.Command.Upgrade(List("flix/museum-clerk@1.1.0")))
+  }
+
+  test("upgrade.many") {
+    val args = Array("upgrade", "flix/museum-clerk@1.1.0", "flix/museum-giftshop")
+    val opts = Main.parseCmdOpts(args).get
+    assert(opts.command == Main.Command.Upgrade(List("flix/museum-clerk@1.1.0", "flix/museum-giftshop")))
+  }
+
+  test("upgrade.no-package") {
+    // A command that names no package upgrades every package the project declares.
+    val args = Array("upgrade")
+    val opts = Main.parseCmdOpts(args).get
+    assert(opts.command == Main.Command.Upgrade(Nil))
   }
 
   test("outdated") {
@@ -186,6 +215,7 @@ class TestMain extends AnyFunSuite {
     val args = Array("repl")
     val opts = Main.parseCmdOpts(args).get
     assert(opts.command == Main.Command.Repl)
+    assert(!opts.pauseOnExit)
   }
 
   test("check") {
@@ -250,6 +280,19 @@ class TestMain extends AnyFunSuite {
     val args = Array("--listen", "8080", "p.flix")
     val opts = Main.parseCmdOpts(args).get
     assert(opts.listen.nonEmpty)
+  }
+
+  test("--pause-on-exit") {
+    val args = Array("--pause-on-exit")
+    val opts = Main.parseCmdOpts(args).get
+    assert(opts.pauseOnExit)
+  }
+
+  test("repl --pause-on-exit") {
+    val args = Array("repl", "--pause-on-exit")
+    val opts = Main.parseCmdOpts(args).get
+    assert(opts.command == Main.Command.Repl)
+    assert(opts.pauseOnExit)
   }
 
   test("--threads") {

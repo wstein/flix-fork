@@ -5,6 +5,10 @@ Unreleased:
   exported Flix functions to be referenced from Scala, Kotlin, and other JVM languages without a
   class/package name collision.
 
+Version 0.77.0:
+- Language: Added experimental support for polymorphic effects (thanks Magnus!)
+- Compiler: Improved HTML documentation generation (thanks Magnus!)
+
 Version 0.76.2:
 - Compiler: Restructure package management internals (thanks Magnus!)
 

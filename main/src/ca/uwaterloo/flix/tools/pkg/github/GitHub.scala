@@ -1,17 +1,8 @@
 /*
  * Copyright 2021 Matthew Lutze
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *   http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Use of this source code is governed by the Apache 2.0 license
+ * that can be found in the LICENSE.md file.
  */
 package ca.uwaterloo.flix.tools.pkg.github
 
@@ -26,7 +17,7 @@ import org.json4s.native.JsonMethods.{compact, parse, render}
 import java.io.{IOException, InputStream}
 import java.net.http.HttpRequest.BodyPublishers
 import java.net.http.{HttpClient, HttpRequest, HttpResponse}
-import java.net.{URI, URL, URLEncoder}
+import java.net.{MalformedURLException, URI, URISyntaxException, URL, URLEncoder}
 import java.nio.charset.StandardCharsets
 import java.nio.file.Path
 import java.util.Locale
@@ -43,6 +34,28 @@ object GitHub {
     * `github.com.example.com` does, is a different host and is not one of them.
     */
   private val TokenHosts: Set[String] = Set("api.github.com", "github.com", "uploads.github.com")
+
+  /**
+    * How many releases to ask for at once.
+    *
+    * The API answers 30 unless asked otherwise, and 100 is the most it will give.
+    */
+  private val ReleasesPerPage: Int = 100
+
+  /**
+    * The media type the REST API is asked to answer in.
+    */
+  private val ApiMediaType: String = "application/vnd.github+json"
+
+  /**
+    * The version of the REST API to speak.
+    *
+    * GitHub dates its API and asks every request to name the one it was written against. A
+    * request that names none is served by whichever version is current, so a breaking change to
+    * the API arrives as a build that stopped working; naming one means it arrives as a version
+    * to move off when we choose to.
+    */
+  private val ApiVersion: String = "2022-11-28"
 
   /**
     * A GitHub project.
@@ -75,8 +88,8 @@ object GitHub {
     * and never reaching a server at all.
     */
   def getReleases(project: Project, token: Option[String]): Result[List[Release], PackageError] = {
-    val url = releasesUrl(project)
-    val req = newRequest(url, token).GET().build()
+    val url = releaseListingUrl(project)
+    val req = newApiRequest(url, token).GET().build()
     val response = try {
       Client.sendRequest(req)
     } catch {
@@ -101,7 +114,7 @@ object GitHub {
 
       case _: ClassCastException => return Err(PackageError.JsonError(json, project))
     }
-    Ok(releaseJsons.arr.map(parseRelease))
+    Ok(releaseJsons.arr.flatMap(parseRelease))
   }
 
   /**
@@ -121,7 +134,7 @@ object GitHub {
     */
   private def verifyRelease(project: Project, version: SemVer, token: String): Result[Unit, ReleaseError] = {
     val url = releaseVersionUrl(project, version)
-    val req = newRequest(url, Some(token)).GET().build()
+    val req = newApiRequest(url, Some(token)).GET().build()
 
     try {
       // Send request
@@ -154,7 +167,7 @@ object GitHub {
     val jsonCompact = compact(render(content))
 
     val url = releasesUrl(project)
-    val req = newRequest(url, Some(token))
+    val req = newApiRequest(url, Some(token))
       .header("Content-Type", "application/json")
       .POST(BodyPublishers.ofByteArray(jsonCompact.getBytes("utf-8")))
       .build()
@@ -167,7 +180,7 @@ object GitHub {
       val code = resp.statusCode()
       code match {
         case 201 => resp.body()
-        case 401 => return Err(ReleaseError.InvalidApiKeyError)
+        case 401 => return Err(ReleaseError.InvalidToken)
         case 404 => return Err(ReleaseError.RepositoryNotFound(project))
         case _ => return Err(ReleaseError.UnexpectedResponseCode(code, resp.body()))
       }
@@ -195,7 +208,7 @@ object GitHub {
     val assetName = assetPath.getFileName.toString
 
     val url = releaseAssetUploadUrl(project, releaseId, assetName)
-    val req = newRequest(url, Some(token))
+    val req = newApiRequest(url, Some(token))
       .header("Content-Type", "application/octet-stream")
       .POST(BodyPublishers.ofFile(assetPath))
       .build()
@@ -208,7 +221,7 @@ object GitHub {
       val code = resp.statusCode()
       code match {
         case 201 => Ok(())
-        case 401 => Err(ReleaseError.InvalidApiKeyError)
+        case 401 => Err(ReleaseError.InvalidToken)
         case _ => Err(ReleaseError.UnexpectedResponseCode(code, resp.body()))
       }
 
@@ -225,7 +238,7 @@ object GitHub {
     val jsonCompact = compact(render(content))
 
     val url = releaseIdUrl(project, releaseId)
-    val req = newRequest(url, Some(token))
+    val req = newApiRequest(url, Some(token))
       .header("Content-Type", "application/json")
       .method("PATCH", BodyPublishers.ofByteArray(jsonCompact.getBytes("utf-8")))
       .build()
@@ -238,7 +251,7 @@ object GitHub {
       val code = resp.statusCode()
       code match {
         case 200 => Ok(())
-        case 401 => Err(ReleaseError.InvalidApiKeyError)
+        case 401 => Err(ReleaseError.InvalidToken)
         case 404 => Err(ReleaseError.RepositoryNotFound(project))
         case 422 => Err(ReleaseError.ReleaseAlreadyExists(project, version))
         case _ => Err(ReleaseError.UnexpectedResponseCode(code, resp.body()))
@@ -368,6 +381,19 @@ object GitHub {
   }
 
   /**
+    * Returns the URL of the project's releases, asking for as many at once as the API will give.
+    *
+    * A project with more than that is read short -- `upgrade` and `outdated` can be wrong about
+    * it -- and the answer names the rest in a `Link` header.
+    *
+    * Kept apart from [[releasesUrl]], which a page size cannot go on: a release is created
+    * there, and a single release's address is built by appending to it.
+    */
+  private def releaseListingUrl(project: Project): URL = {
+    new URI(s"${releasesUrl(project).toString}?per_page=$ReleasesPerPage").toURL
+  }
+
+  /**
     * Returns the URL for updating information about this specific release.
     */
   private def releaseIdUrl(project: Project, releaseId: String): URL = {
@@ -394,39 +420,52 @@ object GitHub {
   }
 
   /**
-    * Parses a Release JSON.
+    * Parses a release JSON, if it is a release of the package.
+    *
+    * A repository's releases are its own to tag, and only the ones tagged as a version are
+    * versions of the package: a repository may release something that is not a Flix package at
+    * all, or may have released one before it was one. Such a release is passed over rather than
+    * read as a version, and rather than -- as it once was -- thrown out of the listing as an
+    * exception, which took down every build that read a repository holding one.
     */
-  private def parseRelease(json: JValue): Release = {
-    val version = parseSemVer((json \ "tag_name").values.toString)
-    val assetJsons = (json \ "assets").asInstanceOf[JArray]
-    val assets = assetJsons.arr.map(parseAsset)
-    Release(version, assets)
+  private def parseRelease(json: JValue): Option[Release] = json \ "tag_name" match {
+    case JString(tag) => parseSemVer(tag).map(version => Release(version, parseAssets(json \ "assets")))
+    case _ => None
   }
 
   /**
-    * Parses an Asset JSON.
+    * Parses the assets of a release, passing over the ones that cannot be read.
+    *
+    * An asset that has no address is no use to a build that wants to download it, and is not
+    * worth failing a listing that may well hold the asset it was looking for.
     */
-  private def parseAsset(asset: JValue): Asset = {
+  private def parseAssets(json: JValue): List[Asset] = json match {
+    case JArray(assets) => assets.flatMap(parseAsset)
+    case _ => Nil
+  }
+
+  /**
+    * Parses an asset JSON, if it names a file at an address.
+    */
+  private def parseAsset(asset: JValue): Option[Asset] = {
+    val name = asset \ "name"
     val url = asset \ "browser_download_url"
     val apiUrl = asset \ "url"
-    val name = asset \ "name"
-    Asset(name.values.toString, new URI(url.values.toString).toURL, new URI(apiUrl.values.toString).toURL)
+    try {
+      Some(Asset(name.values.toString, new URI(url.values.toString).toURL, new URI(apiUrl.values.toString).toURL))
+    } catch {
+      case _: URISyntaxException => None
+      case _: MalformedURLException => None
+      case _: IllegalArgumentException => None
+    }
   }
 
   /**
-    * Parses a semantic version, starting with v, e.g.
-    *
-    * * `v2.3.4`
+    * Parses a semantic version that starts with `v`, e.g. `v2.3.4`, if `str` is one.
     */
-  private def parseSemVer(str: String): SemVer = {
+  private def parseSemVer(str: String): Option[SemVer] = {
     val (v, num) = str.splitAt(1)
-    if (v != "v") {
-      throw new RuntimeException(s"Invalid semantic version: $str")
-    }
-    SemVer.ofString(num) match {
-      case Some(semver) => semver
-      case _ => throw new RuntimeException(s"Invalid semantic version: $str")
-    }
+    if (v == "v") SemVer.ofString(num) else None
   }
 
   /**
@@ -451,6 +490,18 @@ object GitHub {
     */
   private def isAuthorized(url: URL, token: Option[String]): Boolean =
     token.nonEmpty && mayReceiveToken(url)
+
+  /**
+    * Returns a builder for a REST API request to `url`, as [[newRequest]] does, naming the media
+    * type and the API version the answer is expected to follow.
+    *
+    * Only the API is asked these: a release asset and a jar are files served from an address,
+    * and what they are is not GitHub's to say.
+    */
+  def newApiRequest(url: URL, token: Option[String]): HttpRequest.Builder =
+    newRequest(url, token)
+      .header("Accept", ApiMediaType)
+      .header("X-GitHub-Api-Version", ApiVersion)
 
   /**
     * Returns a builder for a request to `url`, carrying `token` if there is one to carry and

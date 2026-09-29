@@ -1,17 +1,8 @@
 /*
  * Copyright 2021 Jonathan Lindegaard Starup
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *   http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Use of this source code is governed by the Apache 2.0 license
+ * that can be found in the LICENSE.md file.
  */
 
 package ca.uwaterloo.flix.language.phase.jvm
@@ -20,14 +11,14 @@ import ca.uwaterloo.flix.api.{CompilerConstants, Flix, FlixEvent}
 import ca.uwaterloo.flix.language.ast.JvmAst.{Def, OffsetFormalParam, Root}
 import ca.uwaterloo.flix.language.ast.{Purity, SimpleType, Symbol}
 import ca.uwaterloo.flix.language.jvm.ClassDescs
-import ca.uwaterloo.flix.language.phase.jvm.ClassMaker.StaticMethod
+import ca.uwaterloo.flix.language.phase.jvm.ClassMaker.{ConstructorMethod, InstanceField, StaticMethod}
 import ca.uwaterloo.flix.language.phase.jvm.Instructions.*
-import ca.uwaterloo.flix.language.phase.jvm.classes.{GenAbstractArrow, GenArrow, GenFrame, GenResult, GenThunk, GenValue}
+import ca.uwaterloo.flix.language.phase.jvm.classes.{GenAbstractArrow, GenArrow, GenFrame, GenResult, GenThunk, GenUnit, GenValue}
 import ca.uwaterloo.flix.util.ParOps
 import org.objectweb.asm.{ClassWriter, Label, MethodVisitor, Opcodes}
 
 import java.lang.constant.{ClassDesc, MethodTypeDesc}
-import java.lang.constant.ConstantDescs.{CD_String, CD_int}
+import java.lang.constant.ConstantDescs.{CD_Object, CD_String, CD_int}
 
 /**
   * Generates byte code for the function and closure classes.
@@ -55,6 +46,28 @@ object GenFunAndClosureClasses {
     Mangle.mkDesc(Mangle.packageOfNamespace(sym.namespace), JvmNameCompaction.compact(
       Mangle.classPrefixOfNamespace(sym.namespace) + Mangle.mkClassName("Clo", JvmNames.defnName(sym)),
       JvmNameCompaction.effectiveWidth(flix.options.xsymbolHashLength, flix.options.xsymbolNames)))
+
+  /**
+    * Emits instructions that run the def `sym`, of type `Unit -> t`, to completion and discard
+    * its result.
+    *
+    * The def's function class is instantiated, the `Unit` singleton is stored in its `arg0`
+    * field, and the resulting thunk is unwound. If the def suspends, an unhandled effect error
+    * is thrown, using `errorHint` in its message.
+    *
+    * [...] -> [...]
+    */
+  def runUnitDef(sym: Symbol.DefnSym, errorHint: String)(implicit mv: MethodVisitor): Unit = {
+    val desc = defnDesc(sym)
+    NEW(desc)
+    DUP()
+    INVOKESPECIAL(ConstructorMethod(desc, Nil))
+    DUP()
+    GETSTATIC(GenUnit.SingletonField)
+    PUTFIELD(InstanceField(desc, "arg0", CD_Object))
+    GenResult.unwindSuspensionFreeThunk(errorHint, sym.loc)
+    POP()
+  }
 
   /**
     * Returns a map of function- and closure-classes for the given set `defs`.

@@ -1,17 +1,8 @@
 /*
  * Copyright 2021 Jonathan Lindegaard Starup
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *   http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Use of this source code is governed by the Apache 2.0 license
+ * that can be found in the LICENSE.md file.
  */
 
 package ca.uwaterloo.flix.language.phase.jvm.classes
@@ -20,7 +11,7 @@ import ca.uwaterloo.flix.api.Flix
 import ca.uwaterloo.flix.language.ast.{JvmAst, SourceLocation}
 import ca.uwaterloo.flix.language.phase.jvm.ClassMaker.Final.IsFinal
 import ca.uwaterloo.flix.language.phase.jvm.ClassMaker.Visibility.IsPublic
-import ca.uwaterloo.flix.language.phase.jvm.ClassMaker.{ConstructorMethod, InstanceField, StaticMethod}
+import ca.uwaterloo.flix.language.phase.jvm.ClassMaker.{ConstructorMethod, StaticMethod}
 import ca.uwaterloo.flix.language.phase.jvm.Instructions.*
 import ca.uwaterloo.flix.language.phase.jvm.MethodTypeDescs.mkDescriptor
 import ca.uwaterloo.flix.language.phase.jvm.{ClassConstants, ClassMaker, GenFunAndClosureClasses, JvmNames, Mangle, TypeDescs}
@@ -30,8 +21,8 @@ import org.objectweb.asm.MethodVisitor
 import java.lang.constant.ClassDesc
 
 /**
-  * The namespace class of a Flix module, which holds the shim methods of the module's
-  * entry points and tests.
+  * The namespace class of a Flix module, which holds a `static void` shim method for each test
+  * in the module. A namespace class is only generated for namespaces that contain tests.
   */
 object GenNamespace {
 
