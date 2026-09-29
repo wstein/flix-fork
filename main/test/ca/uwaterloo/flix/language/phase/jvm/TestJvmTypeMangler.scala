@@ -1,7 +1,10 @@
 package ca.uwaterloo.flix.language.phase.jvm
 
 import ca.uwaterloo.flix.language.ast.{Kind, Name, SimpleType, SourceLocation, Symbol, Type, TypeConstructor}
+import ca.uwaterloo.flix.language.ast.shared.SymUse.AssocTypeSymUse
 import org.scalatest.funsuite.AnyFunSuite
+
+import scala.collection.immutable.SortedSet
 
 class TestJvmTypeMangler extends AnyFunSuite {
   private val loc = SourceLocation.Unknown
@@ -83,5 +86,43 @@ class TestJvmTypeMangler extends AnyFunSuite {
     val effect = builtin(TypeConstructor.Effect(Symbol.mkEffSym("Example.First"), Kind.Eff))
     val effectName = "Def$run$" + JvmTypeMangler.monomorph(List(effect, effect), noGenerated)
     assert(JvmTypeDemangler.demangle(effectName) == Right("run(effect Example.First, effect Example.First)"))
+  }
+
+  test("uncommon semantic types demangle to readable structure") {
+    val assoc = new Symbol.AssocTypeSym(Symbol.mkTraitSym("Example.Items"), "Element", loc)
+    val types = List(
+      Type.AssocType(AssocTypeSymUse(assoc, loc), Type.Int32, Kind.Star, loc) -> "Example.Items.Element[Int32]: Star",
+      Type.JvmToType(Type.Int32, loc) -> "JvmToType[Int32]",
+      Type.JvmToEff(Type.Int32, loc) -> "JvmToEff[Int32]",
+      Type.UnresolvedJvmType(Type.JvmMember.JvmStaticMethod(
+        java.lang.constant.ClassDesc.of("java.lang.String"), Name.Ident("valueOf", loc), List(Type.Int32)), loc) ->
+        "UnresolvedStaticMethod(Ljava/lang/String;, valueOf, [Int32])")
+    types.foreach { case (tpe, expected) =>
+      assert(JvmTypeKeyDemangler.demangle(JvmTypeKey.encode(tpe, Nil, noGenerated)) == Right(expected))
+      val suffix = JvmTypeMangler.monomorph(List(tpe), noGenerated)
+      assert(suffix.startsWith("IX"), suffix)
+      assert(JvmTypeDemangler.demangle("Def$example$" + suffix) == Right("example(" + expected + ")"))
+    }
+  }
+
+  test("uncommon constructors decode their embedded X key") {
+    val region = Type.mkRegion(new Symbol.RegionSym(7, "r", loc), loc)
+    val origin: Symbol => GeneratedJvmKey = _ => GeneratedJvmKey("region", List("Example.f", "r"))
+    val suffix = JvmTypeMangler.monomorph(List(region), origin)
+    assert(suffix.startsWith("IK"), suffix)
+    assert(JvmTypeDemangler.demangle("Def$example$" + suffix) ==
+      Right("example(Region[Region[generated(region, Example.f, r)]])"))
+    val enm = new Symbol.RestrictableEnumSym(List("Example"), "Choice", Nil, loc)
+    val first = new Symbol.RestrictableCaseSym(enm, "First", loc)
+    val order = Ordering.by[Symbol.RestrictableCaseSym, String](_.name)
+    val cases = builtin(TypeConstructor.CaseSet(SortedSet(first)(order), enm))
+    val caseSuffix = JvmTypeMangler.monomorph(List(cases), noGenerated)
+    assert(JvmTypeDemangler.demangle("Def$example$" + caseSuffix) ==
+      Right("example(CaseSet[Example.Choice{Example.Choice.First}])"))
+  }
+
+  test("malformed uncommon type keys fail without throwing") {
+    assert(JvmTypeDemangler.demangle("Def$example$IX2abE").isLeft)
+    assert(JvmTypeKeyDemangler.demangle("AAAA").isLeft)
   }
 }

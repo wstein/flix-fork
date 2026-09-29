@@ -133,17 +133,18 @@ object JvmTypeDemangler {
         case 'J' | 'G' | 'X' =>
           val kind = current
           offset += 1
-          if (kind == 'J' && current == 'N') "Java(" + qualified() + ")"
+          if (kind == 'X') semanticKey()
+          else if (kind == 'J' && current == 'N') "Java(" + qualified() + ")"
           else {
             val encoded = framed()
-            if (kind == 'J') "Java(" + unhex(encoded) + ")" else if (kind == 'G') "generated(" + encoded + ")" else "opaque(" + encoded + ")"
+            if (kind == 'J') "Java(" + unhex(encoded) + ")"
+            else "generated(" + encoded + ")"
           }
         case 'K' =>
           offset += 1
-          val kind = framed()
-          take('X')
           framed()
-          kind
+          take('X')
+          semanticKey()
         case _ => throw new IllegalArgumentException
       }
       val rendered = if (offset < data.length && current == 'I') base + list().mkString("[", ", ", "]") else base
@@ -155,6 +156,29 @@ object JvmTypeDemangler {
       if (value.length % 2 != 0) throw new IllegalArgumentException
       val decoded = value.grouped(2).map(Integer.parseInt(_, 16).toByte).toArray
       new String(decoded, StandardCharsets.UTF_8)
+    }
+
+    /** An X frame starts with hex digits, so its length prefix needs semantic validation. */
+    private def semanticKey(): String = {
+      val start = offset
+      var boundary = start
+      while (boundary < data.length && boundary - start < 7 && data(boundary) >= '0' && data(boundary) <= '9') {
+        boundary += 1
+        val length = try new String(data, start, boundary - start, StandardCharsets.US_ASCII).toInt
+        catch { case _: NumberFormatException => throw new IllegalArgumentException }
+        if (length > 0 && boundary + length <= data.length) {
+          val encoded = new String(data, boundary, length, StandardCharsets.US_ASCII)
+          if (encoded.length % 2 == 0 && encoded.matches("[0-9a-f]+")) {
+            JvmTypeKeyDemangler.demangle(unhex(encoded)) match {
+              case Right(rendered) =>
+                offset = boundary + length
+                return rendered
+              case Left(_) =>
+            }
+          }
+        }
+      }
+      throw new IllegalArgumentException
     }
 
     private def qualified(): String = {
