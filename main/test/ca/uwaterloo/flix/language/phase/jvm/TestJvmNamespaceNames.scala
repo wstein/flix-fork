@@ -15,7 +15,7 @@ class TestJvmNamespaceNames extends AnyFunSuite {
   private def definition(id: Option[Int]): JvmAst.Def = {
     val sym = new Symbol.DefnSym(id, namespace, "entryPoint", loc)
     JvmAst.Def(Annotations.Empty, Modifiers.Empty, sym, Nil, Nil, Nil, 0,
-      JvmAst.Expr.Cst(Constant.Int32(42), loc), SimpleType.Int32, JvmAst.UnboxedType(SimpleType.Int32), loc)
+      JvmAst.Expr.Cst(Constant.Unit, loc), SimpleType.Unit, JvmAst.UnboxedType(SimpleType.Unit), loc)
   }
 
   private def shimName(id: Option[Int]): String = {
@@ -25,7 +25,7 @@ class TestJvmNamespaceNames extends AnyFunSuite {
       flix.jvmOrigins.symbols.register(defn.sym, origin)
       flix.jvmOrigins.freeze(List(defn.sym), JvmNameTable.DefaultWidth)
       val method = GenNamespace.ShimMethod(namespace, defn)
-      assert(method.d.descriptorString() == "()I")
+      assert(method.d.descriptorString() == "()V")
       val spelling = if (id.isDefined) defn.sym.text + Flix.Delimiter + flix.jvmOrigins.nameTable.suffix(defn.sym) else defn.sym.text
       assert(method.name == "m_" + Mangle.mangle(spelling))
       method.name

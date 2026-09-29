@@ -9,7 +9,7 @@
 package ca.uwaterloo.flix.language.phase.jvm
 
 import ca.uwaterloo.flix.api.Flix
-import ca.uwaterloo.flix.language.ast.{BytecodeAst, SimpleType, SourceLocation}
+import ca.uwaterloo.flix.language.ast.{BytecodeAst, SimpleType, SourceLocation, Symbol}
 import ca.uwaterloo.flix.language.ast.JvmAst.*
 import ca.uwaterloo.flix.language.dbg.AstPrinter.DebugNoOp
 import ca.uwaterloo.flix.language.jvm.ClassDescs
@@ -190,7 +190,7 @@ object CodeGen {
 
     val tests = testDefs.map {
       case defn =>
-        val shim = GenNamespace.ShimMethod(defn.sym)
+        val shim = GenNamespace.ShimMethod(defn.sym.namespace, defn)
         defn.sym -> BytecodeAst.Test(shim.clazz, shim.name, defn.ann.isSkip)
     }.toMap
     val main = root.mainEntryPoint.map{

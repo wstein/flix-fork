@@ -57,7 +57,7 @@ object GenFunAndClosureClasses {
     *
     * [...] -> [...]
     */
-  def runUnitDef(sym: Symbol.DefnSym, errorHint: String)(implicit mv: MethodVisitor): Unit = {
+  def runUnitDef(sym: Symbol.DefnSym, errorHint: String)(implicit mv: MethodVisitor, flix: Flix): Unit = {
     val desc = defnDesc(sym)
     NEW(desc)
     DUP()

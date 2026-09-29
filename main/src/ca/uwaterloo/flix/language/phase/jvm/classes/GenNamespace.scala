@@ -13,8 +13,7 @@ import ca.uwaterloo.flix.language.phase.jvm.ClassMaker.Final.IsFinal
 import ca.uwaterloo.flix.language.phase.jvm.ClassMaker.Visibility.IsPublic
 import ca.uwaterloo.flix.language.phase.jvm.ClassMaker.{ConstructorMethod, StaticMethod}
 import ca.uwaterloo.flix.language.phase.jvm.Instructions.*
-import ca.uwaterloo.flix.language.phase.jvm.MethodTypeDescs.mkDescriptor
-import ca.uwaterloo.flix.language.phase.jvm.{ClassConstants, ClassMaker, GenFunAndClosureClasses, JvmNames, Mangle, TypeDescs}
+import ca.uwaterloo.flix.language.phase.jvm.{ClassConstants, ClassMaker, GenFunAndClosureClasses, JvmNames, Mangle, MethodTypeDescs}
 import ca.uwaterloo.flix.util.InternalCompilerException
 import org.objectweb.asm.MethodVisitor
 
@@ -51,30 +50,14 @@ object GenNamespace {
   private def Constructor(ns: List[String]): ConstructorMethod = ConstructorMethod(desc(ns), Nil)
 
   def ShimMethod(ns: List[String], defn: JvmAst.Def)(implicit flix: Flix): StaticMethod = {
-    val erasedArgs = defn.fparams.map(_.tpe).map(TypeDescs.toErasedClassDesc)
-    val erasedResult = TypeDescs.toErasedClassDesc(defn.unboxedType.tpe)
     val defnName = JvmNames.defnName(defn.sym)
     val name = "m_" + Mangle.mangle(defnName)
-    StaticMethod(desc(ns), name, mkDescriptor(erasedArgs *)(erasedResult))
+    StaticMethod(desc(ns), name, MethodTypeDescs.NothingToVoid)
   }
 
   private def shimIns(defn: JvmAst.Def)(implicit mv: MethodVisitor, root: JvmAst.Root, flix: Flix): Unit = {
-    val defnDesc = GenFunAndClosureClasses.defnDesc(defn.sym)
-    val paramTypes = defn.fparams.map(fp => TypeDescs.toErasedClassDesc(fp.tpe))
-    withNames(0, paramTypes) {
-      case (_, args) =>
-        val erasedResult = TypeDescs.toErasedClassDesc(defn.unboxedType.tpe)
-        NEW(defnDesc)
-        DUP()
-        INVOKESPECIAL(ConstructorMethod(defnDesc, Nil))
-        for ((arg, index) <- args.zipWithIndex) {
-          DUP()
-          arg.load()
-          PUTFIELD(InstanceField(defnDesc, s"arg$index", paramTypes(index)))
-        }
-        GenResult.unwindSuspensionFreeThunkToType(erasedResult, s"in shim method of ${defn.sym}", defn.loc)
-        xReturn(erasedResult)
-    }
+    GenFunAndClosureClasses.runUnitDef(defn.sym, s"in shim method of ${defn.sym}")
+    RETURN()
   }
 
 }
