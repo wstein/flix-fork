@@ -2,7 +2,8 @@
 
 ## Status
 
-Proposed; implementation in progress. Scoped to the *spelling* of generated JVM class names: what a specialization, a lambda,
+Proposed; prototyped on `feat/itanium-generated-names`, with an edit-resistance finding still open.
+Scoped to the *spelling* of generated JVM class names: what a specialization, a lambda,
 a local definition, and an anonymous class are called. Their *identity* -- the provenance keys
 `JvmProvenance` records and `JvmNameTable` checks -- is unchanged. Numbered 4 in the fork's series:
 ADRs 1 and 2 are on `feat/stable-specialization-names-rewrite`, and ADR 3, JVM interop as a typed
@@ -209,6 +210,25 @@ its own parameter instead of the value zero.
   bounds each name, and compaction bounds the worst case.
 - **A spelling is recorded beside each specialization key**, as readable paths are beside lexical
   keys: `specializedSymbol` and `erasedSymbol` have the types in hand when they register.
+
+## Prototype validation (2026-09-29)
+
+- The fork's JVM naming tests pass (172 tests). The uncommon `X` forms, including keys embedded
+  in `K` constructors, now demangle from their versioned structural type keys without changing
+  emitted class names; malformed keys fail closed.
+- `flix-specialization-names-lab` passes all 14 fixture checks after its classifier and golden
+  snapshots were updated for mangled defs, flat erasure names, readable nested ordinals, and
+  actual fallback/compaction hashes. Its short-name stress probe found 37 distinct,
+  demangleable specializations. The class census found 1,126 readable generated classes and
+  no apparent counter IDs in the lab build. At a one-digit fallback width, the compiler's
+  collision guard reports a collision instead of silently overwriting a generated enum name.
+- The separate `flix-stable-naming-lab/Corpus.flix` compiles with the prototype and emits two
+  distinct, demangleable `ToString` specializations for `Shape[Int32]` and `Shape[String]`.
+- **Acceptance remains open:** the lab's `edit-resistance --assert-stable-names` run found one
+  nested `Clo$lowerStmt…$newTests$arg$<number>$0` name that changes between sequential and
+  parallel builds and after unrelated edits. The readable path appears to include an internal
+  generated argument number; its exact cause and fix still need confirmation. Neither the
+  fixture snapshots nor the demangler tests establish edit stability for that class.
 
 ## Alternatives considered
 
