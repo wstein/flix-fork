@@ -17,6 +17,8 @@ pub mod Java.Boundary {
     import java.lang.Long
     import java.lang.Float
     import java.lang.Double
+    import java.math.BigInteger
+    import java.math.BigDecimal
     import java.util.Optional
     import java.util.LinkedHashSet
     import java.util.LinkedHashMap
@@ -126,6 +128,23 @@ pub mod Java.Boundary {
     instance JavaArgument[String] {
         type In = String
         pub def toFlix(x: String): String = x
+    }
+
+    instance JavaResult[BigInt] {
+        type Out = BigInteger
+        pub def toJava(x: BigInt): BigInteger = x
+    }
+    instance JavaArgument[BigInt] {
+        type In = BigInteger
+        pub def toFlix(x: BigInteger): BigInt = x
+    }
+    instance JavaResult[BigDecimal] {
+        type Out = BigDecimal
+        pub def toJava(x: BigDecimal): BigDecimal = x
+    }
+    instance JavaArgument[BigDecimal] {
+        type In = BigDecimal
+        pub def toFlix(x: BigDecimal): BigDecimal = x
     }
 
     instance JavaResult[List[a]] with JavaResult[a] {

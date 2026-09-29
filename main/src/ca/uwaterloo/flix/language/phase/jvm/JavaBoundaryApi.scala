@@ -95,6 +95,12 @@ object JavaBoundaryApi {
         case Some(desc) if !argument => Ok(JavaType(desc, desc.descriptorString()))
         case Some(_) => Err(Error("A Java generic argument must be boxed by its boundary instance.", tpe.loc))
         case None if tpe == Type.Str => Ok(JavaType(CD_String, CD_String.descriptorString()))
+        case None if tpe == Type.BigInt =>
+          val desc = ClassDesc.of("java.math.BigInteger")
+          Ok(JavaType(desc, desc.descriptorString()))
+        case None if tpe == Type.BigDecimal =>
+          val desc = ClassDesc.of("java.math.BigDecimal")
+          Ok(JavaType(desc, desc.descriptorString()))
         case None => tpe.baseType match {
           case Type.Cst(TypeConstructor.Native(desc, arity), _) if tpe.typeArguments.size == arity =>
             Result.traverse(tpe.typeArguments)(javaType(_, true)).map { args =>

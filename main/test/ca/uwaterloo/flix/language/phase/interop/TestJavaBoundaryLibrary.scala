@@ -31,6 +31,8 @@ class TestJavaBoundaryLibrary extends AnyFunSuite with TestUtils {
                          |    pub def map(): Map[Int32, List[Int32]] = Map.singleton(4, 5 :: Nil)
                          |    pub def bools(): List[Bool] = true :: false :: Nil
                          |    pub def chars(): List[Char] = 'a' :: Nil
+                         |    pub def big(x: List[BigInt]): List[BigInt] = x
+                         |    pub def decimal(x: List[BigDecimal]): List[BigDecimal] = x
                          |    pub def checked(x: Bool): Unit \ Assert = Assert.assertTrue(x)
                          |    pub def primitive(x: Int32): Int32 \ (Chan + NonDet) = {
                          |        let (sender, receiver) = Channel.buffered(1);
@@ -77,7 +79,7 @@ class TestJavaBoundaryLibrary extends AnyFunSuite with TestUtils {
 
   test("packaged deep conversions and default handlers pass a staged Java caller") {
     implicit val flix: Flix = new Flix()
-    val output = compileMembers(List("values", "nested", "optional", "vector", "chain", "set", "map", "bools", "chars", "checked", "converted", "primitive", "model", "order", "readModel")).unsafeGet
+    val output = compileMembers(List("values", "nested", "optional", "vector", "chain", "set", "map", "bools", "chars", "big", "decimal", "checked", "converted", "primitive", "model", "order", "readModel")).unsafeGet
     val signatures = output.plan.methods.map(method => method.member.name -> method.signature).toMap
     assert(signatures("map") == "()Ljava/util/Map<Ljava/lang/Integer;Ljava/util/List<Ljava/lang/Integer;>;>;")
     assert(signatures("chain") == "(Ljava/util/Collection<Ljava/lang/Integer;>;)Ljava/util/Collection<Ljava/lang/Integer;>;")
@@ -123,6 +125,8 @@ class TestJavaBoundaryLibrary extends AnyFunSuite with TestUtils {
                                   |    if (!LibraryApi.map().equals(Map.of(4, List.of(5)))) throw new AssertionError("map");
                                   |    if (!LibraryApi.bools().equals(List.of(true, false))) throw new AssertionError("bool");
                                   |    if (!LibraryApi.chars().equals(List.of('a'))) throw new AssertionError("char");
+                                  |    if (!LibraryApi.big(List.of(java.math.BigInteger.TEN)).equals(List.of(java.math.BigInteger.TEN))) throw new AssertionError("big integer");
+                                  |    if (!LibraryApi.decimal(List.of(java.math.BigDecimal.TEN)).equals(List.of(java.math.BigDecimal.TEN))) throw new AssertionError("decimal");
                                   |    LibraryApi.checked(true);
                                   |    boolean failed = false;
                                   |    try { LibraryApi.checked(false); }

@@ -201,7 +201,7 @@ object JavaBoundaryWrappers {
   private def isDirect(tpe: Type): Boolean = tpe.baseType match {
     case Type.Cst(TypeConstructor.Unit | TypeConstructor.Bool | TypeConstructor.Char | TypeConstructor.Int8 |
       TypeConstructor.Int16 | TypeConstructor.Int32 | TypeConstructor.Int64 | TypeConstructor.Float32 |
-      TypeConstructor.Float64 | TypeConstructor.Str | _: TypeConstructor.Native, _) => true
+      TypeConstructor.Float64 | TypeConstructor.Str | TypeConstructor.BigInt | TypeConstructor.BigDecimal | _: TypeConstructor.Native, _) => true
     case _ => false
   }
 
@@ -231,6 +231,8 @@ object JavaBoundaryWrappers {
         case Type.Cst(TypeConstructor.Float32, _) => "Float32"
         case Type.Cst(TypeConstructor.Float64, _) => "Float64"
         case Type.Cst(TypeConstructor.Str, _) => "String"
+        case Type.Cst(TypeConstructor.BigInt, _) => "BigInt"
+        case Type.Cst(TypeConstructor.BigDecimal, _) => "BigDecimal"
         case _ => throw new IllegalStateException("A validated boundary type has no source renderer.")
       }
     }
