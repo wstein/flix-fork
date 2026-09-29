@@ -56,6 +56,10 @@ FLIX_FORK_ROOT=/path/to/compiler-worktree ./scripts/check-concrete-boundary-type
 
 ## Still unproven
 
+The following limits apply to this type-elaboration proof alone. The subsequent
+[named boundary API slice](NAMED-BOUNDARY-API.md) adds facade emission and staged Java linking
+for checked wrappers, but does not complete the replacement pipeline.
+
 No new export syntax, forwarding facade, JVM generic `Signature` emission, or joint-compilation
 stubs are implemented here. In particular, syntax-only stubs cannot simply query a typed root
 when the Java side of a cyclic build does not exist. That bootstrapping contract needs its own

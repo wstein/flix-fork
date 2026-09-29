@@ -6,6 +6,13 @@ Proposed. Scoped to how Flix code is *called from* the JVM -- Java, Kotlin, Scal
 values cross that boundary. Calling Java *from* Flix (`import`, `new`, method calls) is unchanged.
 Numbered 3 to follow ADRs 1 and 2 on `feat/stable-specialization-names-rewrite`.
 
+Revision 6 records the [named boundary API slice](../interop/NAMED-BOUNDARY-API.md): an opt-in
+programmatic declaration exposes checked concrete wrappers through a chosen Java class, records
+generic signatures, retains wrapper entry points, and passes a staged Java caller against the
+replacement facade. API-only stubs use a checked contract; they do not solve cyclic pre-type-check
+bootstrapping. Source declarations, automatic wrapper orchestration, handled effects, opaque
+handles, and Kotlin/Scala callers remain phase-1 work. The status stays Proposed.
+
 Revision 5 records the [concrete boundary-type proof](../interop/CONCRETE-BOUNDARY-TYPES.md):
 checked instances derive `List<Integer>` and conversion effects internally without relaxing
 source associated-type rules. Concrete wrapper signatures require a validated typed root, so
@@ -195,6 +202,12 @@ After monomorphization the wrapper's types are exact JVM types. The backend emit
 with one `public static` method per member forwarding to `f$java`. The wrapper's typed signature
 -- the only place Java generics still exist -- is recorded on it before simplification and
 written as the facade method's `Signature` attribute. This is the entire new codegen.
+
+The experimental `Flix.codeGenWithJavaApi` entry point now implements this forwarding contract
+for already checked concrete wrappers, selected by a programmatic `JavaBoundaryApi.Declaration`.
+It preserves generic signatures and primitive descriptors, retains the selected definitions, and
+rejects exact/case-folded generated-class collisions. Its initial effect policy is deliberately
+restricted to Pure and IO; it does not yet synthesize default handlers or generated wrappers.
 
 ### 5. Effects
 
