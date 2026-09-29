@@ -1,6 +1,6 @@
 # The Flix tooling contract
 
-How a **build tool** drives `flix.jar`: `--diagnostics-json`, `--lib`, `stubs`,
+How a **build tool** drives `flix.jar`: `--diagnostics-json`, `--lib`,
 and a version handshake.
 
 ## This is not BSP, and not an LSP extension
@@ -56,11 +56,11 @@ it breaks builds this repository cannot see.
 | `flix capabilities --contract-version N` | the handshake; non-zero if the caller cannot be served |
 | `flix check --diagnostics-json` | structured diagnostics on stdout |
 | `flix build --diagnostics-json --lib J` | the same, plus build-produced jars on the classpath |
-| `flix stubs --out D` | Java facades for `@Export`ed defs, before anything is compiled |
 
-Consumers moving from direct generated-class references to the export facade should follow the
-[JVM consumer migration steps](JOINT-COMPILATION.md#migrating-jvm-consumers). Debugger consumers
-must also read the current build's sidecar class names; the
+The fork no longer offers `@Export` or compile-only facade stubs; the handshake reports
+`exportStubs: false`. Existing joint-compilation consumers must stay on an archived
+export-enabled compiler until a replacement interop boundary is implemented.
+Debugger consumers must read the current build's sidecar class names; the
 [debugger guide](idea-debugging.md#build-sidecars) records the sidecar formats and source identity.
 
 Four rules the handshake follows:

@@ -167,9 +167,8 @@ Consumers migrating from the old generated-class layout should use each sidecar'
 `className` as emitted. A root definition is now under `dev.flix.gen` (for example,
 `dev.flix.gen.Def$foo`), and a one-segment namespace uses a sibling implementation class
 such as `dev.flix.gen.List$Def$map`. Do not prepend or strip packages when resolving a
-breakpoint or Smart Step Into target. These are implementation names, not the exported
-Java facade names; the [joint-compilation guide](JOINT-COMPILATION.md#migrating-jvm-consumers)
-covers callers of `@Export`ed definitions.
+breakpoint or Smart Step Into target. These are implementation names, not a stable
+Java caller API.
 
 Lambda parameters are captured from the typed source and joined by their source name
 and declaration location when lifted. Parameterized types such as `Option[Int32]`
