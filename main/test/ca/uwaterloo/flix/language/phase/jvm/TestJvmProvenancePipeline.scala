@@ -8,10 +8,27 @@ import ca.uwaterloo.flix.util.{InternalCompilerException, Options}
 import org.objectweb.asm.ClassReader
 import org.scalatest.funsuite.AnyFunSuite
 
+import java.nio.charset.StandardCharsets
 import scala.collection.concurrent.TrieMap
 
 class TestJvmProvenancePipeline extends AnyFunSuite {
   private case class Emission(suffixes: Map[String, Set[String]], descriptors: Set[String])
+
+  test("enums differing only in case cannot emit colliding class files") {
+    implicit val security: SecurityContext = SecurityContext.Unrestricted
+    val flix = new Flix().setOptions(Options.TestWithLibNix)
+    flix.addSource(CompilerConstants.VirtualTestFile,
+      text = "enum Color { case Red }\nenum COLOR { case Red }\npub def first(): Color = Color.Red\npub def second(): COLOR = COLOR.Red",
+      sctx = security)
+    val (checked, errors) = flix.check()
+    assert(errors.isEmpty, errors.mkString("\n"))
+    val root = checked.get
+    val entryPoints = root.defs.values.filter(_.spec.mod.isPublic).map(_.sym).toSet
+    val error = intercept[InternalCompilerException] { flix.codeGen(root.copy(entryPoints = entryPoints)) }
+    assert(error.getMessage.contains("differ only in case"))
+    assert(error.getMessage.contains("Case$Color$Red"))
+    assert(error.getMessage.contains("Case$COLOR$Red"))
+  }
 
   private def emitted(source: String, newMono: Boolean, threads: Int, checkRuntime: Boolean = false, fullLibrary: Boolean = false): Emission = {
     implicit val security: SecurityContext = SecurityContext.Unrestricted
@@ -35,6 +52,9 @@ class TestJvmProvenancePipeline extends AnyFunSuite {
     intercept[InternalCompilerException] { flix.jvmOrigins }
     val descriptors = compilation.getClasses.iterator.map { case (descriptor, clazz) =>
       val internalName = new ClassReader(clazz.bytecode).getClassName
+      val fileName = internalName.split('/').last + ".class"
+      assert(fileName.getBytes(StandardCharsets.UTF_8).length <= JvmNameCompaction.MaxFileNameBytes,
+        s"Generated class filename is too long: $fileName")
       val actualDescriptor = s"L$internalName;"
       assert(actualDescriptor == descriptor.descriptorString(), s"Classfile name disagrees with map key: $internalName")
       assert(clazz.name == descriptor)
@@ -42,7 +62,11 @@ class TestJvmProvenancePipeline extends AnyFunSuite {
     }.toSet
     entries.foreach { case (sym, suffix) =>
       if (sym.id.nonEmpty) {
-        assert(descriptors.exists(_.contains(suffix)), s"No emitted class contains the frozen suffix for $sym: $suffix")
+        val classNames = List("Def", "Clo").map { prefix =>
+          JvmNameCompaction.compact(Mangle.mkClassName(prefix, sym.text + "$" + suffix), options.xsymbolHashLength)
+        }
+        assert(descriptors.exists(desc => classNames.exists(desc.contains)),
+          s"No emitted class contains the frozen name for $sym: ${classNames.mkString(", ")}")
       }
     }
     if (checkRuntime) {
@@ -68,6 +92,12 @@ class TestJvmProvenancePipeline extends AnyFunSuite {
                           |pub def example(value: Int32): Int32 -> Int32 = argument -> provenanceIdentity(if (true) value else argument)
                           |pub def other(value: Bool): Bool = provenanceIdentity(value)
                           |""".stripMargin
+
+  test("classic monomorphizer spells quantified arguments, not the whole arrow") {
+    val result = emitted("@DontInline\npub def generic(value: a): a = value\npub def consume(): Int32 = generic(1)", newMono = false, threads = 1)
+    assert(result.suffixes("generic").exists(suffix =>
+      JvmTypeDemangler.demangle("Def$generic$" + suffix) == Right("generic(Int32)")))
+  }
 
   for (newMono <- List(false, true)) {
     test(s"monomorphizer $newMono distinguishes lazy flatMap closure copies") {

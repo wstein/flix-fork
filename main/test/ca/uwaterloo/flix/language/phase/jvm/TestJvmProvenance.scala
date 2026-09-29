@@ -25,8 +25,8 @@ class TestJvmProvenance extends AnyFunSuite {
         }
       }
       executor.invokeAll(tasks.asJava).asScala.foreach(_.get())
-      val table = registry.freeze(entries.map(_._1))
-      val expected = JvmNameTable.build(entries)
+      val table = registry.freeze(entries.map(_._1), JvmNameTable.DefaultWidth)
+      val expected = JvmNameTable.build(entries, JvmNameTable.DefaultWidth)
       entries.foreach { case (sym, _) => assert(table.suffix(sym) == expected.suffix(sym)) }
     } finally {
       executor.shutdownNow()
@@ -58,18 +58,18 @@ class TestJvmProvenance extends AnyFunSuite {
     registry.register(equivalent, first)
     val registrationError = intercept[InternalCompilerException] { registry.register(equivalent, second) }
     val tableError = intercept[InternalCompilerException] {
-      JvmNameTable.build(List(original -> first, equivalent -> second))
+      JvmNameTable.build(List(original -> first, equivalent -> second), JvmNameTable.DefaultWidth)
     }
     assert(registrationError.getMessage == tableError.getMessage)
     assert(registrationError.getMessage.contains(s"Conflicting JVM naming provenance for '$equivalent': '$first' and '$second'."))
     assert(registry.origin(equivalent) == first)
     registry.register(equivalent, first)
-    assert(registry.freeze(List(equivalent)).suffix(original) ==
-      JvmNameTable.build(List(original -> first, equivalent -> first)).suffix(equivalent))
+    assert(registry.freeze(List(equivalent), JvmNameTable.DefaultWidth).suffix(original) ==
+      JvmNameTable.build(List(original -> first, equivalent -> first), JvmNameTable.DefaultWidth).suffix(equivalent))
   }
 
   test("freeze requires provenance for every requested symbol") {
-    intercept[InternalCompilerException] { new JvmProvenance().freeze(List(symbol(1))) }
+    intercept[InternalCompilerException] { new JvmProvenance().freeze(List(symbol(1)), JvmNameTable.DefaultWidth) }
   }
 
   test("freeze includes only surviving symbols") {
@@ -78,21 +78,21 @@ class TestJvmProvenance extends AnyFunSuite {
     val dead = symbol(2)
     registry.register(live, key("live"))
     registry.register(dead, key("dead"))
-    val table = registry.freeze(List(live))
+    val table = registry.freeze(List(live), JvmNameTable.DefaultWidth)
     assert(table.suffix(live).nonEmpty)
     intercept[InternalCompilerException] { table.suffix(dead) }
   }
 
   test("registration after freeze fails") {
     val registry = new JvmProvenance()
-    registry.freeze(Nil)
+    registry.freeze(Nil, JvmNameTable.DefaultWidth)
     intercept[InternalCompilerException] { registry.register(symbol(1), key("late")) }
   }
 
   test("a registry cannot be reused for a second freeze") {
     val registry = new JvmProvenance()
-    registry.freeze(Nil)
-    intercept[InternalCompilerException] { registry.freeze(Nil) }
+    registry.freeze(Nil, JvmNameTable.DefaultWidth)
+    intercept[InternalCompilerException] { registry.freeze(Nil, JvmNameTable.DefaultWidth) }
   }
 
   test("separate compilation registries do not share origins") {
@@ -101,7 +101,7 @@ class TestJvmProvenance extends AnyFunSuite {
     val sym = symbol(1)
     first.register(sym, key("first"))
     second.register(sym, key("second"))
-    assert(first.freeze(List(sym)).suffix(sym) != second.freeze(List(sym)).suffix(sym))
+    assert(first.freeze(List(sym), JvmNameTable.DefaultWidth).suffix(sym) != second.freeze(List(sym), JvmNameTable.DefaultWidth).suffix(sym))
   }
 
   test("identical registration is idempotent") {
@@ -109,15 +109,15 @@ class TestJvmProvenance extends AnyFunSuite {
     val sym = symbol(1)
     registry.register(sym, key("same"))
     registry.register(sym, key("same"))
-    assert(registry.freeze(List(sym)).suffix(sym) == JvmNameTable.build(List(sym -> key("same"))).suffix(sym))
+    assert(registry.freeze(List(sym), JvmNameTable.DefaultWidth).suffix(sym) == JvmNameTable.build(List(sym -> key("same")), JvmNameTable.DefaultWidth).suffix(sym))
   }
 
   test("a failed freeze also closes registration") {
     val registry = new JvmProvenance()
     val sym = symbol(1)
-    intercept[InternalCompilerException] { registry.freeze(List(sym)) }
+    intercept[InternalCompilerException] { registry.freeze(List(sym), JvmNameTable.DefaultWidth) }
     intercept[InternalCompilerException] { registry.register(sym, key("late")) }
-    intercept[InternalCompilerException] { registry.freeze(Nil) }
+    intercept[InternalCompilerException] { registry.freeze(Nil, JvmNameTable.DefaultWidth) }
   }
 
   test("dead symbols do not claim live names") {
@@ -125,7 +125,7 @@ class TestJvmProvenance extends AnyFunSuite {
     val live = symbol(1)
     registry.register(live, key("same"))
     registry.register(symbol(2), key("same"))
-    assert(registry.freeze(List(live)).suffix(live).nonEmpty)
+    assert(registry.freeze(List(live), JvmNameTable.DefaultWidth).suffix(live).nonEmpty)
   }
 
   test("live symbols with identical provenance fail during freeze") {
@@ -134,7 +134,7 @@ class TestJvmProvenance extends AnyFunSuite {
     val second = symbol(2)
     registry.register(first, key("same"))
     registry.register(second, key("same"))
-    intercept[InternalCompilerException] { registry.freeze(List(first, second)) }
+    intercept[InternalCompilerException] { registry.freeze(List(first, second), JvmNameTable.DefaultWidth) }
   }
 
   test("phase pruning removes dead origins while preserving live origins") {
@@ -147,7 +147,7 @@ class TestJvmProvenance extends AnyFunSuite {
     assert(registry.origin(live) == key("live"))
     intercept[InternalCompilerException] { registry.origin(dead) }
     registry.register(symbol(3), key("new"))
-    assert(registry.freeze(List(live)).suffix(live).nonEmpty)
+    assert(registry.freeze(List(live), JvmNameTable.DefaultWidth).suffix(live).nonEmpty)
   }
 
   test("pruning all origins does not close registration") {
@@ -166,23 +166,23 @@ class TestJvmProvenance extends AnyFunSuite {
     val dead = symbol(2)
     registry.register(live, key("live"))
     registry.register(dead, key("dead"))
-    val table = registry.freeze(List(live))
+    val table = registry.freeze(List(live), JvmNameTable.DefaultWidth)
     intercept[InternalCompilerException] { registry.origin(live) }
     intercept[InternalCompilerException] { registry.origin(dead) }
-    assert(table.suffix(live) == JvmNameTable.build(List(live -> key("live"))).suffix(live))
+    assert(table.suffix(live) == JvmNameTable.build(List(live -> key("live")), JvmNameTable.DefaultWidth).suffix(live))
   }
 
   test("failed freeze releases registry entries") {
     val registry = new JvmProvenance()
     val sym = symbol(1)
     registry.register(sym, key("registered"))
-    intercept[InternalCompilerException] { registry.freeze(List(sym, symbol(2))) }
+    intercept[InternalCompilerException] { registry.freeze(List(sym, symbol(2)), JvmNameTable.DefaultWidth) }
     intercept[InternalCompilerException] { registry.origin(sym) }
   }
 
   test("pruning after freeze fails") {
     val registry = new JvmProvenance()
-    registry.freeze(Nil)
+    registry.freeze(Nil, JvmNameTable.DefaultWidth)
     intercept[InternalCompilerException] { registry.retainLive(Set.empty) }
   }
 }

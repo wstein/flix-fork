@@ -30,6 +30,30 @@ class TestMain extends AnyFunSuite {
     assert(opts.command == Main.Command.Init)
   }
 
+  test("--Xsymbol-hash-length sets the compacted-name hash width") {
+    assert(Main.parseCmdOpts(Array("build", "--Xsymbol-hash-length", "8")).get.xsymbolHashLength == 8)
+    assert(Main.parseCmdOpts(Array("build")).get.xsymbolHashLength == ca.uwaterloo.flix.language.phase.jvm.JvmNameTable.DefaultWidth)
+  }
+
+  test("--Xsymbol-hash-length outside its range is refused") {
+    assert(Main.parseCmdOpts(Array("build", "--Xsymbol-hash-length", "0")).isEmpty)
+    assert(Main.parseCmdOpts(Array("build", "--Xsymbol-hash-length", "50")).isEmpty)
+  }
+
+  test("--Xsymbol-names selects stable or counter names") {
+    import ca.uwaterloo.flix.language.phase.jvm.JvmNameTable.Mode
+    assert(Main.parseCmdOpts(Array("build")).get.xsymbolNames == Mode.Stable)
+    assert(Main.parseCmdOpts(Array("build", "--Xsymbol-names", "counter")).get.xsymbolNames == Mode.Counter)
+    assert(Main.parseCmdOpts(Array("build", "--Xsymbol-names", "other")).isEmpty)
+    assert(Main.parseCmdOpts(Array("build", "--Xstable-name-length", "8")).isEmpty)
+  }
+
+  test("demangle accepts a generated class name") {
+    assert(Main.parseCmdOpts(Array("demangle", "Def$map$I5Int32E")).get.command ==
+      Main.Command.Demangle("Def$map$I5Int32E"))
+    assert(Main.parseCmdOpts(Array("demangle")).isEmpty)
+  }
+
   test("build") {
     val args = Array("build")
     val opts = Main.parseCmdOpts(args).get

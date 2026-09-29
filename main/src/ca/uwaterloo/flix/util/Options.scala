@@ -17,6 +17,7 @@
 package ca.uwaterloo.flix.util
 
 import ca.uwaterloo.flix.language.ast.Symbol
+import ca.uwaterloo.flix.language.phase.jvm.JvmNameTable
 
 object Options {
   // Enable constraint-based monomorphization if "XNEWMONO" env var is set.
@@ -42,6 +43,8 @@ object Options {
     xnodeprecated = false,
     xsubeffecting = Set.empty,
     xnewmono = EnableMono2,
+    xsymbolHashLength = JvmNameTable.DefaultWidth,
+    xsymbolNames = JvmNameTable.Mode.Stable,
     XPerfN = None,
     XPerfFrontend = false,
     XPerfPar = false,
@@ -117,6 +120,8 @@ case class Options(lib: LibLevel,
                    xnodeprecated: Boolean,
                    xsubeffecting: Set[Subeffecting],
                    xnewmono: Boolean,
+                   xsymbolHashLength: Int,
+                   xsymbolNames: JvmNameTable.Mode,
                    XPerfFrontend: Boolean,
                    XPerfN: Option[Int],
                    XPerfPar: Boolean,

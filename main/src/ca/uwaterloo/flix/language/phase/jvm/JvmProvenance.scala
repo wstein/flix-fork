@@ -8,12 +8,31 @@ import scala.collection.mutable
 final class JvmProvenance {
 
   private var origins = mutable.Map.empty[Symbol, GeneratedJvmKey]
+  private var readables = mutable.Map.empty[Symbol, JvmReadableOrigin]
+  private var spellings = mutable.Map.empty[Symbol, String]
   private var frozen = false
 
   def register(sym: Symbol, key: GeneratedJvmKey): Unit = synchronized {
     requireOpen()
     JvmProvenance.checkConsistent(sym, origins.get(sym), key)
     origins(sym) = key
+  }
+
+  /** Records how `sym` reads, beside its key; see [[JvmReadableOrigin]]. */
+  def registerReadable(sym: Symbol, readable: JvmReadableOrigin): Unit = synchronized {
+    requireOpen()
+    readables(sym) = readable
+  }
+
+  /** Records a specialization spelling while its type arguments are still available. */
+  def registerSpelling(sym: Symbol, spelling: String): Unit = synchronized {
+    requireOpen()
+    spellings.get(sym).foreach { previous =>
+      if (previous != spelling) {
+        throw InternalCompilerException(s"Conflicting JVM specialization spellings for '$sym'.", SourceLocation.Unknown)
+      }
+    }
+    spellings(sym) = spelling
   }
 
   def origin(sym: Symbol): GeneratedJvmKey = synchronized {
@@ -24,15 +43,21 @@ final class JvmProvenance {
   def retainLive(live: Set[Symbol]): Unit = synchronized {
     requireOpen()
     origins = mutable.Map.from(origins.iterator.filter { case (sym, _) => live.contains(sym) })
+    readables = mutable.Map.from(readables.iterator.filter { case (sym, _) => live.contains(sym) })
+    spellings = mutable.Map.from(spellings.iterator.filter { case (sym, _) => live.contains(sym) })
   }
 
-  def freeze(required: Iterable[Symbol]): JvmNameTable = synchronized {
+  /** Returns the name table of `required`, with suffixes `width` base-36 digits wide (see [[JvmNameTable.build]]). */
+  def freeze(required: Iterable[Symbol], width: Int, mode: JvmNameTable.Mode = JvmNameTable.Mode.Stable): JvmNameTable = synchronized {
     requireOpen()
     frozen = true
     try {
-      JvmNameTable.build(required.iterator.map(sym => sym -> origin(sym)).toList)
+      val entries = required.iterator.map(sym => sym -> origin(sym)).toList
+      JvmNameTable.build(entries, width, readables.toMap, spellings.toMap, mode)
     } finally {
       origins = mutable.Map.empty
+      readables = mutable.Map.empty
+      spellings = mutable.Map.empty
     }
   }
 
@@ -44,6 +69,8 @@ final class JvmProvenance {
 
   def close(): Unit = synchronized {
     origins = mutable.Map.empty
+    readables = mutable.Map.empty
+    spellings = mutable.Map.empty
     frozen = true
   }
 }

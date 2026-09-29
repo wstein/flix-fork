@@ -22,6 +22,7 @@ import ca.uwaterloo.flix.language.CompilationMessage
 import ca.uwaterloo.flix.language.ast.shared.{Origin, SecurityContext}
 import ca.uwaterloo.flix.language.ast.{Symbol, TypedAst}
 import ca.uwaterloo.flix.language.phase.HtmlDocumentor
+import ca.uwaterloo.flix.language.phase.jvm.{JvmNameTable, JvmTypeDemangler}
 import ca.uwaterloo.flix.language.phase.unification.zhegalkin.ZhegalkinPerf
 import ca.uwaterloo.flix.runtime.JvmLoader
 import ca.uwaterloo.flix.runtime.shell.Shell
@@ -97,6 +98,8 @@ object Main {
       xnodeprecated = cmdOpts.xnodeprecated,
       xsubeffecting = cmdOpts.xsubeffecting,
       xnewmono = cmdOpts.xnewmono,
+      xsymbolHashLength = cmdOpts.xsymbolHashLength,
+      xsymbolNames = cmdOpts.xsymbolNames,
       XPerfFrontend = cmdOpts.XPerfFrontend,
       XPerfPar = cmdOpts.XPerfPar,
       XPerfN = cmdOpts.XPerfN,
@@ -557,6 +560,14 @@ object Main {
         case Command.Zhegalkin =>
           ZhegalkinPerf.run(options.XPerfN)
 
+        case Command.Demangle(name) =>
+          JvmTypeDemangler.demangle(name) match {
+            case Right(result) => println(result)
+            case Left(error) =>
+              Console.err.println(error)
+              System.exit(1)
+          }
+
       }
     } catch {
       case ex: RuntimeException =>
@@ -605,6 +616,8 @@ object Main {
     xverify: Boolean = false,
     xsubeffecting: Set[Subeffecting] = Set.empty,
     xnewmono: Boolean = false,
+    xsymbolHashLength: Int = JvmNameTable.DefaultWidth,
+    xsymbolNames: JvmNameTable.Mode = JvmNameTable.Mode.Stable,
     XPerfN: Option[Int] = None,
     XPerfFrontend: Boolean = false,
     XPerfPar: Boolean = false,
@@ -677,6 +690,8 @@ object Main {
 
     case object Zhegalkin extends Command
 
+    case class Demangle(name: String) extends Command
+
   }
 
   /**
@@ -732,6 +747,10 @@ object Main {
           text("adds a jar to the classpath. Repeatable."),
         opt[Unit]("diagnostics-json").action((_, c) => c.copy(jsonDiagnostics = true)).
           text("writes diagnostics to stdout as JSON, for a build tool to read."),
+      )
+
+      cmd("demangle").text("  explains a generated JVM class name.").children(
+        arg[String]("class-name").action((name, c) => c.copy(command = Command.Demangle(name))).required()
       )
 
       cmd("build-classes").action((_, c) => c.copy(command = Command.BuildClasses)).text("  builds the current project and writes the class files to the build directory.")
@@ -941,6 +960,22 @@ object Main {
       // Xnewmono
       opt[Unit]("Xnewmono").action((_, c) => c.copy(xnewmono = true)).
         text("[experimental] uses the constraint-based monomorphization pipeline instead of the demand-driven one.")
+
+      // Xsymbol-hash-length
+      opt[Int]("Xsymbol-hash-length").action((width, c) => c.copy(xsymbolHashLength = width)).
+        validate { width =>
+          if (width < 1 || width > JvmNameTable.MaxWidth) failure(s"Xsymbol-hash-length must be between 1 and ${JvmNameTable.MaxWidth}")
+          else success
+        }.
+        text(s"[experimental] width of compacted-name and fallback SHA-256 hashes in base-36 digits (default: ${JvmNameTable.DefaultWidth}).")
+
+      opt[String]("Xsymbol-names").action((mode, c) => c.copy(xsymbolNames =
+        if (mode == "counter") JvmNameTable.Mode.Counter else JvmNameTable.Mode.Stable)).
+        validate { mode =>
+          if (mode == "stable" || mode == "counter") success
+          else failure("Xsymbol-names must be stable or counter")
+        }.
+        text("[experimental] use stable provenance names or upstream-style counter names (default: stable).")
 
       note("")
 

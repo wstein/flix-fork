@@ -36,7 +36,7 @@ object CodeGen {
     val namedSymbols: Set[Symbol] = root.defs.keySet.map(sym => sym: Symbol) ++
       root.enums.values.flatMap(getNullaryTagsOf).map(_.sym.enumSym) ++
       root.anonClasses.map(_.sym)
-    flix.jvmOrigins.freeze(namedSymbols)
+    flix.jvmOrigins.freeze(namedSymbols, flix.options.xsymbolHashLength, flix.options.xsymbolNames)
     flix.jvmOrigins.finalizeDebugDefinitions(root.defs.values)
     flix.jvmOrigins.finalizeDebugCalls(root)
     implicit val r: Root = root
@@ -178,7 +178,22 @@ object CodeGen {
     val duplicates = allClasses.groupBy(_.name).collect { case (name, classes) if classes.length > 1 => name }
     if (duplicates.nonEmpty) {
       val names = duplicates.map(ClassDescs.internalNameOf).mkString(", ")
-      throw InternalCompilerException(s"Duplicate JVM class names: $names", SourceLocation.Unknown)
+      val compacted = duplicates.exists(name => ClassDescs.internalNameOf(name).contains("$$$$"))
+      val advice = if (compacted && flix.options.xsymbolNames == JvmNameTable.Mode.Counter)
+        " A compacted counter-mode name collided; inspect the generated class names."
+      else if (compacted && flix.options.xsymbolHashLength < JvmNameTable.MaxWidth)
+        s" A compacted-name hash collided; increase --Xsymbol-hash-length above ${flix.options.xsymbolHashLength}."
+      else if (compacted) " A compacted-name hash collided at the maximum width; inspect the naming provenance."
+      else ""
+      throw InternalCompilerException(s"Duplicate JVM class names: $names.$advice", SourceLocation.Unknown)
+    }
+
+    // Class files with names differing only in case overwrite each other on common
+    // case-insensitive file systems, even though their JVM descriptors are distinct.
+    val caseCollisions = allClasses.groupBy(clazz => ClassDescs.internalNameOf(clazz.name).toLowerCase(java.util.Locale.ROOT))
+      .values.collect { case classes if classes.map(_.name).distinct.length > 1 => classes.map(c => ClassDescs.internalNameOf(c.name)).sorted }
+    if (caseCollisions.nonEmpty) {
+      throw InternalCompilerException(s"JVM class names differ only in case: ${caseCollisions.map(_.mkString(" and ")).mkString(", ")}.", SourceLocation.Unknown)
     }
 
     val classMap = allClasses.map(clazz => clazz.name -> clazz).toMap

@@ -14,6 +14,8 @@ final class JvmCompilationOrigins(val symbols: JvmProvenance) {
   private var debugBindings = Map.empty[Symbol.DefnSym, List[JvmLexicalOrigins.Binding]]
   private var debugDefinitions = Map.empty[String, Map[String, List[JvmLexicalOrigins.Binding]]]
   private var debugCalls = List.empty[DebugCalls.Call]
+  // How a lambda or anonymous class reads, following it through the phases that keep its identity.
+  private var readables = new IdentityHashMap[AnyRef, JvmReadableOrigin]()
   private var closed = false
   private var freezeStarted = false
   private var frozenNames: Option[JvmNameTable] = None
@@ -95,13 +97,14 @@ final class JvmCompilationOrigins(val symbols: JvmProvenance) {
     debugCalls
   }
 
-  def freeze(required: Iterable[Symbol]): Unit = synchronized {
+  def freeze(required: Iterable[Symbol], width: Int, mode: JvmNameTable.Mode = JvmNameTable.Mode.Stable): Unit = synchronized {
     requireOpen()
     freezeStarted = true
     try {
-      frozenNames = Some(symbols.freeze(required))
+      frozenNames = Some(symbols.freeze(required, width, mode))
     } finally {
       expressions = new IdentityHashMap[AnyRef, GeneratedJvmKey]()
+      readables = new IdentityHashMap[AnyRef, JvmReadableOrigin]()
     }
   }
 
@@ -118,7 +121,14 @@ final class JvmCompilationOrigins(val symbols: JvmProvenance) {
 
   def transfer[A <: AnyRef](from: AnyRef, to: A, phase: String): A = synchronized {
     attribute(to, expression(from), phase)
+    Option(readables.get(from)).foreach(readables.putIfAbsent(to, _))
     to
+  }
+
+  /** Records how the captured expression `exp` reads; see [[JvmReadableOrigin]]. */
+  def recordReadable(exp: AnyRef, readable: JvmReadableOrigin): Unit = synchronized {
+    requireOpen()
+    readables.put(exp, readable)
   }
 
   def synthetic[A <: AnyRef](from: AnyRef, to: A, role: String): A = synchronized {
@@ -126,15 +136,22 @@ final class JvmCompilationOrigins(val symbols: JvmProvenance) {
     to
   }
 
-  def specialize[A <: AnyRef](from: AnyRef, to: A, owner: Symbol.DefnSym, phase: String): A =
+  /**
+    * Clones `from`'s key for the specialization `owner`, and its readable origin with it: the
+    * owner's own name is what tells the copies of one lambda apart.
+    */
+  def specialize[A <: AnyRef](from: AnyRef, to: A, owner: Symbol.DefnSym, phase: String): A = synchronized {
     cloneTree(from, to, symbols.origin(owner), phase)
+    Option(readables.get(from)).foreach(r => readables.putIfAbsent(to, r.copy(specialization = Some(owner))))
+    to
+  }
 
   def cloneTree[A <: AnyRef](from: AnyRef, to: A, context: GeneratedJvmKey, phase: String): A = synchronized {
     attribute(to, JvmOriginKey.compose("cloned-expression", List(context, expression(from))), phase)
     to
   }
 
-  def specializedSymbol(fresh: Symbol, original: Symbol, args: List[Type]): Unit = {
+  def specializedSymbol(fresh: Symbol, original: Symbol, args: List[Type], spellingArgs: List[Type]): Unit = {
     val arguments = args.map(JvmTypeKey.encode(_, Nil, symbols.origin))
     symbols.register(fresh, JvmOriginKey.compose("specialization", List(symbols.origin(original)), arguments))
     (fresh, original) match {
@@ -142,21 +159,35 @@ final class JvmCompilationOrigins(val symbols: JvmProvenance) {
         recordDebugBindings(target, sourceBindings(source))
       case _ => ()
     }
+    symbols.registerSpelling(fresh, JvmTypeMangler.monomorph(spellingArgs, symbols.origin))
   }
+
+  def specializedSymbol(fresh: Symbol, original: Symbol, args: List[Type]): Unit =
+    specializedSymbol(fresh, original, args, args)
 
   def erasedSymbol(fresh: Symbol, original: Symbol, args: List[SimpleType]): Unit = {
     val arguments = args.map(JvmTypeKey.encodeSimple(_, symbols.origin))
     symbols.register(fresh, JvmOriginKey.compose("erasure", List(symbols.origin(original)), arguments))
+    symbols.registerSpelling(fresh, JvmTypeMangler.erasure(args))
   }
 
-  def derivedSymbol(fresh: Symbol, source: AnyRef, role: String): Unit =
+  /**
+    * Registers the symbol `fresh` generated from `source` -- a lifted lambda or local definition,
+    * or a specialized anonymous class -- and hands it `source`'s readable origin, if it has one.
+    */
+  def derivedSymbol(fresh: Symbol, source: AnyRef, role: String): Unit = synchronized {
     symbols.register(fresh, JvmOriginKey.compose("generated-symbol", List(expression(source)), List(role)))
+    Option(readables.get(source)).foreach(symbols.registerReadable(fresh, _))
+  }
 
   def retainExpressions(live: Iterable[AnyRef]): Unit = synchronized {
     requireOpen()
     val retained = new IdentityHashMap[AnyRef, GeneratedJvmKey]()
     live.foreach(exp => retained.put(exp, expression(exp)))
     expressions = retained
+    val readable = new IdentityHashMap[AnyRef, JvmReadableOrigin]()
+    live.foreach(exp => Option(readables.get(exp)).foreach(readable.put(exp, _)))
+    readables = readable
   }
 
   def retainMono(root: MonoAst.Root): Unit = retainRoot(root, keepExpressions = true)
@@ -201,6 +232,7 @@ final class JvmCompilationOrigins(val symbols: JvmProvenance) {
     debugBindings = Map.empty
     debugDefinitions = Map.empty
     debugCalls = Nil
+    readables = new IdentityHashMap[AnyRef, JvmReadableOrigin]()
     frozenNames = None
     symbols.close()
     closed = true
@@ -252,7 +284,10 @@ object JvmCompilationOrigins {
   def capture(root: TypedAst.Root, captureDebugBindings: Boolean = true): JvmCompilationOrigins = {
     val source = JvmSourceOrigins.capture(root, captureDebugBindings)
     val origins = new JvmCompilationOrigins(source.provenance)
-    source.foreachExpression(origins.record)
+    source.foreachExpression { (exp, key, readable) =>
+      origins.record(exp, key)
+      readable.foreach(origins.recordReadable(exp, _))
+    }
     val bindingsByDefinition = mutable.Map.empty[Symbol.DefnSym, mutable.ListBuffer[JvmLexicalOrigins.Binding]]
     source.foreachBinding { case (sym, binding) =>
       bindingsByDefinition.getOrElseUpdate(sym, mutable.ListBuffer.empty) += binding

@@ -1280,7 +1280,11 @@ object Specialization {
           // The function has not been specialized.
           // Generate a fresh specialized definition symbol.
           val freshSym = Symbol.freshDefnSym(defn.sym)
-          flix.jvmOrigins.specializedSymbol(freshSym, defn.sym, List(tpe))
+          val quantifiers = defn.spec.declaredScheme.quantifiers
+          // Trait members can specialize by their instance head without declaring type
+          // quantifiers of their own. Keep their full signature to distinguish those cases.
+          val spellingArgs = if (quantifiers.isEmpty) List(tpe) else quantifiers.map(q => subst(Type.Var(q, q.loc)))
+          flix.jvmOrigins.specializedSymbol(freshSym, defn.sym, List(tpe), spellingArgs)
 
           // Register the fresh symbol (and actual type).
           ctx.addSpecializedName(defn.sym, tpe, freshSym)

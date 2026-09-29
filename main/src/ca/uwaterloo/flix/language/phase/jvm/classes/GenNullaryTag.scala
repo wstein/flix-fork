@@ -51,7 +51,12 @@ object GenNullaryTag {
     * `Struct$Obj`.
     */
   def desc(sym: Symbol.CaseSym)(implicit flix: Flix): ClassDesc =
-    Mangle.mkNamespacedDesc(sym.enumSym.namespace, "Case", List(JvmNames.enumName(sym.enumSym), sym.name).mkString(Flix.Delimiter))
+    Mangle.mkDesc(Mangle.packageOfNamespace(sym.enumSym.namespace),
+      ca.uwaterloo.flix.language.phase.jvm.JvmNameCompaction.compact(
+        Mangle.classPrefixOfNamespace(sym.enumSym.namespace) +
+          Mangle.mkClassName("Case", List(JvmNames.enumName(sym.enumSym), sym.name)),
+        ca.uwaterloo.flix.language.phase.jvm.JvmNameCompaction.effectiveWidth(
+          flix.options.xsymbolHashLength, flix.options.xsymbolNames)))
 
   def genByteCode(sym: Symbol.CaseSym)(implicit flix: Flix): Array[Byte] = {
     val d = desc(sym)

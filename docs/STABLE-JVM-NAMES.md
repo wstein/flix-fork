@@ -21,16 +21,98 @@ Callers must
 provide canonical semantic fields: rendered types, internal counters, source
 positions, unordered collections, and optimized body hashes are unsuitable.
 
-`JvmNameTable` assigns twelve lowercase base-36 characters from SHA-256 modulo
-36^12, including leading zeros. Registration order does not affect names. The
-table rejects conflicting keys for one symbol, one key assigned to distinct
-symbols, and different keys producing the same suffix. Repeated registration
-of the same symbol and key is allowed. Missing lookups fail with an internal
-compiler error; there is no counter fallback.
+`JvmNameTable` uses `--Xsymbol-hash-length` lowercase base-36 characters
+(default twelve) from SHA-256 modulo 36^width, including leading zeros, only for
+fallback or compacted names. Specializations use the recorded mangled type arguments.
+Registration order does not affect names. The table rejects conflicting keys for
+one symbol, one key assigned to distinct symbols, and different keys producing
+the same suffix. Repeated registration of the same symbol and key is allowed.
+Missing lookups fail with an internal compiler error.
 
-The collision check is deliberately global across the table, including families.
+The width runs from 1 to 49 digits by policy. A full SHA-256 digest can require
+50 base-36 digits because 36^49 < 2^256 < 36^50. A narrower suffix is shorter and more likely to
+collide: below the default, a collision is expected and its error names the
+flag and says to widen it; at or above the default, 36^width names make an
+accidental collision implausible, so the error reports a provenance defect. A
+narrower name is the low-order digits of the wider one, since both reduce the
+same digest.
+
+`--Xsymbol-names counter` opts out: each symbol is named by its own internal
+counter id, as upstream Flix names it, so names change whenever an unrelated
+edit or thread schedule shifts the counter. It exists to compare against
+upstream and to rule the naming out when chasing a defect. Provenance is still
+required, so the opt-out cannot hide a symbol that would fail to be named, and
+there is still no counter fallback in stable mode.
+
+The fallback-hash collision check is deliberately global across the table, including families.
 This is stricter than checking final JVM class names and avoids relying on
-generator-specific prefixes to conceal ambiguous provenance.
+generator-specific prefixes to conceal ambiguous provenance. It is skipped in
+counter mode, where a counter id is unique to its symbol by construction and
+ids of different kinds of symbol may coincide without their classes colliding.
+
+## Specialization spelling and class-file limit
+
+`specializedSymbol` stores a length-framed, Itanium-style spelling beside its provenance key:
+`Def$map$I5Int326StringE` identifies the `(Int32, String)` specialization. Repeated complete
+types use `S_`, `S0_`, and so on, numbered in depth-first postorder. `erasedSymbol` stores the
+flat primitive-or-`Obj` shape used for enum and struct classes, for example
+`Case$Option$Obj$None`. A nested class of a specialized def uses that def's mangled suffix.
+The classic monomorphizer spells declared type arguments, while retaining the full
+call-site type as its provenance key. Definitions without declared quantifiers,
+such as trait members specialized by an instance head, spell the full signature
+to keep distinct instances distinct.
+If two live specializations of one definition still have the same displayed
+arguments but different full call-site types (for example, different effects),
+both use their stable provenance hashes. Neither can claim the shared spelling.
+
+The grammar escapes identifier bytes before measuring length, and canonicalizes commutative
+effects and row labels the same way as the identity key. Less common forms use an `X` production
+containing the full type key; the demangler renders its uncommon forms as readable structural types.
+`flix demangle <class-name>` explains uncompacted names and reports that a compacted middle
+cannot be recovered.
+
+Only a class name whose final simple filename plus `.class` exceeds 240 UTF-8 bytes is compacted.
+The namespace's directories do not count toward that component limit. Compaction retains both
+ends around `$$$$<fixed-width-SHA-256-base36>$$$$`; a duplicate final class name fails at
+codegen with advice about `--Xsymbol-hash-length`. Counter mode uses the default compaction
+hash width regardless of that flag.
+Codegen also rejects names that differ only in case, since they would address the
+same class file on common case-insensitive file systems.
+
+## Readable names for nested classes
+
+A lambda, a local definition, and an anonymous class are named by where they
+are written wherever that spelling is unique: `Clo$price$discount$0` for the
+first lambda bound by `let discount` in `price`, `Clo$price$0` for the first
+lambda directly in its body, `Def$price$helper` for a local definition, and
+`Anon$Shop$price$0` for an anonymous class, which spells its owner because its
+class name has no other place for it. A lambda of a specialized owner is named
+after the owner's own mangled suffix, `Clo$map$I5Int32E$0`, which tells the copies
+apart.
+
+The provenance key stays the identity. Keys hash every level of their path at
+capture, so a readable path cannot be read back from one; `JvmLexicalOrigins`
+records a `JvmReadableOrigin` beside each key instead -- the `let` binders,
+local definitions, and methods between the definition and the class, then its
+name or its source-order ordinal among its kind in that scope.
+Source-written binder names are used only when the symbol's location contains
+that exact identifier; compiler-generated binders use a scope-local ordinal,
+so scheduling-dependent generated argument numbers cannot enter class names.
+The path follows an expression through `transfer`, and through `specialize`,
+which tags it with the specialized owner; an Inliner clone or a synthetic expression has none,
+and `derivedSymbol` hands a lifted lambda or local definition its source's.
+
+`JvmNameTable` uses the readable spelling only if no class it could collide
+with -- one with the same definition prefix, or any anonymous class -- is
+spelled the same way, readable or hashed. When two readable spellings
+coincide, both keep their hashes, since which one would win is not a stable
+property. Anything without a readable origin or specialization spelling keeps its hash, and
+counter mode ignores both readable origins and specialization spellings.
+
+One stability property is traded for readability: an ordinal counts within its
+binding in source order, so inserting a lambda before another in the same
+binding renames the later one. A hashed name did not change then. Only classes
+of the edited definition are affected, and they are recompiled anyway.
 
 ## Namespace and package layout
 
