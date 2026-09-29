@@ -6,6 +6,13 @@ Proposed. Scoped to how Flix code is *called from* the JVM -- Java, Kotlin, Scal
 values cross that boundary. Calling Java *from* Flix (`import`, `new`, method calls) is unchanged.
 Numbered 3 to follow ADRs 1 and 2 on `feat/stable-specialization-names-rewrite`.
 
+Revision 5 records the [concrete boundary-type proof](../interop/CONCRETE-BOUNDARY-TYPES.md):
+checked instances derive `List<Integer>` and conversion effects internally without relaxing
+source associated-type rules. Concrete wrapper signatures require a validated typed root, so
+section 3 replaces early concrete desugaring with staged elaboration and ordinary wrapper
+checking. This does not implement the new declaration, facade, signatures, or joint-compilation
+stubs; the status remains Proposed.
+
 Revision 4 records the `flix-lab` typed-boundary probe: recursive element conversion, a
 `List<Integer>` JVM signature, and a staged Java caller work through the archived `@Export`
 path, but `JavaResult.Out[List[Int32]]` is rejected. The proposed wrapper therefore needs an
@@ -89,9 +96,9 @@ their existing callers.
 
 ## Decision
 
-Model the boundary as typed Flix code synthesized before resolution, with a narrow phase 1 that
-needs no new type-level machinery, and one small piece of codegen: a forwarding facade for an
-explicitly declared API.
+Model the boundary as typed Flix code synthesized and checked through a staged frontend, with a
+narrow phase 1 that needs no new type-level machinery, and one small piece of codegen: a forwarding
+facade for an explicitly declared API.
 
 ### 1. Boundary traits, distinct from `ToJava`/`ToFlix`
 
@@ -124,12 +131,14 @@ Leaf instances delegate to `ToJava`/`ToFlix` where those already do the right th
 work within an instance constrained by `JavaResult[a]`. It did **not** establish that a concrete
 application such as `JavaResult.Out[List[Int32]]` works: Flix rejects it because an associated
 type may only be applied to a type variable. The prototype used an explicit `JList[Integer]`
-export signature. Phase 1 must elaborate concrete boundary types before generating wrappers;
-  that elaboration, including generic signatures and effect sums, needs its own compiler proof.
-  A resolver-only spike allowing concrete associated-type applications type-checked a simple
-  instance, but also admitted an unresolved application and a self-referential instance that
-  existing tests reject. It was reverted: simply removing the restriction is not a safe phase-1
-  implementation.
+export signature. `BoundaryTypeElaborator` now proves concrete type and effect selection from
+the checked trait and equality environments, including recursive containers and user instances.
+Its internal projections are not new source syntax. Missing evidence, unresolved projections,
+cycles, unbound variables, and invalid equality constraints are rejected. A two-pass test renders
+the selected native type into a wrapper, rechecks it with the ordinary frontend, and executes
+the conversion. Generic classfile signatures remain a separate facade-emission gate.
+A resolver-only spike had admitted unresolved and self-referential applications; it was reverted.
+Simply removing the resolver restriction is not a safe phase-1 implementation.
 
 ### 2. An explicit, named API declaration
 
@@ -145,11 +154,16 @@ place. Every listed def must be monomorphic, declare its full signature, and hav
 parameter: a region-bound value (`Array[t, r]`, a mutable struct) never crosses. (The syntax is
 illustrative; any form that names the Java class and the members will do.)
 
-### 3. Wrappers are synthesized before resolution
+### 3. Concrete elaboration precedes ordinary wrapper checking
 
 For each listed def `f(x1: a1, ...): r \ e`, the compiler must first elaborate the declared
 signature to concrete boundary types `JArg[a1]`, ..., `JResult[r]` and conversion effects.
-It then synthesizes, in `Desugar` or earlier,
+This cannot happen in `Desugar`: instance selection and associated-type definitions require
+the typed environments and successful `Instances` validation. Early processing can reserve
+API names and retain declarations, but cannot yet choose concrete wrapper signatures.
+
+The proof uses two frontend passes: check the original program, elaborate internal projections
+from the validated root, then synthesize an ordinary def and recheck the augmented program:
 
 ```flix
 def f$java(x1: JArg[a1], ...): JResult[r] \ e + (conversion effects) =
@@ -159,15 +173,21 @@ def f$java(x1: JArg[a1], ...): JResult[r] \ e + (conversion effects) =
 Here `JArg` and `JResult` denote compiler-elaborated types, **not** Flix associated-type
 applications in generated source. In particular `JResult[List[Int32]]` is `JList[Integer]`.
 Parameters and results that are primitives, `String`, or Java types are left unwrapped. Because it
-is synthesized before `Resolver`:
+is submitted to the ordinary frontend in the second pass:
 
-- it is resolved, kinded, and type-checked like every other def, so a type that cannot cross is an
-  ordinary *missing instance* error;
+- it is resolved, kinded, and type-checked like every other def, including its actual conversion
+  calls; missing boundary evidence is rejected by elaboration before generation;
 - every synthesized node carries the source location of the member's line in the `export`
   declaration, so that error points at the export, not at invisible code;
 - it is registered as an entry point, so `TreeShaker1`/`TreeShaker2` retain it;
-- incremental compilation keys it on the declaration and on `f`'s declared signature, both of
-  which it is a pure function of.
+- incremental compilation keys it on the declaration, `f`'s declared signature, and the selected
+  instance definitions, whose changes can alter the Java ABI or effects.
+
+Production integration must preserve this ordering. A two-pass frontend is the proven prototype
+mechanism, not yet an implemented export pipeline. A dedicated entry point for checking generated
+typed definitions could avoid replay, but must be demonstrated separately. The syntax-only stub
+generator cannot assume these typed environments exist; how it obtains equivalent concrete types
+in cyclic Java-first builds remains an explicit phase-1 gate.
 
 ### 4. The backend emits a forwarding facade, with a recorded signature
 
@@ -210,16 +230,18 @@ type-checking, so an instance can name them. That is phase 2.
 
 | Phase | Adds | Keeps | Removes |
 |---|---|---|---|
-| 1 | `Java.Boundary` traits; `export mod ... as`; wrappers before resolution; forwarding facade with `Signature`; `Opaque[t]`; ABI gate; a new syntax-only stub generator for joint compilation | the v0.77.0 compiler and its non-export fork features | nothing yet |
+| 1 | `Java.Boundary` traits; `export mod ... as`; staged elaboration and checked wrappers; forwarding facade with `Signature`; `Opaque[t]`; ABI gate; a new stub generator for joint compilation | the v0.77.0 compiler and its non-export fork features | nothing yet |
 | 2 | synthetic-type provider, so instances can target generated tuple, record, and enum classes; recover the archived conversion semantics as trait instances | stubs | nothing from the old export backend: it is already gone |
 | 3 | `export instance com.acme.Service = mod Acme.Impl`: Flix implements a Java interface Java compiles first | stubs for Flix-owned APIs only | stubs for Java-first projects |
 | 4 | effects as Java handler interfaces; collection views (O(1) at the boundary) | -- | copies where they are too expensive |
 
-**A syntax-only stub generator is required in phase 1.** A Flix module that calls a Java class
+**A pre-type-check stub path is required in phase 1.** A Flix module that calls a Java class
 Java has not compiled yet cannot be type-checked, so a typed `--emit-java-api` cannot break the
 joint-compilation cycle. The old `ExportStubs` is gone; the new generator must read
-`export mod ... as` declarations before resolution, using the declared Java name. Phase 3 removes
-the cycle itself for projects whose contract is a Java interface.
+`export mod ... as` declarations before resolution, using the declared Java name. Syntax alone
+does not provide validated user-instance reductions; an explicit concrete API signature or a
+restricted bootstrap elaboration may be needed. This choice is not settled by the current proof.
+Phase 3 removes the cycle itself for projects whose contract is a Java interface.
 
 ## The ABI gate, in phase 1
 
@@ -239,8 +261,8 @@ Java caller compiled against those recorded descriptors must keep linking.
 ## Consequences
 
 - **Smaller compiler, larger library.** The old boundary-specific Scala is already removed;
-  the replacement adds a trait module, one desugaring, a syntax-only stub path, and a forwarding
-  facade.
+  the replacement adds a trait module, staged elaboration and wrapper checking, a stub path, and a
+  forwarding facade.
 - **Extensible.** A user converts their own types by writing instances.
 - **Errors are type errors**, located at the export's member line.
 - **Names are stable by construction.** The `as` name fixes the Java class; the facade layout is
@@ -249,7 +271,7 @@ Java caller compiled against those recorded descriptors must keep linking.
 - **Phase 1 converts less than the archived fork did.** Tuples, records, and enums need phase 2's
   synthetic types or a user's own Java class. Existing export consumers stay on an archived build
   until their required shapes are implemented.
-- **Upstreamable in pieces.** Phase 1 is one declaration form, one desugaring, a library module,
+- **Upstreamable in pieces.** Phase 1 is one declaration form, staged wrapper checking, a library module,
   and a forwarding facade -- the shape a maintainer who just deleted `@Export` can review.
 
 ## Alternatives considered
@@ -265,7 +287,7 @@ Rated for value, effort, and fit with upstream (★ low to ★★★★★ high)
 | Generate Java classes for tuples, records, and enums in phase 1 | ★★★★ | large | ★★★ | Deferred to phase 2: needs a synthetic-type provider |
 | Generated Java source facades compiled by `javac` | ★★★ | medium | ★★ | Deferred: better IDE and Javadoc story, but a Java toolchain inside the Flix build |
 | Reflective scripting API (JSR-223) | ★★ | small | ★★ | Out of scope: embedding, not a typed contract |
-| **Typed boundary: boundary traits, declared API, wrappers before resolution** | ★★★★★ | medium | ★★★★★ | **Proposed** |
+| **Typed boundary: boundary traits, declared API, staged checked wrappers** | ★★★★★ | medium | ★★★★★ | **Proposed** |
 
 ## Migration from the fork's `@Export`
 
@@ -287,12 +309,11 @@ Rated for value, effort, and fit with upstream (★ low to ★★★★★ high)
 
 ## Open questions
 
-- **Concrete boundary-type elaboration.** The library instance can write
-  `JList[JavaResult.Out[a]]`, but Flix rejects `JavaResult.Out[List[Int32]]`. How does the compiler
-  derive `JList[Integer]` and conversion effects from a declared concrete type, including
-  user-defined instances, without a second hard-coded conversion table? This is the phase-1 gate.
-  The elaborator must also reject missing instances and recursive associated-type definitions;
-  a blanket resolver relaxation fails those checks.
+- **Wrapper and stub integration.** The concrete elaboration proof answers type and effect
+  selection without changing surface associated-type rules. How should production wrapper
+  checking avoid redundant frontend work, preserve instance-dependent incremental invalidation,
+  and provide identical types to joint-compilation stubs when Java dependencies do not yet exist?
+  The named facade and its recorded generic `Signature` remain phase-1 gates.
 - **The synthetic-type provider.** Where it runs, how it declares classes to the Java resolver,
   and how it names them without the layout leaks of the current design.
 - **The `Opaque[t]` handle.** A generic `FlixValue<T>` wrapper, or the erased Flix value itself
