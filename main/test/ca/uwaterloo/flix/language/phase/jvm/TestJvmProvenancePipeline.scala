@@ -8,6 +8,7 @@ import ca.uwaterloo.flix.util.{InternalCompilerException, Options}
 import org.objectweb.asm.ClassReader
 import org.scalatest.funsuite.AnyFunSuite
 
+import java.nio.charset.StandardCharsets
 import scala.collection.concurrent.TrieMap
 
 class TestJvmProvenancePipeline extends AnyFunSuite {
@@ -35,6 +36,9 @@ class TestJvmProvenancePipeline extends AnyFunSuite {
     intercept[InternalCompilerException] { flix.jvmOrigins }
     val descriptors = compilation.getClasses.iterator.map { case (descriptor, clazz) =>
       val internalName = new ClassReader(clazz.bytecode).getClassName
+      val fileName = internalName.split('/').last + ".class"
+      assert(fileName.getBytes(StandardCharsets.UTF_8).length <= JvmNameCompaction.MaxFileNameBytes,
+        s"Generated class filename is too long: $fileName")
       val actualDescriptor = s"L$internalName;"
       assert(actualDescriptor == descriptor.descriptorString(), s"Classfile name disagrees with map key: $internalName")
       assert(clazz.name == descriptor)
