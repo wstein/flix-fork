@@ -21,16 +21,33 @@ Callers must
 provide canonical semantic fields: rendered types, internal counters, source
 positions, unordered collections, and optimized body hashes are unsuitable.
 
-`JvmNameTable` assigns twelve lowercase base-36 characters from SHA-256 modulo
-36^12, including leading zeros. Registration order does not affect names. The
-table rejects conflicting keys for one symbol, one key assigned to distinct
-symbols, and different keys producing the same suffix. Repeated registration
-of the same symbol and key is allowed. Missing lookups fail with an internal
-compiler error; there is no counter fallback.
+`JvmNameTable` assigns `--Xstable-name-length` lowercase base-36 characters
+(default twelve) from SHA-256 modulo 36^width, including leading zeros.
+Registration order does not affect names. The table rejects conflicting keys for
+one symbol, one key assigned to distinct symbols, and different keys producing
+the same suffix. Repeated registration of the same symbol and key is allowed.
+Missing lookups fail with an internal compiler error.
+
+The width runs from 1 to 49 digits; 49 is the most a SHA-256 digest fills,
+since 36^49 < 2^256 < 36^50. A narrower suffix is shorter and more likely to
+collide: below the default, a collision is expected and its error names the
+flag and says to widen it; at or above the default, 36^width names make an
+accidental collision implausible, so the error reports a provenance defect. A
+narrower name is the low-order digits of the wider one, since both reduce the
+same digest.
+
+`--Xstable-name-length 0` opts out: each symbol is named by its own internal
+counter id, as upstream Flix names it, so names change whenever an unrelated
+edit or thread schedule shifts the counter. It exists to compare against
+upstream and to rule the naming out when chasing a defect. Provenance is still
+required, so the opt-out cannot hide a symbol that would fail to be named, and
+there is still no counter fallback at any other width.
 
 The collision check is deliberately global across the table, including families.
 This is stricter than checking final JVM class names and avoids relying on
-generator-specific prefixes to conceal ambiguous provenance.
+generator-specific prefixes to conceal ambiguous provenance. It is skipped at
+width zero only, where a counter id is unique to its symbol by construction and
+ids of different kinds of symbol may coincide without their classes colliding.
 
 ## Semantic type keys
 
