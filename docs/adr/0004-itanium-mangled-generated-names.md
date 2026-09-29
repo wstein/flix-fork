@@ -62,10 +62,22 @@ hash is MD5 as unpadded hexadecimal, `md5.digest().map(b => (b & 0xFF).toHexStri
 
 ## Decision
 
-### 1. A specialization is spelled by its mangled type arguments
+### 1. A specialization is spelled by its type arguments, in the grammar its key needs
 
-After the definition's own name comes the mangling of the arguments it is specialized at, in an
-Itanium-style grammar adapted to JVM class names:
+After the specialized symbol's own name come the arguments it is specialized at. Flix has two
+kinds of specialization, and each is spelled the way its arguments require:
+
+- **An erasure specialization** -- an enum or struct specialized by `Eraser`, `erasedSymbol` -- is
+  keyed by erased types, and every argument is an *atom*: a primitive or `Obj`. The declaration
+  fixes how many there are. It is spelled as a flat list, `Case$List$Obj$Nil` for the `Nil`
+  singleton of `List` erased at a reference type, today `Case$List$zl5deigc9az4$Nil`: with only
+  atoms and a known arity, a flat list is already injective, so brackets would add nothing but
+  length. It is the spelling Flix already uses for its shape classes, `Tuple2$Obj$Int32` and
+  `Tag$Obj$Obj`.
+- **A monomorph specialization** -- a definition specialized by `specializedSymbol` -- is keyed by
+  full types, which nest and are nominal: `Map[String, List[Int32]]`, records, functions, effects.
+  A flat list loses where one argument ends and the next begins, so it is spelled in an
+  Itanium-style grammar adapted to JVM class names:
 
 | Construct | Itanium | Here |
 |---|---|---|
@@ -75,14 +87,18 @@ Itanium-style grammar adapted to JVM class names:
 | type arguments | `I <args> E` | the same |
 | substitution | `S_`, `S0_`, ... for a repeated component | the same; which components are candidates, and their numbering order, is an open question |
 
-For example, with the definition's name kept plain in front:
+For example, with the symbol's own name kept plain in front:
 
 ```
 Def$map$I5Int326StringE                     map at (Int32, String)
 Def$index$I3MapI6String4ListI5Int32EEEE     index at Map[String, List[Int32]]
 Def$swap$I5ColorS_E                         swap at (Color, Color): S_ repeats 5Color
-Case$Option$IObjE$None                      None of Option erased at a reference type
+Case$Option$Obj$None                        None of Option erased at a reference type (flat)
+Case$Option$Int32$None                      None of Option erased at Int32 (flat)
 ```
+
+The two spellings cannot collide: they name different kinds of symbol, a definition against an
+enum case, under different prefixes (`Def$`, `Clo$` against `Case$`).
 
 Length-prefixed names and explicit `I ... E` / `N ... E` brackets make the grammar injective:
 every spelling parses back to exactly one argument list, which a `flix demangle` command can print.
@@ -166,6 +182,8 @@ Rated for readability, stability, and cost (★ low to ★★★★★ high).
 | Keep hashing every specialization (status quo) | ★ | ★★★★★ | none | Rejected: unreadable where it matters most |
 | Plain `$`-separated type names (`Def$map$Map$String$List$Int32`) | ★★★★★ | ★★★★★ | low | Rejected: not injective, arity and nesting are lost |
 | Faithful Itanium, builtins as letters (`Def$map$IiiE`) | ★★ | ★★★★★ | low | Rejected: injective but cryptic for no gain |
+| Itanium-style for erasure specializations too (`Case$Option$IObjE$None`) | ★★★ | ★★★★★ | low | Rejected: one grammar, but for an atom-only list with a known arity its brackets add length and no injectivity |
+| Scala's `$mc … $sp` letters (`Def$map$mcIL$sp`) | ★★ | ★ | low | Rejected: every reference type is `L`, so `map` at `String` and at `Color` spell alike -- Scala can afford that only because it erases generics instead of specializing them |
 | **Itanium-style, builtins as words, Scala-style compaction with SHA-256** | ★★★★ | ★★★★★ | medium | **Proposed** |
 | Compaction hashed with MD5 as Scala does | -- | ★★★★ | low | Rejected: no reason to prefer it over the SHA-256 already in use, and variable-width formatting |
 | Hash encoded as base64url | ★★★ | ★★ | low | Rejected, see below |
@@ -177,10 +195,6 @@ Java source cannot name.
 
 ## Open questions
 
-- **Which types to spell.** Monomorph specializations are keyed by full types, `Eraser`'s by
-  erased ones. Spelling the erased key is short and matches Flix's existing `Tuple2$Obj$Int32`
-  convention; spelling full types is more informative. Where the two coexist for one definition,
-  the spelling must follow the key that actually distinguishes the classes.
 - **Effect and region arguments.** Whether every effect the key distinguishes needs spelling, or
   some are erased before any class depends on them.
 - **The limit's unit.** 240 *characters* as Scala counts, or 240 *bytes* of the file name's
