@@ -118,4 +118,40 @@ class TestJvmNameTable extends AnyFunSuite {
     intercept[InternalCompilerException] { JvmNameTable.build(List(symbol(1) -> key(malformed)), JvmNameTable.DefaultWidth) }
   }
 
+  test("the suffix has the width it is given") {
+    val entries = (1 to 50).map(id => symbol(id) -> key(id.toString))
+    for (width <- List(4, 12, 20, JvmNameTable.MaxWidth)) {
+      val table = JvmNameTable.build(entries, width)
+      entries.foreach { case (sym, _) => assert(table.suffix(sym).matches(s"[0-9a-z]{$width}")) }
+    }
+  }
+
+  test("a narrower width keeps the same names' trailing digits apart only as far as it can") {
+    // Widening never changes which keys collide at a width that has none: names at width 8 are
+    // the low-order digits of names at width 12, since both reduce the same digest.
+    val entries = (1 to 50).map(id => symbol(id) -> key(id.toString))
+    val narrow = JvmNameTable.build(entries, 8)
+    val wide = JvmNameTable.build(entries, 12)
+    entries.foreach { case (sym, _) => assert(wide.suffix(sym).endsWith(narrow.suffix(sym))) }
+  }
+
+  test("a collision names the flag, and says whether the width is below the supported one") {
+    val entries = List(symbol(1) -> key("first"), symbol(2) -> key("second"))
+    val narrow = intercept[InternalCompilerException] {
+      JvmNameTable.buildWithDigest(entries, 2, _ => BigInt(0))
+    }
+    assert(narrow.getMessage.contains("--Xstable-name-length"))
+    assert(narrow.getMessage.contains("below the default"))
+    val default = intercept[InternalCompilerException] {
+      JvmNameTable.buildWithDigest(entries, JvmNameTable.DefaultWidth, _ => BigInt(0))
+    }
+    assert(default.getMessage.contains("--Xstable-name-length"))
+    assert(!default.getMessage.contains("below the default"))
+  }
+
+  test("a width outside the supported range is refused") {
+    intercept[InternalCompilerException] { JvmNameTable.build(Nil, 0) }
+    intercept[InternalCompilerException] { JvmNameTable.build(Nil, JvmNameTable.MaxWidth + 1) }
+  }
+
 }
