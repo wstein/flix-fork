@@ -51,6 +51,17 @@ class TestJvmReadableNames extends AnyFunSuite {
     assert(table.suffix(lambda) == table.suffix(owner) + "$0")
   }
 
+  test("a lambda of a mangled owner inherits its readable type arguments") {
+    val owner = defn(Some(10), "map")
+    val lambda = defn(Some(11), "map")
+    val table = JvmNameTable.build(
+      List(owner -> GeneratedJvmKey("specialization", List("map", "Int32")), lambda -> key("a")),
+      JvmNameTable.DefaultWidth,
+      Map(lambda -> JvmReadableOrigin(List("Shop", "map"), List("0"), Some(owner))),
+      Map(owner -> "I5Int32E"), JvmNameTable.Mode.Stable)
+    assert(table.suffix(lambda) == "I5Int32E$0")
+  }
+
   test("an anonymous class is named with its owner, since its class name has none") {
     val anon = new Symbol.AnonClassSym(3, SourceLocation.Unknown)
     val table = JvmNameTable.build(List(anon -> GeneratedJvmKey("lexical-anonymous-class", List("a"))), JvmNameTable.DefaultWidth,

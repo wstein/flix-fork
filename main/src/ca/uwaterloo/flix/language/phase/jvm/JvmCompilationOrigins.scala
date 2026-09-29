@@ -76,11 +76,13 @@ final class JvmCompilationOrigins(val symbols: JvmProvenance) {
   def specializedSymbol(fresh: Symbol, original: Symbol, args: List[Type]): Unit = {
     val arguments = args.map(JvmTypeKey.encode(_, Nil, symbols.origin))
     symbols.register(fresh, JvmOriginKey.compose("specialization", List(symbols.origin(original)), arguments))
+    symbols.registerSpelling(fresh, JvmTypeMangler.monomorph(args, symbols.origin))
   }
 
   def erasedSymbol(fresh: Symbol, original: Symbol, args: List[SimpleType]): Unit = {
     val arguments = args.map(JvmTypeKey.encodeSimple(_, symbols.origin))
     symbols.register(fresh, JvmOriginKey.compose("erasure", List(symbols.origin(original)), arguments))
+    symbols.registerSpelling(fresh, JvmTypeMangler.erasure(args))
   }
 
   /**

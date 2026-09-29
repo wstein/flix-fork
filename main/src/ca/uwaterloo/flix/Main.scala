@@ -22,7 +22,7 @@ import ca.uwaterloo.flix.language.CompilationMessage
 import ca.uwaterloo.flix.language.ast.shared.SecurityContext
 import ca.uwaterloo.flix.language.ast.{Symbol, TypedAst}
 import ca.uwaterloo.flix.language.phase.HtmlDocumentor
-import ca.uwaterloo.flix.language.phase.jvm.JvmNameTable
+import ca.uwaterloo.flix.language.phase.jvm.{JvmNameTable, JvmTypeDemangler}
 import ca.uwaterloo.flix.language.phase.unification.zhegalkin.ZhegalkinPerf
 import ca.uwaterloo.flix.runtime.JvmLoader
 import ca.uwaterloo.flix.runtime.shell.Shell
@@ -505,6 +505,14 @@ object Main {
         case Command.Zhegalkin =>
           ZhegalkinPerf.run(options.XPerfN)
 
+        case Command.Demangle(name) =>
+          JvmTypeDemangler.demangle(name) match {
+            case Right(result) => println(result)
+            case Left(error) =>
+              Console.err.println(error)
+              System.exit(1)
+          }
+
       }
     } catch {
       case ex: RuntimeException =>
@@ -602,6 +610,8 @@ object Main {
 
     case object Zhegalkin extends Command
 
+    case class Demangle(name: String) extends Command
+
   }
 
   /**
@@ -641,6 +651,10 @@ object Main {
       cmd("init").action((_, c) => c.copy(command = Command.Init)).text("  creates a new project in the current directory.")
 
       cmd("check").action((_, c) => c.copy(command = Command.Check)).text("  checks the current project for errors.")
+
+      cmd("demangle").text("  explains a generated JVM class name.").children(
+        arg[String]("class-name").action((name, c) => c.copy(command = Command.Demangle(name))).required()
+      )
 
       cmd("build").action((_, c) => c.copy(command = Command.Build)).text("  builds (i.e. compiles) the current project.")
 

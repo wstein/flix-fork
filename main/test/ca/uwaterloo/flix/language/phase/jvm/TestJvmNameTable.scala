@@ -23,6 +23,28 @@ class TestJvmNameTable extends AnyFunSuite {
     assert(second.id.contains(999))
   }
 
+  test("a specialization uses the spelling recorded beside its key") {
+    val sym = symbol(1)
+    val entry = List(sym -> key("map", "Int32", "String"))
+    val spelling = "I5Int326StringE"
+    val stable = JvmNameTable.build(entry, JvmNameTable.DefaultWidth, Map.empty,
+      Map(sym -> spelling), JvmNameTable.Mode.Stable)
+    val counter = JvmNameTable.build(entry, JvmNameTable.DefaultWidth, Map.empty,
+      Map(sym -> spelling), JvmNameTable.Mode.Counter)
+    assert(stable.suffix(sym) == spelling)
+    assert(counter.suffix(sym) == "1")
+  }
+
+  test("duplicate specialization spellings fail closed") {
+    val first = symbol(1)
+    val second = symbol(2)
+    intercept[InternalCompilerException] {
+      JvmNameTable.build(List(first -> key("first"), second -> key("second")),
+        JvmNameTable.DefaultWidth, Map.empty, Map(first -> "I5Int32E", second -> "I5Int32E"),
+        JvmNameTable.Mode.Stable)
+    }
+  }
+
   test("key fields are framed without delimiter ambiguity") {
     val first = symbol(1)
     val second = symbol(2)
@@ -162,7 +184,7 @@ class TestJvmNameTable extends AnyFunSuite {
     intercept[InternalCompilerException] { JvmNameTable.build(Nil, JvmNameTable.MaxWidth + 1) }
   }
 
-  test("generated class names use the configured width end to end") {
+  test("generated specializations use readable names or counters end to end") {
     import ca.uwaterloo.flix.api.Flix
     import ca.uwaterloo.flix.util.{Options, Result}
     val program =
@@ -184,7 +206,8 @@ class TestJvmNameTable extends AnyFunSuite {
       suffixes
     }
     val wide = suffixesOf(20)
-    assert(wide.nonEmpty && wide.forall(_.matches("[0-9a-z]{20}")), wide)
+    assert(wide.nonEmpty && wide.forall(_.startsWith("I")), wide)
+    assert(suffixesOf(8) == wide)
     val counters = suffixesOf(0)
     assert(counters.nonEmpty && counters.forall(_.matches("[0-9]+")), counters)
   }

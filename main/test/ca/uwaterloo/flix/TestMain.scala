@@ -45,6 +45,12 @@ class TestMain extends AnyFunSuite {
     assert(Main.parseCmdOpts(Array("build", "--Xstable-name-length", "8")).isEmpty)
   }
 
+  test("demangle accepts a generated class name") {
+    assert(Main.parseCmdOpts(Array("demangle", "Def$map$I5Int32E")).get.command ==
+      Main.Command.Demangle("Def$map$I5Int32E"))
+    assert(Main.parseCmdOpts(Array("demangle")).isEmpty)
+  }
+
   test("build") {
     val args = Array("build")
     val opts = Main.parseCmdOpts(args).get

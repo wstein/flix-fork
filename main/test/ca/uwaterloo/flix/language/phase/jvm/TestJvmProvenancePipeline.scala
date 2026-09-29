@@ -42,7 +42,11 @@ class TestJvmProvenancePipeline extends AnyFunSuite {
     }.toSet
     entries.foreach { case (sym, suffix) =>
       if (sym.id.nonEmpty) {
-        assert(descriptors.exists(_.contains(suffix)), s"No emitted class contains the frozen suffix for $sym: $suffix")
+        val classNames = List("Def", "Clo").map { prefix =>
+          JvmNameCompaction.compact(Mangle.mkClassName(prefix, sym.text + "$" + suffix), options.xsymbolHashLength)
+        }
+        assert(descriptors.exists(desc => classNames.exists(desc.contains)),
+          s"No emitted class contains the frozen name for $sym: ${classNames.mkString(", ")}")
       }
     }
     if (checkRuntime) {

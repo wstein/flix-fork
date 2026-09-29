@@ -9,6 +9,7 @@ final class JvmProvenance {
 
   private var origins = mutable.Map.empty[Symbol, GeneratedJvmKey]
   private var readables = mutable.Map.empty[Symbol, JvmReadableOrigin]
+  private var spellings = mutable.Map.empty[Symbol, String]
   private var frozen = false
 
   def register(sym: Symbol, key: GeneratedJvmKey): Unit = synchronized {
@@ -23,6 +24,17 @@ final class JvmProvenance {
     readables(sym) = readable
   }
 
+  /** Records a specialization spelling while its type arguments are still available. */
+  def registerSpelling(sym: Symbol, spelling: String): Unit = synchronized {
+    requireOpen()
+    spellings.get(sym).foreach { previous =>
+      if (previous != spelling) {
+        throw InternalCompilerException(s"Conflicting JVM specialization spellings for '$sym'.", SourceLocation.Unknown)
+      }
+    }
+    spellings(sym) = spelling
+  }
+
   def origin(sym: Symbol): GeneratedJvmKey = synchronized {
     origins.getOrElse(sym,
       throw InternalCompilerException(s"Missing JVM naming provenance for '$sym'.", SourceLocation.Unknown))
@@ -32,6 +44,7 @@ final class JvmProvenance {
     requireOpen()
     origins = mutable.Map.from(origins.iterator.filter { case (sym, _) => live.contains(sym) })
     readables = mutable.Map.from(readables.iterator.filter { case (sym, _) => live.contains(sym) })
+    spellings = mutable.Map.from(spellings.iterator.filter { case (sym, _) => live.contains(sym) })
   }
 
   /** Returns the name table of `required`, with suffixes `width` base-36 digits wide (see [[JvmNameTable.build]]). */
@@ -40,10 +53,11 @@ final class JvmProvenance {
     frozen = true
     try {
       val entries = required.iterator.map(sym => sym -> origin(sym)).toList
-      JvmNameTable.build(entries, width, readables.toMap, mode)
+      JvmNameTable.build(entries, width, readables.toMap, spellings.toMap, mode)
     } finally {
       origins = mutable.Map.empty
       readables = mutable.Map.empty
+      spellings = mutable.Map.empty
     }
   }
 
@@ -56,6 +70,7 @@ final class JvmProvenance {
   def close(): Unit = synchronized {
     origins = mutable.Map.empty
     readables = mutable.Map.empty
+    spellings = mutable.Map.empty
     frozen = true
   }
 }

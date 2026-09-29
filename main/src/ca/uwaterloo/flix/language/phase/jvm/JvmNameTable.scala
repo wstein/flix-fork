@@ -51,7 +51,10 @@ object JvmNameTable {
     build(entries, width, readable, Mode.Stable)
 
   def build(entries: Iterable[(Symbol, GeneratedJvmKey)], width: Int, readable: Map[Symbol, JvmReadableOrigin], mode: Mode): JvmNameTable =
-    buildWithDigest(entries, width, readable, mode, key => BigInt(1, MessageDigest.getInstance("SHA-256").digest(key.bytes)))
+    build(entries, width, readable, Map.empty, mode)
+
+  def build(entries: Iterable[(Symbol, GeneratedJvmKey)], width: Int, readable: Map[Symbol, JvmReadableOrigin], spellings: Map[Symbol, String], mode: Mode): JvmNameTable =
+    buildWithDigest(entries, width, readable, spellings, mode, key => BigInt(1, MessageDigest.getInstance("SHA-256").digest(key.bytes)))
 
   private[jvm] def buildWithDigest(entries: Iterable[(Symbol, GeneratedJvmKey)], width: Int, digest: GeneratedJvmKey => BigInt): JvmNameTable =
     buildWithDigest(entries, width, Map.empty, digest)
@@ -61,13 +64,16 @@ object JvmNameTable {
   }
 
   private[jvm] def buildWithDigest(entries: Iterable[(Symbol, GeneratedJvmKey)], width: Int, readable: Map[Symbol, JvmReadableOrigin], mode: Mode, digest: GeneratedJvmKey => BigInt): JvmNameTable = {
+    buildWithDigest(entries, width, readable, Map.empty, mode, digest)
+  }
+
+  private[jvm] def buildWithDigest(entries: Iterable[(Symbol, GeneratedJvmKey)], width: Int, readable: Map[Symbol, JvmReadableOrigin], spellings: Map[Symbol, String], mode: Mode, digest: GeneratedJvmKey => BigInt): JvmNameTable = {
     if (width < 0 || width > MaxWidth) {
       throw InternalCompilerException(s"Stable JVM name width $width is outside 0 to $MaxWidth.", SourceLocation.Unknown)
     }
     val namespaceSize = BigInt(36).pow(width)
     val provenance = mutable.Map.empty[Symbol, GeneratedJvmKey]
     val owners = mutable.Map.empty[GeneratedJvmKey, Symbol]
-    val claims = mutable.Map.empty[String, GeneratedJvmKey]
     val names = mutable.Map.empty[Symbol, String]
 
     entries.foreach { case (sym, key) =>
@@ -83,21 +89,36 @@ object JvmNameTable {
           val digits = (digest(key) mod namespaceSize).toString(36)
           "0" * (width - digits.length) + digits
         }
-      // A counter id is unique to its symbol by construction, and ids of different kinds of
-      // symbol may coincide without their classes colliding, so only a digest is checked.
-      claims.get(name).filter(_ => width > 0 && mode == Mode.Stable).foreach { previous =>
-        if (previous != key) {
-          throw InternalCompilerException(s"Stable JVM name collision on '$name': '$previous' and '$key'." + collisionAdvice(width), SourceLocation.Unknown)
-        }
-      }
       provenance(sym) = key
       owners(key) = sym
-      claims(name) = key
       names(sym) = name
     }
 
     val hashed = names.toMap
-    new JvmNameTable(if (width == 0 || mode == Mode.Counter) hashed else hashed ++ readableNames(hashed, readable))
+    val result = if (width == 0 || mode == Mode.Counter) hashed else {
+      val specialized = hashed ++ spellings.filter { case (sym, _) => hashed.contains(sym) }
+      specialized ++ readableNames(specialized, readable)
+    }
+    // Only names that remain hashes consume the truncated-hash namespace. A readable or mangled
+    // name must not fail because of a hash it never emits.
+    if (width > 0 && mode == Mode.Stable) {
+      val claims = mutable.Map.empty[String, GeneratedJvmKey]
+      result.foreach { case (sym, name) if name == hashed(sym) =>
+        val key = provenance(sym)
+        claims.get(name).foreach { previous =>
+          if (previous != key) {
+            throw InternalCompilerException(s"Stable JVM name collision on '$name': '$previous' and '$key'." + collisionAdvice(width), SourceLocation.Unknown)
+          }
+        }
+        claims(name) = key
+      case _ => () }
+    }
+    val duplicateNames = result.toList.groupBy { case (sym, name) => (classGroup(sym), name) }
+      .collect { case (spelling, owners) if owners.lengthIs > 1 => spelling }
+    if (duplicateNames.nonEmpty) {
+      throw InternalCompilerException(s"Duplicate JVM specialization spelling '${duplicateNames.head}'.", SourceLocation.Unknown)
+    }
+    new JvmNameTable(result)
   }
 
   /**
@@ -148,6 +169,8 @@ object JvmNameTable {
     */
   private def classGroup(sym: Symbol): List[String] = sym match {
     case s: Symbol.DefnSym => "definition" :: s.namespace ::: List(s.text)
+    case s: Symbol.EnumSym => "enum" :: s.namespace ::: List(s.text)
+    case s: Symbol.StructSym => "struct" :: s.namespace ::: List(s.text)
     case _: Symbol.AnonClassSym => List("anonymous-class")
     case other => List("other", other.toString)
   }
