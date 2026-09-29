@@ -237,6 +237,30 @@ deprecation period: `N > 0` becomes `--Xsymbol-hash-length N`, and `0` becomes
 `--Xsymbol-names counter`. `JvmNameTable`'s width parameter keeps meaning a width; the mode becomes
 its own parameter instead of the value zero.
 
+### 5. Names that differ only in case are a collision
+
+Every collision check compares exact strings: the provenance checks, the table's hash claims and
+spelling duplicates, and `CodeGen`'s final check for duplicate class names. The hash is safe, being
+lowercase base 36. But a mangled or readable name carries identifiers the programmer wrote, and the
+default file systems of macOS (APFS) and Windows (NTFS) are case-insensitive, so two names that
+differ only in case are one file:
+
+```
+Case$Color$Red       Case$COLOR$Red          two enums in one namespace
+Clo$price$Total$0    Clo$price$total$0       two let binders
+```
+
+The compiler would pass both as distinct, and one class would silently replace the other when the
+classes are written to disk or a jar is unpacked -- the failure the base-36 alphabet exists to
+prevent. Upstream has the same latent gap for its own declaration names (`Def$foo` against
+`Def$Foo`), but a hash on every generated suffix used to hide it for generated names; readable and
+mangled names bring it back.
+
+`CodeGen` therefore runs its duplicate check a second time on case-folded names: two class names
+equal when compared ignoring case are an error naming both, as two identical names are. There is no
+fallback to a hash: which of the two would keep its readable name is not a stable property, and a
+programmer can rename one of two identifiers that differ only in case.
+
 ## Consequences
 
 - **Readable for common specializations.** Stack traces, profilers, and the debugger show the
