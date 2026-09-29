@@ -12,11 +12,10 @@ import ca.uwaterloo.flix.language.CompilationMessage
 import ca.uwaterloo.flix.language.ast.{SourceLocation, Symbol, Type, TypeConstructor, TypedAst}
 import ca.uwaterloo.flix.language.ast.shared.{SecurityContext, SourceName}
 import ca.uwaterloo.flix.language.phase.jvm.JavaBoundaryApi
-import ca.uwaterloo.flix.language.phase.typer.ConstraintSolver2
-import ca.uwaterloo.flix.language.phase.unification.EqualityEnv
 import ca.uwaterloo.flix.runtime.CompilationResult
 import ca.uwaterloo.flix.util.Result
 import ca.uwaterloo.flix.util.Result.{Err, Ok}
+import ca.uwaterloo.flix.util.collection.CofiniteSet
 
 import java.lang.constant.ClassDesc
 import java.net.URI
@@ -38,7 +37,8 @@ object JavaBoundaryWrappers {
   case class BoundaryError(cause: BoundaryTypeElaborator.Error, loc: SourceLocation) extends Error
   case class FacadeError(cause: JavaBoundaryApi.Error) extends Error { def loc: SourceLocation = cause.loc }
   private case class Conversion(tpe: Type, eff: Type, call: Option[String])
-  private case class Wrapper(member: Member, name: String, args: List[Conversion], result: Conversion, eff: Type)
+  private case class Wrapper(member: Member, name: String, args: List[Conversion], result: Conversion,
+                             effects: List[Symbol.EffSym], handlers: List[Symbol.DefnSym])
 
   /** Checks caller sources, derives wrappers from validated instances, rechecks, and emits a facade. */
   def compile(flix: Flix, api: Declaration, traits: Traits, sctx: SecurityContext): Result[Output, Error] = {
@@ -64,9 +64,12 @@ object JavaBoundaryWrappers {
         val arguments = wrapper.args.zipWithIndex.map { case (arg, index) => arg.call.fold(s"p$index")(name => s"$name(p$index)") }
         val target = (wrapper.member.target.namespace :+ wrapper.member.target.text).mkString(".")
         val call = arguments.mkString(s"$target(", ", ", ")")
-        val body = wrapper.result.call.fold(call)(name => s"$name($call)")
+        val converted = wrapper.result.call.fold(call)(name => s"$name($call)")
+        val body = wrapper.handlers.foldLeft(converted) { (inner, handler) =>
+          s"${(handler.namespace :+ handler.text).mkString(".")}(_ -> $inner)"
+        }
         val result = renderer.render(wrapper.result.tpe)
-        val effect = if (isPure(wrapper.eff)) "" else " \\ IO"
+        val effect = if (wrapper.effects.isEmpty) "" else wrapper.effects.map(_.toString).mkString(" \\ (", " + ", ")")
         s"    pub def ${wrapper.name}${params.mkString("(", ", ", ")")}: $result$effect = $body"
       }
       val imports = renderer.imports
@@ -112,9 +115,18 @@ object JavaBoundaryWrappers {
           args <- Result.traverse(if (params == List(Type.Unit)) Nil else params)(conversion(_, traits.argument, "In", "toFlix", root, member.loc))
           result <- conversion(spec.retTpe, traits.result, "Out", "toJava", root, member.loc)
           eff = (args.map(_.eff) :+ result.eff).foldLeft(spec.eff)((left, right) => Type.mkUnion(left, right, member.loc))
-          wrapper <- if (isPure(eff) || ConstraintSolver2.isEquivalent(eff, Type.IO)(EqualityEnv.empty, flix))
-            Ok(Wrapper(member, name, args, result, eff))
-          else Err(Invalid("Only Pure/IO target and conversion effects are supported in this slice.", member.loc))
+          wrapper <- Type.eval(eff) match {
+            case Ok(CofiniteSet.Set(effects)) =>
+              val handlers = root.defaultHandlers.filter(handler => effects.contains(handler.handledSym))
+              val remaining = effects -- handlers.map(_.handledSym)
+              if (!remaining.subsetOf(Symbol.PrimitiveEffs))
+                Err(Invalid("Boundary effects require a default handler or must be primitive.", member.loc))
+              else {
+                val residual = if (handlers.isEmpty) remaining else remaining + Symbol.IO
+                Ok(Wrapper(member, name, args, result, residual.toList, handlers.map(_.handlerSym)))
+              }
+            case _ => Err(Invalid("Boundary effects must be ground and finite.", member.loc))
+          }
         } yield wrapper
     }
   }
@@ -144,8 +156,6 @@ object JavaBoundaryWrappers {
       TypeConstructor.Float64 | TypeConstructor.Str | _: TypeConstructor.Native, _) => true
     case _ => false
   }
-
-  private def isPure(tpe: Type)(implicit flix: Flix): Boolean = ConstraintSolver2.isEquivalent(tpe, Type.Pure)(EqualityEnv.empty, flix)
 
   /** Renders only validated concrete types. Conversion selection is exclusively instance-driven. */
   private class Renderer {

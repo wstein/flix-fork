@@ -12,10 +12,9 @@ import ca.uwaterloo.flix.language.ast.{SourceLocation, Symbol, Type, TypeConstru
 import ca.uwaterloo.flix.language.phase.jvm.ClassMaker.{ConstructorMethod, InstanceField}
 import ca.uwaterloo.flix.language.phase.jvm.Instructions.*
 import ca.uwaterloo.flix.language.phase.jvm.classes.{GenResult, GenUnit}
-import ca.uwaterloo.flix.language.phase.typer.ConstraintSolver2
-import ca.uwaterloo.flix.language.phase.unification.EqualityEnv
 import ca.uwaterloo.flix.util.Result
 import ca.uwaterloo.flix.util.Result.{Err, Ok}
+import ca.uwaterloo.flix.util.collection.CofiniteSet
 import org.objectweb.asm.{MethodVisitor, Opcodes}
 
 import java.lang.constant.ClassDesc
@@ -61,9 +60,10 @@ object JavaBoundaryApi {
       return Err(Error("Invalid Java API method name.", defn.loc))
     if (!spec.mod.isPublic || spec.tparams.nonEmpty || spec.tconstrs.nonEmpty || spec.econstrs.nonEmpty)
       return Err(Error("A boundary wrapper must be public, monomorphic, and unconstrained.", defn.loc))
-    if (!ConstraintSolver2.isEquivalent(spec.eff, Type.Pure)(EqualityEnv.empty, flix) &&
-        !ConstraintSolver2.isEquivalent(spec.eff, Type.IO)(EqualityEnv.empty, flix))
-      return Err(Error("This API slice only supports Pure and IO; handled effects need further integration.", defn.loc))
+    Type.eval(spec.eff) match {
+      case Ok(CofiniteSet.Set(effects)) if effects.subsetOf(Symbol.PrimitiveEffs) => ()
+      case _ => return Err(Error("API wrappers must handle non-primitive effects before forwarding to Java.", defn.loc))
+    }
     val params = spec.fparams.toList.map(_.tpe)
     val nullary = params == List(Type.Unit)
     for {
