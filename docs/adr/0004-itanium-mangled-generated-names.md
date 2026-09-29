@@ -110,17 +110,38 @@ prefix, `Def$`/`Clo$`/`Anon$`, and `.class` -- is compacted to
 <first quarter> $$$$ <hash> $$$$ <last quarter>
 ```
 
-where `<hash>` is SHA-256 of the full uncompacted name, reduced to a fixed number of base-36
-digits: `--Xstable-name-length`, default 12, zero-padded. Fixed width keeps the result's length
-predictable; Scala's unpadded hexadecimal varies from 16 to 32 characters and is not strictly
+where `<hash>` is SHA-256 of the full uncompacted name, reduced to a fixed number of lowercase
+base-36 digits: `--Xsymbol-hash-length`, default 12, zero-padded. Fixed width keeps the result's
+length predictable; Scala's unpadded hexadecimal varies from 16 to 32 characters and is not strictly
 injective as a formatting (`0x01 0x23` and `0x12 0x03` both print as `123`). The table's existing
 collision check applies to compacted names, with its existing advice.
 
-### 4. `--Xstable-name-length` governs only the hash
+The alphabet stays lowercase base 36. Class files are files, and the default file systems of macOS
+(APFS) and Windows (NTFS) are case-insensitive: two names differing only in case would land on one
+file when classes are written out or a jar is unpacked, and one class would silently replace the
+other. Lowercase base 36 is also denser than lowercase base 32, 5.17 bits a character against 5.
 
-The flag's width now sets the compaction hash and the fallback hash of a nested class whose
-readable spelling is not unique. `0` still opts out of everything, naming each class by its
-counter as upstream Flix does.
+### 4. Two flags: the hash's width, and whether names are stable at all
+
+`--Xstable-name-length` (`13cc632f5`) set both the hash's width and, at `0`, a different naming
+scheme. Under this decision its width only measures a hash, and a mode is not a length, so it
+splits in two:
+
+| Flag | Meaning | Default |
+|---|---|---|
+| `--Xsymbol-hash-length N` | the width of the SHA-256 base-36 hash, from 1 to 49 | 12 |
+| `--Xsymbol-names stable\|counter` | provenance names, or upstream's counter ids | `stable` |
+
+`--Xsymbol-hash-length` sets the compaction hash and the fallback hash of a nested class whose
+readable spelling is not unique; 49 digits is the most a SHA-256 digest fills, since
+36^49 < 2^256 < 36^50. `--Xsymbol-names counter` names each class by its internal counter as
+upstream Flix does, for comparing against upstream and for ruling the naming out when chasing a
+defect; it ignores `--Xsymbol-hash-length`. Provenance is still required in either mode.
+
+`--Xstable-name-length` has been neither pushed nor released, so it is renamed without a
+deprecation period: `N > 0` becomes `--Xsymbol-hash-length N`, and `0` becomes
+`--Xsymbol-names counter`. `JvmNameTable`'s width parameter keeps meaning a width; the mode becomes
+its own parameter instead of the value zero.
 
 ## Consequences
 
@@ -147,7 +168,10 @@ Rated for readability, stability, and cost (★ low to ★★★★★ high).
 | Faithful Itanium, builtins as letters (`Def$map$IiiE`) | ★★ | ★★★★★ | low | Rejected: injective but cryptic for no gain |
 | **Itanium-style, builtins as words, Scala-style compaction with SHA-256** | ★★★★ | ★★★★★ | medium | **Proposed** |
 | Compaction hashed with MurmurHash3, 32 bits | -- | -- | -- | Rejected, see below |
+| Compaction hashed with MurmurHash3, x64_128 | -- | ★★★★★ | medium | Rejected, see below |
 | Compaction hashed with MD5 as Scala does | -- | ★★★★ | low | Rejected: no reason to prefer it over the SHA-256 already in use, and variable-width formatting |
+| Hash encoded as base64url | ★★★ | ★★ | low | Rejected, see below |
+| One flag, `--Xstable-name-length`, with `0` as the counter mode | -- | -- | none | Rejected: a mode is not a length, see §4 |
 
 **Why not MurmurHash3 at 32 bits.** Scala uses MurmurHash3 for `hashCode`, where a collision
 costs a slower lookup; it compacts names with MD5. Here a collision fails the build, since the
@@ -156,6 +180,16 @@ collision is about `1 - e^(-n^2 / 2^33)` at 32 bits: 1.2 % for 10,000 names and 
 Twelve base-36 digits, about 2^62, give 10^-11 and 10^-9. Speed does not argue for it: SHA-256 from
 the JDK costs microseconds for a few hundred bytes, the whole naming scheme measured at -0.4 %
 Xperf in flix/flix#13043, and under this decision only overlong names are hashed at all.
+
+**Why not MurmurHash3 at 128 bits.** Its output has been stable since 2011, so names would not
+drift, and 128 bits is wide enough. But the JDK has no implementation and Scala's standard library
+only the 32-bit variant, so it means writing one or adding Guava; and SHA-256 is already the
+provenance hash throughout -- `JvmLexicalOrigins.frame`, `JvmOriginKey.compose`, and `JvmNameTable`
+all use `MessageDigest`. A second algorithm for one hash buys only speed, which naming does not need.
+
+**Why not base64url.** Denser, at six bits a character, but it mixes cases, which a case-insensitive
+file system folds together (see §3), and it contains `-`, which the JVM accepts in a class name but
+Java source cannot name.
 
 ## Open questions
 
