@@ -14,6 +14,13 @@ final class JvmNameTable private (names: Map[Symbol, String]) {
 
 object JvmNameTable {
 
+  sealed trait Mode
+
+  object Mode {
+    case object Stable extends Mode
+    case object Counter extends Mode
+  }
+
   /** The suffix width, in base-36 digits, that `--Xstable-name-length` defaults to. */
   val DefaultWidth: Int = 12
 
@@ -41,12 +48,19 @@ object JvmNameTable {
     * could collide with; everything else keeps its hash. Width zero ignores readable origins.
     */
   def build(entries: Iterable[(Symbol, GeneratedJvmKey)], width: Int, readable: Map[Symbol, JvmReadableOrigin]): JvmNameTable =
-    buildWithDigest(entries, width, readable, key => BigInt(1, MessageDigest.getInstance("SHA-256").digest(key.bytes)))
+    build(entries, width, readable, Mode.Stable)
+
+  def build(entries: Iterable[(Symbol, GeneratedJvmKey)], width: Int, readable: Map[Symbol, JvmReadableOrigin], mode: Mode): JvmNameTable =
+    buildWithDigest(entries, width, readable, mode, key => BigInt(1, MessageDigest.getInstance("SHA-256").digest(key.bytes)))
 
   private[jvm] def buildWithDigest(entries: Iterable[(Symbol, GeneratedJvmKey)], width: Int, digest: GeneratedJvmKey => BigInt): JvmNameTable =
     buildWithDigest(entries, width, Map.empty, digest)
 
   private[jvm] def buildWithDigest(entries: Iterable[(Symbol, GeneratedJvmKey)], width: Int, readable: Map[Symbol, JvmReadableOrigin], digest: GeneratedJvmKey => BigInt): JvmNameTable = {
+    buildWithDigest(entries, width, readable, Mode.Stable, digest)
+  }
+
+  private[jvm] def buildWithDigest(entries: Iterable[(Symbol, GeneratedJvmKey)], width: Int, readable: Map[Symbol, JvmReadableOrigin], mode: Mode, digest: GeneratedJvmKey => BigInt): JvmNameTable = {
     if (width < 0 || width > MaxWidth) {
       throw InternalCompilerException(s"Stable JVM name width $width is outside 0 to $MaxWidth.", SourceLocation.Unknown)
     }
@@ -64,14 +78,14 @@ object JvmNameTable {
         }
       }
       val name =
-        if (width == 0) counterOf(sym)
+        if (width == 0 || mode == Mode.Counter) counterOf(sym)
         else {
           val digits = (digest(key) mod namespaceSize).toString(36)
           "0" * (width - digits.length) + digits
         }
       // A counter id is unique to its symbol by construction, and ids of different kinds of
       // symbol may coincide without their classes colliding, so only a digest is checked.
-      claims.get(name).filter(_ => width > 0).foreach { previous =>
+      claims.get(name).filter(_ => width > 0 && mode == Mode.Stable).foreach { previous =>
         if (previous != key) {
           throw InternalCompilerException(s"Stable JVM name collision on '$name': '$previous' and '$key'." + collisionAdvice(width), SourceLocation.Unknown)
         }
@@ -83,7 +97,7 @@ object JvmNameTable {
     }
 
     val hashed = names.toMap
-    new JvmNameTable(if (width == 0) hashed else hashed ++ readableNames(hashed, readable))
+    new JvmNameTable(if (width == 0 || mode == Mode.Counter) hashed else hashed ++ readableNames(hashed, readable))
   }
 
   /**
@@ -154,7 +168,7 @@ object JvmNameTable {
     */
   private def collisionAdvice(width: Int): String =
     if (width < DefaultWidth)
-      s" Suffixes are $width base-36 digits (--Xstable-name-length), below the default of $DefaultWidth, where collisions are expected: use a wider width."
+      s" Suffixes are $width base-36 digits (--Xsymbol-hash-length), below the default of $DefaultWidth, where collisions are expected: use a wider width."
     else
-      s" Suffixes are $width base-36 digits (--Xstable-name-length), so this is a provenance defect rather than a narrow-width collision."
+      s" Suffixes are $width base-36 digits (--Xsymbol-hash-length), so this is a provenance defect rather than a narrow-width collision."
 }

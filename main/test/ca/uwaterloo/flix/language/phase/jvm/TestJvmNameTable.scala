@@ -148,12 +148,12 @@ class TestJvmNameTable extends AnyFunSuite {
     val narrow = intercept[InternalCompilerException] {
       JvmNameTable.buildWithDigest(entries, 2, _ => BigInt(0))
     }
-    assert(narrow.getMessage.contains("--Xstable-name-length"))
+    assert(narrow.getMessage.contains("--Xsymbol-hash-length"))
     assert(narrow.getMessage.contains("below the default"))
     val default = intercept[InternalCompilerException] {
       JvmNameTable.buildWithDigest(entries, JvmNameTable.DefaultWidth, _ => BigInt(0))
     }
-    assert(default.getMessage.contains("--Xstable-name-length"))
+    assert(default.getMessage.contains("--Xsymbol-hash-length"))
     assert(!default.getMessage.contains("below the default"))
   }
 
@@ -171,7 +171,8 @@ class TestJvmNameTable extends AnyFunSuite {
         |def main(): Unit \ IO = { println(twice(x -> x + 1, 1)); println(twice(s -> s + "!", "a")) }
         |""".stripMargin
     def suffixesOf(width: Int): Set[String] = {
-      val flix = new Flix().setOptions(Options.TestWithLibMin.copy(xstableNameLength = width))
+      val flix = new Flix().setOptions(Options.TestWithLibMin.copy(xsymbolHashLength = if (width == 0) JvmNameTable.DefaultWidth else width,
+        xsymbolNames = if (width == 0) JvmNameTable.Mode.Counter else JvmNameTable.Mode.Stable))
       flix.addVirtualPath(ca.uwaterloo.flix.api.CompilerConstants.VirtualTestFile, program)(ca.uwaterloo.flix.language.ast.shared.SecurityContext.Unrestricted)
       val result = flix.compile() match {
         case Result.Ok(r) => r

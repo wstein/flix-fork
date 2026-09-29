@@ -27,15 +27,22 @@ class TestMain extends AnyFunSuite {
     assert(opts.command == Main.Command.Init)
   }
 
-  test("--Xstable-name-length sets the generated-name width") {
-    assert(Main.parseCmdOpts(Array("build", "--Xstable-name-length", "8")).get.xstableNameLength == 8)
-    assert(Main.parseCmdOpts(Array("build", "--Xstable-name-length", "0")).get.xstableNameLength == 0)
-    assert(Main.parseCmdOpts(Array("build")).get.xstableNameLength == ca.uwaterloo.flix.language.phase.jvm.JvmNameTable.DefaultWidth)
+  test("--Xsymbol-hash-length sets the compacted-name hash width") {
+    assert(Main.parseCmdOpts(Array("build", "--Xsymbol-hash-length", "8")).get.xsymbolHashLength == 8)
+    assert(Main.parseCmdOpts(Array("build")).get.xsymbolHashLength == ca.uwaterloo.flix.language.phase.jvm.JvmNameTable.DefaultWidth)
   }
 
-  test("--Xstable-name-length outside its range is refused") {
-    assert(Main.parseCmdOpts(Array("build", "--Xstable-name-length", "-1")).isEmpty)
-    assert(Main.parseCmdOpts(Array("build", "--Xstable-name-length", "50")).isEmpty)
+  test("--Xsymbol-hash-length outside its range is refused") {
+    assert(Main.parseCmdOpts(Array("build", "--Xsymbol-hash-length", "0")).isEmpty)
+    assert(Main.parseCmdOpts(Array("build", "--Xsymbol-hash-length", "50")).isEmpty)
+  }
+
+  test("--Xsymbol-names selects stable or counter names") {
+    import ca.uwaterloo.flix.language.phase.jvm.JvmNameTable.Mode
+    assert(Main.parseCmdOpts(Array("build")).get.xsymbolNames == Mode.Stable)
+    assert(Main.parseCmdOpts(Array("build", "--Xsymbol-names", "counter")).get.xsymbolNames == Mode.Counter)
+    assert(Main.parseCmdOpts(Array("build", "--Xsymbol-names", "other")).isEmpty)
+    assert(Main.parseCmdOpts(Array("build", "--Xstable-name-length", "8")).isEmpty)
   }
 
   test("build") {

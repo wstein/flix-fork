@@ -35,12 +35,12 @@ final class JvmProvenance {
   }
 
   /** Returns the name table of `required`, with suffixes `width` base-36 digits wide (see [[JvmNameTable.build]]). */
-  def freeze(required: Iterable[Symbol], width: Int): JvmNameTable = synchronized {
+  def freeze(required: Iterable[Symbol], width: Int, mode: JvmNameTable.Mode = JvmNameTable.Mode.Stable): JvmNameTable = synchronized {
     requireOpen()
     frozen = true
     try {
       val entries = required.iterator.map(sym => sym -> origin(sym)).toList
-      JvmNameTable.build(entries, width, readables.toMap)
+      JvmNameTable.build(entries, width, readables.toMap, mode)
     } finally {
       origins = mutable.Map.empty
       readables = mutable.Map.empty

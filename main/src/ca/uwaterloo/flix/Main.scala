@@ -90,7 +90,8 @@ object Main {
       xnodeprecated = cmdOpts.xnodeprecated,
       xsubeffecting = cmdOpts.xsubeffecting,
       xnewmono = cmdOpts.xnewmono,
-      xstableNameLength = cmdOpts.xstableNameLength,
+      xsymbolHashLength = cmdOpts.xsymbolHashLength,
+      xsymbolNames = cmdOpts.xsymbolNames,
       XPerfFrontend = cmdOpts.XPerfFrontend,
       XPerfPar = cmdOpts.XPerfPar,
       XPerfN = cmdOpts.XPerfN,
@@ -538,7 +539,8 @@ object Main {
     xverify: Boolean = false,
     xsubeffecting: Set[Subeffecting] = Set.empty,
     xnewmono: Boolean = false,
-    xstableNameLength: Int = JvmNameTable.DefaultWidth,
+    xsymbolHashLength: Int = JvmNameTable.DefaultWidth,
+    xsymbolNames: JvmNameTable.Mode = JvmNameTable.Mode.Stable,
     XPerfN: Option[Int] = None,
     XPerfFrontend: Boolean = false,
     XPerfPar: Boolean = false,
@@ -787,14 +789,21 @@ object Main {
       opt[Unit]("Xnewmono").action((_, c) => c.copy(xnewmono = true)).
         text("[experimental] uses the constraint-based monomorphization pipeline instead of the demand-driven one.")
 
-      // Xstable-name-length
-      opt[Int]("Xstable-name-length").action((width, c) => c.copy(xstableNameLength = width)).
+      // Xsymbol-hash-length
+      opt[Int]("Xsymbol-hash-length").action((width, c) => c.copy(xsymbolHashLength = width)).
         validate { width =>
-          if (width < 0 || width > JvmNameTable.MaxWidth) failure(s"Xstable-name-length must be between 0 and ${JvmNameTable.MaxWidth}")
+          if (width < 1 || width > JvmNameTable.MaxWidth) failure(s"Xsymbol-hash-length must be between 1 and ${JvmNameTable.MaxWidth}")
           else success
         }.
-        text("[experimental] the width, in base-36 digits, of the suffix naming a generated class after its provenance; " +
-          s"0 names it by its internal counter instead, as upstream Flix does (default: ${JvmNameTable.DefaultWidth}).")
+        text(s"[experimental] width of compacted-name and fallback SHA-256 hashes in base-36 digits (default: ${JvmNameTable.DefaultWidth}).")
+
+      opt[String]("Xsymbol-names").action((mode, c) => c.copy(xsymbolNames =
+        if (mode == "counter") JvmNameTable.Mode.Counter else JvmNameTable.Mode.Stable)).
+        validate { mode =>
+          if (mode == "stable" || mode == "counter") success
+          else failure("Xsymbol-names must be stable or counter")
+        }.
+        text("[experimental] use stable provenance names or upstream-style counter names (default: stable).")
 
       note("")
 
