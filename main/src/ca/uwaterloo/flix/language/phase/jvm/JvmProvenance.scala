@@ -40,7 +40,7 @@ final class JvmProvenance {
     frozen = true
     try {
       val entries = required.iterator.map(sym => sym -> origin(sym)).toList
-      JvmNameTable.build(entries, width)
+      JvmNameTable.build(entries, width, readables.toMap)
     } finally {
       origins = mutable.Map.empty
       readables = mutable.Map.empty

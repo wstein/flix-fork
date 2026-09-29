@@ -33,9 +33,20 @@ object JvmNameTable {
     * symbol that would fail to be named otherwise.
     */
   def build(entries: Iterable[(Symbol, GeneratedJvmKey)], width: Int): JvmNameTable =
-    buildWithDigest(entries, width, key => BigInt(1, MessageDigest.getInstance("SHA-256").digest(key.bytes)))
+    build(entries, width, Map.empty)
 
-  private[jvm] def buildWithDigest(entries: Iterable[(Symbol, GeneratedJvmKey)], width: Int, digest: GeneratedJvmKey => BigInt): JvmNameTable = {
+  /**
+    * Returns the table as [[build]] does, but naming a lambda, local definition, or anonymous class
+    * by its readable origin in `readable` wherever that spelling is unique among the classes it
+    * could collide with; everything else keeps its hash. Width zero ignores readable origins.
+    */
+  def build(entries: Iterable[(Symbol, GeneratedJvmKey)], width: Int, readable: Map[Symbol, JvmReadableOrigin]): JvmNameTable =
+    buildWithDigest(entries, width, readable, key => BigInt(1, MessageDigest.getInstance("SHA-256").digest(key.bytes)))
+
+  private[jvm] def buildWithDigest(entries: Iterable[(Symbol, GeneratedJvmKey)], width: Int, digest: GeneratedJvmKey => BigInt): JvmNameTable =
+    buildWithDigest(entries, width, Map.empty, digest)
+
+  private[jvm] def buildWithDigest(entries: Iterable[(Symbol, GeneratedJvmKey)], width: Int, readable: Map[Symbol, JvmReadableOrigin], digest: GeneratedJvmKey => BigInt): JvmNameTable = {
     if (width < 0 || width > MaxWidth) {
       throw InternalCompilerException(s"Stable JVM name width $width is outside 0 to $MaxWidth.", SourceLocation.Unknown)
     }
@@ -71,7 +82,60 @@ object JvmNameTable {
       names(sym) = name
     }
 
-    new JvmNameTable(names.toMap)
+    val hashed = names.toMap
+    new JvmNameTable(if (width == 0) hashed else hashed ++ readableNames(hashed, readable))
+  }
+
+  /**
+    * Returns the readable names that can replace hashes in `hashed`.
+    *
+    * A readable name is kept only if no other class it could collide with -- one with the same
+    * prefix, see [[classGroup]] -- is spelled the same way, readable or hashed. When two readable
+    * spellings coincide, both keep their hashes: which one would win is not a stable property.
+    */
+  private def readableNames(hashed: Map[Symbol, String], readable: Map[Symbol, JvmReadableOrigin]): Map[Symbol, String] = {
+    val candidates = readable.iterator.flatMap {
+      case (sym, origin) if hashed.contains(sym) => render(sym, origin, hashed).map(sym -> _)
+      case _ => None
+    }.toMap
+    val spellings = candidates.toList.groupBy { case (sym, name) => (classGroup(sym), name) }
+    val kept = hashed.iterator.collect { case (sym, name) if !candidates.contains(sym) => (classGroup(sym), name) }.toSet
+    candidates.filter { case (sym, name) =>
+      val spelling = (classGroup(sym), name)
+      spellings(spelling).lengthIs == 1 && !kept.contains(spelling)
+    }
+  }
+
+  /**
+    * Returns the readable suffix of `sym`, or `None` if its origin cannot be spelled.
+    *
+    * A specialized owner contributes its own suffix, which tells its copies apart; an owner that is
+    * not generated has none to contribute. An anonymous class also spells its owner, since its
+    * class name has no other place for it.
+    */
+  private def render(sym: Symbol, origin: JvmReadableOrigin, hashed: Map[Symbol, String]): Option[String] = {
+    val specialization = origin.specialization match {
+      case Some(owner: Symbol.DefnSym) if owner.id.isDefined => hashed.get(owner).map(List(_))
+      case _ => Some(Nil)
+    }
+    specialization.filter(_ => origin.path.nonEmpty).flatMap { spec =>
+      sym match {
+        case _: Symbol.AnonClassSym if origin.owner.nonEmpty => Some((origin.owner ++ spec ++ origin.path).mkString("$"))
+        case _: Symbol.DefnSym => Some((spec ++ origin.path).mkString("$"))
+        case _ => None
+      }
+    }
+  }
+
+  /**
+    * Returns what `sym`'s class name shares with the classes its suffix could collide with: a
+    * definition's namespace and name, which prefix its suffix, or the single root package every
+    * anonymous class shares.
+    */
+  private def classGroup(sym: Symbol): List[String] = sym match {
+    case s: Symbol.DefnSym => "definition" :: s.namespace ::: List(s.text)
+    case _: Symbol.AnonClassSym => List("anonymous-class")
+    case other => List("other", other.toString)
   }
 
   /** Returns the counter id `sym` was minted with, or its text if it has none. */
