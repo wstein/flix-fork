@@ -23,6 +23,8 @@ The wrapper must already have a concrete Java signature, for example
 `java.util.List[java.lang.Integer]`, and an ordinary, checked conversion body. The preceding
 concrete elaboration proof shows how to derive that signature and recheck a generated wrapper.
 Automatically orchestrating those passes for a source API declaration remains separate work.
+The subsequent [automatic wrapper API](AUTOMATIC-BOUNDARY-WRAPPERS.md) now orchestrates them
+for programmatic declarations selecting original Flix definitions. Source syntax is still future work.
 Consumers should handle the returned errors, not use `unsafeGet` as in this short illustration.
 
 ## Implemented contract
@@ -77,7 +79,6 @@ and exact/case-only class collisions.
 
 ## Remaining phase-1 gates
 
-Source declaration syntax and automatic wrapper orchestration; export-source diagnostics and
-instance-dependent incremental invalidation; pre-type-check cyclic-build stubs; Kotlin and Scala
-callers; boundary library packaging and Java argument conversion; default handlers and the full
+Source declaration syntax and CLI/LSP integration; pre-type-check cyclic-build stubs; Kotlin and Scala
+callers; boundary library packaging and a broader conversion corpus; default handlers and the full
 allowed-effect rule; explicit opaque handles and region restrictions. ADR 3 remains Proposed.

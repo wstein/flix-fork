@@ -6,6 +6,14 @@ Proposed. Scoped to how Flix code is *called from* the JVM -- Java, Kotlin, Scal
 values cross that boundary. Calling Java *from* Flix (`import`, `new`, method calls) is unchanged.
 Numbered 3 to follow ADRs 1 and 2 on `feat/stable-specialization-names-rewrite`.
 
+Revision 7 records [automatic wrapper orchestration](../interop/AUTOMATIC-BOUNDARY-WRAPPERS.md):
+programmatic declarations select original definitions; checked instances derive Java argument
+and result types and conversion effects; generated ordinary definitions are rechecked before
+facade emission. Repeated calls remove their owned virtual source and rebuild from current
+instance information. Missing directional evidence and unsupported outputs fail at the supplied
+member location. Source syntax, packaged traits, cyclic-build stubs, handlers, opaque handles,
+and Kotlin/Scala callers still remain; the status stays Proposed.
+
 Revision 6 records the [named boundary API slice](../interop/NAMED-BOUNDARY-API.md): an opt-in
 programmatic declaration exposes checked concrete wrappers through a chosen Java class, records
 generic signatures, retains wrapper entry points, and passes a staged Java caller against the
@@ -177,6 +185,13 @@ def f$java(x1: JArg[a1], ...): JResult[r] \ e + (conversion effects) =
     JavaResult.toJava(f(JavaArgument.toFlix(x1), ...))
 ```
 
+`JavaBoundaryWrappers.compile` now orchestrates these passes for a programmatic declaration
+and explicitly selected result/argument traits. The caller selects original definitions, not
+hand-written Java-shaped wrappers. It sums checked conversion effects, rebuilds wrappers after
+instance edits, reports member-specific failures at the supplied declaration location, and
+removes its generated virtual source on both success and failure. This is still an opt-in API,
+not source syntax or a packaged boundary library.
+
 Here `JArg` and `JResult` denote compiler-elaborated types, **not** Flix associated-type
 applications in generated source. In particular `JResult[List[Int32]]` is `JList[Integer]`.
 Parameters and results that are primitives, `String`, or Java types are left unwrapped. Because it
@@ -190,8 +205,8 @@ is submitted to the ordinary frontend in the second pass:
 - incremental compilation keys it on the declaration, `f`'s declared signature, and the selected
   instance definitions, whose changes can alter the Java ABI or effects.
 
-Production integration must preserve this ordering. A two-pass frontend is the proven prototype
-mechanism, not yet an implemented export pipeline. A dedicated entry point for checking generated
+Production integration must preserve this ordering. A two-pass frontend is the implemented opt-in
+prototype mechanism, not yet a complete source-level export pipeline. A dedicated entry point for checking generated
 typed definitions could avoid replay, but must be demonstrated separately. The syntax-only stub
 generator cannot assume these typed environments exist; how it obtains equivalent concrete types
 in cyclic Java-first builds remains an explicit phase-1 gate.
