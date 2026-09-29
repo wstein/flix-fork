@@ -125,7 +125,11 @@ work within an instance constrained by `JavaResult[a]`. It did **not** establish
 application such as `JavaResult.Out[List[Int32]]` works: Flix rejects it because an associated
 type may only be applied to a type variable. The prototype used an explicit `JList[Integer]`
 export signature. Phase 1 must elaborate concrete boundary types before generating wrappers;
-that elaboration, including generic signatures and effect sums, needs its own compiler proof.
+  that elaboration, including generic signatures and effect sums, needs its own compiler proof.
+  A resolver-only spike allowing concrete associated-type applications type-checked a simple
+  instance, but also admitted an unresolved application and a self-referential instance that
+  existing tests reject. It was reverted: simply removing the restriction is not a safe phase-1
+  implementation.
 
 ### 2. An explicit, named API declaration
 
@@ -287,6 +291,8 @@ Rated for value, effort, and fit with upstream (★ low to ★★★★★ high)
   `JList[JavaResult.Out[a]]`, but Flix rejects `JavaResult.Out[List[Int32]]`. How does the compiler
   derive `JList[Integer]` and conversion effects from a declared concrete type, including
   user-defined instances, without a second hard-coded conversion table? This is the phase-1 gate.
+  The elaborator must also reject missing instances and recursive associated-type definitions;
+  a blanket resolver relaxation fails those checks.
 - **The synthetic-type provider.** Where it runs, how it declares classes to the Java resolver,
   and how it names them without the layout leaks of the current design.
 - **The `Opaque[t]` handle.** A generic `FlixValue<T>` wrapper, or the erased Flix value itself
