@@ -89,6 +89,29 @@ class. This ADR keeps that invariant: every mangled or readable suffix it introd
 prefix and the symbol's own name, and none of its segments can be a Flix identifier ending in `$`,
 since a Flix identifier cannot contain `$` at all.
 
+### Special characters in identifiers
+
+A Flix identifier may contain characters a JVM class name should not. `Mangle.mangle` replaces each
+operator character with a word -- `+` with `plus`, `<` with `less`, `.` with `dot`, `|` with
+`bar`, and so on -- which is how the class of `|>` becomes `Def$bargreater`. `$` itself is never
+escaped, since no Flix identifier can contain it; that is what lets `$` delimit a name's segments.
+
+### Upstream, the fork today, and this ADR
+
+| | Upstream | Fork today | ADR 4 |
+|---|---|---|---|
+| Shape classes | flat erased atoms | same | same |
+| Specialized definition | `Def$map$1234` (counter) | `Def$map$k3j9x0q2m1ab` (SHA-256, base 36) | `Def$map$I5Int326StringE` (Itanium-style) |
+| Erased enum case | `Case$Option$1234$None` | `Case$Option$<hash>$None` | `Case$Option$Obj$None` (flat) |
+| Lambda | `Clo$map$1234` | `Clo$price$discount$0` (readable path) | the same, led by the owner's mangled suffix |
+| Anonymous class | `Anon$42` | `Anon$Shop$price$0` | the same |
+| Package layout | namespace = package | beside the facade (`f4dac093c`) | unchanged |
+
+Upstream mangles types only into shape classes, and there only as flat erased atoms; it never
+spells a specialization's type arguments into its name. This ADR extends upstream's own flat
+convention to erased enum cases, and adds a bracketed Itanium-style grammar only for definitions,
+whose arguments nest.
+
 ### How Scala does it
 
 Scala spells names in full and compacts only overlong ones. Scala 2.13 (`StdNames.scala`) and
