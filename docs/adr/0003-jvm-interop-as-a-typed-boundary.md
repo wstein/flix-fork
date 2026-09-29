@@ -6,7 +6,11 @@ Proposed. Scoped to how Flix code is *called from* the JVM -- Java, Kotlin, Scal
 values cross that boundary. Calling Java *from* Flix (`import`, `new`, method calls) is unchanged.
 Numbered 3 to follow ADRs 1 and 2 on `feat/stable-specialization-names-rewrite`.
 
-Revision 3 records the fork's cleanup before its v0.77.0 merge: `@Export`, its conversion
+Revision 4 records the `flix-lab` typed-boundary probe: recursive element conversion, a
+`List<Integer>` JVM signature, and a staged Java caller work through the archived `@Export`
+path, but `JavaResult.Out[List[Int32]]` is rejected. The proposed wrapper therefore needs an
+explicit boundary-type elaboration step; the probe does not validate the new declaration or
+facade. Revision 3 records the fork's cleanup before its v0.77.0 merge: `@Export`, its conversion
 backend, and the old stub generator have been removed. Phase 1 must introduce stubs for the
 new declaration rather than adapt an existing command. Revision 2 narrowed phase 1 to what
 can be built without new language machinery and identified the existing `ToJava`/`ToFlix`
@@ -115,11 +119,13 @@ instance JavaResult[List[a]] with JavaResult[a] {
 }
 ```
 
-Leaf instances delegate to `ToJava`/`ToFlix` where those already do the right thing. Whether an
-instance's associated type may be defined through a constraint's associated type
-(`JList[JavaResult.Out[a]]`), and whether that effect may be written as shown, is the first thing
-the phase-1 prototype must establish; if not, phase 1 provides the container instances from the
-compiler, for a fixed set of containers, instead of writing them in the library.
+Leaf instances delegate to `ToJava`/`ToFlix` where those already do the right thing. The
+`flix-lab` prototype established that `JList[JavaResult.Out[a]]` and its recursive conversion
+work within an instance constrained by `JavaResult[a]`. It did **not** establish that a concrete
+application such as `JavaResult.Out[List[Int32]]` works: Flix rejects it because an associated
+type may only be applied to a type variable. The prototype used an explicit `JList[Integer]`
+export signature. Phase 1 must elaborate concrete boundary types before generating wrappers;
+that elaboration, including generic signatures and effect sums, needs its own compiler proof.
 
 ### 2. An explicit, named API declaration
 
@@ -137,15 +143,18 @@ illustrative; any form that names the Java class and the members will do.)
 
 ### 3. Wrappers are synthesized before resolution
 
-For each listed def `f(x1: a1, ...): r \ e`, the compiler synthesizes, in `Desugar` or earlier,
-from the declared signature alone,
+For each listed def `f(x1: a1, ...): r \ e`, the compiler must first elaborate the declared
+signature to concrete boundary types `JArg[a1]`, ..., `JResult[r]` and conversion effects.
+It then synthesizes, in `Desugar` or earlier,
 
 ```flix
-def f$java(x1: JavaArgument.In[a1], ...): JavaResult.Out[r] \ e + (conversion effects) =
+def f$java(x1: JArg[a1], ...): JResult[r] \ e + (conversion effects) =
     JavaResult.toJava(f(JavaArgument.toFlix(x1), ...))
 ```
 
-with parameters and result that are primitives, `String`, or Java types left unwrapped. Because it
+Here `JArg` and `JResult` denote compiler-elaborated types, **not** Flix associated-type
+applications in generated source. In particular `JResult[List[Int32]]` is `JList[Integer]`.
+Parameters and results that are primitives, `String`, or Java types are left unwrapped. Because it
 is synthesized before `Resolver`:
 
 - it is resolved, kinded, and type-checked like every other def, so a type that cannot cross is an
@@ -274,9 +283,10 @@ Rated for value, effort, and fit with upstream (★ low to ★★★★★ high)
 
 ## Open questions
 
-- **Associated types through constraints.** Whether `type Out = JList[JavaResult.Out[a]]` and the
-  matching effect are expressible in an instance today (§1). This decides between library-defined
-  and compiler-provided container instances.
+- **Concrete boundary-type elaboration.** The library instance can write
+  `JList[JavaResult.Out[a]]`, but Flix rejects `JavaResult.Out[List[Int32]]`. How does the compiler
+  derive `JList[Integer]` and conversion effects from a declared concrete type, including
+  user-defined instances, without a second hard-coded conversion table? This is the phase-1 gate.
 - **The synthetic-type provider.** Where it runs, how it declares classes to the Java resolver,
   and how it names them without the layout leaks of the current design.
 - **The `Opaque[t]` handle.** A generic `FlixValue<T>` wrapper, or the erased Flix value itself
