@@ -9,6 +9,8 @@ import scala.collection.mutable
 
 final class JvmCompilationOrigins(val symbols: JvmProvenance) {
   private var expressions = new IdentityHashMap[AnyRef, GeneratedJvmKey]()
+  // How a lambda or anonymous class reads, following it through the phases that keep its identity.
+  private var readables = new IdentityHashMap[AnyRef, JvmReadableOrigin]()
   private var closed = false
   private var freezeStarted = false
   private var frozenNames: Option[JvmNameTable] = None
@@ -24,6 +26,7 @@ final class JvmCompilationOrigins(val symbols: JvmProvenance) {
       frozenNames = Some(symbols.freeze(required, width))
     } finally {
       expressions = new IdentityHashMap[AnyRef, GeneratedJvmKey]()
+      readables = new IdentityHashMap[AnyRef, JvmReadableOrigin]()
     }
   }
 
@@ -40,7 +43,14 @@ final class JvmCompilationOrigins(val symbols: JvmProvenance) {
 
   def transfer[A <: AnyRef](from: AnyRef, to: A, phase: String): A = synchronized {
     attribute(to, expression(from), phase)
+    Option(readables.get(from)).foreach(readables.putIfAbsent(to, _))
     to
+  }
+
+  /** Records how the captured expression `exp` reads; see [[JvmReadableOrigin]]. */
+  def recordReadable(exp: AnyRef, readable: JvmReadableOrigin): Unit = synchronized {
+    requireOpen()
+    readables.put(exp, readable)
   }
 
   def synthetic[A <: AnyRef](from: AnyRef, to: A, role: String): A = synchronized {
@@ -48,8 +58,15 @@ final class JvmCompilationOrigins(val symbols: JvmProvenance) {
     to
   }
 
-  def specialize[A <: AnyRef](from: AnyRef, to: A, owner: Symbol.DefnSym, phase: String): A =
+  /**
+    * Clones `from`'s key for the specialization `owner`, and its readable origin with it: the
+    * owner's own name is what tells the copies of one lambda apart.
+    */
+  def specialize[A <: AnyRef](from: AnyRef, to: A, owner: Symbol.DefnSym, phase: String): A = synchronized {
     cloneTree(from, to, symbols.origin(owner), phase)
+    Option(readables.get(from)).foreach(r => readables.putIfAbsent(to, r.copy(specialization = Some(owner))))
+    to
+  }
 
   def cloneTree[A <: AnyRef](from: AnyRef, to: A, context: GeneratedJvmKey, phase: String): A = synchronized {
     attribute(to, JvmOriginKey.compose("cloned-expression", List(context, expression(from))), phase)
@@ -66,14 +83,23 @@ final class JvmCompilationOrigins(val symbols: JvmProvenance) {
     symbols.register(fresh, JvmOriginKey.compose("erasure", List(symbols.origin(original)), arguments))
   }
 
-  def derivedSymbol(fresh: Symbol, source: AnyRef, role: String): Unit =
+  /**
+    * Registers the symbol `fresh` generated from `source` -- a lifted lambda or local definition,
+    * or a specialized anonymous class -- and hands it `source`'s readable origin, if it has one.
+    */
+  def derivedSymbol(fresh: Symbol, source: AnyRef, role: String): Unit = synchronized {
     symbols.register(fresh, JvmOriginKey.compose("generated-symbol", List(expression(source)), List(role)))
+    Option(readables.get(source)).foreach(symbols.registerReadable(fresh, _))
+  }
 
   def retainExpressions(live: Iterable[AnyRef]): Unit = synchronized {
     requireOpen()
     val retained = new IdentityHashMap[AnyRef, GeneratedJvmKey]()
     live.foreach(exp => retained.put(exp, expression(exp)))
     expressions = retained
+    val readable = new IdentityHashMap[AnyRef, JvmReadableOrigin]()
+    live.foreach(exp => Option(readables.get(exp)).foreach(readable.put(exp, _)))
+    readables = readable
   }
 
   def retainMono(root: MonoAst.Root): Unit = retainRoot(root, keepExpressions = true)
@@ -115,6 +141,7 @@ final class JvmCompilationOrigins(val symbols: JvmProvenance) {
 
   def close(): Unit = synchronized {
     expressions = new IdentityHashMap[AnyRef, GeneratedJvmKey]()
+    readables = new IdentityHashMap[AnyRef, JvmReadableOrigin]()
     frozenNames = None
     symbols.close()
     closed = true
@@ -166,7 +193,10 @@ object JvmCompilationOrigins {
   def capture(root: TypedAst.Root): JvmCompilationOrigins = {
     val source = JvmSourceOrigins.capture(root)
     val origins = new JvmCompilationOrigins(source.provenance)
-    source.foreachExpression(origins.record)
+    source.foreachExpression { (exp, key, readable) =>
+      origins.record(exp, key)
+      readable.foreach(origins.recordReadable(exp, _))
+    }
     source.releaseBodies()
     origins
   }

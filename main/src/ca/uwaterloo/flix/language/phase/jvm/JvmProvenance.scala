@@ -8,12 +8,19 @@ import scala.collection.mutable
 final class JvmProvenance {
 
   private var origins = mutable.Map.empty[Symbol, GeneratedJvmKey]
+  private var readables = mutable.Map.empty[Symbol, JvmReadableOrigin]
   private var frozen = false
 
   def register(sym: Symbol, key: GeneratedJvmKey): Unit = synchronized {
     requireOpen()
     JvmProvenance.checkConsistent(sym, origins.get(sym), key)
     origins(sym) = key
+  }
+
+  /** Records how `sym` reads, beside its key; see [[JvmReadableOrigin]]. */
+  def registerReadable(sym: Symbol, readable: JvmReadableOrigin): Unit = synchronized {
+    requireOpen()
+    readables(sym) = readable
   }
 
   def origin(sym: Symbol): GeneratedJvmKey = synchronized {
@@ -24,6 +31,7 @@ final class JvmProvenance {
   def retainLive(live: Set[Symbol]): Unit = synchronized {
     requireOpen()
     origins = mutable.Map.from(origins.iterator.filter { case (sym, _) => live.contains(sym) })
+    readables = mutable.Map.from(readables.iterator.filter { case (sym, _) => live.contains(sym) })
   }
 
   /** Returns the name table of `required`, with suffixes `width` base-36 digits wide (see [[JvmNameTable.build]]). */
@@ -31,9 +39,11 @@ final class JvmProvenance {
     requireOpen()
     frozen = true
     try {
-      JvmNameTable.build(required.iterator.map(sym => sym -> origin(sym)).toList, width)
+      val entries = required.iterator.map(sym => sym -> origin(sym)).toList
+      JvmNameTable.build(entries, width)
     } finally {
       origins = mutable.Map.empty
+      readables = mutable.Map.empty
     }
   }
 
@@ -45,6 +55,7 @@ final class JvmProvenance {
 
   def close(): Unit = synchronized {
     origins = mutable.Map.empty
+    readables = mutable.Map.empty
     frozen = true
   }
 }

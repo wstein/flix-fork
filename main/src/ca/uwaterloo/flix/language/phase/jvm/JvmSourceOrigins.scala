@@ -13,11 +13,18 @@ final class JvmSourceOrigins private (val provenance: JvmProvenance,
     bodies = Map.empty
   }
 
-  def foreachExpression(consume: (TypedAst.Expr, GeneratedJvmKey) => Unit): Unit =
-    bodies.values.foreach(_.allEntries.foreach { case (exp, key) => consume(exp, key) })
+  /** Passes every captured expression its key and, for a lambda or anonymous class, how it reads. */
+  def foreachExpression(consume: (TypedAst.Expr, GeneratedJvmKey, Option[JvmReadableOrigin]) => Unit): Unit =
+    bodies.foreach { case (owner, lexical) =>
+      lexical.allEntries.foreach { case (exp, key) => consume(exp, key, JvmSourceOrigins.readable(owner, lexical, exp)) }
+    }
 }
 
 object JvmSourceOrigins {
+
+  /** Returns how `exp`, captured in the body of `owner`, reads, if it is a class of its own. */
+  private def readable(owner: Symbol.DefnSym, lexical: JvmLexicalOrigins, exp: TypedAst.Expr): Option[JvmReadableOrigin] =
+    lexical.readablePath(exp).map(JvmReadableOrigin(owner.namespace :+ owner.text, _, None))
 
   def capture(root: TypedAst.Root): JvmSourceOrigins = {
     val provenance = JvmDeclarationOrigins.capture(root)
@@ -37,7 +44,9 @@ object JvmSourceOrigins {
         (tpe, localOrigins) => JvmTypeKey.encodeLexical(tpe, parameters,
           sym => localOrigins.getOrElse(sym, provenance.origin(sym))), provenance.origin)
       lexical.entries.foreach {
-        case (TypedAst.Expr.NewObject(sym, _, _, _, _, _, _), key) => provenance.register(sym, key)
+        case (exp@TypedAst.Expr.NewObject(sym, _, _, _, _, _, _), key) =>
+          provenance.register(sym, key)
+          readable(defn.sym, lexical, exp).foreach(provenance.registerReadable(sym, _))
         case _ => ()
       }
       defn.sym -> lexical
