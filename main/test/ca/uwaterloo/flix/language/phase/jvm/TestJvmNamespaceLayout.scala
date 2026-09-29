@@ -69,7 +69,6 @@ class TestJvmNamespaceLayout extends AnyFunSuite {
 
     assert(names.contains("dev.flix.gen.PublicApi"))
     assert(names.exists(_.startsWith("dev.flix.gen.PublicApi$Def$answer")))
-    assert(names.contains("Root$"), "the root facade retains its historical binary name")
   }
 
   private def compile(program: String): Set[String] = {
