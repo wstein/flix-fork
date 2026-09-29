@@ -36,8 +36,8 @@ Consumers should handle the returned errors, not use `unsafeGet` as in this shor
   Nullary Flix `Unit` parameters become no Java arguments; a `Unit` result becomes Java `void`.
 - Generic arguments must already be boxed. Nested native type arguments are recorded in the
   method's JVM `Signature` before simplification. Unsupported types never fall back to `Object`.
-- This slice supports Pure and IO only. Other effects are rejected, including effects with
-  default handlers: handler synthesis is not yet integrated into this entry point.
+- This low-level entry point accepts ground, finite primitive effects only. The higher-level
+  source wrapper path installs default handlers before forwarding.
 - The API's wrappers are added to tree-shaking roots. Forwarding bytecode only initializes their
   normal argument fields and uses the existing thunk/result-unwinding machinery. It does not
   implement collection conversion, inspect Flix data layouts, or perform reflective dispatch.
@@ -77,8 +77,9 @@ primitive results, nullary calls, and original exception propagation. Negative t
 duplicates, polymorphism, unconverted Flix types, unboxed generic arguments, unsupported effects,
 and exact/case-only class collisions.
 
-## Remaining phase-1 gates
+## Phase 1 integration
 
-Source declaration syntax and CLI/LSP integration; pre-type-check cyclic-build stubs; Kotlin and Scala
-callers; boundary library packaging and a broader conversion corpus; default handlers and the full
-allowed-effect rule; explicit opaque handles and region restrictions. ADR 3 remains Proposed.
+The [Phase 1 guide](JAVA-BOUNDARY-PHASE1.md) covers the source contract, packaged library,
+syntax-only bootstrap stubs, effect/opaque/region policy, and staged Java/Kotlin/Scala callers.
+`JavaBoundaryApi.stub(plan)` remains the checked-plan API; the new `java-api-stubs` command is
+the syntax-only path that breaks cyclic builds. ADR 3 remains Proposed.

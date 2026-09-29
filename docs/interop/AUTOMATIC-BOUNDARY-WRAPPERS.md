@@ -1,5 +1,8 @@
 # Automatic boundary wrappers (experimental)
 
+For the complete source-contract path and current validation, see
+[experimental Phase 1](JAVA-BOUNDARY-PHASE1.md). This page describes the lower-level API.
+
 `JavaBoundaryWrappers.compile` now joins the concrete elaboration proof to the named facade API.
 Callers select original Flix definitions and boundary trait symbols; they do not write Java-shaped
 wrapper signatures or conversion bodies. No surface associated-type rule is changed.
@@ -13,8 +16,9 @@ val result = JavaBoundaryWrappers.compile(flix, api, traits, securityContext)
 ```
 
 The caller has already added its original sources to `flix`. The traits must define
-`Out`/`In`, `Aef`, and `toJava`/`toFlix` in the ADR's shapes. Trait symbols are explicit because
-the new boundary library is not yet packaged into the standard library. Existing `ToJava` and
+`Out`/`In`, `Aef`, and `toJava`/`toFlix` in the ADR's shapes. The packaged traits are
+`Java.Boundary.JavaResult` and `Java.Boundary.JavaArgument`; explicit symbols remain useful for
+isolated prototypes. Existing `ToJava` and
 `ToFlix` are untouched. The declaration location is supplied by the caller and is the primary
 location reported for member-specific elaboration and wrapper-checking failures.
 
@@ -26,7 +30,8 @@ location reported for member-specific elaboration and wrapper-checking failures.
 3. Keep top-level primitives, `String`, Java native types, and `Unit` unchanged. For other types,
    derive argument `In` and result `Out` plus their `Aef` from checked instances. Missing
    directional evidence is an error, never an opaque or `Object` fallback.
-4. Sum the original effect and all conversion effects. This slice admits only Pure/IO.
+4. Sum the original effect and all conversion effects. Admit ground, finite primitive effects
+   and default-handled effects; wrap the entire conversion/call sequence in required handlers.
 5. Generate ordinary source definitions calling argument conversions, the original function,
    and the result conversion. Native imports and concrete signatures come from the derived types.
 6. Recheck that augmented program with the ordinary frontend, retain the wrappers as entry points,
@@ -42,8 +47,8 @@ dependency-graph format or claim optimal incremental compilation performance.
 
 `WrapperErrors.loc` maps an ordinary generated-source failure to the selected member's supplied
 location. Its nested compiler messages retain the generated source for inspection. Errors in
-original sources retain their own locations. Wiring this into a CLI/LSP error renderer is future
-source-declaration integration, not implemented here.
+original sources retain their own locations. `JavaBoundary` now converts these errors into
+shared CLI/LSP messages for `.flix-api` source contracts.
 
 ## Validation
 
@@ -61,9 +66,10 @@ Other tests cover missing directional evidence, polymorphism, array rejection, u
 associated outputs, primary diagnostic locations, cleanup after failed rechecking, stable repeated
 facade bytes, instance-driven ABI rebuilding, and preservation of caller-owned virtual sources.
 
-## Remaining phase-1 work
+## Current integration
 
-Source declaration syntax and CLI/LSP integration; packaged boundary traits/instances; pre-type-check
-cyclic-build stubs; Kotlin/Scala callers; default-handler synthesis and the full allowed-effect
-policy; explicit opaque handles and exhaustive region policy. API-only stubs still require the
-checked contract and do not break a cyclic Java-first build. ADR 3 remains Proposed.
+Phase 1 adds source contracts, packaged instances, effect handlers, type-tagged opaque crossing,
+transitive region checks, cyclic-build bootstrap stubs, and Kotlin/Scala callers. The separate
+`java-api-stubs` command reads the explicit contract without type-checking; the real compile
+checks its ABI against derived instances before code generation. See the Phase 1 guide for
+the 42-test boundary corpus and rollout limits. ADR 3 remains Proposed.

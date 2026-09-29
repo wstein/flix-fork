@@ -6,6 +6,14 @@ Proposed. Scoped to how Flix code is *called from* the JVM -- Java, Kotlin, Scal
 values cross that boundary. Calling Java *from* Flix (`import`, `new`, method calls) is unchanged.
 Numbered 3 to follow ADRs 1 and 2 on `feat/stable-specialization-names-rewrite`.
 
+Revision 8 records the [experimental Phase 1 integration](../interop/JAVA-BOUNDARY-PHASE1.md):
+packaged deep boundary instances, source contracts and CLI/LSP diagnostics, syntax-only
+bootstrap stubs with a pre-codegen ABI check, entry-point effect policy and default handlers,
+type-tagged opaque handles, transitive region rejection, and staged Java/Kotlin/Scala callers.
+The explicit contract and final generic-ready opaque handle incorporate the agreed design
+refinements. The rollout and upstream discussion draft are local; publication and submitting
+the proposal still require a separate go-ahead. The overall ADR remains Proposed.
+
 Revision 7 records [automatic wrapper orchestration](../interop/AUTOMATIC-BOUNDARY-WRAPPERS.md):
 programmatic declarations select original definitions; checked instances derive Java argument
 and result types and conversion effects; generated ordinary definitions are rechecked before
@@ -124,7 +132,7 @@ Add `JavaResult[t]` and `JavaArgument[t]` in a new `Java.Boundary` module rather
   instance.
 - **Positional boxing.** The facade passes a primitive, `String`, or a Java type unchanged at the
   top level of a signature; the boundary traits are consulted only for other types, and a
-  container asks for its element *boxed* through `JavaResult.Boxed[a]`.
+  container asks for its element *boxed* through `JavaResult.Out[a]`.
 
 ```flix
 pub trait JavaResult[t: Type] {
@@ -157,17 +165,22 @@ Simply removing the resolver restriction is not a safe phase-1 implementation.
 
 ### 2. An explicit, named API declaration
 
-```flix
+```text
 export mod Acme.Api as "com.acme.Api" {
-    def price
-    def quote
+    def price: () -> int;
+    def quote: (java.lang.String) -> java.util.List[java.lang.Integer];
 }
 ```
 
 The Java class name is chosen, not derived from facade layout, and the members are listed in one
 place. Every listed def must be monomorphic, declare its full signature, and have no region
-parameter: a region-bound value (`Array[t, r]`, a mutable struct) never crosses. (The syntax is
-illustrative; any form that names the Java class and the members will do.)
+parameter: a region-bound value (`Array[t, r]`, a mutable struct) never crosses.
+
+Phase 1 uses this declaration in a separate `.flix-api` sidecar. Its signatures explicitly
+record the Java bootstrap ABI; they do not choose conversions. An optional `= target` before
+the colon aliases a Flix function. Ordinary `.flix` grammar is unchanged. Java generic
+arguments use `[...]`, fully qualified reference names, and boxed primitives. This is an
+experimental source format, not a promise of final upstream declaration syntax.
 
 ### 3. Concrete elaboration precedes ordinary wrapper checking
 
@@ -185,12 +198,13 @@ def f$java(x1: JArg[a1], ...): JResult[r] \ e + (conversion effects) =
     JavaResult.toJava(f(JavaArgument.toFlix(x1), ...))
 ```
 
-`JavaBoundaryWrappers.compile` now orchestrates these passes for a programmatic declaration
-and explicitly selected result/argument traits. The caller selects original definitions, not
+`JavaBoundaryWrappers.compile` orchestrates these passes for a programmatic declaration
+and explicitly selected result/argument traits. `compileContract` selects the packaged
+boundary traits from a parsed source contract. The caller selects original definitions, not
 hand-written Java-shaped wrappers. It sums checked conversion effects, rebuilds wrappers after
 instance edits, reports member-specific failures at the supplied declaration location, and
-removes its generated virtual source on both success and failure. This is still an opt-in API,
-not source syntax or a packaged boundary library.
+removes its generated virtual source on both success and failure. The CLI's `java-api` command
+exposes the source-contract path; frontend-only `checkContract` serves editor diagnostics.
 
 Here `JArg` and `JResult` denote compiler-elaborated types, **not** Flix associated-type
 applications in generated source. In particular `JResult[List[Int32]]` is `JList[Integer]`.
@@ -199,17 +213,18 @@ is submitted to the ordinary frontend in the second pass:
 
 - it is resolved, kinded, and type-checked like every other def, including its actual conversion
   calls; missing boundary evidence is rejected by elaboration before generation;
-- every synthesized node carries the source location of the member's line in the `export`
-  declaration, so that error points at the export, not at invisible code;
+- member-specific synthesis/checking errors map to the member's line in the source contract,
+  rather than leaving the primary diagnostic on an invisible generated definition;
 - it is registered as an entry point, so `TreeShaker1`/`TreeShaker2` retain it;
 - incremental compilation keys it on the declaration, `f`'s declared signature, and the selected
   instance definitions, whose changes can alter the Java ABI or effects.
 
-Production integration must preserve this ordering. A two-pass frontend is the implemented opt-in
-prototype mechanism, not yet a complete source-level export pipeline. A dedicated entry point for checking generated
-typed definitions could avoid replay, but must be demonstrated separately. The syntax-only stub
-generator cannot assume these typed environments exist; how it obtains equivalent concrete types
-in cyclic Java-first builds remains an explicit phase-1 gate.
+Production integration must preserve this ordering. A two-pass frontend is the implemented
+experimental mechanism; a dedicated entry point for checking generated typed definitions could
+avoid replay, but must be demonstrated separately. The syntax-only `java-api-stubs` command
+uses the explicit contract, not inferred instances. After instance validation, the compiler
+derives the actual ABI independently and rejects any class/name/descriptor/generic-signature
+difference before code generation. This one gate checks both cyclic-build stubs and recorded ABI.
 
 ### 4. The backend emits a forwarding facade, with a recorded signature
 
@@ -221,8 +236,9 @@ written as the facade method's `Signature` attribute. This is the entire new cod
 The experimental `Flix.codeGenWithJavaApi` entry point now implements this forwarding contract
 for already checked concrete wrappers, selected by a programmatic `JavaBoundaryApi.Declaration`.
 It preserves generic signatures and primitive descriptors, retains the selected definitions, and
-rejects exact/case-folded generated-class collisions. Its initial effect policy is deliberately
-restricted to Pure and IO; it does not yet synthesize default handlers or generated wrappers.
+rejects exact/case-folded generated-class collisions. Low-level forwarding accepts only ground,
+finite primitive effects; the source wrapper path combines conversion/target effects and installs
+default handlers before forwarding. This follows the effect policy of entry points.
 
 ### 5. Effects
 
@@ -238,8 +254,17 @@ refuses the export first.
 
 A type with no boundary instance is a missing-instance error; there is no silent fallback. To
 pass a Flix value through Java without converting it, the export says so with the type
-`Opaque[t]`, whose instances in both directions wrap and unwrap the value in a Java handle Java can
-hold and pass back but not inspect. A type with only one direction's instance may appear only in
+`Java.Boundary.Opaque[t]`. In a top-level boundary position the compiler synthesizes tagged
+source `pack`/`unpack` calls. Java holds `dev.flix.runtime.OpaqueHandle<Object>` and can return
+it, but the supported handle API cannot inspect the payload. The final handle carries a semantic
+`JvmTypeKey` and a display type; unwrapping checks the key before casting and fails with an
+`IllegalArgumentException` naming expected and actual types. `toString` shows the type only,
+equals/hashCode are identity-based, and handles are not Serializable or persistent across builds.
+The unused generic parameter reserves later generated marker types. This is an explicit compiler
+capability, not a blanket trait instance: containers of opaque values require user instances.
+The compiler-internal bridge is API encapsulation, not a security boundary.
+
+A type with only one direction's instance may appear only in
 that position: a `JavaResult`-only type as a result, a `JavaArgument`-only type as a parameter,
 and the error for the other says which instance is missing.
 
@@ -337,16 +362,14 @@ Rated for value, effort, and fit with upstream (★ low to ★★★★★ high)
 
 ## Open questions
 
-- **Wrapper and stub integration.** The concrete elaboration proof answers type and effect
-  selection without changing surface associated-type rules. How should production wrapper
-  checking avoid redundant frontend work, preserve instance-dependent incremental invalidation,
-  and provide identical types to joint-compilation stubs when Java dependencies do not yet exist?
-  The named facade and its recorded generic `Signature` remain phase-1 gates.
+- **Production frontend performance.** The experimental two-pass frontend preserves checked
+  instances and ABI invalidation; how should production integration avoid redundant work?
+  Bootstrap stubs now come from the explicit contract and are checked before real code generation.
 - **The synthetic-type provider.** Where it runs, how it declares classes to the Java resolver,
   and how it names them without the layout leaks of the current design.
-- **The `Opaque[t]` handle.** A generic `FlixValue<T>` wrapper, or the erased Flix value itself
-  behind a marker interface.
-- **Declaration syntax.** `export mod ... as "..."` is illustrative; it must parse without
-  disturbing `mod` and must say the Java name explicitly.
+- **Typed opaque markers.** Phase 1 fixes the runtime handle name and type-tag checks. Phase 2
+  may supply generated marker types to its reserved generic parameter.
+- **Production declaration syntax.** Phase 1's `.flix-api` sidecar does not disturb ordinary
+  `mod` parsing. Upstream may prefer another explicit-name source form.
 - **Effects as Java interfaces (phase 4).** How a Java handler object maps to Flix's resumption
   semantics, and which effects it may implement at all.
