@@ -48,71 +48,15 @@ object Eraser {
     val enumSpecializations = ctx.getEnumSpecializations
     val newEnums = specializeEnums(enumSpecializations)
     val newStructs = specializeStructs(ctx.getStructSpecializations)
-    // An exported def's parameter conversion builds enum values, and needs the specialization
-    // whose nullary singletons to use for each declared, erased type.
-    val specializations = enumSpecializations.map { case (sym, targs, newSym) => (sym, targs) -> newSym }.toMap
-    ErasedAst.Root(newDefs, newEnums, newStructs, newEffects, root.mainEntryPoint, root.entryPoints, root.sources, exportedEnumFields(root), specializations)
+    ErasedAst.Root(newDefs, newEnums, newStructs, newEffects, root.mainEntryPoint, root.entryPoints, root.sources)
   }(DebugNoOp())
-
-  /**
-    * Returns the declared field types of every case of every monomorphic enum an export returns
-    * or takes, directly or nested, by case name.
-    *
-    * Specialization erases a reference-typed field to `Object`, the representation every Flix
-    * value shares. A Java record generated for an exported enum's case must declare the field's
-    * real type instead, and this is the last phase that still knows it.
-    */
-  private def exportedEnumFields(root: ReducedAst.Root): Map[Symbol.EnumSym, Map[String, List[SimpleType]]] = {
-    val found = mutable.Map.empty[Symbol.EnumSym, Map[String, List[SimpleType]]]
-
-    // `found` doubles as the visited set, so a recursive enum, which `EntryPoints` refuses
-    // anyway, cannot loop here.
-    def visit(tpe: SimpleType): Unit = tpe match {
-      case SimpleType.Enum(sym, Nil) if !found.contains(sym) =>
-        root.enums.get(sym).filter(_.tparams.isEmpty).foreach { enm =>
-          val fields = enm.cases.values.map(c => c.sym.name -> c.tpes.map(Simplifier.toSimpleType)).toMap
-          found += sym -> fields
-          fields.values.flatten.foreach(visit)
-        }
-      case SimpleType.Enum(_, targs) => targs.foreach(visit)
-      case SimpleType.Tuple(elms) => elms.foreach(visit)
-      case SimpleType.RecordExtend(_, value, rest) => visit(value); visit(rest)
-      case SimpleType.Array(element) => visit(element)
-      case SimpleType.Native(_, targs) => targs.foreach(visit)
-      case _ => ()
-    }
-
-    for (defn <- root.defs.values if defn.ann.isExport) {
-      visit(defn.unboxedType.tpe)
-      defn.fparams.foreach(fp => visit(fp.tpe))
-    }
-    found.toMap
-  }
 
   private def visitDef(defn: ReducedAst.Def)(implicit ctx: SharedContext, flix: Flix): ErasedAst.Def = defn match {
     case ReducedAst.Def(ann, mod, sym, cparams, fparams, exp, tpe, originalTpe, loc) =>
       val eNew = visitExp(exp)
       val e = ErasedAst.Expr.ApplyAtomic(AtomicOp.Box, List(eNew), box(tpe), exp.purity, loc)
-      // An exported result retains its exact representation for the namespace shim. Ordinary Flix
-      // calls still use `tpe` above, and non-exported entry points keep their historical erasure.
-      val unboxedType = if (ann.isExport) visitType(originalTpe.tpe) else erase(originalTpe.tpe)
-      val exportedReturnType = if (ann.isExport) Some(originalTpe.tpe) else None
-      val exportedParamTypes = if (ann.isExport) Some(fparams.map(_.tpe)) else None
-      // A parameter's conversion builds values of every enum nested in its type, and a nullary
-      // case's value is the singleton of one specialization: make sure each is generated.
-      if (ann.isExport) fparams.foreach(fp => registerNestedEnums(fp.tpe))
-      ErasedAst.Def(ann, mod, sym, cparams.map(visitParam), fparams.map(visitParam), e, box(tpe), ErasedAst.UnboxedType(unboxedType), exportedReturnType, exportedParamTypes, loc)
-  }
-
-  /** Registers the specialization of every enum nested anywhere in `tpe`, as `visitType` does for `tpe` itself. */
-  private def registerNestedEnums(tpe: SimpleType)(implicit ctx: SharedContext, flix: Flix): Unit = tpe match {
-    case SimpleType.Enum(sym, targs) =>
-      ctx.getSpecializedEnumName(sym, targs.map(erase))
-      targs.foreach(registerNestedEnums)
-    case SimpleType.Tuple(elms) => elms.foreach(registerNestedEnums)
-    case SimpleType.RecordExtend(_, value, rest) => registerNestedEnums(value); registerNestedEnums(rest)
-    case SimpleType.Array(element) => registerNestedEnums(element)
-    case _ => ()
+      val unboxedType = erase(originalTpe.tpe)
+      ErasedAst.Def(ann, mod, sym, cparams.map(visitParam), fparams.map(visitParam), e, box(tpe), ErasedAst.UnboxedType(unboxedType), loc)
   }
 
   private def specializeEnums(specializations: List[(Symbol.EnumSym, List[SimpleType], Symbol.EnumSym)])(implicit root: ReducedAst.Root, flix: Flix): Map[Symbol.EnumSym, ErasedAst.Enum] = {

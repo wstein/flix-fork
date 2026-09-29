@@ -27,23 +27,19 @@ class TestJvmNamespaceLayout extends AnyFunSuite {
   test("generated classes are siblings of their namespace facade at every depth") {
     val names = compile(
       """mod Acme {
-        |    @Export
         |    pub def one(x: Int32): Int32 = x + 1
         |}
         |mod Acme.Api {
-        |    @Export
         |    pub def two(x: Int32): Int32 = x + 2
         |}
         |mod Acme.Api.Deep {
-        |    @Export
         |    pub def three(x: Int32): Int32 = x + 3
         |}
         |mod Acme.Api.Deep.Deeper {
-        |    @Export
         |    pub def four(x: Int32): Int32 = x + 4
         |}
         |
-        |def main(): Unit \ IO = println("built")
+        |def main(): Unit \ IO = println(Acme.one(1) + Acme.Api.two(2) + Acme.Api.Deep.three(3) + Acme.Api.Deep.Deeper.four(4))
         |""".stripMargin)
 
     assert(names.contains("dev.flix.gen.Acme"))
@@ -65,7 +61,6 @@ class TestJvmNamespaceLayout extends AnyFunSuite {
   test("a one-segment namespace keeps its implementation classes out of the unnamed package") {
     val names = compile(
       """mod PublicApi {
-        |    @Export
         |    pub def answer(x: Int32): Int32 = x + 42
         |}
         |

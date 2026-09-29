@@ -22,7 +22,7 @@ import ca.uwaterloo.flix.language.ast.{BytecodeAst, SimpleType, SourceLocation, 
 import ca.uwaterloo.flix.language.ast.JvmAst.*
 import ca.uwaterloo.flix.language.dbg.AstPrinter.DebugNoOp
 import ca.uwaterloo.flix.language.jvm.ClassDescs
-import ca.uwaterloo.flix.language.phase.jvm.classes.{GenAbstractArrow, GenArrow, GenCastError, GenEffectCall, GenExportedEnum, GenExportedProduct, GenExportedRecord, GenExportedTuple, GenExtTag, GenExtTagged, GenFlixError, GenFrame, GenFrames, GenFramesCons, GenFramesNil, GenGlobal, GenHandler, GenHoleError, GenLazy, GenMain, GenMatchError, GenNamespace, GenNullaryTag, GenRecord, GenRecordEmpty, GenRecordExtend, GenRegion, GenReifiedSourceLocation, GenResult, GenResumption, GenResumptionCons, GenResumptionNil, GenResumptionWrapper, GenStruct, GenSuspension, GenTag, GenTagged, GenThunk, GenTuple, GenUncaughtExceptionHandler, GenUnhandledEffectError, GenUnit, GenValue}
+import ca.uwaterloo.flix.language.phase.jvm.classes.{GenAbstractArrow, GenArrow, GenCastError, GenEffectCall, GenExtTag, GenExtTagged, GenFlixError, GenFrame, GenFrames, GenFramesCons, GenFramesNil, GenGlobal, GenHandler, GenHoleError, GenLazy, GenMain, GenMatchError, GenNamespace, GenNullaryTag, GenRecord, GenRecordEmpty, GenRecordExtend, GenRegion, GenReifiedSourceLocation, GenResult, GenResumption, GenResumptionCons, GenResumptionNil, GenResumptionWrapper, GenStruct, GenSuspension, GenTag, GenTagged, GenThunk, GenTuple, GenUncaughtExceptionHandler, GenUnhandledEffectError, GenUnit, GenValue}
 import ca.uwaterloo.flix.util.InternalCompilerException
 
 import java.lang.constant.ClassDesc
@@ -53,41 +53,18 @@ object CodeGen {
       SimpleType.Arrow(List(SimpleType.Float64), SimpleType.Object), // by resumptionWrappers
       SimpleType.Arrow(List(SimpleType.Object), SimpleType.Object), // by resumptionWrappers
     )
-    val allTypes = root.types ++ requiredTypes ++ getExportedParamShapesOf(root)
+    val allTypes = root.types ++ requiredTypes
 
     val mainClass = root.getMain.map(
       main => JvmClass(GenMain.Desc, GenMain.genByteCode(main.sym))
     ).toList
 
-    // An exported enum's class is named like its companion module's namespace class, so where
-    // that module exists the enum class takes its place and carries its shims.
-    val exportedEnums = getExportedEnumsOf(root)
     val namespaces = namespacesOf(root)
     val namespaceClasses = namespaces.map {
       case (ns, defs) =>
         val entrypointDefs = defs.values.toList.filter(defn => root.entryPoints.contains(defn.sym))
-        exportedEnums.get(ns) match {
-          case Some(plan) => JvmClass(GenNamespace.desc(ns), genExportedEnum(plan, entrypointDefs))
-          case None => JvmClass(GenNamespace.desc(ns), GenNamespace.genByteCode(ns, entrypointDefs))
-        }
+        JvmClass(GenNamespace.desc(ns), GenNamespace.genByteCode(ns, entrypointDefs))
     }.toList
-    val companionlessEnumClasses = exportedEnums.collect {
-      case (ns, plan) if !namespaces.contains(ns) => JvmClass(GenNamespace.desc(ns), genExportedEnum(plan, Nil))
-    }.toList
-    val exportedCaseClasses = exportedEnums.values.toList.flatMap {
-      case sealedPlan: ExportPlan.AsSealed =>
-        val outer = sealedPlan.javaType
-        sealedPlan.cases.map { c =>
-          val desc = GenExportedEnum.caseDesc(outer, c.name)
-          JvmClass(desc, GenExportedProduct.genNestedByteCode(desc, outer, c.name, c.components))
-        }
-      case _ => Nil
-    }
-    // A case record `Shape$Circle` has the class name of the namespace class of a module
-    // `Shape.Circle`; generating both would silently keep only one.
-    for (clazz <- exportedCaseClasses if namespaceClasses.exists(_.name == clazz.name)) {
-      throw InternalCompilerException(s"Exported enum case '${clazz.name.displayName()}' clashes with a module of the same name", SourceLocation.Unknown)
-    }
 
     // Generate function classes.
     val functionAndClosureClasses = GenFunAndClosureClasses.gen(root.defs).values.toList
@@ -106,8 +83,6 @@ object CodeGen {
     val extensibleTagClasses = getExtensibleTagTypesOf(allTypes).map(elms => JvmClass(GenExtTag.desc(elms), GenExtTag.genByteCode(elms))).toList
 
     val tupleClasses = getTupleTypesOf(allTypes).map(elms => JvmClass(GenTuple.desc(elms), GenTuple.genByteCode(elms))).toList
-    val exportedTupleClasses = getExportedTupleTypesOf(root).map(elms => JvmClass(GenExportedTuple.desc(elms), GenExportedTuple.genByteCode(elms))).toList
-    val exportedRecordClasses = getExportedRecordTypesOf(root).map(fields => JvmClass(GenExportedRecord.desc(fields), GenExportedRecord.genByteCode(fields))).toList
     val structClasses = root.structs.values.map(TypeDescs.structFields).toSet[List[ClassDesc]].toList.map(elms => JvmClass(GenStruct.desc(elms), GenStruct.genByteCode(elms)))
 
     val recordInterfaces = List(JvmClass(GenRecord.Desc, GenRecord.genByteCode()))
@@ -164,10 +139,6 @@ object CodeGen {
       extTaggedAbstractClass,
       extensibleTagClasses,
       tupleClasses,
-      exportedTupleClasses,
-      exportedRecordClasses,
-      companionlessEnumClasses,
-      exportedCaseClasses,
       structClasses,
       recordInterfaces,
       recordEmptyClasses,
@@ -261,57 +232,6 @@ object CodeGen {
         acc + elms.map(TypeDescs.toErasedClassDesc)
       case (acc, _) => acc
     }
-
-  /**
-    * Returns every plan of every export in `root`, including the plans nested in them, and those
-    * of its parameters' types, whose Java classes are the same a result of that type names.
-    */
-  private def getExportPlansOf(root: Root): List[ExportPlan] =
-    root.defs.values.toList.flatMap { defn =>
-      val params = if (defn.ann.isExport) defn.exportedParamTypes.getOrElse(Nil).flatMap(ExportPlan.ofType(_)(root)) else Nil
-      (ExportPlan.ofDef(defn)(root).toList ++ params).flatMap(ExportPlan.allOf)
-    }
-
-  /**
-    * Returns every tuple and record type nested in an exported parameter's type.
-    *
-    * A parameter's conversion builds these from Java values, so their classes must exist even if
-    * no Flix code names the type: a def may never look inside what it is passed.
-    */
-  private def getExportedParamShapesOf(root: Root): Set[SimpleType] = {
-    def visit(tpe: SimpleType): List[SimpleType] = tpe match {
-      case t@SimpleType.Tuple(elms) => t :: elms.flatMap(visit)
-      case t@SimpleType.RecordExtend(_, value, rest) => t :: visit(value) ++ visit(rest)
-      case SimpleType.Enum(_, targs) => targs.flatMap(visit)
-      case SimpleType.Array(element) => visit(element)
-      case _ => Nil
-    }
-    val declared = root.defs.values.filter(_.ann.isExport).flatMap(_.exportedParamTypes.getOrElse(Nil))
-    val enumFields = root.exportedEnumFields.values.flatMap(_.values.flatten)
-    (declared ++ enumFields).flatMap(visit).toSet
-  }
-
-  /** Returns the Java-facing element types of every distinct exported tuple shape in `root`. */
-  private def getExportedTupleTypesOf(root: Root): Set[List[ClassDesc]] =
-    getExportPlansOf(root).collect { case tuple: ExportPlan.AsTuple => tuple.elements.map(_.javaType) }.toSet
-
-  /** Returns the Java-facing fields of every distinct exported record shape in `root`. */
-  private def getExportedRecordTypesOf(root: Root): Set[List[(String, ClassDesc)]] =
-    getExportPlansOf(root).collect { case record: ExportPlan.AsRecord => record.labels.zip(record.elements.map(_.javaType)) }.toSet
-
-  /** Returns the plan of every exported enum in `root`, keyed by its companion namespace. */
-  private def getExportedEnumsOf(root: Root): Map[List[String], ExportPlan] =
-    getExportPlansOf(root).collect {
-      case enm: ExportPlan.AsEnum => enm.ns -> enm
-      case enm: ExportPlan.AsSealed => enm.ns -> enm
-    }.toMap
-
-  /** Returns the Java enum or sealed interface of an exported enum, carrying the shims of `defs`. */
-  private def genExportedEnum(plan: ExportPlan, defs: List[Def])(implicit root: Root, flix: Flix): Array[Byte] = plan match {
-    case ExportPlan.AsEnum(ns, constants) => GenExportedEnum.genByteCode(ns, constants, defs)
-    case ExportPlan.AsSealed(ns, cases) => GenExportedEnum.genSealedByteCode(ns, cases.map(_.name), defs)
-    case other => throw InternalCompilerException(s"Unexpected exported enum plan: $other", SourceLocation.Unknown)
-  }
 
   /** Returns the set of record extend types in `types` without searching recursively. */
   private def getRecordExtendsOf(types: Iterable[SimpleType]): Set[ClassDesc] =

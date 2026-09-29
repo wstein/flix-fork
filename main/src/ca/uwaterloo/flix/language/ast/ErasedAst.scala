@@ -30,15 +30,9 @@ object ErasedAst {
                   effects: Map[Symbol.EffSym, Effect],
                   mainEntryPoint: Option[Symbol.DefnSym],
                   entryPoints: Set[Symbol.DefnSym],
-                  sources: Map[Source, SourceLocation],
-                  exportedEnumFields: Map[Symbol.EnumSym, Map[String, List[SimpleType]]],
-                  enumSpecializations: Map[(Symbol.EnumSym, List[SimpleType]), Symbol.EnumSym])
+                  sources: Map[Source, SourceLocation])
 
-  /**
-    * `exportedReturnType` and `exportedParamTypes` retain the declared types, type arguments
-    * included, that the Java boundary converts from and to; erasure keeps neither.
-    */
-  case class Def(ann: Annotations, mod: Modifiers, sym: Symbol.DefnSym, cparams: List[FormalParam], fparams: List[FormalParam], exp: Expr, tpe: SimpleType, unboxedType: UnboxedType, exportedReturnType: Option[SimpleType], exportedParamTypes: Option[List[SimpleType]], loc: SourceLocation) {
+  case class Def(ann: Annotations, mod: Modifiers, sym: Symbol.DefnSym, cparams: List[FormalParam], fparams: List[FormalParam], exp: Expr, tpe: SimpleType, unboxedType: UnboxedType, loc: SourceLocation) {
     val arrowType: SimpleType.Arrow = SimpleType.mkArrow(fparams.map(_.tpe), tpe)
   }
 

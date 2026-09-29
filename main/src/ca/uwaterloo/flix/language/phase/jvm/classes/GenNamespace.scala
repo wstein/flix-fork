@@ -17,13 +17,14 @@
 package ca.uwaterloo.flix.language.phase.jvm.classes
 
 import ca.uwaterloo.flix.api.Flix
-import ca.uwaterloo.flix.language.ast.JvmAst
+import ca.uwaterloo.flix.language.ast.{JvmAst, SourceLocation}
 import ca.uwaterloo.flix.language.phase.jvm.ClassMaker.Final.IsFinal
 import ca.uwaterloo.flix.language.phase.jvm.ClassMaker.Visibility.IsPublic
 import ca.uwaterloo.flix.language.phase.jvm.ClassMaker.{ConstructorMethod, InstanceField, StaticMethod}
 import ca.uwaterloo.flix.language.phase.jvm.Instructions.*
 import ca.uwaterloo.flix.language.phase.jvm.MethodTypeDescs.mkDescriptor
 import ca.uwaterloo.flix.language.phase.jvm.{ClassConstants, ClassMaker, GenFunAndClosureClasses, JvmNames, Mangle, TypeDescs}
+import ca.uwaterloo.flix.util.InternalCompilerException
 import org.objectweb.asm.MethodVisitor
 
 import java.lang.constant.ClassDesc
@@ -51,6 +52,8 @@ object GenNamespace {
       cm match {
         case c: ClassMaker.InstanceClassMaker =>
           c.mkStaticMethod(ShimMethod(ns, defn), IsPublic, IsFinal, shimIns(defn)(_, root, flix))
+        case _ =>
+          throw InternalCompilerException(s"Unexpected namespace class for '$ns'", SourceLocation.Unknown)
       }
     }
 
