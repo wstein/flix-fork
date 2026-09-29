@@ -1,17 +1,8 @@
 /*
  * Copyright 2022 Matthew Lutze
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *   http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Use of this source code is governed by the Apache 2.0 license
+ * that can be found in the LICENSE.md file.
  */
 package ca.uwaterloo.flix.language.errors
 
@@ -73,7 +64,7 @@ object EntryPointError {
          |
          |${highlight(loc, "unhandled effect", fmt)}
          |
-         |${underline("Explanation:")} Entry point functions (main, tests, exports) can only
+         |${underline("Explanation:")} Entry point functions (main and tests) can only
          |use primitive effects (like IO) or effects with default handlers. The effect
          |'${magenta(FormatType.formatType(eff))}' has no default handler.
          |
@@ -102,114 +93,9 @@ object EntryPointError {
          |
          |${highlight(loc, "type variable not allowed here", fmt)}
          |
-         |${underline("Explanation:")} Entry point functions (main, tests, exports) must have
+         |${underline("Explanation:")} Entry point functions (main and tests) must have
          |concrete types. Type variables like 'a' or 't' are not allowed because the runtime
          |needs to know the exact types at the entry point.
-         |""".stripMargin
-    }
-  }
-
-  /**
-    * An error raised to indicate that an exported function has an unexpected name.
-    *
-    * @param loc the location of the defn.
-    */
-  case class IllegalExportName(loc: SourceLocation) extends EntryPointError {
-    def code: ErrorCode = ErrorCode.E1172
-
-    def summary: String = s"Unexpected name for exported function."
-
-    def message(fmt: Formatter)(implicit root: Option[TypedAst.Root]): String = {
-      import fmt.*
-      s""">> Unexpected name for exported function.
-         |
-         |${highlight(loc, "name not valid in Java", fmt)}
-         |
-         |${underline("Explanation:")} Exported functions must have names that are valid Java
-         |identifiers. A valid name starts with a lowercase letter and contains only letters
-         |and digits (e.g., 'getValue', 'process123').
-         |""".stripMargin
-    }
-  }
-
-  /**
-    * An error raised to indicate that an exported function is in the root namespace.
-    *
-    * @param loc the location of the defn.
-    */
-  case class IllegalExportNamespace(loc: SourceLocation) extends EntryPointError {
-    def code: ErrorCode = ErrorCode.E1285
-
-    def summary: String = s"Exported function in root namespace."
-
-    def message(fmt: Formatter)(implicit root: Option[TypedAst.Root]): String = {
-      import fmt.*
-      s""">> Exported function must be in a module.
-         |
-         |${highlight(loc, "function in root namespace", fmt)}
-         |
-         |${underline("Explanation:")} Exported functions generate Java methods in a class
-         |named after the module. Functions in the root namespace have no module name,
-         |so there is no class to contain the exported method.
-         |
-         |To fix this, move the function into a module:
-         |
-         |  mod MyModule {
-         |      @Export
-         |      pub def myFunction(): Int32 = ...
-         |  }
-         |""".stripMargin
-    }
-  }
-
-  /**
-    * An error raised to indicate that an exported function uses an unexpected type.
-    *
-    * @param t   the type that is not allowed.
-    * @param loc the location of the type.
-    */
-  case class IllegalExportType(t: Type, loc: SourceLocation)(implicit flix: Flix) extends EntryPointError {
-    def code: ErrorCode = ErrorCode.E1396
-
-    def summary: String = s"Unexpected type in exported function: '${FormatType.formatType(t)}'."
-
-    def message(fmt: Formatter)(implicit root: Option[TypedAst.Root]): String = {
-      import fmt.*
-      s""">> Unexpected type '${red(FormatType.formatType(t))}' in exported function.
-         |
-         |${highlight(loc, "type not exportable", fmt)}
-         |
-         |${underline("Explanation:")} Exported functions can only use primitive Java types:
-         |
-         |  Bool, Char, Int8, Int16, Int32, Int64, Float32, Float64, or java.lang.Object
-         |""".stripMargin
-    }
-  }
-
-  /**
-    * An error raised to indicate that an exported function in the companion module of an exported
-    * enum has a name the generated Java type already uses.
-    *
-    * @param name    the name of the exported function.
-    * @param enumSym the enum whose generated Java type also holds the function.
-    * @param loc     the location of the defn.
-    */
-  case class IllegalExportEnumMember(name: String, enumSym: Symbol.EnumSym, loc: SourceLocation) extends EntryPointError {
-    def code: ErrorCode = ErrorCode.E3187
-
-    def summary: String = s"Exported function '$name' clashes with a method of the Java type of enum '$enumSym'."
-
-    def message(fmt: Formatter)(implicit root: Option[TypedAst.Root]): String = {
-      import fmt.*
-      s""">> Exported function '${red(name)}' clashes with a method of the Java type of enum '${cyan(enumSym.toString)}'.
-         |
-         |${highlight(loc, "name already used by the generated Java type", fmt)}
-         |
-         |${underline("Explanation:")} An exported enum becomes a Java enum, or a sealed
-         |interface if its cases carry data, and the exported functions of its companion
-         |module become static methods of that same type. Every Java enum already has
-         |methods such as 'name', 'ordinal', 'values' and 'valueOf', so an exported function
-         |cannot use one of those names. Rename it.
          |""".stripMargin
     }
   }
@@ -263,34 +149,6 @@ object EntryPointError {
          |${highlight(loc, "the result type must be Unit", fmt)}
          |
          |${underline("Explanation:")} The main function must return Unit.
-         |""".stripMargin
-    }
-  }
-
-  /**
-    * An error raised to indicate that an exported function is not public.
-    *
-    * @param loc the location of the defn.
-    */
-  case class NonPublicExport(loc: SourceLocation) extends EntryPointError {
-    def code: ErrorCode = ErrorCode.E1849
-
-    def summary: String = s"Non-public exported function."
-
-    def message(fmt: Formatter)(implicit root: Option[TypedAst.Root]): String = {
-      import fmt.*
-      s""">> Exported function is not public.
-         |
-         |${highlight(loc, "missing 'pub' modifier", fmt)}
-         |
-         |${underline("Explanation:")} Exported functions must be declared with the 'pub'
-         |modifier to be visible from Java code. Private functions cannot be exported
-         |because they are not accessible outside their module.
-         |
-         |To fix this, add the 'pub' modifier:
-         |
-         |  @Export
-         |  pub def myFunction(): Int32 = ...
          |""".stripMargin
     }
   }

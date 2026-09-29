@@ -1,17 +1,8 @@
 /*
  * Copyright 2022 Matthew Lutze
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *   http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Use of this source code is governed by the Apache 2.0 license
+ * that can be found in the LICENSE.md file.
  */
 package ca.uwaterloo.flix.language.phase
 
@@ -21,7 +12,6 @@ import ca.uwaterloo.flix.language.ast.shared.*
 import ca.uwaterloo.flix.language.ast.{Kind, SourceLocation, Symbol, Type, TypeConstructor, TypedAst}
 import ca.uwaterloo.flix.language.dbg.AstPrinter.*
 import ca.uwaterloo.flix.language.errors.EntryPointError
-import ca.uwaterloo.flix.language.phase.jvm.classes.GenExportedEnum
 import ca.uwaterloo.flix.runtime.shell.Shell
 import ca.uwaterloo.flix.util.collection.{CofiniteSet, Nel}
 import ca.uwaterloo.flix.util.{ParOps, Result}
@@ -39,13 +29,12 @@ import scala.jdk.CollectionConverters.*
   * A function is an entry point if:
   *   - It is the main function (called `main` by default, but can configured to an arbitrary name).
   *   - It is a test (annotated with `@Test`).
-  *   - It is an exported function (annotated with `@Export`).
   *
   * This phase has these sub-phases:
   *   - Resolve the entrypoint option so that there is no implicit default entry point.
-  *   - Check that all entry points have valid signatures, where rules differ from main, tests, and
-  *     exports. If an entrypoint does not have a valid signature, its related annotation is
-  *     removed to allow further compilation to continue with valid assumptions.
+  *   - Check that all entry points have valid signatures, where rules differ for main and tests.
+  *     If an entrypoint does not have a valid signature, its related annotation is removed to
+  *     allow further compilation to continue with valid assumptions.
   *   - Compute the set of all entry points and store it in Root.
   *
   * (Wrapping entry points with their default effect handlers happens later, in `Lowering`.)
@@ -157,14 +146,14 @@ object EntryPoints {
   }
 
   /**
-    * CheckEntryPoints checks that all entry points (main/test/export) have valid signatures.
+    * CheckEntryPoints checks that all entry points (main/test) have valid signatures.
     *
     * Because of resilience, invalid entry points are not discarded. Its entry point marker is
     * removed (removed as the main function in root or have its annotation removed).
     */
   private def checkEntryPoints(root: TypedAst.Root)(implicit flix: Flix): (TypedAst.Root, List[EntryPointError]) = {
+    implicit val sctx: SharedContext = SharedContext.mk()
     implicit val r: TypedAst.Root = root
-    implicit val sctx: SharedContext = SharedContext.mk(exportedEnumCompanions(root))
 
     ParOps.parMapValues(root.defs)(defn => flix.profile(defn.sym, defn.loc)(visitDef(defn)))
 
@@ -175,20 +164,18 @@ object EntryPoints {
   }
 
   /**
-    * Checks `defn` with relevant checks for its entry point kind (main/test/export).
+    * Checks `defn` with relevant checks for its entry point kind (main/test).
     *
     * Because of resilience, invalid entry points are not discarded. Its entry point marker is
     * removed (removed as the main function in root or have its annotation removed).
     *
-    * A function can be main, a test, and exported at the same time.
+    * A function can be both main and a test at the same time.
     */
   private def visitDef(defn: TypedAst.Def)(implicit sctx: SharedContext, root: TypedAst.Root, flix: Flix): TypedAst.Def = {
-    // checkMain is different than the other two because the entry point designation exists on
+    // checkMain is different than visitTest because the entry point designation exists on
     // root and invalid main functions are communicated via SharedContext.
     if (TypedAstOps.isMain(defn)) checkMain(defn)
-    val defn1 = if (TypedAstOps.isTest(defn)) visitTest(defn) else defn
-    val defn2 = if (TypedAstOps.isExport(defn)) visitExport(defn1) else defn1
-    defn2
+    if (TypedAstOps.isTest(defn)) visitTest(defn) else defn
   }
 
   /**
@@ -245,47 +232,6 @@ object EntryPoints {
       spec = defn.spec.copy(
         ann = defn.spec.ann.copy(
           annotations = defn.spec.ann.annotations.filterNot(_.isInstanceOf[Annotation.Test])
-        )
-      )
-    )
-
-  /**
-    * Rules for exported functions - an exported function has:
-    *   - No type variables.
-    *   - An effect that is a subset of the primitive effects.
-    *   - Is not in the root namespace.
-    *   - Is `pub`.
-    *   - Has a name that is valid in Java.
-    *   - Has types that are valid in Java (not Flix types like `List[Int32]`).
-    */
-  private def visitExport(defn: TypedAst.Def)(implicit sctx: SharedContext, root: TypedAst.Root, flix: Flix): TypedAst.Def = {
-    val errs = (checkNoTypeVariables(defn) match {
-      case Some(err) => List(err)
-      case None =>
-        // Only run these on functions without type variables.
-        // An exported function should have:
-        //  - Only valid Java types
-        //  - An effect set containing only primitive effects or effects that have default handlers
-        checkEffects(defn, Symbol.PrimitiveEffs ++ root.defaultHandlers.map(_.handledSym)).toList ++ checkJavaTypes(defn)
-    }) ++
-      checkNonRootNamespace(defn) ++
-      checkPub(defn) ++
-      checkValidJavaName(defn) ++
-      checkEnumMemberName(defn)
-    if (errs.isEmpty) {
-      defn
-    } else {
-      errs.foreach(sctx.errors.add)
-      removeExportAnnotation(defn)
-    }
-  }
-
-  /** Returns `defn` without a test annotation. */
-  private def removeExportAnnotation(defn: TypedAst.Def): TypedAst.Def =
-    defn.copy(
-      spec = defn.spec.copy(
-        ann = defn.spec.ann.copy(
-          annotations = defn.spec.ann.annotations.filterNot(_.isInstanceOf[Annotation.Export])
         )
       )
     )
@@ -408,301 +354,7 @@ object EntryPoints {
     }
   }
 
-  /** Returns an error if `defn` is in the root namespace. */
-  private def checkNonRootNamespace(defn: TypedAst.Def): Option[EntryPointError] = {
-    val inRoot = defn.sym.namespace.isEmpty
-    if (inRoot) Some(EntryPointError.IllegalExportNamespace(defn.sym.loc))
-    else None
-  }
-
-  /** Returns an error if `defn` is not a public function. */
-  private def checkPub(defn: TypedAst.Def): Option[EntryPointError] = {
-    val isPub = defn.spec.mod.isPublic
-    if (isPub) None
-    else Some(EntryPointError.NonPublicExport(defn.sym.loc))
-  }
-
-  /** Returns `None` if `defn` has a name that is valid in Java. Returns an error otherwise. */
-  private def checkValidJavaName(defn: TypedAst.Def): Option[EntryPointError] = {
-    val validName = defn.sym.name.matches("[a-z][a-zA-Z0-9]*")
-    if (validName) None
-    else Some(EntryPointError.IllegalExportName(defn.sym.loc))
-  }
-
-  /**
-    * Returns an error if `defn` is in the companion module of an exported enum and has the name of
-    * a method every Java enum already has: the companion's shims live on the enum's own class.
-    */
-  private def checkEnumMemberName(defn: TypedAst.Def)(implicit sctx: SharedContext): Option[EntryPointError] =
-    sctx.enumCompanions.get(defn.sym.namespace) match {
-      case Some(enumSym) if GenExportedEnum.MemberNames.contains(defn.sym.name) =>
-        Some(EntryPointError.IllegalExportEnumMember(defn.sym.name, enumSym, defn.sym.loc))
-      case _ => None
-    }
-
-  /**
-    * Returns every enum some export returns or takes, keyed by the namespace of its companion module.
-    *
-    * Found before any def is checked, since whether an export's name is legal depends on another
-    * export elsewhere returning the enum whose companion module it is in.
-    */
-  private def exportedEnumCompanions(root: TypedAst.Root): Map[List[String], Symbol.EnumSym] =
-    root.defs.values.filter(TypedAstOps.isExport).foldLeft(Set.empty[Symbol.EnumSym]) {
-      case (acc, defn) => (defn.spec.retTpe :: defn.spec.fparams.toList.map(_.tpe)).foldLeft(acc) {
-        case (a, tpe) => exportedEnumsIn(tpe, a)(root)
-      }
-    }.map(sym => (sym.namespace :+ sym.name) -> sym).toMap
-
-  /** Returns `acc` and every enum a value of type `tpe` converts, directly or nested. */
-  private def exportedEnumsIn(tpe: Type, acc: Set[Symbol.EnumSym])(implicit root: TypedAst.Root): Set[Symbol.EnumSym] =
-    unapplyExportedEnum(tpe) match {
-      case Some((sym, _)) if acc.contains(sym) => acc
-      case Some((sym, fields)) => fields.foldLeft(acc + sym) { case (a, field) => exportedEnumsIn(field, a) }
-      case None => tpe match {
-        case Type.Apply(tpe1, tpe2, _) => exportedEnumsIn(tpe2, exportedEnumsIn(tpe1, acc))
-        case Type.Alias(_, _, inner, _) => exportedEnumsIn(inner, acc)
-        case _ => acc
-      }
-    }
-
-  /**
-    * Returns the symbol of a non-polymorphic enum and the types of its cases' fields, which are
-    * converted individually on return: a data-free enum becomes a Java enum, and any other a
-    * sealed interface of one record per case.
-    *
-    * Each field still goes through `isExportableType` on its own, the same way and for the same
-    * reason a tuple's elements do, which also refuses a recursive enum. An enum with a type
-    * parameter is left to `isExportableType` whole, which refuses it.
-    */
-  @tailrec
-  private def unapplyExportedEnum(tpe: Type)(implicit root: TypedAst.Root): Option[(Symbol.EnumSym, List[Type])] = tpe match {
-    case Type.Cst(TypeConstructor.Enum(sym, _), _) =>
-      root.enums.get(sym).filter(_.tparams.isEmpty).map { enm =>
-        (enm.sym, enm.cases.values.toList.sortBy(_.sym.ordinal).flatMap(_.tpes))
-      }
-    case Type.Alias(_, _, inner, _) => unapplyExportedEnum(inner)
-    case _ => None
-  }
-
-  /** Returns an error for each type in `defn` that is not valid in Java. */
-  private def checkJavaTypes(defn: TypedAst.Def)(implicit root: TypedAst.Root, flix: Flix): List[EntryPointError] = {
-    val paramTypes = defn.spec.fparams.toList.map(_.tpe) match {
-      case List(tpe) if isUnitType(tpe) == Result.Ok(true) => Nil
-      case tpes => tpes
-    }
-    conversionErrors(defn.spec.retTpe, Position.Result, Set.empty, inParameter = false) :::
-      paramTypes.flatMap(conversionErrors(_, Position.Result, Set.empty, inParameter = true))
-  }
-
-  /**
-    * Where a converted value sits in an export's result, which decides what it may be.
-    *
-    * `ExportPlan` applies the same rules to the same positions when it builds the conversion.
-    */
-  private sealed trait Position
-
-  private object Position {
-    /** The result itself, the only place `Unit` crosses, as `void`. */
-    case object Result extends Position
-
-    /** A container's type argument. */
-    case object Argument extends Position
-
-    /**
-      * A tuple element, a record field, or an enum case's field. A container is refused here:
-      * the Java record generated for a product is shared by the erased shape of its components,
-      * so a `List<Integer>` component would reach Java as a raw `List`.
-      */
-    case object Component extends Position
-  }
-
-  /**
-    * Returns an error for each part of the type `tpe` that cannot be converted at `pos`.
-    *
-    * Conversions nest: a container's type arguments may be anything a result may be, and a
-    * product's components anything but a container. A parameter is converted the other way, from
-    * Java, by building Flix values directly, so `inParameter` refuses `Set` and `Map`, whose
-    * balanced trees only the standard library builds. `visiting` holds the enums whose fields are
-    * being checked, so a recursive enum is refused rather than checked forever.
-    */
-  private def conversionErrors(tpe: Type, pos: Position, visiting: Set[Symbol.EnumSym], inParameter: Boolean)(implicit root: TypedAst.Root, flix: Flix): List[EntryPointError] = {
-    def errors(t: Type, p: Position, v: Set[Symbol.EnumSym]): List[EntryPointError] = conversionErrors(t, p, v, inParameter)
-
-    val container = pos != Position.Component
-    val tree = unapplyMap(tpe).isDefined || unapplySet(tpe).isDefined
-    val element = unapplyOption(tpe).orElse(unapplyList(tpe)).orElse(unapplyVector(tpe)).orElse(unapplyChain(tpe)).orElse(unapplySet(tpe))
-    if (pos == Position.Result && isUnitType(tpe) == Result.Ok(true)) Nil
-    else if (inParameter && tree) List(EntryPointError.IllegalExportType(tpe, tpe.loc))
-    else (unapplyMap(tpe), element) match {
-      case (Some((k, v)), _) if container => errors(k, Position.Argument, visiting) ::: errors(v, Position.Argument, visiting)
-      case (None, Some(elm)) if container => errors(elm, Position.Argument, visiting)
-      case _ => unapplyTuple(tpe).orElse(unapplyRecord(tpe)) match {
-        case Some(elms) => elms.flatMap(errors(_, Position.Component, visiting))
-        case None => unapplyExportedEnum(tpe) match {
-          case Some((sym, _)) if visiting.contains(sym) => List(EntryPointError.IllegalExportType(tpe, tpe.loc))
-          case Some((sym, fields)) => fields.flatMap(errors(_, Position.Component, visiting + sym))
-          case None => exactErrors(tpe, pos)
-        }
-      }
-    }
-  }
-
-  /**
-    * Returns an error if `tpe` does not cross the boundary unchanged at `pos`.
-    *
-    * An applied Java type, such as `ArrayList[String]`, crosses unchanged but for its generic
-    * signature, which a product's shared record class cannot carry.
-    */
-  private def exactErrors(tpe: Type, pos: Position)(implicit flix: Flix): List[EntryPointError] = {
-    val applied = Type.eraseAliases(tpe) match {
-      case Type.Apply(_, _, _) => true
-      case _ => false
-    }
-    if (pos == Position.Component && applied) List(EntryPointError.IllegalExportType(tpe, tpe.loc))
-    else isExportableType(tpe) match {
-      case Result.Ok(true) => Nil
-      case Result.Ok(false) => List(EntryPointError.IllegalExportType(tpe, tpe.loc))
-      // Do not report an error, since previous phases should have done already.
-      case Result.Err(ErrorOrMalformed) => Nil
-    }
-  }
-
-  /** Returns the element of the standard library's `Option`, which is converted on return. */
-  @tailrec
-  private def unapplyOption(tpe: Type): Option[Type] = tpe match {
-    case Type.Apply(Type.Cst(TypeConstructor.Enum(sym, _), _), elm, _)
-      if sym.namespace.isEmpty && sym.text == "Option" => Some(elm)
-    case Type.Alias(_, _, inner, _) => unapplyOption(inner)
-    case _ => None
-  }
-
-  /** Returns the element of the standard library's `List`, which is converted on return. */
-  @tailrec
-  private def unapplyList(tpe: Type): Option[Type] = tpe match {
-    case Type.Apply(Type.Cst(TypeConstructor.Enum(sym, _), _), elm, _)
-      if sym.namespace.isEmpty && sym.text == "List" => Some(elm)
-    case Type.Alias(_, _, inner, _) => unapplyList(inner)
-    case _ => None
-  }
-
-  /**
-    * Returns the element of `Vector`, which is converted on return.
-    *
-    * `Array[t, r]` erases to the same `SimpleType.Array` as `Vector[t]` once codegen no longer
-    * has `Type` to tell them apart, so this unwrap -- exercised only in return position, as with
-    * `Option` and `List` above -- is the sole place soundness is enforced: a mutable, region-scoped
-    * `Array` must never reach here.
-    */
-  @tailrec
-  private def unapplyVector(tpe: Type): Option[Type] = tpe match {
-    case Type.Apply(Type.Cst(TypeConstructor.Vector, _), elm, _) => Some(elm)
-    case Type.Alias(_, _, inner, _) => unapplyVector(inner)
-    case _ => None
-  }
-
-  /** Returns the element of the standard library's `Chain`, which is converted on return. */
-  @tailrec
-  private def unapplyChain(tpe: Type): Option[Type] = tpe match {
-    case Type.Apply(Type.Cst(TypeConstructor.Enum(sym, _), _), elm, _)
-      if sym.namespace.isEmpty && sym.text == "Chain" => Some(elm)
-    case Type.Alias(_, _, inner, _) => unapplyChain(inner)
-    case _ => None
-  }
-
-  /** Returns the element of the standard library's `Set`, which is converted on return. */
-  @tailrec
-  private def unapplySet(tpe: Type): Option[Type] = tpe match {
-    case Type.Apply(Type.Cst(TypeConstructor.Enum(sym, _), _), elm, _)
-      if sym.namespace.isEmpty && sym.text == "Set" => Some(elm)
-    case Type.Alias(_, _, inner, _) => unapplySet(inner)
-    case _ => None
-  }
-
-  /** Returns the key and value of the standard library's `Map`, which are converted on return. */
-  @tailrec
-  private def unapplyMap(tpe: Type): Option[(Type, Type)] = tpe match {
-    case Type.Apply(Type.Apply(Type.Cst(TypeConstructor.Enum(sym, _), _), key, _), value, _)
-      if sym.namespace.isEmpty && sym.text == "Map" => Some((key, value))
-    case Type.Alias(_, _, inner, _) => unapplyMap(inner)
-    case _ => None
-  }
-
-  /**
-    * Returns the elements of a tuple type, which are converted individually on return.
-    *
-    * Each element still goes through `isExportableType` on its own, so a tuple nested inside
-    * another converted container, or containing one, is refused: only exact/primitive elements
-    * are admitted by this first slice of tuple export.
-    */
-  private def unapplyTuple(tpe: Type): Option[List[Type]] = tpe match {
-    case Type.Alias(_, _, inner, _) => unapplyTuple(inner)
-    case _ => peelTuple(tpe, Nil)
-  }
-
-  @tailrec
-  private def peelTuple(tpe: Type, args: List[Type]): Option[List[Type]] = tpe match {
-    case Type.Apply(inner, arg, _) => peelTuple(inner, arg :: args)
-    case Type.Cst(TypeConstructor.Tuple(arity), _) if args.lengthIs == arity => Some(args)
-    case _ => None
-  }
-
-  /**
-    * Returns the field types of a closed structural-record type, which are converted
-    * individually on return, the same way and for the same reason a tuple's elements are.
-    *
-    * An open record -- one still carrying a row variable -- fails to peel down to
-    * `RecordRowEmpty` and is refused here rather than exported with a partial field set.
-    */
-  @tailrec
-  private def unapplyRecord(tpe: Type): Option[List[Type]] = tpe match {
-    case Type.Apply(Type.Cst(TypeConstructor.Record, _), row, _) => peelRecordRow(row, Nil)
-    case Type.Alias(_, _, inner, _) => unapplyRecord(inner)
-    case _ => None
-  }
-
-  @tailrec
-  private def peelRecordRow(row: Type, fields: List[Type]): Option[List[Type]] = row match {
-    case Type.Cst(TypeConstructor.RecordRowEmpty, _) => Some(fields)
-    case Type.Apply(Type.Apply(Type.Cst(TypeConstructor.RecordRowExtend(_), _), fieldType, _), rest, _) =>
-      peelRecordRow(rest, fieldType :: fields)
-    case _ => None
-  }
-
-  /**
-    * Returns `true` if `tpe` is a valid Java type that can be exported.
-    *
-    *   - `isExportableType(Int32) = true`
-    *   - `isExportableType(Bool) = true`
-    *   - `isExportableType(String) = true`
-    *   - `isExportableType(List[String]) = false`
-    *   - `isExportableType(java.lang.Object) = true`
-    */
-  private def isExportableType(tpe: Type): Result[Boolean, ErrorOrMalformed.type] = {
-    // TODO: Currently, because of eager erasure, we only allow primitive types and Object.
-    tpe match {
-      case Type.Cst(TypeConstructor.Bool, _) => Result.Ok(true)
-      case Type.Cst(TypeConstructor.Char, _) => Result.Ok(true)
-      case Type.Cst(TypeConstructor.Float32, _) => Result.Ok(true)
-      case Type.Cst(TypeConstructor.Float64, _) => Result.Ok(true)
-      case Type.Cst(TypeConstructor.Int8, _) => Result.Ok(true)
-      case Type.Cst(TypeConstructor.Int16, _) => Result.Ok(true)
-      case Type.Cst(TypeConstructor.Int32, _) => Result.Ok(true)
-      case Type.Cst(TypeConstructor.Int64, _) => Result.Ok(true)
-      case Type.Cst(TypeConstructor.Str, _) => Result.Ok(true)
-      case Type.Cst(TypeConstructor.Native(_, _), _) => Result.Ok(true)
-      case Type.Cst(_, _) => Result.Ok(false)
-      case Type.Apply(tpe1, tpe2, _) =>
-        isExportableType(tpe1).flatMap(head => isExportableType(tpe2).map(head && _))
-      case Type.Alias(_, _, t, _) => isExportableType(t)
-      case Type.Var(_, _) => Result.Err(ErrorOrMalformed)
-      case Type.AssocType(_, _, _, _) => Result.Err(ErrorOrMalformed)
-      case Type.JvmToType(_, _) => Result.Err(ErrorOrMalformed)
-      case Type.JvmToEff(_, _) => Result.Err(ErrorOrMalformed)
-      case Type.UnresolvedJvmType(_, _) => Result.Err(ErrorOrMalformed)
-    }
-  }
-
-  /** Returns a new root where [[TypedAst.Root.entryPoints]] contains all entry points (main/test/export). */
+  /** Returns a new root where [[TypedAst.Root.entryPoints]] contains all entry points (main/test). */
   private def findEntryPoints(root: TypedAst.Root): TypedAst.Root = {
     val s = mutable.Set.empty[Symbol.DefnSym]
     for ((sym, defn) <- root.defs if TypedAstOps.isEntryPoint(defn)(root)) {
@@ -714,20 +366,18 @@ object EntryPoints {
 
   private object SharedContext {
     /** Returns a fresh shared context. */
-    def mk(enumCompanions: Map[List[String], Symbol.EnumSym]): SharedContext = new SharedContext(
+    def mk(): SharedContext = new SharedContext(
       new ConcurrentLinkedQueue(),
-      new AtomicBoolean(false),
-      enumCompanions
+      new AtomicBoolean(false)
     )
   }
 
   /**
     * A global shared context. Must be thread-safe.
     *
-    * @param errors         the [[EntryPointError]]s in the AST, if any.
-    * @param invalidMain    marks the main entrypoint as invalid.
-    * @param enumCompanions the enums some export returns, keyed by their companion namespace.
+    * @param errors      the [[EntryPointError]]s in the AST, if any.
+    * @param invalidMain marks the main entrypoint as invalid.
     */
-  private case class SharedContext(errors: ConcurrentLinkedQueue[EntryPointError], invalidMain: AtomicBoolean, enumCompanions: Map[List[String], Symbol.EnumSym])
+  private case class SharedContext(errors: ConcurrentLinkedQueue[EntryPointError], invalidMain: AtomicBoolean)
 
 }
