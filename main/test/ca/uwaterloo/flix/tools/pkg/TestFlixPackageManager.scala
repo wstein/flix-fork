@@ -126,7 +126,7 @@ class TestFlixPackageManager extends AnyFunSuite with BeforeAndAfter {
     val token = PkgTestUtils.privateRepoTestToken
     val toml = PkgTestUtils.mkTomlWithDeps(
       s"""
-        |"github:${PkgTestUtils.PrivateRepo}" = "0.1.1"
+        |"github:${PkgTestUtils.PrivateRepo}" = { version = "0.1.1", mount = "privatePackage" }
         |""".stripMargin
     )
     val manifest = ManifestParser.parse(toml, ManifestPath) match {
