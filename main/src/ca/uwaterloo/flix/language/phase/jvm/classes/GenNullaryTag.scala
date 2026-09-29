@@ -52,7 +52,8 @@ object GenNullaryTag {
     * `Struct$Obj`.
     */
   def desc(sym: Symbol.CaseSym)(implicit flix: Flix): ClassDesc =
-    mkDesc(sym.enumSym.namespace, Mangle.mkClassName("Case", List(JvmNames.enumName(sym.enumSym), sym.name)))
+    mkDesc(sym.enumSym.namespace, ca.uwaterloo.flix.language.phase.jvm.JvmNameCompaction.compact(
+      Mangle.mkClassName("Case", List(JvmNames.enumName(sym.enumSym), sym.name)), flix.options.xsymbolHashLength))
 
   def genByteCode(sym: Symbol.CaseSym)(implicit flix: Flix): Array[Byte] = {
     val d = desc(sym)
