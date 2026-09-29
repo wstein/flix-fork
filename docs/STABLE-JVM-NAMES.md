@@ -60,7 +60,7 @@ flat primitive-or-`Obj` shape used for enum and struct classes, for example
 
 The grammar escapes identifier bytes before measuring length, and canonicalizes commutative
 effects and row labels the same way as the identity key. Less common forms use an `X` production
-containing the full type key; this is lossless for identity but not yet a human-readable type.
+containing the full type key; the demangler renders its uncommon forms as readable structural types.
 `flix demangle <class-name>` explains uncompacted names and reports that a compacted middle
 cannot be recovered.
 

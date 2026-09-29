@@ -105,9 +105,9 @@ enum case, under different prefixes (`Def$`, `Clo$` against `Case$`).
 Length-prefixed names and explicit `I ... E` / `N ... E` brackets make the grammar injective.
 Source-name bytes outside ASCII letters, digits, and `_` are written as `$hh` before counting;
 this prevents the subsequent JVM-name escape pass from invalidating a length frame. The `X`
-production keeps the entire canonical type key, not a truncated digest, so it remains injective
-while its demangled display is currently opaque. `flix demangle` prints the readable productions
-and explicitly reports a compacted name whose discarded middle cannot be recovered.
+production keeps the entire canonical type key, not a truncated digest, so it remains injective.
+`flix demangle` decodes that versioned key to a readable structural type, prints the other
+readable productions, and reports when compaction has discarded an unrecoverable middle.
 Builtins are spelled as words rather than Itanium's letters, because readability is the point;
 they cannot be confused with a source name, which always starts with its length. A record's fields
 are spelled in label order, a function type as its parameter and result types, and an effect
@@ -168,8 +168,8 @@ its own parameter instead of the value zero.
 ## Consequences
 
 - **Readable for common specializations.** Stack traces, profilers, and the debugger show the
-  common type arguments. An `X` fallback retains identity but still displays an opaque key;
-  `flix demangle` recovers readable types only outside that fallback and compaction.
+  common type arguments. An `X` fallback retains identity and can be rendered from its
+  versioned structural key; only compaction prevents recovery.
 - **Still stable.** A spelling is a pure function of the specialization -- no counter, schedule,
   or unrelated edit changes it. Renaming a type renames the specializations at it, which is what a
   reader expects.
@@ -207,5 +207,5 @@ Java source cannot name.
 - **The limit's unit: settled.** Count the UTF-8 bytes of the simple class filename plus `.class`.
 - **Substitution numbering: settled.** Number complete type components in depth-first postorder,
   from zero; `S_` refers to zero and `S0_` to one. Golden vectors pin the traversal.
-- **`flix demangle`: in progress.** Uncompacted names can be parsed. Compaction deliberately
+- **`flix demangle`: implemented for uncompacted names.** Compaction deliberately
   discards a middle span, so a demangler must report that it cannot recover it.
