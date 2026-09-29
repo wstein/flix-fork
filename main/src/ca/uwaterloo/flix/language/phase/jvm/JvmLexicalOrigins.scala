@@ -11,10 +11,18 @@ import scala.collection.mutable
 
 /** Temporary, declaration-local identity lookup. Release after copying origins to generated symbols. */
 final class JvmLexicalOrigins private (private val origins: IdentityHashMap[Expr, GeneratedJvmKey],
+                                       private val readablePaths: IdentityHashMap[Expr, List[String]],
                                        val entries: List[(Expr, GeneratedJvmKey)],
                                        val allEntries: List[(Expr, GeneratedJvmKey)],
                                        private[jvm] val fingerprintEvaluations: Long) {
   def get(exp: Expr): Option[GeneratedJvmKey] = Option(origins.get(exp))
+
+  /**
+    * Returns the readable path of the lambda, local definition, or anonymous class `exp` below its
+    * definition: its enclosing `let` binders, local definitions, and methods, then its own name or
+    * source-order ordinal among its kind in that scope. See [[JvmReadableOrigin]].
+    */
+  def readablePath(exp: Expr): Option[List[String]] = Option(readablePaths.get(exp))
 
   def originOf(exp: Expr): GeneratedJvmKey = get(exp).getOrElse {
     throw InternalCompilerException("Missing lexical JVM origin.", exp.loc)
@@ -62,6 +70,11 @@ object JvmLexicalOrigins {
     private val ordered = mutable.ListBuffer.empty[(Expr, GeneratedJvmKey)]
     private val all = mutable.ListBuffer.empty[(Expr, GeneratedJvmKey)]
     private val groups = mutable.Map.empty[(String, String, String), Int]
+    // Readable paths, beside the hashed scopes: a scope's path, a counter per scope and kind for
+    // the ordinal of each lambda or anonymous class in source order, and each record's path.
+    private val readableScopes = mutable.Map.empty[String, List[String]]
+    private val readableOrdinals = mutable.Map.empty[(String, String), Int]
+    private val readablePaths = new IdentityHashMap[Expr, List[String]]()
     private val fingerprints = new IdentityHashMap[Env, IdentityHashMap[Expr, mutable.Map[Int, String]]]()
     private var fingerprintEvaluations = 0L
 
@@ -69,8 +82,10 @@ object JvmLexicalOrigins {
       val env = Env(fparams.zipWithIndex.map { case (param, index) =>
         param.bnd.sym -> frame("parameter", List(index.toString))
       }.toMap, Map.empty)
-      visit(exp, env, frame(owner.family, owner.fields), "body", isRoot = true)
-      new JvmLexicalOrigins(origins, ordered.toList, all.toList, fingerprintEvaluations)
+      val root = frame(owner.family, owner.fields)
+      readableScopes(root) = Nil
+      visit(exp, env, root, "body", isRoot = true)
+      new JvmLexicalOrigins(origins, readablePaths, ordered.toList, all.toList, fingerprintEvaluations)
     }
 
     private def symbol(sym: Symbol): String = {
@@ -122,7 +137,10 @@ object JvmLexicalOrigins {
       val methods = obj.methods.map { entry =>
         val methodScope = context match {
           case AlphaBinding(_) => context.scope
-          case SiteBinding(site) => frame("method", List(site, entry.ident.name, parameters(entry.fparams.toList, env)))
+          case SiteBinding(site) =>
+            val scope = frame("method", List(site, entry.ident.name, parameters(entry.fparams.toList, env)))
+            readableScopes.get(site).foreach(path => readableScopes(scope) = path :+ entry.ident.name)
+            scope
         }
         method(entry, bind(entry.fparams.toList, env, methodScope), methodScope)
       }
@@ -136,14 +154,28 @@ object JvmLexicalOrigins {
       frame("site", List(scope, role, fingerprint, ordinal.toString))
     }
 
-    private def record(exp: Expr, scope: String, role: String, kind: String, fingerprint: String): String = {
+    /**
+      * Records `exp`'s key, and its readable path below `scope`: `name` if it has one, or its
+      * source-order ordinal among its `kind` in `scope` otherwise.
+      */
+    private def record(exp: Expr, scope: String, role: String, kind: String, fingerprint: String, name: Option[String]): String = {
       val site = identity(scope, role, fingerprint)
       val key = GeneratedJvmKey("lexical-" + kind, List(site))
       if (origins.containsKey(exp)) fail("Repeated AST identity in lexical capture.", exp)
       origins.put(exp, key)
       ordered += ((exp, key))
       all += ((exp, key))
-      frame(key.family, key.fields)
+      val body = frame(key.family, key.fields)
+      readableScopes.get(scope).foreach { parent =>
+        val segment = name.getOrElse {
+          val ordinal = readableOrdinals.getOrElse((scope, kind), 0)
+          readableOrdinals((scope, kind)) = ordinal + 1
+          ordinal.toString
+        }
+        readablePaths.put(exp, parent :+ segment)
+        readableScopes(body) = parent :+ segment
+      }
+      body
     }
 
     private def visit(exp: Expr, env: Env, scope: String, role: String, isRoot: Boolean = false): Unit = {
@@ -158,16 +190,17 @@ object JvmLexicalOrigins {
       }
       exp match {
         case lambda: Expr.Lambda =>
-          val site = record(exp, scope, role, "lambda", fingerprint(exp, env, 0))
+          val site = record(exp, scope, role, "lambda", fingerprint(exp, env, 0), None)
           mapLambdaBody(lambda, env, SiteBinding(site)) { (_, body, inner) => visit(body, inner, site, "body") }
         case local: Expr.LocalDef =>
-          val site = record(exp, scope, role, "local-def", localFingerprint(local, env, 0))
+          val site = record(exp, scope, role, "local-def", localFingerprint(local, env, 0), Some(local.bnd.sym.text))
           mapLocalDefBodies(local, env, SiteBinding(site))(
             (_, body, inner) => visit(body, inner, site, "body"),
             (rest, recursive) => visit(rest, recursive(), scope, role))
           ()
         case Expr.Let(binder, value, rest, _, _, _) =>
           val binding = identity(scope, "let:" + role, fingerprint(value, env, 0))
+          readableScopes.get(scope).foreach(path => readableScopes(binding) = path :+ binder.sym.text)
           val site = if (isRoot) frame("root", List(scope, role)) else frame("let-expression", List(binding))
           val key = GeneratedJvmKey("lexical-expression", List(site))
           if (origins.containsKey(exp)) fail("Repeated AST identity in lexical capture.", exp)
@@ -176,7 +209,7 @@ object JvmLexicalOrigins {
           visit(value, env, binding, "value")
           visit(rest, env + (binder.sym -> binding), scope, role)
         case obj: Expr.NewObject =>
-          val site = record(exp, scope, role, "anonymous-class", fingerprint(exp, env, 0))
+          val site = record(exp, scope, role, "anonymous-class", fingerprint(exp, env, 0), None)
           mapObjectBodies(obj, env, SiteBinding(site))(
             (constructor, inner) => visit(constructor.exp, inner, site, "constructor"),
             (method, inner, methodScope) => visit(method.exp, inner, methodScope, "body"))
