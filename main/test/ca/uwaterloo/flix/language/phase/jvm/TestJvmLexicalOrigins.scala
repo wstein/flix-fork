@@ -3,7 +3,7 @@ package ca.uwaterloo.flix.language.phase.jvm
 import ca.uwaterloo.flix.api.Flix
 import ca.uwaterloo.flix.TestUtils
 import ca.uwaterloo.flix.api.CompilerConstants
-import ca.uwaterloo.flix.language.ast.{SemanticOp, TypedAst}
+import ca.uwaterloo.flix.language.ast.{SemanticOp, Symbol, TypedAst}
 import ca.uwaterloo.flix.util.{InternalCompilerException, Options}
 import org.scalatest.funsuite.AnyFunSuite
 
@@ -26,6 +26,25 @@ class TestJvmLexicalOrigins extends AnyFunSuite with TestUtils {
   }
 
   private def keys(source: String): List[GeneratedJvmKey] = capture(source).entries.map(_._2)
+
+  test("generated let names do not enter readable lambda paths") {
+    val root = checked("def example(): Int32 = { let kept = (x: Int32) -> x; kept(1) }")
+    val decl = root.defs.values.find(_.sym.name == "example").get
+    val let = decl.exp.asInstanceOf[TypedAst.Expr.Let]
+    val lambda = let.exp1.asInstanceOf[TypedAst.Expr.Lambda]
+
+    def path(name: String): List[String] = {
+      val sym = let.bnd.sym
+      val generated = new Symbol.VarSym(sym.id, name, sym.tvar, sym.boundBy, sym.loc)
+      val renamed = let.copy(bnd = let.bnd.copy(sym = generated))
+      val modified = root.copy(defs = root.defs.updated(decl.sym, decl.copy(exp = renamed)))
+      JvmSourceOrigins.capture(modified).body(decl.sym).readablePath(lambda).get
+    }
+
+    assert(path("kept") == List("kept", "0"))
+    assert(path("kept$arg$42") == List("0", "0"))
+    assert(path("kept$arg$62948") == path("kept$arg$42"))
+  }
 
   private def characterization(origins: JvmLexicalOrigins): List[String] = {
     def entry(prefix: String, exp: TypedAst.Expr, key: GeneratedJvmKey): String =
