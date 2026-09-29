@@ -126,7 +126,7 @@ object CliContract {
             // handshake exists to have already said no.
             ("capabilities" ->
               ("diagnostics" -> true) ~
-                ("exportStubs" -> true) ~
+                ("exportStubs" -> false) ~
                 ("explicitLibraries" -> true) ~
                 ("daemon" -> false)))
     }

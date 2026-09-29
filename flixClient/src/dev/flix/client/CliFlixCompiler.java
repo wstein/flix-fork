@@ -99,14 +99,6 @@ public final class CliFlixCompiler implements FlixCompiler {
         return compile(projectDirectory, "build", libraries);
     }
 
-    @Override
-    public FlixResult stubs(Path projectDirectory, Path destination) {
-        FlixProcessRunner.Result invocation = run(projectDirectory, List.of("stubs", "--out", destination.toString()));
-        // `stubs` reports refusals on stderr rather than as a document, so there is nothing to
-        // parse. The exit status is the whole result.
-        return new FlixResult(invocation.status() == 0, List.of());
-    }
-
     private FlixResult compile(Path projectDirectory, String action, List<Path> libraries) {
         List<String> arguments = new ArrayList<>();
         arguments.add(action);

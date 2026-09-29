@@ -883,10 +883,7 @@ class Flix(pkgs: List[InstalledPackage] = Nil, jars: List[Path] = Nil, mounts: M
     * [[threadPool]] directly, so without this such a caller fails with a null pool rather than with
     * anything that names the cause.
     *
-    * There is a real use for running only part of the pipeline: deriving a project's `@Export`
-    * signatures needs the front end as far as the weeder and must work on a program the resolver
-    * would reject, which is exactly the program whose Java counterpart has not been generated yet.
-    * See `ExportStubs`.
+    * Callers running individual phases must still initialize the compiler's thread pool.
     */
   def withThreadPool[A](f: => A): A = {
     initThreadPool()

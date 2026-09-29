@@ -65,7 +65,7 @@ class TestCliContract extends AnyFunSuite {
     val (_, document) = CliContract.describe(None)
     val capabilities = field(document, "capabilities").getOrElse(fail("no capabilities reported"))
     assertResult(Some(JBool(true)))(field(capabilities, "diagnostics"))
-    assertResult(Some(JBool(true)))(field(capabilities, "exportStubs"))
+    assertResult(Some(JBool(false)))(field(capabilities, "exportStubs"))
     assertResult(Some(JBool(false)))(field(capabilities, "daemon"))
   }
 

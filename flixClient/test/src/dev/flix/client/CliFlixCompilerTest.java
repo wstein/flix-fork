@@ -173,21 +173,6 @@ class CliFlixCompilerTest {
     }
 
     @Test
-    void stubGenerationReportsItsOutcomeAndStartsNoParse() {
-        // `stubs` writes no document, so a reader that insisted on one would fail every successful
-        // run. The exit status is the whole result.
-        Canned runner = new Canned(0, "");
-        FlixResult result = new CliFlixCompiler(Path.of("java"), Path.of("flix.jar"), runner)
-                .stubs(Path.of("/w"), Path.of("/w/build/stubs"));
-
-        assertTrue(result.success());
-        assertTrue(result.diagnostics().isEmpty());
-        assertEquals(
-                List.of("java", "-jar", "flix.jar", "stubs", "--out", "/w/build/stubs"),
-                runner.seen().get(0));
-    }
-
-    @Test
     void defaultLauncherUsesThePlatformJavaExecutable() {
         Canned runner = new Canned(0, """
                 {"protocolVersion": 1, "minimumClientVersion": 1,

@@ -19,7 +19,7 @@ package ca.uwaterloo.flix
 import ca.uwaterloo.flix.api.lsp.{LspServer, VSCodeLspServer, FormatterLsp as LspFormatter}
 import ca.uwaterloo.flix.api.{Bootstrap, BootstrapError, CliContract, Flix, Version}
 import ca.uwaterloo.flix.language.CompilationMessage
-import ca.uwaterloo.flix.language.ast.shared.{Origin, SecurityContext, Source, SourceName}
+import ca.uwaterloo.flix.language.ast.shared.{Origin, SecurityContext}
 import ca.uwaterloo.flix.language.ast.{Symbol, TypedAst}
 import ca.uwaterloo.flix.language.phase.HtmlDocumentor
 import ca.uwaterloo.flix.language.phase.unification.zhegalkin.ZhegalkinPerf
@@ -241,45 +241,6 @@ object Main {
           val (compatible, document) = CliContract.describe(cmdOpts.clientContractVersion)
           Console.out.println(JsonMethods.pretty(JsonMethods.render(document)))
           System.exit(if (compatible) 0 else 1)
-
-        case Command.Stubs =>
-          // Pass 0 of joint compilation. It exists to run *before* anything is compiled, on a
-          // program that cannot yet compile: a Flix module calling a Java class that does not
-          // exist because that class calls back into this module. So it must not bootstrap the
-          // project or resolve dependencies -- it reads sources and nothing else.
-          val destination = Paths.get(cmdOpts.stubsOut.getOrElse("build/stubs"))
-          val sources = stubSourcePaths(cwd, cmdOpts.files) match {
-            case Result.Ok(paths) => paths
-            case Result.Err(message) =>
-              Console.err.println(message)
-              System.exit(1)
-              Nil
-          }
-
-          implicit val sctx: SecurityContext = SecurityContext.Unrestricted
-          implicit val flix: Flix = new Flix().setFormatter(formatter).setOptions(options)
-          val inputs = sources.map { path =>
-            Source.fromString(SourceName.PathName(path), Origin.User, sctx, Files.readString(path))
-          }
-          val (facades, unsupported) = ExportStubs.run(inputs)
-
-          if (unsupported.nonEmpty) {
-            // Refusing is the conservative outcome, not the convenient one: a wrong stub compiles,
-            // and the caller meets the mistake as a linkage error at run time.
-            Console.err.println("Cannot describe these exported defs in Java:")
-            for (u <- unsupported) Console.err.println(s"  ${u.loc.format}: ${u.name} -- ${u.reason}")
-            Console.err.println("Import the Java types they name, or give them a type that can cross the boundary.")
-            System.exit(1)
-          }
-
-          ExportStubs.write(facades, destination) match {
-            case Result.Ok(_) =>
-              println(s"Wrote ${facades.length} stub(s) to $destination")
-              System.exit(0)
-            case Result.Err(error) =>
-              Console.err.println(error.message)
-              System.exit(1)
-          }
 
         case Command.Check =>
           if (cmdOpts.files.nonEmpty && cmdOpts.jsonDiagnostics) {
@@ -614,7 +575,6 @@ object Main {
     */
   case class CmdOpts(
     command: Command = Command.None,
-                     stubsOut: Option[String] = None,
                      libs: Seq[String] = Seq.empty,
                      jsonDiagnostics: Boolean = false,
                      clientContractVersion: Option[Int] = None,
@@ -682,8 +642,6 @@ object Main {
     case object Doc extends Command
 
     case object Format extends Command
-
-    case object Stubs extends Command
 
     case object Capabilities extends Command
 
@@ -767,11 +725,6 @@ object Main {
       cmd("capabilities").action((_, c) => c.copy(command = Command.Capabilities)).text("  reports the tooling contract this compiler speaks.").children(
         opt[Int]("contract-version").action((arg, c) => c.copy(clientContractVersion = Some(arg))).
           text("the contract version the caller speaks. Exits non-zero if it cannot be served."),
-      )
-
-      cmd("stubs").action((_, c) => c.copy(command = Command.Stubs)).text("  writes compile-only Java stubs for the @Export-ed defs.").children(
-        opt[String]("out").action((arg, c) => c.copy(stubsOut = Some(arg))).
-          text("where to write the stubs. Defaults to 'build/stubs'."),
       )
 
       cmd("build").action((_, c) => c.copy(command = Command.Build)).text("  builds (i.e. compiles) the current project.").children(
@@ -1070,20 +1023,6 @@ object Main {
     if (errors.isEmpty) Result.Ok(())
     else Result.Err(BootstrapError.CompilationErrors(errors, optRoot))
   }
-
-  /** Returns the explicit stub inputs, or discovers project sources with a useful missing-root error. */
-  private[flix] def stubSourcePaths(cwd: Path, files: Seq[File]): Result[List[Path], String] = {
-    if (files.nonEmpty) {
-      Result.Ok(files.toList.map(_.toPath))
-    } else {
-      val sourceDirectory = cwd.resolve("src")
-      if (!Files.isDirectory(sourceDirectory))
-        Result.Err(s"Cannot generate stubs: source directory does not exist: $sourceDirectory")
-      else
-        Result.Ok(FileOps.getFilesWithExtIn(sourceDirectory, "flix", Int.MaxValue))
-    }
-  }
-
 
   private def mkFlixWithFiles(files: Seq[File], options: Options, jars: List[Path])(implicit formatter: Formatter): Flix = {
     val flix = new Flix(jars = jars).setFormatter(formatter)
