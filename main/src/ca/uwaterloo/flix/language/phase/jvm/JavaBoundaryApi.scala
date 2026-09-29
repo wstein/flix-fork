@@ -72,6 +72,10 @@ object JavaBoundaryApi {
     } yield Method(member, defn, args, ret, nullary)
   }
 
+  /** Shared fail-closed representation check for generated wrapper signatures. */
+  private[flix] def validateBoundaryType(tpe: Type): Result[Unit, Error] =
+    if (tpe == Type.Unit) Ok(()) else javaType(tpe, false).map(_ => ())
+
   /** Java type arguments must already be boxed. Never silently erase unsupported types to Object. */
   private def javaType(tpe: Type, argument: Boolean): Result[JavaType, Error] = tpe match {
     case Type.Alias(_, _, expanded, _) => javaType(expanded, argument)

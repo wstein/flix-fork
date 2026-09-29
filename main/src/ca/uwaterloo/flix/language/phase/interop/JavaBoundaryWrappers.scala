@@ -1,0 +1,180 @@
+/*
+ * Copyright 2026 Werner Stein
+ *
+ * Use of this source code is governed by the Apache 2.0 license
+ * that can be found in the LICENSE.md file.
+ */
+
+package ca.uwaterloo.flix.language.phase.interop
+
+import ca.uwaterloo.flix.api.Flix
+import ca.uwaterloo.flix.language.CompilationMessage
+import ca.uwaterloo.flix.language.ast.{SourceLocation, Symbol, Type, TypeConstructor, TypedAst}
+import ca.uwaterloo.flix.language.ast.shared.{SecurityContext, SourceName}
+import ca.uwaterloo.flix.language.phase.jvm.JavaBoundaryApi
+import ca.uwaterloo.flix.language.phase.typer.ConstraintSolver2
+import ca.uwaterloo.flix.language.phase.unification.EqualityEnv
+import ca.uwaterloo.flix.runtime.CompilationResult
+import ca.uwaterloo.flix.util.Result
+import ca.uwaterloo.flix.util.Result.{Err, Ok}
+
+import java.lang.constant.ClassDesc
+import java.net.URI
+import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
+import javax.lang.model.SourceVersion
+import scala.collection.mutable
+
+/** Opt-in two-pass wrapper orchestration. No surface associated-type rule is relaxed. */
+object JavaBoundaryWrappers {
+  case class Member(name: String, target: Symbol.DefnSym, loc: SourceLocation)
+  case class Declaration(className: String, members: List[Member])
+  case class Traits(result: Symbol.TraitSym, argument: Symbol.TraitSym)
+  case class Output(compilation: CompilationResult, plan: JavaBoundaryApi.Plan)
+  sealed trait Error { def loc: SourceLocation }
+  case class Invalid(message: String, loc: SourceLocation) extends Error
+  case class InputErrors(messages: List[CompilationMessage], loc: SourceLocation) extends Error
+  case class WrapperErrors(messages: List[CompilationMessage], loc: SourceLocation) extends Error
+  case class BoundaryError(cause: BoundaryTypeElaborator.Error, loc: SourceLocation) extends Error
+  case class FacadeError(cause: JavaBoundaryApi.Error) extends Error { def loc: SourceLocation = cause.loc }
+  private case class Conversion(tpe: Type, eff: Type, call: Option[String])
+  private case class Wrapper(member: Member, name: String, args: List[Conversion], result: Conversion, eff: Type)
+
+  /** Checks caller sources, derives wrappers from validated instances, rechecks, and emits a facade. */
+  def compile(flix: Flix, api: Declaration, traits: Traits, sctx: SecurityContext): Result[Output, Error] = {
+    implicit val compiler: Flix = flix
+    val checked = flix.check()
+    if (checked._2.nonEmpty) return Err(InputErrors(checked._2, checked._2.head.loc))
+    val root = checked._1.get
+    val digest = MessageDigest.getInstance("SHA-256").digest(api.className.getBytes(StandardCharsets.UTF_8))
+      .map(byte => f"${byte & 0xff}%02x").mkString
+    val module = "BoundaryGenerated" + digest
+    val uri = URI.create(s"flix-boundary:/$module.flix")
+    if (root.modules.keys.exists(_.ns == List(module)) || root.sources.keys.exists(_.sourceName == SourceName.UriName(uri)))
+      return Err(Invalid("The generated boundary module or source name is already owned by the caller.", SourceLocation.Unknown))
+    if (!SourceVersion.isName(api.className) || api.className.startsWith("java.") || api.className.startsWith("dev.flix.") ||
+        api.members.isEmpty || api.members.map(_.name).distinct.size != api.members.size)
+      return Err(Invalid("Expected a non-reserved Java class name and distinct API member names.", SourceLocation.Unknown))
+    Result.traverse(api.members.zipWithIndex) { case (member, index) =>
+      generateWrapper(member, s"w$index", traits, root)
+    }.flatMap { wrappers =>
+      val renderer = new Renderer
+      val definitions = wrappers.map { wrapper =>
+        val params = wrapper.args.zipWithIndex.map { case (arg, index) => s"p$index: ${renderer.render(arg.tpe)}" }
+        val arguments = wrapper.args.zipWithIndex.map { case (arg, index) => arg.call.fold(s"p$index")(name => s"$name(p$index)") }
+        val target = (wrapper.member.target.namespace :+ wrapper.member.target.text).mkString(".")
+        val call = arguments.mkString(s"$target(", ", ", ")")
+        val body = wrapper.result.call.fold(call)(name => s"$name($call)")
+        val result = renderer.render(wrapper.result.tpe)
+        val effect = if (isPure(wrapper.eff)) "" else " \\ IO"
+        s"    pub def ${wrapper.name}${params.mkString("(", ", ", ")")}: $result$effect = $body"
+      }
+      val imports = renderer.imports
+      val source = (List(s"pub mod $module {") ++ imports ++ definitions ++ List("}")).mkString("\n")
+      flix.addSource(uri, source, sctx)
+      try {
+        val augmented = flix.check()
+        if (augmented._2.nonEmpty) {
+          val diagnostic = augmented._2.head
+          val index = diagnostic.loc.startLine - imports.size - 2
+          val loc = if (diagnostic.source.sourceName != SourceName.UriName(uri)) diagnostic.loc
+          else if (index >= 0 && index < wrappers.size) wrappers(index).member.loc
+          else wrappers.head.member.loc
+          Err(WrapperErrors(augmented._2, loc))
+        } else {
+          val typed = augmented._1.get
+          val members = wrappers.map { wrapper =>
+            val sym = typed.defs.keys.find(sym => sym.namespace == List(module) && sym.text == wrapper.name).get
+            JavaBoundaryApi.Member(wrapper.member.name, sym)
+          }
+          val declaration = JavaBoundaryApi.Declaration(api.className, members)
+          for {
+            plan <- JavaBoundaryApi.prepare(declaration, typed).mapErr(FacadeError.apply)
+            compiled <- flix.codeGenWithJavaApi(typed, declaration).mapErr(FacadeError.apply)
+          } yield Output(compiled, plan)
+        }
+      } finally flix.remSource(uri)
+    }
+  }
+
+  private def generateWrapper(member: Member, name: String, traits: Traits,
+                              root: TypedAst.Root)(implicit flix: Flix): Result[Wrapper, Error] = {
+    root.defs.get(member.target) match {
+      case None => Err(Invalid("Unknown API target.", member.loc))
+      case Some(defn) =>
+        val spec = defn.spec
+        if (!spec.mod.isPublic || spec.tparams.nonEmpty || spec.tconstrs.nonEmpty || spec.econstrs.nonEmpty)
+          return Err(Invalid("API targets must be public, monomorphic, and unconstrained.", member.loc))
+        if (!member.target.text.matches("[A-Za-z_][A-Za-z0-9_]*") || !SourceVersion.isIdentifier(member.name) || SourceVersion.isKeyword(member.name))
+          return Err(Invalid("This prototype requires an ordinary function name and a valid Java member name.", member.loc))
+        val params = spec.fparams.toList.map(_.tpe)
+        for {
+          args <- Result.traverse(if (params == List(Type.Unit)) Nil else params)(conversion(_, traits.argument, "In", "toFlix", root, member.loc))
+          result <- conversion(spec.retTpe, traits.result, "Out", "toJava", root, member.loc)
+          eff = (args.map(_.eff) :+ result.eff).foldLeft(spec.eff)((left, right) => Type.mkUnion(left, right, member.loc))
+          wrapper <- if (isPure(eff) || ConstraintSolver2.isEquivalent(eff, Type.IO)(EqualityEnv.empty, flix))
+            Ok(Wrapper(member, name, args, result, eff))
+          else Err(Invalid("Only Pure/IO target and conversion effects are supported in this slice.", member.loc))
+        } yield wrapper
+    }
+  }
+
+  private def conversion(tpe: Type, trt: Symbol.TraitSym, associated: String, method: String,
+                         root: TypedAst.Root, loc: SourceLocation)(implicit flix: Flix): Result[Conversion, Error] = tpe match {
+    case Type.Alias(_, _, expanded, _) => conversion(expanded, trt, associated, method, root, loc)
+    case _ if tpe.typeConstructors.exists {
+      case TypeConstructor.Array | TypeConstructor.ArrayWithoutRegion | _: TypeConstructor.Struct => true
+      case _ => false
+    } => Err(Invalid("Region-bound arrays and mutable structs cannot cross the boundary.", loc))
+    case _ if isDirect(tpe) => JavaBoundaryApi.validateBoundaryType(tpe)
+      .mapErr(cause => Invalid(cause.message, loc)).map(_ => Conversion(tpe, Type.Pure, None))
+    case _ =>
+      val out = new Symbol.AssocTypeSym(trt, associated, loc)
+      val effect = new Symbol.AssocTypeSym(trt, "Aef", loc)
+      for {
+        result <- BoundaryTypeElaborator.elaborate(out, tpe, root).mapErr(BoundaryError(_, loc))
+        _ <- JavaBoundaryApi.validateBoundaryType(result).mapErr(cause => Invalid(cause.message, loc))
+        eff <- BoundaryTypeElaborator.elaborate(effect, tpe, root).mapErr(BoundaryError(_, loc))
+      } yield Conversion(result, eff, Some((trt.namespace :+ trt.name :+ method).mkString(".")))
+  }
+
+  private def isDirect(tpe: Type): Boolean = tpe.baseType match {
+    case Type.Cst(TypeConstructor.Unit | TypeConstructor.Bool | TypeConstructor.Char | TypeConstructor.Int8 |
+      TypeConstructor.Int16 | TypeConstructor.Int32 | TypeConstructor.Int64 | TypeConstructor.Float32 |
+      TypeConstructor.Float64 | TypeConstructor.Str | _: TypeConstructor.Native, _) => true
+    case _ => false
+  }
+
+  private def isPure(tpe: Type)(implicit flix: Flix): Boolean = ConstraintSolver2.isEquivalent(tpe, Type.Pure)(EqualityEnv.empty, flix)
+
+  /** Renders only validated concrete types. Conversion selection is exclusively instance-driven. */
+  private class Renderer {
+    private val natives = mutable.LinkedHashMap.empty[ClassDesc, String]
+    def imports: List[String] = natives.iterator.map { case (desc, alias) =>
+      val name = desc.descriptorString().drop(1).dropRight(1).replace('/', '.')
+      val dot = name.lastIndexOf('.')
+      if (dot < 0) s"    import $name as $alias"
+      else s"    import ${name.take(dot)}.{${name.drop(dot + 1)} => $alias}"
+    }.toList
+    def render(tpe: Type): String = tpe match {
+      case Type.Alias(_, _, expanded, _) => render(expanded)
+      case _ => tpe.baseType match {
+        case Type.Cst(TypeConstructor.Native(desc, _), _) =>
+          val name = natives.getOrElseUpdate(desc, s"BoundaryNative${natives.size}")
+          val args = tpe.typeArguments.map(render)
+          if (args.isEmpty) name else args.mkString(s"$name[", ", ", "]")
+        case Type.Cst(TypeConstructor.Unit, _) => "Unit"
+        case Type.Cst(TypeConstructor.Bool, _) => "Bool"
+        case Type.Cst(TypeConstructor.Char, _) => "Char"
+        case Type.Cst(TypeConstructor.Int8, _) => "Int8"
+        case Type.Cst(TypeConstructor.Int16, _) => "Int16"
+        case Type.Cst(TypeConstructor.Int32, _) => "Int32"
+        case Type.Cst(TypeConstructor.Int64, _) => "Int64"
+        case Type.Cst(TypeConstructor.Float32, _) => "Float32"
+        case Type.Cst(TypeConstructor.Float64, _) => "Float64"
+        case Type.Cst(TypeConstructor.Str, _) => "String"
+        case _ => throw new IllegalStateException("A validated boundary type has no source renderer.")
+      }
+    }
+  }
+}
