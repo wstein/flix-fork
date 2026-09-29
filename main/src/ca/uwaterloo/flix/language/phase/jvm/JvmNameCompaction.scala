@@ -9,6 +9,9 @@ object JvmNameCompaction {
   private val Extension = ".class"
   private val Separator = "$$$$"
 
+  def effectiveWidth(configured: Int, mode: JvmNameTable.Mode): Int =
+    if (mode == JvmNameTable.Mode.Counter) JvmNameTable.DefaultWidth else configured
+
   /** The namespace is a directory path, so only the simple class name and `.class` count. */
   def compact(name: String, hashWidth: Int): String = {
     if (bytes(name) + bytes(Extension) <= MaxFileNameBytes) return name

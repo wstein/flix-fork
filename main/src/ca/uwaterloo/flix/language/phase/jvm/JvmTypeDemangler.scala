@@ -1,5 +1,6 @@
 package ca.uwaterloo.flix.language.phase.jvm
 
+import java.io.ByteArrayOutputStream
 import java.nio.charset.StandardCharsets
 import scala.collection.mutable
 
@@ -62,8 +63,20 @@ object JvmTypeDemangler {
     private def framed(): String = {
       val length = number()
       if (length < 0 || offset + length > data.length) throw new IllegalArgumentException
-      val result = new String(data, offset, length, StandardCharsets.UTF_8)
-      offset += length
+      val end = offset + length
+      val decoded = new ByteArrayOutputStream()
+      while (offset < end) {
+        if (data(offset) == '$') {
+          if (offset + 2 >= end) throw new IllegalArgumentException
+          val digits = new String(data, offset + 1, 2, StandardCharsets.US_ASCII)
+          decoded.write(Integer.parseInt(digits, 16))
+          offset += 3
+        } else {
+          decoded.write(data(offset) & 0xff)
+          offset += 1
+        }
+      }
+      val result = new String(decoded.toByteArray, StandardCharsets.UTF_8)
       result
     }
 
@@ -86,12 +99,7 @@ object JvmTypeDemangler {
       }
       val base = current match {
         case c if c >= '0' && c <= '9' => framed()
-        case 'N' =>
-          offset += 1
-          val names = mutable.ListBuffer.empty[String]
-          while (current != 'E') names += framed()
-          offset += 1
-          names.mkString(".")
+        case 'N' => qualified()
         case 'F' | 'W' | 'T' | 'R' | 'L' =>
           val kind = current
           offset += 1
@@ -100,12 +108,32 @@ object JvmTypeDemangler {
           Map('F' -> "Arrow", 'W' -> "ArrowWithoutEffect", 'T' -> "Tuple", 'R' -> "Relation", 'L' -> "Lattice")(kind) + arity
         case 'Q' =>
           offset += 1
-          "effect " + tpe()
+          "effect " + (if (current == 'N') qualified() else framed())
+        case 'O' =>
+          offset += 1
+          framed()
+        case 'B' | 'H' =>
+          val kind = if (current == 'B') "RecordRow" else "SchemaRow"
+          offset += 1
+          take('I')
+          val fields = mutable.ListBuffer.empty[String]
+          while (current == 'Y') {
+            offset += 1
+            val label = framed()
+            fields += label + ": " + tpe()
+          }
+          take('Z')
+          val tail = tpe()
+          take('E')
+          kind + fields.mkString("{", ", ", " | " + tail + "}")
         case 'J' | 'G' | 'X' =>
           val kind = current
           offset += 1
-          val encoded = framed()
-          if (kind == 'J') "Java(" + unhex(encoded) + ")" else if (kind == 'G') "generated(" + encoded + ")" else "opaque(" + encoded + ")"
+          if (kind == 'J' && current == 'N') "Java(" + qualified() + ")"
+          else {
+            val encoded = framed()
+            if (kind == 'J') "Java(" + unhex(encoded) + ")" else if (kind == 'G') "generated(" + encoded + ")" else "opaque(" + encoded + ")"
+          }
         case 'K' =>
           offset += 1
           val kind = framed()
@@ -123,6 +151,14 @@ object JvmTypeDemangler {
       if (value.length % 2 != 0) throw new IllegalArgumentException
       val decoded = value.grouped(2).map(Integer.parseInt(_, 16).toByte).toArray
       new String(decoded, StandardCharsets.UTF_8)
+    }
+
+    private def qualified(): String = {
+      take('N')
+      val names = mutable.ListBuffer.empty[String]
+      while (current != 'E') names += framed()
+      offset += 1
+      names.mkString(".")
     }
   }
 }

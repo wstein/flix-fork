@@ -171,7 +171,14 @@ object CodeGen {
     val duplicates = allClasses.groupBy(_.name).collect { case (name, classes) if classes.length > 1 => name }
     if (duplicates.nonEmpty) {
       val names = duplicates.map(ClassDescs.internalNameOf).mkString(", ")
-      throw InternalCompilerException(s"Duplicate JVM class names: $names", SourceLocation.Unknown)
+      val compacted = duplicates.exists(name => ClassDescs.internalNameOf(name).contains("$$$$"))
+      val advice = if (compacted && flix.options.xsymbolNames == JvmNameTable.Mode.Counter)
+        " A compacted counter-mode name collided; inspect the generated class names."
+      else if (compacted && flix.options.xsymbolHashLength < JvmNameTable.MaxWidth)
+        s" A compacted-name hash collided; increase --Xsymbol-hash-length above ${flix.options.xsymbolHashLength}."
+      else if (compacted) " A compacted-name hash collided at the maximum width; inspect the naming provenance."
+      else ""
+      throw InternalCompilerException(s"Duplicate JVM class names: $names.$advice", SourceLocation.Unknown)
     }
 
     val classMap = allClasses.map(clazz => clazz.name -> clazz).toMap

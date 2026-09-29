@@ -43,7 +43,8 @@ object GenAnonymousClasses {
     * so it is placed in the root package.
     */
   def desc(sym: Symbol.AnonClassSym)(implicit flix: Flix): ClassDesc =
-    Mangle.mkDesc(Mangle.RootPackage, JvmNameCompaction.compact(Mangle.mkClassName("Anon", flix.jvmOrigins.nameTable.suffix(sym)), flix.options.xsymbolHashLength))
+    Mangle.mkDesc(Mangle.RootPackage, JvmNameCompaction.compact(Mangle.mkClassName("Anon", flix.jvmOrigins.nameTable.suffix(sym)),
+      JvmNameCompaction.effectiveWidth(flix.options.xsymbolHashLength, flix.options.xsymbolNames)))
 
   /**
     * Returns the name of the bridge method through which `method` is called on the superclass.

@@ -21,7 +21,7 @@ object JvmNameTable {
     case object Counter extends Mode
   }
 
-  /** The suffix width, in base-36 digits, that `--Xstable-name-length` defaults to. */
+  /** The fallback and compaction hash width, in base-36 digits, used by default. */
   val DefaultWidth: Int = 12
 
   /**
@@ -34,10 +34,8 @@ object JvmNameTable {
     * Returns the table naming each symbol in `entries` after its provenance, with suffixes of
     * `width` base-36 digits.
     *
-    * `width` is `--Xstable-name-length`. Zero opts out of provenance naming: each symbol is named
-    * by its own counter id, as upstream Flix names it, so its name changes whenever an unrelated
-    * edit shifts the counter. Provenance is still required, so the opt-out cannot hide a
-    * symbol that would fail to be named otherwise.
+    * `width` is `--Xsymbol-hash-length`, from 1 to [[MaxWidth]]. Counter mode is independent of
+    * this width. Provenance is required in either mode.
     */
   def build(entries: Iterable[(Symbol, GeneratedJvmKey)], width: Int): JvmNameTable =
     build(entries, width, Map.empty)
@@ -45,7 +43,7 @@ object JvmNameTable {
   /**
     * Returns the table as [[build]] does, but naming a lambda, local definition, or anonymous class
     * by its readable origin in `readable` wherever that spelling is unique among the classes it
-    * could collide with; everything else keeps its hash. Width zero ignores readable origins.
+    * could collide with; everything else keeps its hash. Counter mode ignores readable origins.
     */
   def build(entries: Iterable[(Symbol, GeneratedJvmKey)], width: Int, readable: Map[Symbol, JvmReadableOrigin]): JvmNameTable =
     build(entries, width, readable, Mode.Stable)
@@ -68,8 +66,8 @@ object JvmNameTable {
   }
 
   private[jvm] def buildWithDigest(entries: Iterable[(Symbol, GeneratedJvmKey)], width: Int, readable: Map[Symbol, JvmReadableOrigin], spellings: Map[Symbol, String], mode: Mode, digest: GeneratedJvmKey => BigInt): JvmNameTable = {
-    if (width < 0 || width > MaxWidth) {
-      throw InternalCompilerException(s"Stable JVM name width $width is outside 0 to $MaxWidth.", SourceLocation.Unknown)
+    if (width < 1 || width > MaxWidth) {
+      throw InternalCompilerException(s"Stable JVM name width $width is outside 1 to $MaxWidth.", SourceLocation.Unknown)
     }
     val namespaceSize = BigInt(36).pow(width)
     val provenance = mutable.Map.empty[Symbol, GeneratedJvmKey]
@@ -84,7 +82,7 @@ object JvmNameTable {
         }
       }
       val name =
-        if (width == 0 || mode == Mode.Counter) counterOf(sym)
+        if (mode == Mode.Counter) counterOf(sym)
         else {
           val digits = (digest(key) mod namespaceSize).toString(36)
           "0" * (width - digits.length) + digits
@@ -95,13 +93,13 @@ object JvmNameTable {
     }
 
     val hashed = names.toMap
-    val result = if (width == 0 || mode == Mode.Counter) hashed else {
+    val result = if (mode == Mode.Counter) hashed else {
       val specialized = hashed ++ spellings.filter { case (sym, _) => hashed.contains(sym) }
       specialized ++ readableNames(specialized, readable)
     }
     // Only names that remain hashes consume the truncated-hash namespace. A readable or mangled
     // name must not fail because of a hash it never emits.
-    if (width > 0 && mode == Mode.Stable) {
+    if (mode == Mode.Stable) {
       val claims = mutable.Map.empty[String, GeneratedJvmKey]
       result.foreach { case (sym, name) if name == hashed(sym) =>
         val key = provenance(sym)

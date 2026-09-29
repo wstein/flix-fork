@@ -27,7 +27,16 @@ object JvmTypeMangler {
     case _ => "Obj"
   }
 
-  private def framed(s: String): String = s.getBytes(StandardCharsets.UTF_8).length.toString + s
+  /** Escape before length-prefixing: Mangle must not change a frame's byte length later. */
+  private def framed(s: String): String = {
+    val escaped = s.getBytes(StandardCharsets.UTF_8).iterator.map { byte =>
+      val value = byte & 0xff
+      if ((value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z') ||
+          (value >= '0' && value <= '9') || value == '_') value.toChar.toString
+      else "$" + f"$value%02x"
+    }.mkString
+    escaped.length.toString + escaped
+  }
 
   private def hex(bytes: Array[Byte]): String = bytes.iterator.map(b => f"${b & 0xff}%02x").mkString
 
@@ -48,6 +57,9 @@ object JvmTypeMangler {
     }
 
     private def raw(value: Type): String = value match {
+      case Type.Apply(Type.Apply(Type.Cst(TypeConstructor.RecordRowExtend(_), _), _, _), _, _) => row(value, isRecord = true)
+      case Type.Apply(Type.Apply(Type.Cst(TypeConstructor.SchemaRowExtend(_), _), _, _), _, _) => row(value, isRecord = false)
+      case Type.Apply(Type.Apply(Type.Cst(tc, _), _, _), _, _) if commutative(tc) => canonicalSet(value, tc)
       case Type.Apply(_, _, _) =>
         val (head, args) = flatten(value)
         raw(head) + "I" + args.map(tpe).mkString + "E"
@@ -100,7 +112,11 @@ object JvmTypeMangler {
         case TypeConstructor.Struct(sym, _) => nominal(sym.namespace, sym.text, sym.id.nonEmpty, sym)
         case TypeConstructor.RestrictableEnum(sym, _) => nominal(sym.namespace, sym.name, generated = false, sym)
         case TypeConstructor.Effect(sym, _) => "Q" + nominal(sym.namespace, sym.name, generated = false, sym)
-        case TypeConstructor.Native(desc, _) => "J" + framed(hex(desc.descriptorString().getBytes(StandardCharsets.UTF_8)))
+        case TypeConstructor.Native(desc, _) =>
+          val descriptor = desc.descriptorString()
+          if (descriptor.startsWith("L") && descriptor.endsWith(";"))
+            "J" + "N" + descriptor.substring(1, descriptor.length - 1).split('/').map(framed).mkString + "E"
+          else "J" + framed(hex(descriptor.getBytes(StandardCharsets.UTF_8)))
         case other => "K" + framed(other.getClass.getSimpleName.stripSuffix("$")) + fallback(value)
       }
       case _ => fallback(value)
@@ -114,6 +130,41 @@ object JvmTypeMangler {
 
     private def fallback(value: Type): String =
       "X" + framed(hex(JvmTypeKey.encode(value, Nil, origin).getBytes(StandardCharsets.UTF_8)))
+
+    private def commutative(tc: TypeConstructor): Boolean = tc match {
+      case TypeConstructor.Union | TypeConstructor.Intersection | TypeConstructor.SymmetricDiff |
+           TypeConstructor.And | TypeConstructor.Or => true
+      case _ => false
+    }
+
+    private def canonicalSet(value: Type, operator: TypeConstructor): String = {
+      def operands(tpe: Type): List[Type] = tpe match {
+        case Type.Alias(_, _, expanded, _) => operands(expanded)
+        case Type.Apply(Type.Apply(Type.Cst(tc, _), left, _), right, _) if tc == operator =>
+          operands(left) ::: operands(right)
+        case other => List(other)
+      }
+      val keyed = operands(value).map(tpe => JvmTypeKey.encode(tpe, Nil, origin) -> tpe).sortBy(_._1)
+      val canonical = if (operator == TypeConstructor.SymmetricDiff) keyed else keyed.distinctBy(_._1)
+      if (canonical.lengthIs == 1) raw(canonical.head._2)
+      else "O" + framed(operator.getClass.getSimpleName.stripSuffix("$")) +
+        "I" + canonical.map { case (_, tpe0) => tpe(tpe0) }.mkString + "E"
+    }
+
+    private def row(value: Type, isRecord: Boolean): String = {
+      def collect(rest: Type): (List[(String, Type)], Type) = rest match {
+        case Type.Apply(Type.Apply(Type.Cst(TypeConstructor.RecordRowExtend(label), _), field, _), tail, _) if isRecord =>
+          val (fields, remainder) = collect(tail)
+          ((label.name, field) :: fields, remainder)
+        case Type.Apply(Type.Apply(Type.Cst(TypeConstructor.SchemaRowExtend(pred), _), field, _), tail, _) if !isRecord =>
+          val (fields, remainder) = collect(tail)
+          ((pred.name, field) :: fields, remainder)
+        case other => (Nil, other)
+      }
+      val (fields, tail) = collect(value)
+      val ordered = fields.sortBy(_._1).map { case (label, field) => "Y" + framed(label) + tpe(field) }.mkString
+      (if (isRecord) "B" else "H") + "I" + ordered + "Z" + tpe(tail) + "E"
+    }
 
     private def flatten(value: Type): (Type, List[Type]) = {
       def loop(t: Type, args: List[Type]): (Type, List[Type]) = t match {

@@ -27,4 +27,11 @@ class TestJvmNameCompaction extends AnyFunSuite {
     assert(compacted != name)
     assert((compacted + ".class").getBytes(StandardCharsets.UTF_8).length <= 240)
   }
+
+  test("counter mode ignores the configured hash length") {
+    val name = "Def$" + "long" * 100
+    val counterWidth = JvmNameCompaction.effectiveWidth(1, JvmNameTable.Mode.Counter)
+    assert(counterWidth == JvmNameTable.DefaultWidth)
+    assert(JvmNameCompaction.compact(name, counterWidth).matches(".*\\$\\$\\$\\$[0-9a-z]{12}\\$\\$\\$\\$.*"))
+  }
 }

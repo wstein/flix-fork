@@ -157,10 +157,11 @@ class TestJvmNameTable extends AnyFunSuite {
     entries.foreach { case (sym, _) => assert(wide.suffix(sym).endsWith(narrow.suffix(sym))) }
   }
 
-  test("width zero names a symbol by its own counter, as upstream does") {
+  test("counter mode names a symbol by its own counter, as upstream does") {
     val defn = symbol(42)
     val anon = new Symbol.AnonClassSym(7, SourceLocation.Unknown)
-    val table = JvmNameTable.build(List(defn -> key("a"), anon -> GeneratedJvmKey("anonymous-class", List("b"))), 0)
+    val table = JvmNameTable.build(List(defn -> key("a"), anon -> GeneratedJvmKey("anonymous-class", List("b"))),
+      JvmNameTable.DefaultWidth, Map.empty, JvmNameTable.Mode.Counter)
     assert(table.suffix(defn) == "42")
     assert(table.suffix(anon) == "7")
   }
@@ -181,6 +182,7 @@ class TestJvmNameTable extends AnyFunSuite {
 
   test("a width outside the supported range is refused") {
     intercept[InternalCompilerException] { JvmNameTable.build(Nil, -1) }
+    intercept[InternalCompilerException] { JvmNameTable.build(Nil, 0) }
     intercept[InternalCompilerException] { JvmNameTable.build(Nil, JvmNameTable.MaxWidth + 1) }
   }
 
@@ -192,9 +194,8 @@ class TestJvmNameTable extends AnyFunSuite {
         |def twice(f: a -> a, x: a): a = f(f(x))
         |def main(): Unit \ IO = { println(twice(x -> x + 1, 1)); println(twice(s -> s + "!", "a")) }
         |""".stripMargin
-    def suffixesOf(width: Int): Set[String] = {
-      val flix = new Flix().setOptions(Options.TestWithLibMin.copy(xsymbolHashLength = if (width == 0) JvmNameTable.DefaultWidth else width,
-        xsymbolNames = if (width == 0) JvmNameTable.Mode.Counter else JvmNameTable.Mode.Stable))
+    def suffixesOf(width: Int, mode: JvmNameTable.Mode = JvmNameTable.Mode.Stable): Set[String] = {
+      val flix = new Flix().setOptions(Options.TestWithLibMin.copy(xsymbolHashLength = width, xsymbolNames = mode))
       flix.addVirtualPath(ca.uwaterloo.flix.api.CompilerConstants.VirtualTestFile, program)(ca.uwaterloo.flix.language.ast.shared.SecurityContext.Unrestricted)
       val result = flix.compile() match {
         case Result.Ok(r) => r
@@ -208,7 +209,7 @@ class TestJvmNameTable extends AnyFunSuite {
     val wide = suffixesOf(20)
     assert(wide.nonEmpty && wide.forall(_.startsWith("I")), wide)
     assert(suffixesOf(8) == wide)
-    val counters = suffixesOf(0)
+    val counters = suffixesOf(20, JvmNameTable.Mode.Counter)
     assert(counters.nonEmpty && counters.forall(_.matches("[0-9]+")), counters)
   }
 }

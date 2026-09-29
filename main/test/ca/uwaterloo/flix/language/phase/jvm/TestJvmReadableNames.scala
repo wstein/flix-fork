@@ -69,10 +69,10 @@ class TestJvmReadableNames extends AnyFunSuite {
     assert(table.suffix(anon) == "Shop$price$0")
   }
 
-  test("width zero keeps counter names and ignores readable origins") {
+  test("counter mode keeps counter names and ignores readable origins") {
     val lambda = defn(Some(5), "price")
-    val table = JvmNameTable.build(List(lambda -> key("a")), 0,
-      Map(lambda -> JvmReadableOrigin(List("Shop", "price"), List("0"), None)))
+    val table = JvmNameTable.build(List(lambda -> key("a")), JvmNameTable.DefaultWidth,
+      Map(lambda -> JvmReadableOrigin(List("Shop", "price"), List("0"), None)), JvmNameTable.Mode.Counter)
     assert(table.suffix(lambda) == "5")
   }
 
