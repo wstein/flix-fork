@@ -71,6 +71,24 @@ recomputed at every use, so it is the same in every build. And it is injective b
 every argument is one atom, and the family, or the argument count it spells (`Fn2`), fixes how
 many there are.
 
+Erasure is what makes an Itanium-style grammar unnecessary there. Itanium's brackets and length
+prefixes delimit nested components of varying length; erasure has already collapsed every nested
+type to `Obj`, and an atom cannot contain `$`, so a plain `$` join is unambiguous. The same holds
+for an erased enum case, whose enum's name identifies its declaration and so its arity. Only a
+monomorph specialization keeps full types, and only it needs a grammar -- which upstream avoids by
+naming it with a counter, `Def$map$1234`. Were shape classes ever specialized by full types
+instead -- a tuple class per `(List[Int32], String)` rather than per `(Obj, Obj)` -- nesting would
+return to their names, and they would need brackets too.
+
+Upstream already has the other half of Itanium. Itanium reserves the prefix `_Z`, so a mangled name
+cannot be mistaken for a source identifier; `Mangle.scala`'s *prefix invariant* does the same job:
+a class named after a programmer's identifier must carry a reserved prefix -- `Def$`, `Clo$`,
+`Eff$`, or `Case$` -- because the segments of a shape name, `Obj`, `Int32`, and the rest, are legal
+Flix identifiers. Without it `enum Tag { case Obj }` would be named `Tag$Obj`, which is a shape
+class. This ADR keeps that invariant: every mangled or readable suffix it introduces follows such a
+prefix and the symbol's own name, and none of its segments can be a Flix identifier ending in `$`,
+since a Flix identifier cannot contain `$` at all.
+
 ### How Scala does it
 
 Scala spells names in full and compacts only overlong ones. Scala 2.13 (`StdNames.scala`) and
