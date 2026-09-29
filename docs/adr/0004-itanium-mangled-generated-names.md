@@ -46,6 +46,30 @@ Two facts bound any spelling:
   be recorded beside the key when the specialization is registered, from the `Type` or
   `SimpleType` arguments `specializedSymbol` and `erasedSymbol` receive.
 
+### How Flix spells its shape classes
+
+Flix already spells types into one family of names: its *shape* classes, which every value of the
+same erased shape shares, in the root package -- `Tuple$Obj$Int32`, `Tag$Obj`, `Struct$Obj`,
+`Lazy$Int32`, `Fn2$Obj$Obj$Obj`. The spelling happens in three places:
+
+1. **`Eraser` decides the shape.** It erases element types in `SimpleType`,
+   `Tuple(elms) => SimpleType.mkTuple(elms.map(erase))`, so `(String, Int32)` becomes
+   `Tuple(Object, Int32)`. It makes no name for it.
+2. **`TypeDescs.toErasedClassDesc` maps each erased type to a JVM type**: a primitive stays
+   primitive, and every reference type becomes `Object`.
+3. **Each generator's `desc` spells the name, in code generation, wherever the class is used**:
+   `GenTuple.desc(elms)` is `mkClassName("Tuple", elms.map(Mangle.erasedName))`, and `GenTag`,
+   `GenStruct`, `GenLazy`, and `GenArrow` (`Fn<arity>`) are the same. `Mangle.erasedName` turns each
+   JVM type into its atom -- `Bool`, `Char`, `Int8` to `Float64`, and `Obj` for every reference --
+   and `mkClassName` joins them with `$`. `CodeGen` collects the distinct shapes from the program's
+   types (`getTupleTypesOf(allTypes)` and the rest) and generates one class for each.
+
+These names never had the problem this ADR addresses. A shape class is not a symbol: it has no
+`GenSym` id and no entry in `JvmNameTable`, and its name is a pure function of its erased shape,
+recomputed at every use, so it is the same in every build. And it is injective by construction:
+every argument is one atom, and the family, or the argument count it spells (`Fn2`), fixes how
+many there are.
+
 ### How Scala does it
 
 Scala spells names in full and compacts only overlong ones. Scala 2.13 (`StdNames.scala`) and
@@ -73,8 +97,14 @@ kinds of specialization, and each is spelled the way its arguments require:
   fixes how many there are. It is spelled as a flat list, `Case$List$Obj$Nil` for the `Nil`
   singleton of `List` erased at a reference type, today `Case$List$zl5deigc9az4$Nil`: with only
   atoms and a known arity, a flat list is already injective, so brackets would add nothing but
-  length. It is the spelling Flix already uses for its shape classes, `Tuple2$Obj$Int32` and
+  length. It is the spelling Flix already uses for its shape classes, `Tuple$Obj$Int32` and
   `Tag$Obj$Obj`.
+
+  Unlike a shape class, though, an erased enum case is a declaration symbol, named by
+  `JvmNameTable` when it freezes, not recomputed where it is used. Its flat spelling is therefore
+  recorded when `Eraser` registers the specialization: `erasedSymbol(fresh, sym, targs)` already
+  receives the erased `targs`, and spells each through the same `Mangle.erasedName` atoms, so
+  `Case$Option$Obj$None` and `Tuple$Obj$Int32` use one vocabulary.
 - **A monomorph specialization** -- a definition specialized by `specializedSymbol` -- is keyed by
   full types, which nest and are nominal: `Map[String, List[Int32]]`, records, functions, effects.
   A flat list loses where one argument ends and the next begins, so it is spelled in an
