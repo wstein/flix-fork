@@ -8,7 +8,7 @@
 package ca.uwaterloo.flix
 
 import ca.uwaterloo.flix.api.lsp.{LspServer, VSCodeLspServer, FormatterLsp as LspFormatter}
-import ca.uwaterloo.flix.api.{Bootstrap, BootstrapError, CliContract, Flix, Version}
+import ca.uwaterloo.flix.api.{Bootstrap, BootstrapError, CliContract, Flix, JavaBoundary, Version}
 import ca.uwaterloo.flix.language.CompilationMessage
 import ca.uwaterloo.flix.language.ast.shared.{Origin, SecurityContext}
 import ca.uwaterloo.flix.language.ast.{SourceLocation, Symbol, TypedAst}
@@ -134,6 +134,24 @@ object Main {
       implicit val out: PrintStream = System.err
 
       cmdOpts.command match {
+        case Command.JavaApi(contractFile, stubsOnly) =>
+          val result = JavaBoundary.read(Paths.get(contractFile)).flatMap { contract =>
+            val output = Paths.get(cmdOpts.javaApiOutput)
+            if (stubsOnly && cmdOpts.files.nonEmpty) Result.Err(BootstrapError.FileError("java-api-stubs accepts only the API contract, not Flix source files."))
+            else if (stubsOnly) JavaBoundary.writeStubs(contract, output)
+            else if (cmdOpts.files.isEmpty) {
+              Bootstrap.bootstrap(cwd, options.githubToken).flatMap { bootstrap =>
+                val flix = bootstrap.mkFlix(options, formatter, libPaths(cmdOpts.libs))
+                JavaBoundary.compile(flix, contract).flatMap(compiled => JavaBoundary.writeClasses(compiled.compilation.getClasses.values, output))
+              }
+            }
+            else {
+              val flix = mkFlixWithFiles(cmdOpts.files, options, libPaths(cmdOpts.libs))
+              JavaBoundary.compile(flix, contract).flatMap(compiled => JavaBoundary.writeClasses(compiled.compilation.getClasses.values, output))
+            }
+          }
+          if (cmdOpts.jsonDiagnostics) exitWithJson(result) else exitOnResult(result)
+
         case Command.None =>
           // check if the --listen flag was passed.
           if (cmdOpts.listen.nonEmpty) {
@@ -582,6 +600,7 @@ object Main {
     */
   case class CmdOpts(
     command: Command = Command.None,
+    javaApiOutput: String = "build/java-api",
                      libs: Seq[String] = Seq.empty,
                      jsonDiagnostics: Boolean = false,
                      clientContractVersion: Option[Int] = None,
@@ -630,6 +649,7 @@ object Main {
   sealed trait Command
 
   object Command {
+    case class JavaApi(contract: String, stubsOnly: Boolean) extends Command
 
     case object None extends Command
 
@@ -738,6 +758,14 @@ object Main {
       head(Header)
 
       // Command
+      List("java-api" -> false, "java-api-stubs" -> true).foreach { case (name, stubsOnly) =>
+        cmd(name).text("  experimental typed-boundary API: checked classes or syntax-only bootstrap stubs.").children(
+          arg[String]("contract.flix-api").required().action((path, c) => c.copy(command = Command.JavaApi(path, stubsOnly))),
+          opt[String]("out").action((path, c) => c.copy(javaApiOutput = path)).text("output class-file directory."),
+          opt[String]("lib").unbounded().action((path, c) => c.copy(libs = c.libs :+ path)).text("adds a Java dependency jar."),
+          opt[Unit]("diagnostics-json").action((_, c) => c.copy(jsonDiagnostics = true)).text("writes LSP-compatible diagnostics as JSON.")
+        )
+      }
       cmd("init").action((_, c) => c.copy(command = Command.Init)).text("  creates a new project in the current directory.")
 
       cmd("check").action((_, c) => c.copy(command = Command.Check)).text("  checks the current project for errors.").children(

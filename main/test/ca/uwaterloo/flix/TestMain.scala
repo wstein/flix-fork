@@ -14,6 +14,16 @@ import org.scalatest.funsuite.AnyFunSuite
 import java.nio.file.Files
 
 class TestMain extends AnyFunSuite {
+  test("experimental Java API commands parse contracts, source files and dependencies") {
+    val options = Main.parseCmdOpts(Array("java-api", "Api.flix-api", "--out", "output", "--lib", "java.jar", "--diagnostics-json", "Api.flix")).get
+    assert(options.command == Main.Command.JavaApi("Api.flix-api", false))
+    assert(options.javaApiOutput == "output")
+    assert(options.libs == Seq("java.jar"))
+    assert(options.files.map(_.getName) == Seq("Api.flix"))
+    assert(options.jsonDiagnostics)
+    assert(Main.parseCmdOpts(Array("java-api-stubs", "Api.flix-api")).get.command == Main.Command.JavaApi("Api.flix-api", true))
+    assert(Main.parseCmdOpts(Array("java-api")).isEmpty)
+  }
 
   test("init") {
     val args = Array("init")

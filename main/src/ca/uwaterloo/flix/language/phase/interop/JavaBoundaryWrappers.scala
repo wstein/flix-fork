@@ -38,12 +38,38 @@ object JavaBoundaryWrappers {
   case class WrapperErrors(messages: List[CompilationMessage], loc: SourceLocation) extends Error
   case class BoundaryError(cause: BoundaryTypeElaborator.Error, loc: SourceLocation) extends Error
   case class FacadeError(cause: JavaBoundaryApi.Error) extends Error { def loc: SourceLocation = cause.loc }
+  case class ContractError(cause: JavaBoundaryContract.Error) extends Error { def loc: SourceLocation = cause.loc }
+  private case class Prepared(root: TypedAst.Root, declaration: JavaBoundaryApi.Declaration, plan: JavaBoundaryApi.Plan)
   private case class Conversion(tpe: Type, eff: Type, call: Option[String])
   private case class Wrapper(member: Member, name: String, args: List[Conversion], result: Conversion,
                              effects: List[Symbol.EffSym], handlers: List[Symbol.DefnSym])
 
   /** Checks caller sources, derives wrappers from validated instances, rechecks, and emits a facade. */
   def compile(flix: Flix, api: Declaration, traits: Traits, sctx: SecurityContext): Result[Output, Error] = {
+    emit(flix, prepareValidated(flix, api, traits, sctx, _ => Ok(())))
+  }
+
+  /** Rejects a bootstrap/recorded ABI mismatch before invoking code generation. */
+  def compileContract(flix: Flix, contract: JavaBoundaryContract.Contract, sctx: SecurityContext): Result[Output, Error] =
+    emit(flix, prepareContract(flix, contract, sctx))
+
+  /** Frontend-only entry point for editor diagnostics: no bytecode or disk output. */
+  def checkContract(flix: Flix, contract: JavaBoundaryContract.Contract, sctx: SecurityContext): Result[JavaBoundaryApi.Plan, Error] =
+    prepareContract(flix, contract, sctx).map(_.plan)
+
+  private def prepareContract(flix: Flix, contract: JavaBoundaryContract.Contract, sctx: SecurityContext): Result[Prepared, Error] = {
+    val traits = Traits(Symbol.mkTraitSym("Java.Boundary.JavaResult"), Symbol.mkTraitSym("Java.Boundary.JavaArgument"))
+    prepareValidated(flix, contract.declaration, traits, sctx,
+      plan => JavaBoundaryContract.verify(contract, plan).mapErr(ContractError.apply))
+  }
+
+  private def emit(flix: Flix, prepared: Result[Prepared, Error]): Result[Output, Error] = prepared.flatMap { checked =>
+    flix.codeGenWithJavaApi(checked.root, checked.declaration).mapErr(FacadeError.apply)
+      .map(compiled => Output(compiled, checked.plan))
+  }
+
+  private def prepareValidated(flix: Flix, api: Declaration, traits: Traits, sctx: SecurityContext,
+                               verify: JavaBoundaryApi.Plan => Result[Unit, Error]): Result[Prepared, Error] = {
     implicit val compiler: Flix = flix
     val checked = flix.check()
     if (checked._2.nonEmpty) return Err(InputErrors(checked._2, checked._2.head.loc))
@@ -95,8 +121,8 @@ object JavaBoundaryWrappers {
           val declaration = JavaBoundaryApi.Declaration(api.className, members)
           for {
             plan <- JavaBoundaryApi.prepare(declaration, typed).mapErr(FacadeError.apply)
-            compiled <- flix.codeGenWithJavaApi(typed, declaration).mapErr(FacadeError.apply)
-          } yield Output(compiled, plan)
+            _ <- verify(plan)
+          } yield Prepared(typed, declaration, plan)
         }
       } finally flix.remSource(uri)
     }

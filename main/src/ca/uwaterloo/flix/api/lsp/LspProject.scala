@@ -6,11 +6,11 @@
  */
 package ca.uwaterloo.flix.api.lsp
 
-import ca.uwaterloo.flix.api.{Bootstrap, BootstrapError, Flix}
+import ca.uwaterloo.flix.api.{Bootstrap, BootstrapError, Flix, JavaBoundary}
 import ca.uwaterloo.flix.api.lsp.provider.DebugEvalSidecar
 import ca.uwaterloo.flix.language.CompilationMessage
 import ca.uwaterloo.flix.language.ast.TypedAst.Root
-import ca.uwaterloo.flix.language.ast.shared.{SecurityContext, SourceName}
+import ca.uwaterloo.flix.language.ast.shared.{Origin, SecurityContext, Source, SourceName}
 import ca.uwaterloo.flix.util.Formatter.NoFormatter
 import ca.uwaterloo.flix.util.{Options, Result}
 
@@ -18,6 +18,7 @@ import java.io.PrintStream
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path, Paths}
 import scala.collection.mutable
+import scala.jdk.CollectionConverters.*
 
 /**
   * The Flix project a language server serves.
@@ -99,7 +100,7 @@ class LspProject(o: Options) {
       case Some(b) => b.mkFlix(o.copy(inMemory = true, coverage = coverage), NoFormatter)
       case None => new Flix().setFormatter(NoFormatter).setOptions(o.copy(inMemory = true, coverage = coverage))
     }
-    for ((name, src) <- buffers) {
+    for ((name, src) <- buffers if !isContract(name)) {
       ClientUri.addSource(result, name, src)
     }
     result
@@ -153,7 +154,7 @@ class LspProject(o: Options) {
     */
   def addSource(name: SourceName, src: String): Unit = synchronized {
     buffers += (name -> src)
-    ClientUri.addSource(flix, name, src)
+    if (!isContract(name)) ClientUri.addSource(flix, name, src)
   }
 
   /**
@@ -169,6 +170,7 @@ class LspProject(o: Options) {
     */
   def remSource(name: SourceName): Unit = synchronized {
     buffers -= name
+    if (isContract(name)) return
     name match {
       case SourceName.PathName(path) if isProjectSource(path) && Files.isRegularFile(path) =>
         flix.addFile(path, SecurityContext.Unrestricted)
@@ -186,14 +188,26 @@ class LspProject(o: Options) {
       // once, and the previous one keeps being compiled until the client asks for a restart.
       reload().foreach(err => out.println(err.message(NoFormatter)))
     }
-    flix.check()
+    val checked = flix.check()
+    val contracts = projectContracts.map(path => SourceName.PathName(path) -> Files.readString(path)).toMap ++ buffers.filter { case (name, _) => isContract(name) }
+    val errors = contracts.toList.sortBy(_._1.toString).flatMap { case (name, text) =>
+      val source = Source.fromString(name, Origin.User, SecurityContext.Unrestricted, text)
+      val result = JavaBoundary.parse(source).flatMap { contract =>
+        if (checked._2.nonEmpty) Result.Ok(()) else JavaBoundary.check(flix, contract).map(_ => ())
+      }
+      result match {
+        case Result.Err(BootstrapError.CompilationErrors(messages, _)) => messages
+        case _ => Nil
+      }
+    }
+    (checked._1, checked._2 ++ errors)
   }
 
   /**
     * Returns the names of the sources of the project: its source files on disk together with the
     * documents the client has open.
     */
-  def sourceNames: Set[SourceName] = projectSources.map(SourceName.PathName.apply).toSet ++ buffers.keySet
+  def sourceNames: Set[SourceName] = (projectSources ++ projectContracts).map(SourceName.PathName.apply).toSet ++ buffers.keySet
 
   /**
     * Whether every document snapshot owned by the client is identical to its file on disk.
@@ -247,7 +261,7 @@ class LspProject(o: Options) {
     val oldFlix = flix
     flix = newFlix
     // The documents the client has open shadow the files that were read from disk.
-    for ((name, src) <- buffers) {
+    for ((name, src) <- buffers if !isContract(name)) {
       ClientUri.addSource(flix, name, src)
     }
     oldFlix.close()
@@ -265,6 +279,17 @@ class LspProject(o: Options) {
     * Returns `true` if `path` is a source file of the project.
     */
   private def isProjectSource(path: Path): Boolean = projectSources.contains(path.normalize())
+
+  private def isContract(name: SourceName): Boolean = name.toString.endsWith(".flix-api")
+
+  private def projectContracts: List[Path] = {
+    val directory = projectPath.resolve("src")
+    if (!Files.isDirectory(directory)) Nil else {
+      val paths = Files.walk(directory)
+      try paths.iterator().asScala.filter(path => Files.isRegularFile(path) && path.toString.endsWith(".flix-api")).toList
+      finally paths.close()
+    }
+  }
 
 }
 
