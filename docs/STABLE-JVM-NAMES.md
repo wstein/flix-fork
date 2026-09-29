@@ -49,6 +49,38 @@ generator-specific prefixes to conceal ambiguous provenance. It is skipped at
 width zero only, where a counter id is unique to its symbol by construction and
 ids of different kinds of symbol may coincide without their classes colliding.
 
+## Readable names for nested classes
+
+A lambda, a local definition, and an anonymous class are named by where they
+are written wherever that spelling is unique: `Clo$price$discount$0` for the
+first lambda bound by `let discount` in `price`, `Clo$price$0` for the first
+lambda directly in its body, `Def$price$helper` for a local definition, and
+`Anon$Shop$price$0` for an anonymous class, which spells its owner because its
+class name has no other place for it. A lambda of a specialized owner is named
+after the owner's own suffix, `Clo$map$k3j9x0q2m1ab$0`, which tells the copies
+apart.
+
+The provenance key stays the identity. Keys hash every level of their path at
+capture, so a readable path cannot be read back from one; `JvmLexicalOrigins`
+records a `JvmReadableOrigin` beside each key instead -- the `let` binders,
+local definitions, and methods between the definition and the class, then its
+name or its source-order ordinal among its kind in that scope. The path follows
+an expression through `transfer`, and through `specialize`, which tags it with
+the specialized owner; an Inliner clone or a synthetic expression has none,
+and `derivedSymbol` hands a lifted lambda or local definition its source's.
+
+`JvmNameTable` uses the readable spelling only if no class it could collide
+with -- one with the same definition prefix, or any anonymous class -- is
+spelled the same way, readable or hashed. When two readable spellings
+coincide, both keep their hashes, since which one would win is not a stable
+property. Anything without a readable origin keeps its hash, and width zero
+ignores readable origins entirely.
+
+One stability property is traded for readability: an ordinal counts within its
+binding in source order, so inserting a lambda before another in the same
+binding renames the later one. A hashed name did not change then. Only classes
+of the edited definition are affected, and they are recompiled anyway.
+
 ## Semantic type keys
 
 `JvmTypeKey` encodes types structurally, retaining argument order and effects.
