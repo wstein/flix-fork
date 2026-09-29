@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed. Scoped to the *spelling* of generated JVM class names: what a specialization, a lambda,
+Proposed; implementation in progress. Scoped to the *spelling* of generated JVM class names: what a specialization, a lambda,
 a local definition, and an anonymous class are called. Their *identity* -- the provenance keys
 `JvmProvenance` records and `JvmNameTable` checks -- is unchanged. Numbered 4 in the fork's series:
 ADRs 1 and 2 are on `feat/stable-specialization-names-rewrite`, and ADR 3, JVM interop as a typed
@@ -38,7 +38,8 @@ exactly those types, through the canonical encodings of `JvmTypeKey`.
 Two facts bound any spelling:
 
 - **A class file name must fit one path component.** Class files are written to disk and into
-  jars one file per class, and file systems and archive tools cap a component at 255 bytes. A
+  jars one file per class, and file systems and archive tools cap a component at 255 bytes. The
+  namespace is a sequence of directories, not part of that component. A
   name that is too long fails at `build-jar` or on unpacking, far from the compile that made it.
 - **Keys cannot be read back.** `JvmTypeKey` encodes a type into a Base64 string inside the key,
   and `JvmOriginKey.compose` stores its parents' digests. As with readable paths, a spelling must
@@ -82,16 +83,17 @@ kinds of specialization, and each is spelled the way its arguments require:
 | Construct | Itanium | Here |
 |---|---|---|
 | builtin type | one letter (`i`, `b`) | its Flix name: `Int32`, `Bool`, `String`, `Unit`, `Obj` for an erased reference |
-| source name | `<length><identifier>`: `3map` | the same: `5Color` |
+| source name | `<length><identifier>`: `3map` | UTF-8 byte escaping before length-prefixing: `5Color` |
 | qualified name | `N <names> E`: `N4Acme5ColorE` | the same |
 | type arguments | `I <args> E` | the same |
-| substitution | `S_`, `S0_`, ... for a repeated component | the same; which components are candidates, and their numbering order, is an open question |
+| substitution | `S_`, `S0_`, ... for a repeated component | complete type components in depth-first postorder |
+| other canonical type forms | ABI-specific productions | `F<arity>_` for arrows, `O` for canonical effect sets, `B`/`H` for ordered record/schema rows, and `X` followed by the full versioned type key for forms not yet given a readable production |
 
 For example, with the symbol's own name kept plain in front:
 
 ```
 Def$map$I5Int326StringE                     map at (Int32, String)
-Def$index$I3MapI6String4ListI5Int32EEEE     index at Map[String, List[Int32]]
+Def$index$I3MapI6String4ListI5Int32EEE      index at Map[String, List[Int32]]
 Def$swap$I5ColorS_E                         swap at (Color, Color): S_ repeats 5Color
 Case$Option$Obj$None                        None of Option erased at a reference type (flat)
 Case$Option$Int32$None                      None of Option erased at Int32 (flat)
@@ -100,16 +102,20 @@ Case$Option$Int32$None                      None of Option erased at Int32 (flat
 The two spellings cannot collide: they name different kinds of symbol, a definition against an
 enum case, under different prefixes (`Def$`, `Clo$` against `Case$`).
 
-Length-prefixed names and explicit `I ... E` / `N ... E` brackets make the grammar injective:
-every spelling parses back to exactly one argument list, which a `flix demangle` command can print.
+Length-prefixed names and explicit `I ... E` / `N ... E` brackets make the grammar injective.
+Source-name bytes outside ASCII letters, digits, and `_` are written as `$hh` before counting;
+this prevents the subsequent JVM-name escape pass from invalidating a length frame. The `X`
+production keeps the entire canonical type key, not a truncated digest, so it remains injective
+while its demangled display is currently opaque. `flix demangle` prints the readable productions
+and explicitly reports a compacted name whose discarded middle cannot be recovered.
 Builtins are spelled as words rather than Itanium's letters, because readability is the point;
 they cannot be confused with a source name, which always starts with its length. A record's fields
 are spelled in label order, a function type as its parameter and result types, and an effect
 argument as its effects in the canonical order `JvmTypeKey` already imposes -- whatever the key
 distinguishes, the spelling distinguishes.
 
-Mangling runs through `Mangle.mangle`, so an operator or other special character in a source name
-is escaped the way it is today.
+The final class name still runs through `Mangle.mangle`; the type grammar's `$hh` escaping has
+already made its framed payloads safe before that pass.
 
 ### 2. Nested classes keep their readable origin
 
@@ -119,8 +125,8 @@ specialized owner it now leads with the owner's *mangled* suffix instead of its 
 
 ### 3. Overlong names are compacted as Scala does, with a better hash
 
-A name whose class file name component would exceed 240 characters -- counting its namespace
-prefix, `Def$`/`Clo$`/`Anon$`, and `.class` -- is compacted to
+A name whose class file name component would exceed 240 UTF-8 bytes -- counting its
+`Def$`/`Clo$`/`Anon$` prefix and `.class`, but not its namespace directories -- is compacted to
 
 ```
 <first quarter> $$$$ <hash> $$$$ <last quarter>
@@ -129,8 +135,8 @@ prefix, `Def$`/`Clo$`/`Anon$`, and `.class` -- is compacted to
 where `<hash>` is SHA-256 of the full uncompacted name, reduced to a fixed number of lowercase
 base-36 digits: `--Xsymbol-hash-length`, default 12, zero-padded. Fixed width keeps the result's
 length predictable; Scala's unpadded hexadecimal varies from 16 to 32 characters and is not strictly
-injective as a formatting (`0x01 0x23` and `0x12 0x03` both print as `123`). The table's existing
-collision check applies to compacted names, with its existing advice.
+injective as a formatting (`0x01 0x23` and `0x12 0x03` both print as `123`). The final CodeGen
+class-name collision check catches compacted-name collisions and names the width flag in its advice.
 
 The alphabet stays lowercase base 36. Class files are files, and the default file systems of macOS
 (APFS) and Windows (NTFS) are case-insensitive: two names differing only in case would land on one
@@ -161,14 +167,15 @@ its own parameter instead of the value zero.
 
 ## Consequences
 
-- **Readable everywhere.** Stack traces, profilers, and the debugger show which specialization a
-  frame is in; `flix demangle` recovers the types.
+- **Readable for common specializations.** Stack traces, profilers, and the debugger show the
+  common type arguments. An `X` fallback retains identity but still displays an opaque key;
+  `flix demangle` recovers readable types only outside that fallback and compaction.
 - **Still stable.** A spelling is a pure function of the specialization -- no counter, schedule,
   or unrelated edit changes it. Renaming a type renames the specializations at it, which is what a
   reader expects.
 - **Fewer hashes, and fewer collisions.** Only overlong names and non-unique nested spellings
   are hashed, so the collision check guards a small population instead of every generated class.
-- **Longer names.** Constant pools and jar entries grow with the spelling. The 240-character cap
+- **Longer names.** Constant pools and jar entries grow with the spelling. The 240-byte cap
   bounds each name, and compaction bounds the worst case.
 - **A spelling is recorded beside each specialization key**, as readable paths are beside lexical
   keys: `specializedSymbol` and `erasedSymbol` have the types in hand when they register.
@@ -195,10 +202,10 @@ Java source cannot name.
 
 ## Open questions
 
-- **Effect and region arguments.** Whether every effect the key distinguishes needs spelling, or
-  some are erased before any class depends on them.
-- **The limit's unit.** 240 *characters* as Scala counts, or 240 *bytes* of the file name's
-  encoding, which a non-ASCII identifier makes longer.
-- **Substitution numbering.** Itanium numbers substitutions in a fixed traversal order; the
-  grammar needs the same, pinned by golden vectors as the key encoding already is.
-- **`flix demangle`.** A small command, but it makes the grammar a public contract.
+- **Effect and region arguments: settled.** Spell everything the specialization key retains,
+  including effects and regions; otherwise two distinct keys could acquire one class name.
+- **The limit's unit: settled.** Count the UTF-8 bytes of the simple class filename plus `.class`.
+- **Substitution numbering: settled.** Number complete type components in depth-first postorder,
+  from zero; `S_` refers to zero and `S0_` to one. Golden vectors pin the traversal.
+- **`flix demangle`: in progress.** Uncompacted names can be parsed. Compaction deliberately
+  discards a middle span, so a demangler must report that it cannot recover it.
