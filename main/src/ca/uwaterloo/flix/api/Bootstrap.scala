@@ -2229,13 +2229,13 @@ class Bootstrap(val projectPath: Path, token: Option[String]) {
 
     // Ensure `cwd` is not dangerous
     val cwd = Path.of(System.getProperty("user.dir"))
-    checkForSystemPath(cwd) match {
+    Bootstrap.checkForSystemPath(cwd) match {
       case Err(e) => return Err(e)
       case Ok(()) => ()
     }
 
     // Ensure `projectPath` is not dangerous
-    checkForSystemPath(projectPath) match {
+    Bootstrap.checkForSystemPath(projectPath) match {
       case Err(e) => return Err(e)
       case Ok(()) => ()
     }
@@ -2248,7 +2248,7 @@ class Bootstrap(val projectPath: Path, token: Option[String]) {
     val prodClassDir = Bootstrap.getClassDirectory(projectPath, Build.Production)
 
     // Ensure `buildDir` is not dangerous
-    checkForDangerousPath(buildDir) match {
+    Bootstrap.checkForDangerousPath(buildDir, projectPath) match {
       case Err(e) => return Err(e)
       case Ok(()) => ()
     }
@@ -2271,7 +2271,7 @@ class Bootstrap(val projectPath: Path, token: Option[String]) {
           return Err(BootstrapError.FileError(s"Invalid class file in build directory: '${projectPath.relativize(file)}'"))
         }
       } else if (file.startsWith(docDir)) {
-        isValidDocumentFile(file) match {
+        Bootstrap.isValidDocumentFile(file, projectPath) match {
           case Err(e) => return Err(e)
           case Ok(()) => ()
         }
@@ -2281,7 +2281,7 @@ class Bootstrap(val projectPath: Path, token: Option[String]) {
         return Err(BootstrapError.FileError(s"Unexpected directory in build directory: '${projectPath.relativize(file)}'"))
       }
 
-      checkForDangerousPath(file) match {
+      Bootstrap.checkForDangerousPath(file, projectPath) match {
         case Err(e) => return Err(e)
         case Ok(()) => ()
       }
@@ -2299,7 +2299,7 @@ class Bootstrap(val projectPath: Path, token: Option[String]) {
     // Visit in reverse order to delete the innermost directories first
     val directories = FileOps.getDirectoriesIn(buildDir, Int.MaxValue).map(_.normalize())
     for (dir <- directories.reverse) {
-      checkForDangerousPath(dir) match {
+      Bootstrap.checkForDangerousPath(dir, projectPath) match {
         case Err(e) => return Err(e)
         case Ok(()) => ()
       }
