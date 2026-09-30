@@ -7,7 +7,7 @@
 package ca.uwaterloo.flix.language.phase.interop
 
 import ca.uwaterloo.flix.TestUtils
-import ca.uwaterloo.flix.api.{Flix, JavaBoundary}
+import ca.uwaterloo.flix.api.{BootstrapError, Flix, JavaBoundary}
 import ca.uwaterloo.flix.language.ast.shared.{Origin, Source, SourceName}
 import ca.uwaterloo.flix.util.{Options, Result}
 import org.scalatest.funsuite.AnyFunSuite
@@ -96,6 +96,52 @@ class TestJavaBoundaryNominals extends AnyFunSuite with TestUtils {
     checkWithCompanions(
       "pub def boundaryPayload(x: Int32): Int32 = x",
       "pub def boundaryPayload(): String = \"user\"")
+  }
+
+  test("generated module and helper clashes report once at their contract member") {
+    val contract = parse(contractText)
+    val owner = JavaBoundaryNominals.helperOwner(contract, 0)
+    val flix = compiler.addSource(Paths.get(owner.replace('.', '/') + ".flix"),
+      s"pub mod $owner { pub def boundaryPayload(x: Int32): Int32 = x }", sctx)
+    try {
+      JavaBoundary.check(flix, contract) match {
+        case Result.Err(BootstrapError.CompilationErrors(errors, _)) =>
+          assert(errors.size == 2, errors.map(_.summary).mkString("\n"))
+          assert(errors.map(_.summary).toSet == Set(s"Duplicate module: '$owner'.", "Duplicate definition: 'boundaryPayload'."))
+          assert(errors.forall(_.loc == contract.nominals.head.loc))
+        case other => fail(s"Expected located generated name clashes, found $other")
+      }
+    } finally flix.close()
+  }
+
+  test("caller diagnostics keep their own locations alongside generated clashes") {
+    val contract = parse(contractText)
+    val owner = JavaBoundaryNominals.helperOwner(contract, 0)
+    val path = Paths.get(owner.replace('.', '/') + ".flix")
+    val flix = compiler.addSource(path,
+      s"pub mod $owner { pub def value(): Int32 = 1 pub def value(): Int32 = 2 }", sctx)
+    try {
+      JavaBoundary.check(flix, contract) match {
+        case Result.Err(BootstrapError.CompilationErrors(errors, _)) =>
+          assert(errors.count(_.summary == s"Duplicate module: '$owner'.") == 1)
+          assert(errors.exists(_.loc == contract.nominals.head.loc))
+          assert(errors.exists(_.source.sourceName == SourceName.PathName(path)))
+        case other => fail(s"Expected caller and generated diagnostics, found $other")
+      }
+    } finally flix.close()
+  }
+
+  test("invalid nominal targets point to the contract declaration") {
+    val contract = parse(contractText.replace("= Color {", "= MissingColor {"))
+    val flix = compiler
+    try {
+      JavaBoundary.check(flix, contract) match {
+        case Result.Err(BootstrapError.CompilationErrors(errors, _)) =>
+          assert(errors.nonEmpty)
+          assert(errors.forall(_.loc == contract.nominals.head.loc))
+        case other => fail(s"Expected a located nominal target error, found $other")
+      }
+    } finally flix.close()
   }
 
   test("enum and sealed contracts reject missing cases, wrong payloads and folded variant collisions") {

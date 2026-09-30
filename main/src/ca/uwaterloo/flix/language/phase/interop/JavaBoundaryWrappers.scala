@@ -9,6 +9,7 @@ package ca.uwaterloo.flix.language.phase.interop
 
 import ca.uwaterloo.flix.api.Flix
 import ca.uwaterloo.flix.language.CompilationMessage
+import ca.uwaterloo.flix.language.errors.{JavaBoundaryError, NameError}
 import ca.uwaterloo.flix.language.ast.{SourceLocation, Symbol, Type, TypeConstructor, TypedAst}
 import ca.uwaterloo.flix.language.ast.shared.{SecurityContext, SourceName}
 import ca.uwaterloo.flix.language.phase.jvm.{JavaBoundaryApi, JvmClass}
@@ -73,22 +74,48 @@ object JavaBoundaryWrappers {
     if (flix.hasSource(SourceName.UriName(uri)))
       return Err(Invalid("The generated boundary type source is already owned by the caller.", contract.loc))
     flix.withJavaBoundaryTypes(classes.map(clazz => clazz.name -> clazz.bytecode).toMap) {
-      flix.addJavaBoundarySource(uri, JavaBoundaryProducts.source(contract, validationOnly = true), sctx)
+      val declarations = JavaBoundaryProducts.sourceWithLocations(contract, validationOnly = true, Map.empty)
+      var memberLocations = declarations._2
+      flix.addJavaBoundarySource(uri, declarations._1, sctx)
       try {
         val checked = flix.check()
         val validated: Result[Unit, Error] = if (checked._2.nonEmpty) Err(InputErrors(checked._2, checked._2.head.loc))
         else JavaBoundaryTypeGate.verify(contract, checked._1.get)(flix).mapErr(ContractError.apply)
         validated.flatMap { _ =>
           val shapes = JavaBoundaryTypeGate.argumentShapes(contract, checked._1.get)
-          flix.addJavaBoundarySource(uri, JavaBoundaryProducts.source(contract, validationOnly = false, shapes), sctx)
+          val conversions = JavaBoundaryProducts.sourceWithLocations(contract, validationOnly = false, shapes)
+          memberLocations = conversions._2
+          flix.addJavaBoundarySource(uri, conversions._1, sctx)
           body
         }.mapErr {
-        case InputErrors(errors, _) if errors.exists(_.loc.source.sourceName == SourceName.UriName(uri)) =>
-          WrapperErrors(errors, contract.loc)
+        case InputErrors(errors, loc) =>
+          val mapped = contractDiagnostics(errors, SourceName.UriName(uri), memberLocations, contract.loc)
+          if (mapped.exists(_.isInstanceOf[JavaBoundaryError]))
+            WrapperErrors(mapped, mapped.collectFirst { case e: JavaBoundaryError => e.loc }.get)
+          else InputErrors(errors, loc)
+        case WrapperErrors(errors, loc) =>
+          val mapped = contractDiagnostics(errors, SourceName.UriName(uri), memberLocations, contract.loc)
+          WrapperErrors(mapped, mapped.collectFirst { case e: JavaBoundaryError => e.loc }.getOrElse(loc))
         case other => other
         }
       } finally flix.remSource(uri)
     }
+  }
+
+  /** Name clashes have two symmetric reports; either side may be the generated declaration. */
+  private def contractDiagnostics(errors: List[CompilationMessage], source: SourceName,
+                                  locations: Map[Int, SourceLocation], fallback: SourceLocation): List[CompilationMessage] = {
+    errors.map { error =>
+      val sites = error match {
+        case NameError.DuplicateModule(_, first, second) => List(first, second)
+        case NameError.DuplicateLowerName(_, first, second) => List(first, second)
+        case _ => error.loc :: error.locs
+      }
+      sites.find(_.source.sourceName == source) match {
+        case Some(loc) => JavaBoundaryError(error.summary, locations.getOrElse(loc.startLine, fallback))
+        case None => error
+      }
+    }.distinct
   }
 
   private def prepareContract(flix: Flix, contract: JavaBoundaryContract.Contract, sctx: SecurityContext): Result[Prepared, Error] = {
@@ -174,10 +201,11 @@ object JavaBoundaryWrappers {
       try {
         val augmented = flix.check()
         if (augmented._2.nonEmpty) {
-          val diagnostic = augmented._2.head
-          val loc = if (diagnostic.source.sourceName != SourceName.UriName(uri)) diagnostic.loc
-          else memberLocations.getOrElse(diagnostic.loc.startLine, api.loc)
-          Err(WrapperErrors(augmented._2, loc))
+          val errors = augmented._2.map { diagnostic =>
+            if (diagnostic.source.sourceName != SourceName.UriName(uri)) diagnostic
+            else JavaBoundaryError(diagnostic.summary, memberLocations.getOrElse(diagnostic.loc.startLine, api.loc))
+          }.distinct
+          Err(WrapperErrors(errors, errors.head.loc))
         } else {
           val typed = augmented._1.get
           val members = wrappers.map { wrapper =>

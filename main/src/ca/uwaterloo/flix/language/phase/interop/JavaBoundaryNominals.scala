@@ -6,6 +6,7 @@
  */
 package ca.uwaterloo.flix.language.phase.interop
 
+import ca.uwaterloo.flix.language.ast.SourceLocation
 import ca.uwaterloo.flix.language.phase.jvm.JvmClass
 import org.objectweb.asm.{ClassWriter, Opcodes, Type}
 
@@ -102,7 +103,11 @@ object JavaBoundaryNominals {
     JvmClass(desc, cw.toByteArray)
   }
 
-  def source(contract: JavaBoundaryContract.Contract, validationOnly: Boolean, shapes: Map[String, String]): String = contract.nominals.zipWithIndex.map { case (nominal, index) =>
+  def source(contract: JavaBoundaryContract.Contract, validationOnly: Boolean, shapes: Map[String, String]): String =
+    sourceParts(contract, validationOnly, shapes).map(_._1).mkString
+
+  private[interop] def sourceParts(contract: JavaBoundaryContract.Contract, validationOnly: Boolean,
+                                   shapes: Map[String, String]): List[(String, SourceLocation)] = contract.nominals.zipWithIndex.map { case (nominal, index) =>
     val jname = s"BoundaryNominal$index"
     val dot = nominal.className.lastIndexOf('.')
     val imports = List(s"import ${nominal.className.take(dot)}.{${nominal.className.drop(dot + 1)} => $jname}",
@@ -166,6 +171,6 @@ object JavaBoundaryNominals {
     val owner = helperOwner(contract, index)
     val adapter = if (nominal.adapted) s"enum Adapter$index { case Adapter$index(${nominal.target}) }" else ""
     val payload = s"pub def boundaryPayload(x: ${nominal.target}): ${nominal.target} = x"
-    s"\npub mod $owner {\n${imports.mkString("\n")}\n$adapter\n$definitions\n$helpers\n$payload\n}\n"
-  }.mkString
+    s"\npub mod $owner {\n${imports.mkString("\n")}\n$adapter\n$definitions\n$helpers\n$payload\n}\n" -> nominal.loc
+  }
 }

@@ -83,6 +83,20 @@ class TestJavaBoundaryProducts extends AnyFunSuite with TestUtils {
     } finally flix.close()
   }
 
+  test("invalid product targets point to their contract declaration") {
+    val contract = parse(text.replace("= Products.Point;", "= Products.MissingPoint;")).unsafeGet
+    val flix = compiler
+    try {
+      JavaBoundaryWrappers.checkContract(flix, contract, sctx) match {
+        case Result.Err(JavaBoundaryWrappers.WrapperErrors(errors, loc)) =>
+          assert(errors.nonEmpty)
+          assert(loc == contract.products.head.loc)
+          assert(errors.forall(_.loc == contract.products.head.loc))
+        case other => fail(s"Expected a located product target error, found $other")
+      }
+    } finally flix.close()
+  }
+
   test("generated names, fields and concrete source types are validated before emission") {
     List(text.replace("com.acme.Pair", "com.acme.POINT"), text.replace("com.acme.Point", "com.acme.Api"),
       text.replace("ys:", "x:"), text.replace("x: int", "getClass: int"),

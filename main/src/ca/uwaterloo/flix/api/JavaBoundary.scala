@@ -42,7 +42,7 @@ object JavaBoundary {
   private def diagnostic(error: JavaBoundaryWrappers.Error, contract: JavaBoundaryContract.Contract)(implicit compiler: Flix): BootstrapError = {
     val messages: List[CompilationMessage] = error match {
       case JavaBoundaryWrappers.InputErrors(errors, _) => errors
-      case JavaBoundaryWrappers.WrapperErrors(errors, loc) => List(JavaBoundaryError(errors.map(_.summary).mkString("\n"), loc))
+      case JavaBoundaryWrappers.WrapperErrors(errors, _) => errors
       case JavaBoundaryWrappers.Invalid(message, loc) => List(JavaBoundaryError(message, loc))
       case JavaBoundaryWrappers.FacadeError(cause) => List(JavaBoundaryError(cause.message,
         if (cause.loc.isReal) cause.loc else contract.loc))

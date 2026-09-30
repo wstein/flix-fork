@@ -6,6 +6,7 @@
  */
 package ca.uwaterloo.flix.language.phase.interop
 
+import ca.uwaterloo.flix.language.ast.SourceLocation
 import ca.uwaterloo.flix.language.phase.jvm.JvmClass
 import org.objectweb.asm.{ClassWriter, Handle, Opcodes, Type}
 
@@ -100,7 +101,12 @@ object JavaBoundaryProducts {
     source(contract, validationOnly, Map.empty)
   }
 
-  def source(contract: JavaBoundaryContract.Contract, validationOnly: Boolean, shapes: Map[String, String]): String = {
+  def source(contract: JavaBoundaryContract.Contract, validationOnly: Boolean, shapes: Map[String, String]): String =
+    sourceWithLocations(contract, validationOnly, shapes)._1
+
+  /** Map each generated line to the contract declaration that requested it. */
+  private[interop] def sourceWithLocations(contract: JavaBoundaryContract.Contract, validationOnly: Boolean,
+                                            shapes: Map[String, String]): (String, Map[Int, SourceLocation]) = {
     val owner = module(contract)
     val imports = contract.products.zipWithIndex.map { case (product, index) =>
       val dot = product.className.lastIndexOf('.')
@@ -142,6 +148,19 @@ object JavaBoundaryProducts {
          |    }
          |""".stripMargin
     }
-    (List(s"pub mod $owner {") ++ imports ++ definitions ++ List("}")).mkString("\n") + JavaBoundaryNominals.source(contract, validationOnly, shapes)
+    val parts = List((List(s"pub mod $owner {") ++ imports).mkString("\n") + "\n" -> contract.loc) ++
+      definitions.zip(contract.products).map { case (definition, product) => (definition + "\n") -> product.loc } ++
+      List("}" -> contract.loc) ++ JavaBoundaryNominals.sourceParts(contract, validationOnly, shapes)
+    val text = new StringBuilder
+    val locations = scala.collection.mutable.Map.empty[Int, SourceLocation]
+    var line = 1
+    parts.foreach { case (part, loc) =>
+      part.foreach { char =>
+        locations(line) = loc
+        if (char == '\n') line += 1
+      }
+      text.append(part)
+    }
+    (text.toString, locations.toMap)
   }
 }
