@@ -6,6 +6,13 @@ Proposed. Scoped to how Flix code is *called from* the JVM -- Java, Kotlin, Scal
 values cross that boundary. Calling Java *from* Flix (`import`, `new`, method calls) is unchanged.
 Numbered 3 to follow ADRs 1 and 2 on `feat/stable-specialization-names-rewrite`.
 
+Revision 13 records the Phase 2 review fixes and two implementation decisions: state-mutating
+runtime bridge members share one compiler-owned-source access policy, and each `Flix` instance
+retains its compilation monitor with orderly, blocking shutdown. Generated nominal code now
+uses isolated modules, validates contracts and argument-check metadata, and bounds conversion
+depth using a measured 1,000-level budget. Overall ADR status remains Proposed for the later
+phases; the earlier full-suite evidence predates these review fixes.
+
 Revision 12 completes the Phase 2 implementation scope: explicit records, tuples, enums and
 sealed record hierarchies; direct instances for monomorphic nominal enums; recursive nominal
 values and ordinary nested containers; adapter-backed concrete instantiations; and staged JVM
@@ -297,6 +304,24 @@ The unused generic parameter reserves later generated marker types. This is an e
 capability, not a blanket trait instance: containers of opaque values require user instances.
 The compiler-internal bridge is API encapsulation, not a security boundary.
 
+**Runtime-member decision.** `JavaBoundaryRuntime.compilerOnlyMembers` is the single list of
+static members reserved for compiler-owned Flix sources: `OpaqueHandleBridge.wrap`,
+`enterConversion`, and `exitConversion`, keyed by owner descriptor and member name. It covers
+all overloads. Static method reduction checks the list before member lookup and permits a call
+only when `isJavaBoundarySource` recognizes the actual registered source object. A URI beginning
+with `flix-boundary:` grants no access, and replacing a source revokes ownership and invalidates
+cached checking even when its text is identical. Import aliases resolve to the same owner
+descriptor. Ordinary static calls all pass through `TypeReduction2.lookupStaticMethod`; instance
+lookup filters out static methods, and the bridge is final. Tests cover denial, registered
+ownership and revocation for each reserved member. Other bridge members retain ordinary Java
+interop lookup.
+
+The methods remain public in JVM classfiles because separately generated classes call them.
+Java callers, reflection and deliberately bypassing the compiler are outside this source-level
+encapsulation policy. The depth counter clamps extra releases at zero as a defensive measure.
+This decision preserves generated wrapping and depth management while preventing ordinary
+Flix source from mutating these runtime protocols.
+
 A type with only one direction's instance may appear only in
 that position: a `JavaResult`-only type as a result, a `JavaArgument`-only type as a parameter,
 and the error for the other says which instance is missing.
@@ -342,11 +367,14 @@ the adapter through ordinary checked helpers. They cross at top-level signature 
 Nested adapter-backed payloads produce a declaration-located error recommending a monomorphic
 nominal enum wrapper, rather than an ambiguous or implicit container conversion.
 
-Monomorphic enums instead receive direct `JavaResult`/`JavaArgument` instances in their enum
-companion module. Their associated Java type is constant and they have no instance constraints.
+Monomorphic enums instead receive direct `JavaResult`/`JavaArgument` instances in isolated
+compiler-generated `BoundaryTypes<hash>.NominalN` modules. Only those two traits receive an
+orphan exemption in registered compiler-owned sources; caller companions remain available. Their associated Java type is constant and they have no instance constraints.
 Thus ordinary `List[Color]` and `Option[Shape]` instances work, and recursive `Tree` payloads do
-not require recursive instance evidence: only conversion bodies recurse. Existing instance-head
-and overlap rules remain unchanged. Multiple concrete `Box[Int32]`/`Box[String]` declarations
+not require recursive instance evidence: only conversion bodies recurse. Instance-head and
+overlap rules remain enforced. The core `Instances` phase suppresses signature checks dependent
+on an overlap involving generated code, since associated-type selection is ambiguous; the
+overlap remains a compilation error with the caller declaration shown as a related location. Multiple concrete `Box[Int32]`/`Box[String]` declarations
 use distinct adapters and top-level helpers rather than overlapping instances.
 
 The contract additionally declares nominal types explicitly:
@@ -377,6 +405,24 @@ concurrent check cannot observe another API's synthetic types. Incremental AST i
 preserved between the declaration, body and wrapper checks. Scope exit still clears caches,
 so a subsequent ordinary compile is cold; this remains an optimization opportunity, not a
 claim that the provider is per-compilation or that all frontend cache costs have disappeared.
+
+**Compilation-monitor decision.** Keep the existing per-instance, reentrant `synchronized`
+monitor for checks, code generation, compilation, source registration/removal, `setOptions`,
+cache clearing, boundary provider scopes and `close`. The monitor spans the entire boundary
+scope, including source installation, frontend checks, emission and provider restoration.
+`close()` waits for an active operation to finish before closing dependency metadata and JAR
+resources. It is orderly shutdown rather than a cancellation mechanism; an operation waiting
+behind `close()` observes a closed compiler and fails. A concurrency test pauses a real frontend
+check, verifies that close waits, then verifies that checking after close is rejected.
+
+This coarse lock prevents another check or source change from observing temporary synthetic
+types or partially updated caches. Worker phases read the volatile provider and source-ownership
+registry without acquiring the compilation monitor, avoiding a monitor dependency while the
+owner waits for parallel workers. Concurrent throughput uses independent `Flix` instances.
+Direct mutation of exposed options or configuration fields is not covered by the synchronized
+methods and must be done before concurrent use. Immutable provider snapshots and provider-keyed
+caches remain a future design option; adopting them requires separate isolation and lifecycle
+validation rather than removing the monitor alone.
 
 The experimental product grammar inside an `export mod` contract is:
 

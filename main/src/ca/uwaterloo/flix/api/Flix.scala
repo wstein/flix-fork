@@ -523,6 +523,8 @@ class Flix(pkgs: List[InstalledPackage] = Nil, jars: List[Path] = Nil, mounts: M
   /**
     * Compiles the Flix program and returns a typed ast.
     * If the list of [[CompilationMessage]]s is empty, then the root is always `Some(root)`.
+    * Holds this instance's monitor for the whole check; source changes, provider scopes and close
+    * wait for it. Parallel compiler workers read provider metadata without taking this monitor.
     */
   def check(): (Option[TypedAst.Root], List[CompilationMessage]) = synchronized { checkInternal() }
 
@@ -846,6 +848,8 @@ class Flix(pkgs: List[InstalledPackage] = Nil, jars: List[Path] = Nil, mounts: M
     *
     * Classes already loaded through [[jarLoader]] remain usable, but no further classes can be loaded
     * from the JARs. The instance must not be used for compilation after it has been closed.
+    * Waits for an active check, compile or boundary provider scope to finish before releasing
+    * resources. This is orderly shutdown, not cancellation of in-progress compilation.
     */
   override def close(): Unit = synchronized {
     closed = true

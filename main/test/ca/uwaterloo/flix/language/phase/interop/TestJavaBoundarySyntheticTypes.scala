@@ -10,6 +10,7 @@ import ca.uwaterloo.flix.TestUtils
 import ca.uwaterloo.flix.api.Flix
 import ca.uwaterloo.flix.language.errors.InstanceError
 import ca.uwaterloo.flix.util.{Options, Result}
+import ca.uwaterloo.flix.util.tc.Debug
 import org.objectweb.asm.{ClassWriter, Opcodes}
 import org.scalatest.funsuite.AnyFunSuite
 
@@ -150,6 +151,54 @@ class TestJavaBoundarySyntheticTypes extends AnyFunSuite with TestUtils {
       release.countDown()
       owner.join(10000)
       ordinary.join(10000)
+      flix.close()
+    }
+  }
+
+  test("close waits for an active frontend check before releasing compiler resources") {
+    val entered = new CountDownLatch(1)
+    val release = new CountDownLatch(1)
+    val attempted = new CountDownLatch(1)
+    val closed = new CountDownLatch(1)
+    val checked = new CountDownLatch(1)
+    val error = new AtomicReference[Throwable]()
+    val flix = new Flix() {
+      override def phase[A](name: String)(body: => A)(implicit debug: Debug[A]): A = {
+        if (name == "Lexer") {
+          entered.countDown()
+          assert(release.await(20, TimeUnit.SECONDS))
+        }
+        super.phase(name)(body)
+      }
+    }
+    flix.setOptions(Options.TestWithLibNix.copy(xchaosMonkey = false))
+      .addSource(Paths.get("Closing.flix"), "def value(): Int32 = 1", sctx)
+    val checker = new Thread(() => {
+      try expectSuccess(flix.check())
+      catch { case t: Throwable => error.set(t) }
+      finally checked.countDown()
+    })
+    val closer = new Thread(() => {
+      attempted.countDown()
+      try flix.close()
+      catch { case t: Throwable => error.set(t) }
+      finally closed.countDown()
+    })
+    try {
+      checker.start()
+      assert(entered.await(10, TimeUnit.SECONDS))
+      closer.start()
+      assert(attempted.await(10, TimeUnit.SECONDS))
+      assert(!closed.await(150, TimeUnit.MILLISECONDS), "close escaped the running check's monitor")
+      release.countDown()
+      assert(checked.await(10, TimeUnit.SECONDS))
+      assert(closed.await(10, TimeUnit.SECONDS))
+      assert(error.get() == null, Option(error.get()).map(_.toString).getOrElse(""))
+      assertThrows[IllegalStateException] { flix.check() }
+    } finally {
+      release.countDown()
+      checker.join(10000)
+      closer.join(10000)
       flix.close()
     }
   }
