@@ -32,6 +32,7 @@ class TestJavaBoundaryNominals extends AnyFunSuite with TestUtils {
                                | def echoShape: (com.acme.Shape) -> com.acme.Shape;
                                | def tree: () -> com.acme.Tree;
                                | def echoTree: (com.acme.Tree) -> com.acme.Tree;
+                               | def deepTree: (int) -> com.acme.Tree;
                                | def intBox: () -> com.acme.IntBox;
                                | def stringBox: () -> com.acme.StringBox;
                                | def echoBox: (com.acme.IntBox) -> com.acme.IntBox;
@@ -50,6 +51,8 @@ class TestJavaBoundaryNominals extends AnyFunSuite with TestUtils {
                          | pub def echoShape(x: Shape): Shape = x
                          | pub def tree(): Tree = Tree.Node(Tree.Leaf(1), Tree.Node(Tree.Leaf(2), Tree.Leaf(3)))
                          | pub def echoTree(x: Tree): Tree = x
+                         | pub def deepTree(n: Int32): Tree = buildTree(n, Tree.Leaf(1))
+                         | def buildTree(n: Int32, acc: Tree): Tree = if (n == 0) acc else buildTree(n - 1, Tree.Node(acc, Tree.Leaf(0)))
                          | pub def intBox(): Box[Int32] = Box.Box(42)
                          | pub def stringBox(): Box[String] = Box.Box("boxed")
                          | pub def echoBox(x: Box[Int32]): Box[Int32] = x
@@ -59,6 +62,24 @@ class TestJavaBoundaryNominals extends AnyFunSuite with TestUtils {
     Source.fromString(SourceName.PathName(Paths.get("Nominals.flix-api")), Origin.User, sctx, text)).unsafeGet
   private def compiler: Flix = new Flix().setOptions(Options.TestWithLibAll.copy(xchaosMonkey = false))
     .addSource(Paths.get("Nominals.flix"), source, sctx)
+
+  test("nominal conversion budgets are isolated between caller threads") {
+    val worker = java.util.concurrent.Executors.newSingleThreadExecutor()
+    try {
+      for (_ <- 0 until 128) dev.flix.runtime.OpaqueHandleBridge.enterConversion("held")
+      try {
+        intercept[IllegalArgumentException] { dev.flix.runtime.OpaqueHandleBridge.enterConversion("held") }
+        worker.submit(new java.util.concurrent.Callable[Unit] {
+          def call(): Unit = {
+            dev.flix.runtime.OpaqueHandleBridge.enterConversion("other-thread")
+            dev.flix.runtime.OpaqueHandleBridge.exitConversion()
+          }
+        }).get(10, TimeUnit.SECONDS)
+      } finally for (_ <- 0 until 128) dev.flix.runtime.OpaqueHandleBridge.exitConversion()
+      dev.flix.runtime.OpaqueHandleBridge.enterConversion("reset")
+      dev.flix.runtime.OpaqueHandleBridge.exitConversion()
+    } finally worker.shutdownNow()
+  }
 
   test("direct nominal instances derive container and recursive ABIs without recursive instance constraints") {
     val flix = compiler
@@ -199,6 +220,26 @@ class TestJavaBoundaryNominals extends AnyFunSuite with TestUtils {
                                 |  if (sum(tree) != 6 || !NominalApi.echoTree(tree).equals(tree)) throw new AssertionError();
                                 |  if (!Tree.class.isSealed() || Tree.class.getPermittedSubclasses().length != 2) throw new AssertionError();
                                 |  if (!Tree.Leaf.class.isRecord() || !Tree.Node.class.isRecord()) throw new AssertionError();
+                                |  Tree deep = new Tree.Leaf(1);
+                                |  for (int i = 0; i < 2048; i++) deep = new Tree.Node(deep, new Tree.Leaf(0));
+                                |  for (int i = 0; i < 2; i++) {
+                                |   try { NominalApi.echoTree(deep); throw new AssertionError("deep argument accepted"); }
+                                |   catch (IllegalArgumentException expected) {
+                                |    if (!expected.getMessage().contains("128") || !expected.getMessage().contains("com.acme.Tree")) throw expected;
+                                |   }
+                                |   if (!NominalApi.echoTree(tree).equals(tree)) throw new AssertionError("argument guard leaked");
+                                |   try { NominalApi.deepTree(2048); throw new AssertionError("deep result accepted"); }
+                                |   catch (IllegalArgumentException expected) {
+                                |    if (!expected.getMessage().contains("128") || !expected.getMessage().contains("com.acme.Tree")) throw expected;
+                                |   }
+                                |   Tree limit = NominalApi.deepTree(127);
+                                |   if (sum(NominalApi.echoTree(limit)) != 1) throw new AssertionError("guard leaked or rejected the limit");
+                                |   try { NominalApi.deepTree(128); throw new AssertionError("over-limit result accepted"); }
+                                |   catch (IllegalArgumentException expected) { }
+                                |   try { NominalApi.echoTree(new Tree.Node(new Tree.Leaf(1), null)); throw new AssertionError("null child accepted"); }
+                                |   catch (IllegalArgumentException expected) { }
+                                |   if (!NominalApi.echoTree(tree).equals(tree)) throw new AssertionError("exception guard leaked");
+                                |  }
                                 |  IntBox boxed = NominalApi.intBox();
                                 |  if (!boxed.equals(new IntBox.Box(42)) || !NominalApi.echoBox(boxed).equals(boxed)) throw new AssertionError();
                                 |  if (!NominalApi.stringBox().equals(new StringBox.Box("boxed"))) throw new AssertionError();

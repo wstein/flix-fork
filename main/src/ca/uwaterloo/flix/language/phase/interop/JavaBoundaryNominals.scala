@@ -111,7 +111,7 @@ object JavaBoundaryNominals {
     val jname = s"BoundaryNominal$index"
     val dot = nominal.className.lastIndexOf('.')
     val imports = List(s"import ${nominal.className.take(dot)}.{${nominal.className.drop(dot + 1)} => $jname}",
-      "import dev.flix.runtime.{OpaqueHandleBridge => BoundaryChecks}", "import java.lang.IllegalArgumentException") ++
+      "import dev.flix.runtime.{OpaqueHandleBridge => BoundaryChecks}", "import java.lang.IllegalArgumentException", "import java.lang.Throwable") ++
       (if (nominal.sealedType) nominal.variants.zipWithIndex.map { case (variant, vi) =>
         s"import ${nominal.className.take(dot)}.{${nominal.className.drop(dot + 1)}$$${variant.name} => ${jname}Case$vi}"
       } else Nil)
@@ -149,16 +149,27 @@ object JavaBoundaryNominals {
     val outBody = if (nominal.adapted) s"match a { case Adapter$index.Adapter$index(x) => match x { $outCases } }"
       else s"match a { $outCases }"
     val argumentBody = if (nominal.adapted) s"Adapter$index.Adapter$index($inBody)" else inBody
+    // Enter outside the try: a rejected entry did not acquire a level to release.
+    def guarded(body: String): String = s"""
+      |BoundaryChecks.enterConversion("${nominal.className}");
+      |try {
+      |    let converted = $body;
+      |    BoundaryChecks.exitConversion();
+      |    converted
+      |} catch {
+      |    case ex: Throwable => BoundaryChecks.exitConversion(); throw ex
+      |}
+      |""".stripMargin
     val definitions = s"""
       |instance Java.Boundary.JavaResult[$head] {
       |    type Out = $jname
       |    type Aef = IO
-      |    pub def toJava(${if (validationOnly) "_a" else "a"}: $head): $jname \\ IO = ${if (validationOnly) "checked_ecast(bug!(\"validation-only boundary declaration\"))" else outBody}
+      |    pub def toJava(${if (validationOnly) "_a" else "a"}: $head): $jname \\ IO = ${if (validationOnly) "checked_ecast(bug!(\"validation-only boundary declaration\"))" else guarded(outBody)}
       |}
       |instance Java.Boundary.JavaArgument[$head] {
       |    type In = $jname
       |    type Aef = IO
-      |    pub def toFlix(${if (validationOnly) "_x" else "x"}: $jname): $head \\ IO = ${if (validationOnly) "checked_ecast(bug!(\"validation-only boundary declaration\"))" else argumentBody}
+      |    pub def toFlix(${if (validationOnly) "_x" else "x"}: $jname): $head \\ IO = ${if (validationOnly) "checked_ecast(bug!(\"validation-only boundary declaration\"))" else guarded(argumentBody)}
       |}
       |""".stripMargin
     val helpers = if (!nominal.adapted) "" else s"""
