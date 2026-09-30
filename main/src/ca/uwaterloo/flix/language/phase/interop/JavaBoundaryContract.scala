@@ -234,7 +234,7 @@ object JavaBoundaryContract {
       val result = members.result()
       val keys = if (interfaceName.isDefined) result.map(m => m.name + m.args.map(_.desc.descriptorString()).mkString("(", "", ")"))
       else result.map(_.name)
-      if (result.isEmpty || keys.distinct.size != result.size) abort("Expected distinct, nonempty API members.")
+      if ((result.isEmpty && interfaceName.isEmpty) || keys.distinct.size != result.size) abort("Expected distinct, nonempty API members.")
       val types = products.result()
       val enums = nominals.result()
       val names = (className :: (types.map(_.className) ++ enums.flatMap(_.classNames))).map(_.toLowerCase(Locale.ROOT))

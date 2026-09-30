@@ -164,7 +164,7 @@ object JavaBoundaryWrappers {
     if (root.modules.keys.exists(_.ns == List(module)) || root.sources.keys.exists(_.sourceName == SourceName.UriName(uri)))
       return Err(Invalid("The generated boundary module or source name is already owned by the caller.", api.loc))
     if (!SourceVersion.isName(api.className) || api.className.startsWith("java.") || api.className.startsWith("dev.flix.") ||
-        api.members.isEmpty || (api.interfaceName.isEmpty && api.members.map(_.name).distinct.size != api.members.size))
+        (api.members.isEmpty && api.interfaceName.isEmpty) || (api.interfaceName.isEmpty && api.members.map(_.name).distinct.size != api.members.size))
       return Err(Invalid("Expected a non-reserved Java class name and distinct API member names.", api.loc))
     Result.traverse(api.members.zipWithIndex) { case (member, index) =>
       generateWrapper(member, s"w$index", traits, root, declared)

@@ -55,6 +55,12 @@ class TestJavaBoundaryInterfaces extends AnyFunSuite with TestUtils {
                            |  if (!s.equals(s) || s.equals(new Object()) || !s.values().equals(java.util.List.of(9, 2))) throw new AssertionError();
                            | }
                            |} """.stripMargin,
+        "MarkerCaller" -> """package example; public final class MarkerCaller {
+                           | public static void main(String[] args) throws Exception {
+                           |  Object marker = Class.forName("example.FlixMarker").getConstructor().newInstance();
+                           |  if (!(marker instanceof java.io.Serializable) || marker.getClass().getDeclaredMethods().length != 0) throw new AssertionError();
+                           | }
+                           |} """.stripMargin,
         "Base" -> "package example; public interface Base<T> { T echo(T x); }",
         "Specific" -> "package example; public interface Specific extends Base<String> {}",
         "SpecificCaller" -> """package example; public final class SpecificCaller {
@@ -238,6 +244,20 @@ class TestJavaBoundaryInterfaces extends AnyFunSuite with TestUtils {
         val runtime = dir.resolve("runtime")
         assert(JavaBoundary.writeClasses(output.compilation.getClasses.values, runtime) == Result.Ok(()))
         runCaller(dir, jar, runtime, "example.ObjectCaller")
+      } finally flix.close()
+    }
+  }
+
+  test("marker interfaces need only a constructor, while static APIs still require members") {
+    assert(parse("""export mod Impl as "example.Static" {}""").isInstanceOf[Result.Err[?, ?]])
+    withJava { (dir, jar) =>
+      val flix = compiler(jar)
+      try {
+        val contract = parse("""export instance java.io.Serializable = mod Impl as "example.FlixMarker" {}""").unsafeGet
+        val output = JavaBoundary.compile(flix, contract).unsafeGet
+        val runtime = dir.resolve("runtime")
+        assert(JavaBoundary.writeClasses(output.compilation.getClasses.values, runtime) == Result.Ok(()))
+        runCaller(dir, jar, runtime, "example.MarkerCaller")
       } finally flix.close()
     }
   }

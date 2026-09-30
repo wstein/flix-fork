@@ -48,7 +48,7 @@ object JavaBoundaryApi {
     if (api.interfaceName.exists(name => !SourceVersion.isName(name)) ||
       !SourceVersion.isName(api.className) || api.className.startsWith("dev.flix.") || api.className.startsWith("java."))
       return Err(Error("Invalid or reserved Java API class name.", api.loc))
-    if (api.members.isEmpty || (api.interfaceName.isEmpty && api.members.map(_.name).distinct.size != api.members.size))
+    if ((api.members.isEmpty && api.interfaceName.isEmpty) || (api.interfaceName.isEmpty && api.members.map(_.name).distinct.size != api.members.size))
       return Err(Error("An API needs members with distinct Java method names.", api.loc))
     Result.traverse(api.members) { member =>
       root.defs.get(member.wrapper) match {
