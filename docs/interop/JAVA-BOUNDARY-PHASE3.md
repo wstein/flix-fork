@@ -47,8 +47,13 @@ constructor. Its instance methods forward through ordinary checked Flix wrappers
 per-instance Flix state; each invocation allocates a fresh wrapper. Java default methods remain
 inherited unless explicitly overridden. Public `Object` methods satisfy matching interface
 redeclarations, including `equals`. Inherited generic methods specialized by a concrete
-subinterface receive synthetic erased-descriptor bridges, so parent-interface calls dispatch
-correctly as well.
+subinterface receive synthetic erased-descriptor bridges. Each implementation emits every
+required inherited descriptor, including multiple bridges with covariant returns, so calls
+through each parent interface dispatch correctly. Generic return arguments remain invariant.
+Shared defaults and more-specific overrides remain inherited. Conflicting maximally specific
+defaults require an explicit contract member, including conflicts introduced by binary evolution.
+This follows [JLS 9.4.1.3](https://docs.oracle.com/javase/specs/jls/se21/html/jls-9.html#jls-9.4.1.3)
+and [JVMS 5.4.3.4](https://docs.oracle.com/javase/specs/jvms/se21/html/jvms-5.html#jvms-5.4.3.4).
 
 ## Compile Java first
 
@@ -87,7 +92,22 @@ restrictions remain, including explicit adapters for supported structural produc
 representations. All abstract methods must be implemented, apart from those fulfilled by
 `Object`; inherited defaults may be omitted. Interface static methods cannot be implemented. Marker interfaces may use an empty member block;
 the generated constructor is sufficient when no abstract methods are required.
+Checked `throws` declarations do not constrain this boundary: they are accepted, and Flix
+code may throw any exception. Calls allocate a fresh wrapper, as described above. JPMS package
+exports are not validated; deployment must make the interface and its types accessible.
 There is no generated handler constructor, service registration or automatic callback mapping.
+
+## Inheritance review follow-up
+
+The isolated `fix/java-boundary-interface-inheritance` branch preserves the original Phase 3
+worktree. On `90467ff52`, the narrower-return `Supplier<String>` redeclaration and the original
+`A<String>`/`B` example both passed. Stronger regressions reproduced two failures: a covariant
+parent needed a second bridge and threw `AbstractMethodError`; binary evolution introduced two
+conflicting defaults that checking incorrectly accepted. Both tests failed before their fixes.
+Additional positive tests cover shared and more-specific defaults and covariant parameterized
+returns. Interface validation now runs in the interop frontend before JVM emission; raw shape
+plans cannot emit unvalidated implementations. Shared Java metadata requires `isSealed` to be
+passed explicitly rather than relying on a default parameter.
 
 ## Validation
 
@@ -112,6 +132,9 @@ suites, core instance validation and Java metadata/provider checks. Java callers
 Flix and execute in isolated JVMs with only generated runtime output and the Java dependency
 jar. CLI and editor tests also pass. The subsequent milestone commit changes documentation only.
 
-Changes are on `feat/java-boundary-phase3`, in focused conventional commits. No merge or push
-has been performed for this milestone. A full compiler-suite rerun and native-image execution
-are outside this focused validation. Phase 2's earlier full-suite run predates this implementation.
+These results describe the original `feat/java-boundary-phase3` milestone before the inheritance
+review fixes. Phase 2's earlier full-suite run predates this implementation. Native-image
+execution remains outside this validation. The combined regression gate with all review fixes passes **183 tests in 13 suites, zero failures
+and zero aborted suites**, including all 17 interface tests and the unvalidated-plan emission
+regression. There are no ignored, canceled or pending tests. The full compiler-suite gate is
+still required before merging this fixed tip.

@@ -6,6 +6,15 @@ Proposed. Scoped to how Flix code is *called from* the JVM -- Java, Kotlin, Scal
 values cross that boundary. Calling Java *from* Flix (`import`, `new`, method calls) is unchanged.
 Numbered 3 to follow ADRs 1 and 2 on `feat/stable-specialization-names-rewrite`.
 
+Revision 15 addresses the Phase 3 inheritance review. Interface validation preserves declarations
+and all erased descriptors across specialized parent interfaces, checks covariant returns without
+erasing generic arguments, and rejects conflicting inherited defaults unless implemented explicitly.
+Shared defaults and more-specific overrides remain valid. Validation belongs in the interop
+frontend; JVM shape plans cannot emit unchecked interface implementations. Java metadata now
+requires an explicit sealed flag. Checked `throws` declarations are accepted without restricting
+Flix exceptions; fresh wrappers are allocated per call, and JPMS exports remain unchecked.
+The [Phase 3 guide](../interop/JAVA-BOUNDARY-PHASE3.md) records reproduced failures and validation.
+
 Revision 14 implements the experimental Java-first Phase 3 slice and records the Phase 4
 investigation. `export instance <Java interface> = mod <Flix module> as "<implementation>"`
 contracts reuse checked conversion wrappers, validate Java-owned classfile metadata and emit
@@ -20,8 +29,8 @@ element conversion. Automatic handler bindings, escaping/asynchronous resumption
 collection views remain future implementation work. Defaults continue to return detached
 collection copies. Overall status stays Proposed; Phase 2's full-suite evidence predates this
 implementation. The combined gate on `287b3d289` passes 176 tests in 13 suites, zero failed
-or aborted, including all 11 interface tests and both Phase 4 probes. No Phase 3 full-suite run,
-merge, push or native execution is claimed.
+or aborted, including all 11 interface tests and both Phase 4 probes. At that milestone, no Phase 3 full-suite run,
+merge, push or native execution was claimed.
 
 Revision 13 records the Phase 2 review fixes and two implementation decisions: state-mutating
 runtime bridge members share one compiler-owned-source access policy, and each `Flix` instance
