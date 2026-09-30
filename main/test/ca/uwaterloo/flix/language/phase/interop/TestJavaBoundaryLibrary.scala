@@ -22,11 +22,15 @@ import scala.jdk.CollectionConverters.*
 
 class TestJavaBoundaryLibrary extends AnyFunSuite with TestUtils {
   private val source = """pub mod LibraryApi {
+                         |    import java.util.{Map => JMap}
                          |    pub def values(): List[Int32] = 1 :: 2 :: Nil
                          |    pub def nested(): List[List[Int32]] = (1 :: Nil) :: Nil
                          |    pub def optional(x: Option[Int32]): Option[Int32] = x
                          |    pub def vector(x: Vector[Int32]): Vector[Int32] = x
                          |    pub def chain(x: Chain[Int32]): Chain[Int32] = x
+                         |    pub def echo(x: String): String = x
+                         |    pub def nestedArgument(x: List[List[Int32]]): List[List[Int32]] = x
+                         |    pub def nativeMap(x: JMap[String, String]): JMap[String, String] = x
                          |    pub def set(): Set[Int32] = Set.singleton(3)
                          |    pub def map(): Map[Int32, List[Int32]] = Map.singleton(4, 5 :: Nil)
                          |    pub def bools(): List[Bool] = true :: false :: Nil
@@ -79,7 +83,7 @@ class TestJavaBoundaryLibrary extends AnyFunSuite with TestUtils {
 
   test("packaged deep conversions and default handlers pass a staged Java caller") {
     implicit val flix: Flix = new Flix()
-    val output = compileMembers(List("values", "nested", "optional", "vector", "chain", "set", "map", "bools", "chars", "big", "decimal", "checked", "converted", "primitive", "model", "order", "readModel")).unsafeGet
+    val output = compileMembers(List("values", "nested", "optional", "vector", "chain", "echo", "nestedArgument", "nativeMap", "set", "map", "bools", "chars", "big", "decimal", "checked", "converted", "primitive", "model", "order", "readModel")).unsafeGet
     val signatures = output.plan.methods.map(method => method.member.name -> method.signature).toMap
     assert(signatures("map") == "()Ljava/util/Map<Ljava/lang/Integer;Ljava/util/List<Ljava/lang/Integer;>;>;")
     assert(signatures("chain") == "(Ljava/util/Collection<Ljava/lang/Integer;>;)Ljava/util/Collection<Ljava/lang/Integer;>;")
@@ -120,6 +124,17 @@ class TestJavaBoundaryLibrary extends AnyFunSuite with TestUtils {
                                   |    if (!LibraryApi.optional(Optional.of(7)).equals(Optional.of(7))) throw new AssertionError("optional");
                                   |    if (!LibraryApi.optional(Optional.empty()).isEmpty()) throw new AssertionError("empty");
                                   |    if (!LibraryApi.vector(xs).equals(xs)) throw new AssertionError("vector");
+                                  |    expectNull(() -> LibraryApi.vector(null), "x");
+                                  |    expectNull(() -> LibraryApi.vector(Arrays.asList(1, null)), "x[1]");
+                                  |    expectNull(() -> LibraryApi.optional(null), "x");
+                                  |    expectNull(() -> LibraryApi.chain(Arrays.asList((Integer) null)), "x[0]");
+                                  |    expectNull(() -> LibraryApi.echo(null), "x");
+                                  |    expectNull(() -> LibraryApi.nestedArgument(List.of(Arrays.asList(1, null))), "x[0][1]");
+                                  |    Map<String, String> nullable = new LinkedHashMap<>();
+                                  |    nullable.put("key", null);
+                                  |    expectNull(() -> LibraryApi.nativeMap(nullable), "x[0].value");
+                                  |    nullable.clear(); nullable.put(null, "value");
+                                  |    expectNull(() -> LibraryApi.nativeMap(nullable), "x[0].key");
                                   |    if (!new ArrayList<>(LibraryApi.chain(xs)).equals(xs)) throw new AssertionError("chain");
                                   |    if (!LibraryApi.set().equals(Set.of(3))) throw new AssertionError("set");
                                   |    if (!LibraryApi.map().equals(Map.of(4, List.of(5)))) throw new AssertionError("map");
@@ -144,6 +159,12 @@ class TestJavaBoundaryLibrary extends AnyFunSuite with TestUtils {
                                   |    }
                                   |    try { LibraryApi.readModel(null); throw new AssertionError("null opaque accepted"); }
                                   |    catch (IllegalArgumentException expected) { }
+                                  |  }
+                                  |  static void expectNull(Runnable call, String path) {
+                                  |    try { call.run(); throw new AssertionError("null accepted: " + path); }
+                                  |    catch (IllegalArgumentException expected) {
+                                  |      if (!expected.getMessage().contains(path)) throw expected;
+                                  |    }
                                   |  }
                                   |}
                                   |""".stripMargin)

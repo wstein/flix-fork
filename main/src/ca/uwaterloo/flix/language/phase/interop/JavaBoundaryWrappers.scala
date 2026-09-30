@@ -116,7 +116,8 @@ object JavaBoundaryWrappers {
           val typed = augmented._1.get
           val members = wrappers.map { wrapper =>
             val sym = typed.defs.keys.find(sym => sym.namespace == List(module) && sym.text == wrapper.name).get
-            JavaBoundaryApi.Member(wrapper.member.name, sym)
+            val names = root.defs(wrapper.member.target).spec.fparams.toList.map(_.bnd.sym.text)
+            JavaBoundaryApi.Member(wrapper.member.name, sym, names)
           }
           val declaration = JavaBoundaryApi.Declaration(api.className, members)
           for {

@@ -28,7 +28,7 @@ import javax.lang.model.SourceVersion
   * default effect handlers, and pre-type-check cyclic-build stubs are separate integration gates.
   */
 object JavaBoundaryApi {
-  case class Member(name: String, wrapper: Symbol.DefnSym)
+  case class Member(name: String, wrapper: Symbol.DefnSym, argumentNames: List[String] = Nil)
   case class Declaration(className: String, members: List[Member])
   case class Error(message: String, loc: SourceLocation)
   case class JavaType(desc: ClassDesc, signature: String)
@@ -138,7 +138,19 @@ object JavaBoundaryApi {
         mv.visitInsn(Opcodes.DUP)
         mv.visitMethodInsn(Opcodes.INVOKESPECIAL, "java/lang/UnsupportedOperationException", "<init>", "()V", false)
         mv.visitInsn(Opcodes.ATHROW)
-      } else forward(method)
+      } else {
+        var offset = 0
+        method.args.zipWithIndex.foreach { case (arg, index) =>
+          if (!arg.desc.isPrimitive) {
+            xLoad(arg.desc, offset)
+            mv.visitLdcInsn(method.member.argumentNames.lift(index).getOrElse(s"p$index"))
+            mv.visitMethodInsn(Opcodes.INVOKESTATIC, "dev/flix/runtime/OpaqueHandleBridge", "checkArgument",
+              "(Ljava/lang/Object;Ljava/lang/String;)V", false)
+          }
+          offset += (if (arg.desc == CD_long || arg.desc == CD_double) 2 else 1)
+        }
+        forward(method)
+      }
       mv.visitMaxs(0, 0)
       mv.visitEnd()
     }
