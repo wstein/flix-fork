@@ -106,12 +106,15 @@ object JavaBoundaryWrappers {
     val checked = flix.check()
     if (checked._2.nonEmpty) return Err(InputErrors(checked._2, checked._2.head.loc))
     val root = checked._1.get
-    val declared = products.map { case (out, in) =>
+    val bindings = products.map { case (out, in) =>
       val result = root.defs(Symbol.mkDefnSym(out)).spec
       val argument = root.defs(Symbol.mkDefnSym(in)).spec
       Type.eraseAliases(result.fparams.head.tpe) -> (Conversion(result.retTpe, result.eff, Some(out)),
         Conversion(argument.fparams.head.tpe, argument.eff, Some(in)))
-    }.toMap
+    }
+    if (bindings.map(_._1).distinct.size != bindings.size)
+      return Err(Invalid("Declared Java representations have the same checked Flix payload type (including aliases).", api.loc))
+    val declared = bindings.toMap
     val digest = MessageDigest.getInstance("SHA-256").digest(api.className.getBytes(StandardCharsets.UTF_8))
       .map(byte => f"${byte & 0xff}%02x").mkString
     val module = "BoundaryGenerated" + digest

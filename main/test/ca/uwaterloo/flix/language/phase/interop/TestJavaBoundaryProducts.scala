@@ -78,6 +78,22 @@ class TestJavaBoundaryProducts extends AnyFunSuite with TestUtils {
     } finally flix.close()
   }
 
+  test("aliases and their expansions cannot select ambiguous product representations") {
+    val conflicting = parse(text.replace("def point:",
+      "tuple com.acme.AliasPair(left: long, right: double) = Products.Pair; def point:")).unsafeGet
+    val flix = new Flix().setOptions(Options.TestWithLibAll.copy(xchaosMonkey = false))
+      .addSource(Paths.get("Products.flix"), source.replace("pub def pair():", "pub type alias Pair = (Int64, Float64) pub def pair():"), sctx)
+    try {
+      JavaBoundaryWrappers.checkContract(flix, conflicting, sctx) match {
+        case Result.Err(JavaBoundaryWrappers.Invalid(message, loc)) =>
+          assert(message.contains("same checked Flix payload type"))
+          assert(loc == conflicting.loc)
+        case other => fail(s"Expected a semantic target collision, found $other")
+      }
+      expectSuccess(flix.check())
+    } finally flix.close()
+  }
+
   test("staged Java callers link against real declared records, not bootstrap stubs") {
     val contract = parse(text).unsafeGet
     val dir = Files.createTempDirectory("flix-boundary-products-")
