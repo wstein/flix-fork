@@ -21,16 +21,36 @@ import javax.tools.ToolProvider
 import scala.jdk.CollectionConverters.*
 
 class TestJavaBoundaryLibrary extends AnyFunSuite with TestUtils {
-  test("ordinary Flix code cannot import the compiler's opaque wrapping bridge") {
-    val input = """import dev.flix.runtime.OpaqueHandleBridge
-                  |def forge(): Unit \ IO = discard OpaqueHandleBridge.wrap("key", "Int32", null)
-                  |""".stripMargin
+  List("wrap(\"key\", \"Int32\", null)", "enterConversion(\"nominal\")", "exitConversion()").foreach { call =>
+    test(s"only compiler-owned Flix code can call the runtime member $call") {
+      val body = (if (call.startsWith("wrap(")) "discard " else "") + s"OpaqueHandleBridge.$call"
+      val input = s"""import dev.flix.runtime.OpaqueHandleBridge
+                     |def internal(): Unit \\ IO = $body
+                     |""".stripMargin
+      val uri = java.net.URI.create("flix-boundary:/pretend-owned.flix")
+      val flix = new Flix().setOptions(Options.TestWithLibAll.copy(xchaosMonkey = false))
+      try {
+        flix.addSource(uri, input, sctx)
+        expectError[ca.uwaterloo.flix.language.errors.TypeError.StaticMethodNotFound](flix.check())
+        flix.addJavaBoundarySource(uri, input, sctx)
+        expectSuccess(flix.check())
+        flix.addSource(uri, input, sctx)
+        expectError[ca.uwaterloo.flix.language.errors.TypeError.StaticMethodNotFound](flix.check())
+      } finally flix.close()
+    }
+  }
+
+  test("ordinary Flix code can still call the argument-validation bridge") {
     val flix = new Flix().setOptions(Options.TestWithLibAll.copy(xchaosMonkey = false))
     try {
-      flix.addSource(java.net.URI.create("flix-boundary:/pretend-owned.flix"), input, sctx)
-      expectError[ca.uwaterloo.flix.language.errors.TypeError.StaticMethodNotFound](flix.check())
+      flix.addSource(Paths.get("CheckArgument.flix"),
+        """import dev.flix.runtime.OpaqueHandleBridge
+          |def checkNative(): Unit \ IO = OpaqueHandleBridge.checkArgument(null, "native", "U")
+          |""".stripMargin, sctx)
+      expectSuccess(flix.check())
     } finally flix.close()
   }
+
   test("opaque conversions are not public polymorphic Flix helpers") {
     List("pack", "unpack").foreach { name =>
       val input = s"def forge(): Java.Boundary.Opaque[Int32] \\ IO = Java.Boundary.$name(\"key\", \"Int32\", null)"

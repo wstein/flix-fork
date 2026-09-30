@@ -13,6 +13,7 @@ import ca.uwaterloo.flix.language.ast.jvm.{JavaField, JavaMethod, JavaType, Java
 import ca.uwaterloo.flix.language.ast.shared.SymUse.AssocTypeSymUse
 import ca.uwaterloo.flix.language.ast.shared.{AssocTypeDef, RegionScope}
 import ca.uwaterloo.flix.language.jvm.{ClassDescs, JavaArgument, JavaMemberResolver, JavaMetadata}
+import ca.uwaterloo.flix.language.phase.interop.JavaBoundaryRuntime
 import ca.uwaterloo.flix.language.phase.typer.jvm.{JavaTypes, PrimitiveEffects}
 import ca.uwaterloo.flix.language.phase.unification.{EqualityEnv, Substitution}
 import ca.uwaterloo.flix.util.Result.{Err, Ok}
@@ -214,7 +215,7 @@ object TypeReduction2 {
 
   /** Tries to find a static method of `owner` that takes arguments of type `ts`. */
   private def lookupStaticMethod(owner: ClassDesc, methodName: String, ts: List[Type], loc: SourceLocation)(implicit scope: RegionScope, renv: RigidityEnv, flix: Flix): JavaResolution[JavaMethod] = {
-    if (owner == ClassDesc.of("dev.flix.runtime.OpaqueHandleBridge") && methodName == "wrap" &&
+    if (JavaBoundaryRuntime.compilerOnlyMembers.contains((owner, methodName)) &&
       !flix.isJavaBoundarySource(loc.source)) return JavaResolution.NotFound
     val typesAreKnown = ts.forall(isKnown)
     if (!typesAreKnown) return JavaResolution.UnresolvedTypes

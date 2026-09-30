@@ -12,6 +12,10 @@ import java.lang.constant.ClassDesc
 
 /** Standalone, JDK-only support classes included in both bootstrap APIs and runnable artifacts. */
 object JavaBoundaryRuntime {
+  /** All overloads of these state-mutating static members require a compiler-owned source. */
+  private[flix] val compilerOnlyMembers: Set[(ClassDesc, String)] =
+    Set("wrap", "enterConversion", "exitConversion").map(ClassDesc.of("dev.flix.runtime.OpaqueHandleBridge") -> _)
+
   def classes: List[JvmClass] = List("OpaqueHandle", "OpaqueHandleBridge").map { name =>
     val path = s"/dev/flix/runtime/$name.class"
     val resource = Option(getClass.getResourceAsStream(path)).getOrElse(throw new IllegalStateException(s"Missing boundary runtime: $path"))
