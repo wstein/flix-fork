@@ -8,6 +8,8 @@
 package ca.uwaterloo.flix.language.phase
 
 import ca.uwaterloo.flix.TestUtils
+import ca.uwaterloo.flix.api.Flix
+import java.net.URI
 import ca.uwaterloo.flix.language.CompilationMessage
 import ca.uwaterloo.flix.language.errors.InstanceError
 import ca.uwaterloo.flix.util.Options
@@ -508,6 +510,20 @@ class TestInstances extends AnyFunSuite with TestUtils {
         |""".stripMargin
     val result = check(input, Options.TestWithLibNix)
     expectError[InstanceError.OrphanInstance](result)
+  }
+
+  test("only compiler-owned boundary sources bypass orphan checks") {
+    val uri = URI.create("flix-boundary:/Orphan.flix")
+    val input = "mod N { pub trait C[a] } instance N.C[Int32]"
+    val flix = new Flix().setOptions(Options.TestWithLibNix)
+    try {
+      flix.addSource(uri, input, sctx)
+      expectError[InstanceError.OrphanInstance](flix.check())
+      flix.addJavaBoundarySource(uri, input, sctx)
+      expectSuccess(flix.check())
+      flix.addSource(uri, input, sctx)
+      expectError[InstanceError.OrphanInstance](flix.check())
+    } finally flix.close()
   }
 
   test("Test.OrphanInstance.02") {

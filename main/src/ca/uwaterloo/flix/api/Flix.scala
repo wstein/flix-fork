@@ -355,6 +355,7 @@ class Flix(pkgs: List[InstalledPackage] = Nil, jars: List[Path] = Nil, mounts: M
     addSource(uri, text, sctx)
     val name = SourceName.UriName(uri)
     boundarySources.put(name, sources(name))
+    changeSet = changeSet.markChanged(name, cachedTyperAst.dependencyGraph)
     this
   }
 
@@ -445,7 +446,9 @@ class Flix(pkgs: List[InstalledPackage] = Nil, jars: List[Path] = Nil, mounts: M
     * origin, security context, and text changes nothing and marks nothing.
     */
   private def register(source: Source): Unit = synchronized {
-    boundarySources.remove(source.sourceName)
+    // Revoking compiler ownership changes instance legality even when the text is identical.
+    if (boundarySources.remove(source.sourceName) != null)
+      changeSet = changeSet.markChanged(source.sourceName, cachedTyperAst.dependencyGraph)
     sources.get(source.sourceName) match {
     case None =>
       sources += source.sourceName -> source
