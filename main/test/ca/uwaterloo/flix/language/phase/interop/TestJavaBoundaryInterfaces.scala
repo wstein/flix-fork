@@ -262,6 +262,23 @@ class TestJavaBoundaryInterfaces extends AnyFunSuite with TestUtils {
     }
   }
 
+  test("the recorded ABI includes the implemented Java interface") {
+    withJava { (_, jar) =>
+      val flix = compiler(jar)
+      try {
+        val contract = parse(text).unsafeGet
+        val plan = JavaBoundary.check(flix, contract).unsafeGet
+        val changed = parse(text.replace("example.Service =", "example.Parent =")).unsafeGet
+        JavaBoundaryContract.verify(changed, plan) match {
+          case Result.Err(error) =>
+            assert(error.message.contains("interface: expected example.Parent, actual example.Service"))
+            assert(error.loc == changed.loc)
+          case other => fail(s"Expected an interface ABI mismatch, found $other")
+        }
+      } finally flix.close()
+    }
+  }
+
   test("Java compiles first against the interface and invokes Flix without stubs or compiler jar") {
     withJava { (dir, jar) =>
       val flix = compiler(jar)

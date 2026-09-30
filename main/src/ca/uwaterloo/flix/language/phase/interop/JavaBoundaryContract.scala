@@ -51,6 +51,9 @@ object JavaBoundaryContract {
   def verify(contract: Contract, plan: JavaBoundaryApi.Plan): Result[Unit, Error] = {
     val actualClass = plan.name.descriptorString().drop(1).dropRight(1).replace('/', '.')
     val classDiff = if (contract.className == actualClass) Nil else List(s"class: expected ${contract.className}, actual $actualClass")
+    val actualInterface = plan.interfaceName.map(_.descriptorString().drop(1).dropRight(1).replace('/', '.'))
+    val interfaceDiff = if (contract.interfaceName == actualInterface) Nil else List(
+      s"interface: expected ${contract.interfaceName.getOrElse("static API")}, actual ${actualInterface.getOrElse("static API")}")
     val actual = plan.methods.map(method => (method.member.name, method.args.map(_.desc)) -> method).toMap
     val methodDiffs = contract.members.flatMap { member => actual.get((member.name, member.args.map(_.desc))) match {
       case None =>
@@ -64,7 +67,7 @@ object JavaBoundaryContract {
     }}
     val extra = actual.keySet.diff(contract.members.map(m => (m.name, m.args.map(_.desc))).toSet).toList
       .sortBy(_.toString).map { case (name, _) => s"$name: unexpected actual method" }
-    val differences = classDiff ++ methodDiffs ++ extra
+    val differences = classDiff ++ interfaceDiff ++ methodDiffs ++ extra
     if (differences.isEmpty) Ok(()) else {
       val loc = contract.members.find(member => actual.get((member.name, member.args.map(_.desc))).forall(method =>
         member.descriptor != method.descriptor || member.signature != method.signature)).map(_.loc).getOrElse(contract.loc)
