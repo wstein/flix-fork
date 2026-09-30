@@ -185,6 +185,48 @@ class TestJavaBoundaryInterfaces extends AnyFunSuite with TestUtils {
     }
   }
 
+  test("CLI emits an interface implementation from Java-owned classfiles") {
+    withJava { (dir, jar) =>
+      val contract = dir.resolve("Specific.flix-api")
+      val source = dir.resolve("Impl.flix")
+      val runtime = dir.resolve("runtime")
+      Files.writeString(contract, """export instance example.Specific = mod Impl as "example.FlixSpecific" {
+                                    | def echo: (java.lang.String) -> java.lang.String;
+                                    |} """.stripMargin)
+      Files.writeString(source, """pub mod Impl { pub def echo(x: String): String = x + "!" }""")
+      val log = dir.resolve("cli.log")
+      val command = List(Paths.get(System.getProperty("java.home"), "bin", "java").toString,
+        "-Xmx2g", "-cp", System.getProperty("java.class.path"), "ca.uwaterloo.flix.Main", "java-api",
+        contract.toString, "--lib", jar.toString, "--out", runtime.toString, "--diagnostics-json", source.toString)
+      val child = new ProcessBuilder(command.asJava).directory(dir.toFile).redirectErrorStream(true).redirectOutput(log.toFile).start()
+      try {
+        assert(child.waitFor(60, TimeUnit.SECONDS))
+        assert(child.exitValue() == 0, Files.readString(log))
+        assert(Files.exists(runtime.resolve("example/FlixSpecific.class")))
+        assert(!Files.exists(runtime.resolve("example/Specific.class")))
+        runCaller(dir, jar, runtime, "example.SpecificCaller")
+      } finally if (child.isAlive) child.destroyForcibly().waitFor()
+    }
+  }
+
+  test("LSP checks interface contracts and clears corrected method diagnostics") {
+    val project = new LspProject(Options.TestWithLibAll.copy(xchaosMonkey = false))
+    val name = SourceName.PathName(Paths.get("Runnable.flix-api"))
+    val contract = """export instance java.lang.Runnable = mod Impl as "example.FlixRunnable" {
+                     | def run = execute: () -> void;
+                     |} """.stripMargin
+    try {
+      project.addSource(SourceName.PathName(Paths.get("Impl.flix")), "pub mod Impl { pub def execute(): Unit = () }")
+      project.addSource(name, contract.replace("def run = execute:", "def missing = execute:"))
+      val invalid = project.check()
+      assert(invalid._2.size == 1)
+      assert(invalid._2.head.loc.source.sourceName == name)
+      assert(invalid._2.head.loc.startLine == 2)
+      project.addSource(name, contract)
+      assert(project.check()._2.isEmpty)
+    } finally project.close()
+  }
+
   test("public Object methods fulfill redeclared abstract interface methods") {
     withJava { (dir, jar) =>
       val flix = compiler(jar)
