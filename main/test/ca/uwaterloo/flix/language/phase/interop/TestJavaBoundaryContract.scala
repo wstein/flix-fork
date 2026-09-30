@@ -32,6 +32,41 @@ class TestJavaBoundaryContract extends AnyFunSuite with TestUtils {
   private def compiler: Flix = new Flix().setOptions(Options.TestWithLibAll.copy(xchaosMonkey = false))
     .addSource(Paths.get("Cycle.flix"), "pub mod Cycle { pub def values(): List[Int32] = 1 :: Nil pub def value(): Int32 = 42 }", sctx)
 
+  test("sealed variants cannot reuse the enclosing Java type name") {
+    val value = """export mod Cycle as "com.acme.Api" {
+                  | sealed com.acme.Tree = Tree { case Tree(value: int); };
+                  | def tree: () -> com.acme.Tree;
+                  |} """.stripMargin
+    parse(value) match {
+      case Result.Err(error) =>
+        assert(error.message.contains("enclosing"))
+        assert(error.loc.startLine == 2)
+      case other => fail(s"Expected an enclosing-type name error, found $other")
+    }
+    assert(parse(value.replace("sealed", "enum").replace("(value: int)", "")).isInstanceOf[Result.Ok[?, ?]])
+  }
+
+  test("generated classes cannot also name Java packages") {
+    List(
+      """export mod Cycle as "com.acme.Api" {
+        | record com.acme.Api.Point(x: int) = Point;
+        | def point: () -> com.acme.Api.Point;
+        |} """.stripMargin,
+      """export mod Cycle as "com.acme.Api" {
+        | record com.acme.Model(x: int) = Point;
+        | record com.acme.Model.Point(x: int) = Other;
+        | def point: () -> com.acme.Model;
+        |} """.stripMargin
+    ).foreach { value =>
+      parse(value) match {
+        case Result.Err(error) =>
+          assert(error.message.contains("package"))
+          assert(error.loc.startLine >= 2)
+        case other => fail(s"Expected a class/package name error, found $other")
+      }
+    }
+  }
+
   test("explicit contracts retain source locations, aliases and generic signatures") {
     val contract = parse(text).unsafeGet
     assert(contract.className == "com.acme.Cycle")

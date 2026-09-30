@@ -196,6 +196,8 @@ object JavaBoundaryContract {
           expect("}"); expect(";")
           val cases = variants.result()
           if (cases.isEmpty || cases.map(_.name).distinct.size != cases.size) abort("Expected distinct, nonempty enum cases.")
+          if (sealedType && cases.exists(_.name == name.split('.').last))
+            throw new ParseFailure(Error("A sealed variant cannot reuse its enclosing Java type name.", memberLoc))
           nominals += Nominal(name, target, cases, sealedType, memberLoc)
         } else {
         expect("def")
@@ -223,6 +225,14 @@ object JavaBoundaryContract {
       val enums = nominals.result()
       val names = (className :: (types.map(_.className) ++ enums.flatMap(_.classNames))).map(_.toLowerCase(Locale.ROOT))
       if (names.distinct.size != names.size) abort("Generated Java class names collide, including case-only collisions.")
+      val declarations = (className -> loc) :: (types.map(t => t.className -> t.loc) ++
+        enums.flatMap(n => n.classNames.map(_ -> n.loc)))
+      val foldedNames = names.toSet
+      declarations.foreach { case (name, declarationLoc) =>
+        val segments = name.toLowerCase(Locale.ROOT).split('.').toList
+        if (segments.indices.drop(1).exists(i => foldedNames.contains(segments.take(i).mkString("."))))
+          throw new ParseFailure(Error("A generated Java class name also names a package.", declarationLoc))
+      }
       val targets = types.map(_.target) ++ enums.map(_.target)
       if (targets.distinct.size != targets.size) abort("Each Flix type may have only one declared Java representation per contract.")
       Ok(Contract(className, result, loc, types, enums))
