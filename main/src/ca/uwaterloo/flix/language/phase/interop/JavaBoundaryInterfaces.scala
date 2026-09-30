@@ -6,12 +6,16 @@
 package ca.uwaterloo.flix.language.phase.interop
 
 import ca.uwaterloo.flix.api.Flix
-import ca.uwaterloo.flix.language.ast.jvm.JavaType
+import ca.uwaterloo.flix.language.ast.SourceLocation
+import ca.uwaterloo.flix.language.ast.jvm.{JavaMethod, JavaType, JavaTypeVariable}
 import ca.uwaterloo.flix.language.jvm.{JavaLookupError, JavaMemberResolver}
 import java.lang.constant.ConstantDescs.CD_Object
 import ca.uwaterloo.flix.language.phase.jvm.JavaBoundaryApi
 import ca.uwaterloo.flix.util.Result
 import ca.uwaterloo.flix.util.Result.{Err, Ok}
+
+import java.lang.constant.ClassDesc
+import scala.annotation.tailrec
 
 /** Validate implementations against Java-owned classfiles, without loading an interface. */
 object JavaBoundaryInterfaces {
@@ -34,6 +38,8 @@ object JavaBoundaryInterfaces {
         case Err(cause) => Err(invalid(cause.explanation))
       }
       objectClass <- flix.javaTypeProvider.lookupClass(CD_Object).mapErr(e => invalid(e.explanation))
+      hierarchy <- inheritedMethods(owner, plan.loc)
+      _ <- checkDefaults(hierarchy, plan)
       methods <- JavaMemberResolver.instanceMethods(owner).mapErr(e => invalid(s"Unable to resolve Java interface methods: ${e.explanation}"))
       _ <- {
         val keys = plan.methods.map(m => m.member.name -> m.args.map(_.desc))
@@ -72,6 +78,73 @@ object JavaBoundaryInterfaces {
         else Err(invalid("Java interface bridge descriptors collide with another implementation."))
       }
     } yield bridges.flatten
+  }
+
+  /** Keep declaration provenance and every descriptor; a method-graph representative loses both. */
+  private def inheritedMethods(owner: ClassDesc, loc: SourceLocation)(implicit flix: Flix): Result[List[JavaMethod], JavaBoundaryApi.Error] = {
+    @tailrec
+    def visit(pending: List[(JavaType, Set[ClassDesc])], seen: Map[ClassDesc, JavaType],
+              methods: List[JavaMethod]): Result[List[JavaMethod], JavaBoundaryApi.Error] = pending match {
+      case Nil => Ok(methods.reverse)
+      case (tpe, path) :: rest =>
+        val desc = tpe.erasure
+        if (path.contains(desc)) return Err(JavaBoundaryApi.Error("Cyclic Java interface inheritance.", loc))
+        seen.get(desc) match {
+          case Some(previous) if previous == tpe => visit(rest, seen, methods)
+          case Some(_) => Err(JavaBoundaryApi.Error("Incompatible inherited Java interface instantiations.", loc))
+          case None => flix.javaTypeProvider.lookupClass(desc) match {
+            case Err(cause) => Err(JavaBoundaryApi.Error(cause.explanation, loc))
+            case Ok(clazz) =>
+              if (!clazz.isInterface) return Err(JavaBoundaryApi.Error("A Java interface inherits a non-interface type.", loc))
+              val args = tpe match { case JavaType.Parameterized(_, actual) => actual; case _ => Nil }
+              if (args.nonEmpty && args.size != clazz.typeParameters.size)
+                return Err(JavaBoundaryApi.Error("Invalid inherited Java interface type arguments.", loc))
+              val bindings = clazz.typeParameters.map(_.variable).zip(args).toMap
+              val declared = clazz.declaredMethods.filter(m => m.isPublic && !m.isStatic).map { method =>
+                method.copy(parameterTypes = method.parameterTypes.map(substitute(_, bindings)),
+                  returnType = substitute(method.returnType, bindings))
+              }
+              val parents = clazz.interfaces.map(t => substitute(t, bindings) -> (path + desc))
+              visit(parents ::: rest, seen + (desc -> tpe), declared.reverse ::: methods)
+          }
+        }
+    }
+    visit(List(JavaType.NonGeneric(owner) -> Set.empty[ClassDesc]), Map.empty, Nil)
+  }
+
+  private def substitute(tpe: JavaType, bindings: Map[JavaTypeVariable, JavaType]): JavaType = tpe match {
+    case JavaType.Variable(variable, _) => bindings.getOrElse(variable, tpe)
+    case JavaType.Parameterized(desc, args) => JavaType.Parameterized(desc, args.map(substitute(_, bindings)))
+    case JavaType.GenericArray(component, _) =>
+      val actual = substitute(component, bindings)
+      JavaType.GenericArray(actual, actual.erasure.arrayType())
+    case JavaType.Wildcard(upper, lower, desc) =>
+      JavaType.Wildcard(upper.map(substitute(_, bindings)), lower.map(substitute(_, bindings)), desc)
+    case _ => tpe
+  }
+
+  private def methodKey(method: JavaMethod): (String, List[ClassDesc]) =
+    method.ref.name -> method.parameterTypes.map(_.erasure)
+
+  private def checkDefaults(methods: List[JavaMethod], plan: JavaBoundaryApi.Plan)
+                           (implicit flix: Flix): Result[Unit, JavaBoundaryApi.Error] = {
+    val implemented = plan.methods.map(m => m.member.name -> m.args.map(_.desc)).toSet
+    val groups = methods.filter(m => !m.isBridge && !m.isSynthetic).groupBy(methodKey).toList
+      .sortBy { case ((name, args), _) => name + args.map(_.descriptorString()).mkString }
+    Result.traverse(groups) { case (key, candidates) =>
+      if (implemented(key)) Ok(())
+      else Result.traverse(candidates) { method =>
+        Result.traverse(candidates) { other =>
+          if (other.ref.owner == method.ref.owner) Ok(false)
+          else flix.javaTypeProvider.isSubtype(other.ref.owner, method.ref.owner)
+            .mapErr(e => JavaBoundaryApi.Error(e.explanation, plan.loc))
+        }.map(dominated => if (dominated.exists(identity)) None else Some(method))
+      }.flatMap { maximal =>
+        val defaults = maximal.flatten.filterNot(_.isAbstract).map(_.ref.owner).distinct
+        if (defaults.size <= 1) Ok(())
+        else Err(JavaBoundaryApi.Error(s"Conflicting inherited defaults require an explicit implementation: ${key._1}.", plan.loc))
+      }
+    }.map(_ => ())
   }
 
   /** Fail closed rather than erasing type variables, wildcards, or arrays. */

@@ -76,6 +76,18 @@ class TestJavaBoundaryInterfaces extends AnyFunSuite with TestUtils {
                              |  if (bridges != 2) throw new AssertionError("Expected two bridges, found " + bridges);
                              | }
                              |} """.stripMargin,
+        "Grand" -> "package example; public interface Grand { default String f() { return \"Grand\"; } }",
+        "SideOne" -> "package example; public interface SideOne extends Grand {}",
+        "SideTwo" -> "package example; public interface SideTwo extends Grand {}",
+        "Shared" -> "package example; public interface Shared extends SideOne, SideTwo {}",
+        "OverrideSide" -> "package example; public interface OverrideSide extends Grand { default String f() { return \"Override\"; } }",
+        "SharedOverride" -> "package example; public interface SharedOverride extends OverrideSide, SideTwo {}",
+        "DefaultCaller" -> """package example; public final class DefaultCaller {
+                            | public static void main(String[] args) throws Exception {
+                            |  Object instance = Class.forName(args[0]).getConstructor().newInstance();
+                            |  if (!instance.getClass().getMethod("f").invoke(instance).equals(args[1])) throw new AssertionError();
+                            | }
+                            |} """.stripMargin,
         "Left" -> "package example; public interface Left { String f(); }",
         "Right" -> "package example; public interface Right { String f(); }",
         "Diamond" -> "package example; public interface Diamond extends Left, Right {}",
@@ -373,6 +385,20 @@ class TestJavaBoundaryInterfaces extends AnyFunSuite with TestUtils {
         val runtime = dir.resolve("runtime")
         assert(JavaBoundary.writeClasses(output.compilation.getClasses.values, runtime) == Result.Ok(()))
         runCaller(dir, jar, runtime, "example.MultipleCaller")
+      } finally flix.close()
+    }
+  }
+
+  test("a shared default and a more-specific default are inherited without false conflicts") {
+    withJava { (dir, jar) =>
+      val flix = compiler(jar)
+      try List("Shared" -> "Grand", "SharedOverride" -> "Override").foreach { case (name, expected) =>
+        val implementation = "example.Flix" + name
+        val contract = parse(s"""export instance example.$name = mod Impl as "$implementation" {}""").unsafeGet
+        val output = JavaBoundary.compile(flix, contract).unsafeGet
+        val runtime = dir.resolve("runtime")
+        assert(JavaBoundary.writeClasses(output.compilation.getClasses.values, runtime) == Result.Ok(()))
+        runCaller(dir, jar, runtime, "example.DefaultCaller", List(implementation, expected))
       } finally flix.close()
     }
   }
