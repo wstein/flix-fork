@@ -26,6 +26,10 @@ Monomorphic enums have direct directional instances: ordinary `List[Color]` / `O
 conversions and recursive `Tree` work without recursive instance constraints. Enum cases use
 standard Java enum semantics; payload cases become records inside a sealed interface.
 Generated helpers use IO for ordinary Java construction/access and boundary checks.
+This is required by the existing Java effect policy: generated classes have no trusted effect
+override, so their constructors and accessors default to IO. Real conversion bodies are
+checked normally; only the declaration-only gate bodies inflate effects before being discarded.
+Declaring generated accessors pure would require a separate trusted metadata policy.
 Default Set/Map argument instances remain unsupported; result instances remain available.
 
 Synthetic metadata is an in-memory classfile overlay, not loaded classes. The same bytes supply
