@@ -25,6 +25,14 @@ at top-level signature positions. For nested products, use a monomorphic nominal
 Monomorphic enums have direct directional instances: ordinary `List[Color]` / `Option[Shape]`
 conversions and recursive `Tree` work without recursive instance constraints. Enum cases use
 standard Java enum semantics; payload cases become records inside a sealed interface.
+Generated nominal instances and `boundaryPayload` helpers live in compiler-owned
+`BoundaryTypes<hash>.NominalN` modules, so existing type companions and caller helpers can
+coexist. Instance lookup is program-wide. Only registered compiler-owned boundary sources
+bypass the orphan-instance rule; a caller-chosen source URI does not grant that exemption.
+Changing source ownership invalidates cached instance validation even when the text is identical.
+Generated diagnostics point to the requesting contract member, with paired name clashes reported
+once and unrelated caller diagnostics retaining their own locations.
+
 Generated helpers use IO for ordinary Java construction/access and boundary checks.
 This is required by the existing Java effect policy: generated classes have no trusted effect
 override, so their constructors and accessors default to IO. Real conversion bodies are
@@ -62,5 +70,11 @@ tests. It includes both sequential compiler corpora, the standard library, debug
 reachability, naming and package tooling. After that run, the nominal fixture was strengthened
 with List/Optional argument round trips and a null-element path assertion; all 27 focused tests
 and all three JVM callers passed again. No compiler implementation changed after the full run.
-Phase 2 is complete locally within the documented policy; no merge or push has been performed.
+The companion-clash follow-up changes compiler implementation after that full-suite run.
+Its focused validation passes 33 tests across nominal, product, synthetic-provider and library
+suites (including all five original nominal tests and four additional diagnostic regressions),
+50 instance tests, and 18 wrapper/contract tests, with no aborted suites. Java, Kotlin and Scala callers are recompiled
+against fresh stubs and run against real output only. The full suite must be rerun after the
+remaining merge blockers are resolved; the earlier full-suite run does not validate this fix.
+No merge or push has been performed.
 Native-image execution is not covered.
