@@ -28,10 +28,20 @@ standard Java enum semantics; payload cases become records inside a sealed inter
 Sealed variant names must differ from their enclosing type's name. Generated class names
 cannot also serve as package names within the contract. The checked record gate requires
 closed rows, including when the declared labels otherwise match.
-Generated nominal conversions in both directions permit up to 128 nested nominal calls per
+Generated nominal conversions in both directions permit up to 1,000 nested nominal calls per
 thread. Deeper values fail with an `IllegalArgumentException` naming the current Java type.
 Conversions release their depth budget on success and on exceptions; sibling conversions
-reuse the budget, and caller threads have independent budgets.
+reuse the budget, and caller threads have independent budgets. A mutable per-thread counter
+avoids per-level boxing, and extra releases cannot drive it below zero.
+
+The 1,000-level limit follows a local measurement on Homebrew OpenJDK 21.0.12.1 (macOS,
+default 2 MiB thread stack). An isolated runtime copy raised the guard to 1,000,000 while a
+Java probe exercised generated `echoTree` and `deepTree` with unbalanced trees in fresh JVMs,
+both cold and after 10,000 shallow warm-up calls. Sample overflow boundaries were about
+7,200–8,000 levels; repeated probes passed at 7,000, sometimes overflowed at 8,000, and always
+overflowed at 10,000. The chosen limit leaves a substantial margin on that configuration.
+Stack capacity varies with JVM, compilation state and stack settings. Tests accept 1,000
+nominal levels and reject 1,001 in both directions, then verify recovery.
 Generated nominal instances and `boundaryPayload` helpers live in compiler-owned
 `BoundaryTypes<hash>.NominalN` modules, so existing type companions and caller helpers can
 coexist. Instance lookup is program-wide. Only registered compiler-owned boundary sources
@@ -40,9 +50,16 @@ the ordinary rule, and a caller-chosen source URI does not grant the exemption.
 Changing source ownership invalidates cached instance validation even when the text is identical.
 Generated diagnostics point to the requesting contract member, with paired name and instance
 clashes reported once. Conflicting caller declarations appear in the formatted message and in
-LSP related locations. Signature checks dependent on a generated overlap are suppressed;
+LSP related locations. The core `Instances` compiler phase skips signature checks for heads
+with an overlap involving generated code, because associated-type selection is ambiguous.
+The overlap remains a compilation error, and ordinary instance validation keeps its rules;
 unrelated caller diagnostics retain their own locations. Parent braces and product imports
 map to the contract and product declaration respectively.
+
+Real generated conversion bodies require an argument-check shape for every non-primitive
+component. A missing entry raises an internal compiler error naming the path at its contract
+declaration; it cannot silently fall back to a shallow check. Declaration-only source is built
+before shapes are derived and emits no argument checks.
 
 Generated helpers use IO for ordinary Java construction/access and boundary checks.
 This is required by the existing Java effect policy: generated classes have no trusted effect
@@ -90,11 +107,15 @@ remaining merge blockers are resolved; the earlier full-suite run does not valid
 The recursion and contract-validation follow-up reproduces four failures before the fixes:
 unbounded deep nominal conversion, a sealed variant reusing its enclosing name, a generated
 class also naming a package, and an open row accepted by the record gate. Focused checks cover
-the 128-level limit, deep arguments and results, recovery after depth and null-child rejection,
+the nominal depth limit, deep arguments and results, recovery after depth and null-child rejection,
 and thread isolation. Review follow-ups also restrict the orphan exemption, retain caller
 conflict locations, deduplicate hand-written/generated overlaps, and correct line mappings.
 The combined follow-up validation passes **109 tests in seven suites, zero failures or aborted
 suites**. Java, Kotlin and Scala callers are freshly recompiled against regenerated stubs and
 pass against runtime output only. The earlier full-suite evidence still predates these changes.
+The missing-shape and measured-limit follow-up adds two regressions that first failed without
+an internal error, and updates depth tests that first failed under the old 128-level budget.
+Validation passes **135 tests in nine suites, zero failures or aborted suites**, plus freshly
+recompiled Java/Kotlin/Scala callers. The full compiler suite remains pending.
 No merge or push has been performed.
 Native-image execution is not covered.
