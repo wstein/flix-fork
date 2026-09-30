@@ -7,7 +7,8 @@ package ca.uwaterloo.flix.language.phase.interop
 
 import ca.uwaterloo.flix.api.Flix
 import ca.uwaterloo.flix.language.ast.jvm.JavaType
-import ca.uwaterloo.flix.language.jvm.JavaMemberResolver
+import ca.uwaterloo.flix.language.jvm.{JavaLookupError, JavaMemberResolver}
+import java.lang.constant.ConstantDescs.CD_Object
 import ca.uwaterloo.flix.language.phase.jvm.JavaBoundaryApi
 import ca.uwaterloo.flix.util.Result
 import ca.uwaterloo.flix.util.Result.{Err, Ok}
@@ -21,13 +22,19 @@ object JavaBoundaryInterfaces {
     }
     def invalid(message: String) = JavaBoundaryApi.Error(message, plan.loc)
     for {
-      clazz <- flix.javaTypeProvider.lookupClass(owner).mapErr(e => invalid(s"Unable to resolve Java interface: $e"))
+      clazz <- flix.javaTypeProvider.lookupClass(owner).mapErr(e => invalid(s"Unable to resolve Java interface: ${e.explanation}"))
       _ <- if (!clazz.isInterface || clazz.isAnnotation || !clazz.isPublic || clazz.isSealed)
         Err(invalid("An implementation requires a public, non-sealed Java interface, not a class or annotation."))
       else if (clazz.typeParameters.nonEmpty) Err(invalid("A Java interface implementation requires a concrete, non-generic interface."))
       else if (owner == plan.name) Err(invalid("The implementation class must differ from its Java interface."))
       else Ok(())
-      methods <- JavaMemberResolver.instanceMethods(owner).mapErr(e => invalid(s"Unable to resolve Java interface methods: $e"))
+      _ <- flix.javaTypeProvider.lookupClass(plan.name) match {
+        case Err(_: JavaLookupError.MissingClass) => Ok(())
+        case Ok(_) => Err(invalid("The implementation class already exists on the Java classpath."))
+        case Err(cause) => Err(invalid(cause.explanation))
+      }
+      objectClass <- flix.javaTypeProvider.lookupClass(CD_Object).mapErr(e => invalid(e.explanation))
+      methods <- JavaMemberResolver.instanceMethods(owner).mapErr(e => invalid(s"Unable to resolve Java interface methods: ${e.explanation}"))
       _ <- {
         val keys = plan.methods.map(m => m.member.name -> m.args.map(_.desc))
         if (keys.distinct.size != keys.size) Err(invalid("Duplicate Java interface method implementations.")) else Ok(())
@@ -51,7 +58,10 @@ object JavaBoundaryInterfaces {
       }
       _ <- {
         val implemented = plan.methods.map(m => m.member.name -> m.args.map(_.desc)).toSet
-        val missing = methods.filter(_.isAbstract).filterNot(m => implemented(m.ref.name -> m.parameterTypes.map(_.erasure)))
+        val inherited = objectClass.declaredMethods.filter(m => m.isPublic && !m.isStatic)
+          .map(m => m.ref.name -> m.ref.descriptor).toSet
+        val missing = methods.filter(_.isAbstract).filterNot(m =>
+          implemented(m.ref.name -> m.parameterTypes.map(_.erasure)) || inherited(m.ref.name -> m.ref.descriptor))
         if (missing.isEmpty) Ok(())
         else Err(invalid("Missing Java interface implementations: " + missing.map(m => m.ref.name + m.ref.descriptor.descriptorString()).sorted.mkString(", ") + "."))
       }

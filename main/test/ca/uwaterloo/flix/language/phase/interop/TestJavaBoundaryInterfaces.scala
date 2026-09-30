@@ -7,6 +7,7 @@ package ca.uwaterloo.flix.language.phase.interop
 
 import ca.uwaterloo.flix.TestUtils
 import ca.uwaterloo.flix.api.{Flix, JavaBoundary}
+import ca.uwaterloo.flix.api.lsp.LspProject
 import ca.uwaterloo.flix.language.ast.shared.{Origin, Source, SourceName}
 import ca.uwaterloo.flix.util.{Options, Result}
 import org.scalatest.funsuite.AnyFunSuite
@@ -47,6 +48,13 @@ class TestJavaBoundaryInterfaces extends AnyFunSuite with TestUtils {
                        | static int seed() { return 9; }
                        |}
                        |""".stripMargin,
+        "WithObject" -> "package example; public interface WithObject { boolean equals(Object o); java.util.List<Integer> values(); }",
+        "ObjectCaller" -> """package example; public final class ObjectCaller {
+                           | public static void main(String[] args) throws Exception {
+                           |  WithObject s = (WithObject)Class.forName("example.FlixObject").getConstructor().newInstance();
+                           |  if (!s.equals(s) || s.equals(new Object()) || !s.values().equals(java.util.List.of(9, 2))) throw new AssertionError();
+                           | }
+                           |} """.stripMargin,
         "Base" -> "package example; public interface Base<T> { T echo(T x); }",
         "Specific" -> "package example; public interface Specific extends Base<String> {}",
         "SpecificCaller" -> """package example; public final class SpecificCaller {
@@ -115,6 +123,7 @@ class TestJavaBoundaryInterfaces extends AnyFunSuite with TestUtils {
       val flix = compiler(jar)
       try {
         List(
+          text.replace("\"example.FlixService\"", "\"example.Caller\"") -> "already exists on the Java classpath",
           text.replace("example.Service =", "example.Missing =") -> "resolve Java interface",
           text.replace("example.Service =", "java.lang.String =") -> "public, non-sealed",
           text.replace("example.Service =", "java.lang.Deprecated =") -> "public, non-sealed",
@@ -172,6 +181,21 @@ class TestJavaBoundaryInterfaces extends AnyFunSuite with TestUtils {
         val runtime = dir.resolve("runtime")
         assert(JavaBoundary.writeClasses(output.compilation.getClasses.values, runtime) == Result.Ok(()))
         runCaller(dir, jar, runtime, "example.SpecificCaller")
+      } finally flix.close()
+    }
+  }
+
+  test("public Object methods fulfill redeclared abstract interface methods") {
+    withJava { (dir, jar) =>
+      val flix = compiler(jar)
+      try {
+        val contract = parse("""export instance example.WithObject = mod Impl as "example.FlixObject" {
+                             | def values: () -> java.util.List[java.lang.Integer];
+                             |} """.stripMargin).unsafeGet
+        val output = JavaBoundary.compile(flix, contract).unsafeGet
+        val runtime = dir.resolve("runtime")
+        assert(JavaBoundary.writeClasses(output.compilation.getClasses.values, runtime) == Result.Ok(()))
+        runCaller(dir, jar, runtime, "example.ObjectCaller")
       } finally flix.close()
     }
   }
