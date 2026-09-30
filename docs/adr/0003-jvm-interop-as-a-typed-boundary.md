@@ -6,6 +6,14 @@ Proposed. Scoped to how Flix code is *called from* the JVM -- Java, Kotlin, Scal
 values cross that boundary. Calling Java *from* Flix (`import`, `new`, method calls) is unchanged.
 Numbered 3 to follow ADRs 1 and 2 on `feat/stable-specialization-names-rewrite`.
 
+Revision 10 records the Phase 2 metadata spike on `feat/java-boundary-phase2`. An in-memory
+classfile overlay lets ordinary Java interop resolve a synthetic record before it exists on
+the classpath, without loading it into the compiler JVM. Scoped metadata invalidates frontend
+caches and restores the dependency provider on success or failure. This is a foundation, not
+the complete Phase 2 contract, generators, instances, ABI gate, or staged caller validation.
+The instance-head constraint described below requires a design decision before implementation
+can claim the full Phase 2 scope. The status remains Proposed.
+
 Revision 9 records the Phase 1 review fixes: argument null validation, unmodifiable result
 collections, private generated opaque unwrapping, reduction-step budgeting, declaration-located
 errors and generated source maps, and separate frontend timing measurements. The rollout guide
@@ -293,6 +301,31 @@ type-checking, so an instance can name them. That is phase 2.
 | 2 | synthetic-type provider, so instances can target generated tuple, record, and enum classes; recover the archived conversion semantics as trait instances | stubs | nothing from the old export backend: it is already gone |
 | 3 | `export instance com.acme.Service = mod Acme.Impl`: Flix implements a Java interface Java compiles first | stubs for Flix-owned APIs only | stubs for Java-first projects |
 | 4 | effects as Java handler interfaces; collection views (O(1) at the boundary) | -- | copies where they are too expensive |
+
+### Phase 2 instance-head gate
+
+Synthetic Java metadata solves name resolution, but does not make every proposed Flix
+instance legal. The compiler's existing `Instances.checkSimple` rejects concrete tuple
+heads such as `(Int32, Int32)` and concrete applications such as `Box[Int32]`; alias heads
+are rejected separately. `Instances.checkOverlap` allows only one instance per type
+constructor, so replacing concrete instances with two generic `Box[a]` instances cannot
+give two contract declarations distinct Java representations. These rules must not be
+silently relaxed by boundary compilation.
+
+`TestJavaBoundarySyntheticTypes` checks those restrictions and proves that an ordinary
+nominal adapter can instead implement `JavaResult` and `JavaArgument` targeting a synthetic
+record. The record bytecode in this spike is metadata-only: its constructor and accessor
+throw, and no runtime conversion or staged Java caller is claimed.
+
+The recommended next decision is one private, generated nominal adapter per declared
+representation. Its payload is the original concrete Flix type; wrappers insert and remove
+the adapter through ordinary checked code. Generated instances then have legal, distinct
+nominal heads, while user functions retain their original signatures. Nested containers and
+recursive declared types need corresponding checked conversion helpers; the adapter proof
+does not yet establish either. This changes the proposed per-original-type instance scheme
+and is not adopted here without an explicit decision. The alternative is a broader redesign
+of instance-head legality, overlap detection and instance selection, outside the boundary
+metadata spike.
 
 **A pre-type-check stub path is required in phase 1.** A Flix module that calls a Java class
 Java has not compiled yet cannot be type-checked, so a typed `--emit-java-api` cannot break the
