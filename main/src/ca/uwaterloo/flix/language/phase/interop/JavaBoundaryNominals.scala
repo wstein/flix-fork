@@ -7,6 +7,7 @@
 package ca.uwaterloo.flix.language.phase.interop
 
 import ca.uwaterloo.flix.language.ast.SourceLocation
+import ca.uwaterloo.flix.util.InternalCompilerException
 import ca.uwaterloo.flix.language.phase.jvm.JvmClass
 import org.objectweb.asm.{ClassWriter, Opcodes, Type}
 
@@ -132,9 +133,9 @@ object JavaBoundaryNominals {
       s"match x.name() { $cases case _ => throw new IllegalArgumentException(\"Unknown ${nominal.className} constant\") }"
     } else {
       val cases = nominal.variants.zipWithIndex.map { case (variant, vi) =>
-        val checks = variant.components.filterNot(_.tpe.desc.isPrimitive).map { field =>
+        val checks = if (validationOnly) "" else variant.components.filterNot(_.tpe.desc.isPrimitive).map { field =>
           val path = s"${nominal.className}.${variant.name}.${field.name}"
-          s"BoundaryChecks.checkArgument(value.${field.name}(), \"$path\", \"${shapes.getOrElse(path, "!")}\");"
+          s"BoundaryChecks.checkArgument(value.${field.name}(), \"$path\", \"${shapes.getOrElse(path, throw InternalCompilerException(s"Missing Java boundary argument-check shape: $path", nominal.loc))}\");"
         }.mkString
         val args = variant.components.map { field =>
           val value = s"value.${field.name}()"

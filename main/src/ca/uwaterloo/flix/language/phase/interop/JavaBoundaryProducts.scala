@@ -7,6 +7,7 @@
 package ca.uwaterloo.flix.language.phase.interop
 
 import ca.uwaterloo.flix.language.ast.SourceLocation
+import ca.uwaterloo.flix.util.InternalCompilerException
 import ca.uwaterloo.flix.language.phase.jvm.JvmClass
 import org.objectweb.asm.{ClassWriter, Handle, Opcodes, Type}
 
@@ -125,9 +126,9 @@ object JavaBoundaryProducts {
       }
       val rebuilt = if (product.tuple) in.mkString("(", ", ", ")")
       else product.components.zip(in).map { case (field, value) => s"${field.name} = $value" }.mkString("{ ", ", ", " }")
-      val checks = product.components.filterNot(_.tpe.desc.isPrimitive).map { field =>
+      val checks = if (validationOnly) "" else product.components.filterNot(_.tpe.desc.isPrimitive).map { field =>
         val path = s"${product.className}.${field.name}"
-        s"BoundaryChecks.checkArgument(x.${field.name}(), \"$path\", \"${shapes.getOrElse(path, "!")}\"); "
+        s"BoundaryChecks.checkArgument(x.${field.name}(), \"$path\", \"${shapes.getOrElse(path, throw InternalCompilerException(s"Missing Java boundary argument-check shape: $path", product.loc))}\"); "
       }.mkString
       val outBody = if (validationOnly) "checked_ecast(bug!(\"validation-only boundary declaration\"))" else s"match a { case A$index.A$index(x) => ${from}new J$index${out.mkString("(", ", ", ")")} }"
       val inBody = if (validationOnly) "checked_ecast(bug!(\"validation-only boundary declaration\"))" else s"${checks}A$index.A$index($rebuilt)"

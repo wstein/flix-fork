@@ -9,7 +9,7 @@ package ca.uwaterloo.flix.language.phase.interop
 import ca.uwaterloo.flix.TestUtils
 import ca.uwaterloo.flix.api.{BootstrapError, Flix, JavaBoundary}
 import ca.uwaterloo.flix.language.ast.shared.{Origin, Source, SourceName}
-import ca.uwaterloo.flix.util.{Formatter, Options, Result}
+import ca.uwaterloo.flix.util.{Formatter, InternalCompilerException, Options, Result}
 import org.scalatest.funsuite.AnyFunSuite
 
 import java.nio.file.{Files, Paths}
@@ -173,6 +173,16 @@ class TestJavaBoundaryNominals extends AnyFunSuite with TestUtils {
     val (source, locations) = JavaBoundaryProducts.sourceWithLocations(contract, validationOnly = true, Map.empty)
     val brace = source.linesIterator.zipWithIndex.find(_._1 == "}").get._2 + 1
     assert(locations(brace) == contract.loc)
+  }
+
+  test("missing nominal argument-check shapes are internal errors") {
+    val contract = parse(contractText)
+    JavaBoundaryNominals.source(contract, validationOnly = true, Map.empty)
+    val error = intercept[InternalCompilerException] {
+      JavaBoundaryNominals.source(contract, validationOnly = false, Map.empty)
+    }
+    assert(error.message.contains("com.acme.Shape.Label.text"))
+    assert(error.loc == contract.nominals(1).loc)
   }
 
   test("caller diagnostics keep their own locations alongside generated clashes") {

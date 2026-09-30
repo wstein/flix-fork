@@ -9,7 +9,7 @@ package ca.uwaterloo.flix.language.phase.interop
 import ca.uwaterloo.flix.TestUtils
 import ca.uwaterloo.flix.api.{Flix, JavaBoundary}
 import ca.uwaterloo.flix.language.ast.shared.{Origin, Source, SourceName}
-import ca.uwaterloo.flix.util.{Options, Result}
+import ca.uwaterloo.flix.util.{InternalCompilerException, Options, Result}
 import ca.uwaterloo.flix.language.CompilationMessage
 import ca.uwaterloo.flix.language.ast.{Symbol, TypedAst}
 import org.scalatest.funsuite.AnyFunSuite
@@ -111,6 +111,16 @@ class TestJavaBoundaryProducts extends AnyFunSuite with TestUtils {
       val line = source.linesIterator.zipWithIndex.find(_._1.contains(s"=> J$index}")).get._2 + 1
       assert(locations(line) == product.loc)
     }
+  }
+
+  test("missing product argument-check shapes are internal errors") {
+    val contract = parse(text).unsafeGet
+    JavaBoundaryProducts.source(contract, validationOnly = true, Map.empty)
+    val error = intercept[InternalCompilerException] {
+      JavaBoundaryProducts.source(contract, validationOnly = false, Map.empty)
+    }
+    assert(error.message.contains("com.acme.Point.ys"))
+    assert(error.loc == contract.products.head.loc)
   }
 
   test("invalid product targets point to their contract declaration") {
