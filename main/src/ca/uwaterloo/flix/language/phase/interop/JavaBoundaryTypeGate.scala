@@ -33,8 +33,11 @@ object JavaBoundaryTypeGate {
           case _ => Err(JavaBoundaryContract.Error("A tuple declaration must target a concrete Flix tuple.", product.loc))
         } else tpe.baseType match {
           case Type.Cst(TypeConstructor.Record, _) =>
-            val labels = recordFields(tpe.typeArguments.head)
-            if (labels.size != product.components.size || labels.map(_._1).toSet != product.components.map(_.name).toSet)
+            val row = tpe.typeArguments.head
+            val labels = recordFields(row)
+            if (!closedRecordRow(row))
+              Err(JavaBoundaryContract.Error("A record declaration must target a closed Flix record.", product.loc))
+            else if (labels.size != product.components.size || labels.map(_._1).toSet != product.components.map(_.name).toSet)
               Err(JavaBoundaryContract.Error("Record components must name every checked Flix label exactly once.", product.loc))
             else fields(product.components, product.components.map(c => labels.toMap.apply(c.name)), product.loc, root)
           case _ => Err(JavaBoundaryContract.Error("A record declaration must target a closed Flix record.", product.loc))
@@ -53,6 +56,13 @@ object JavaBoundaryTypeGate {
         case _ => Err(JavaBoundaryContract.Error("An enum or sealed declaration must target a concrete nominal Flix enum.", nominal.loc))
       }}
     } yield ()
+  }
+
+  @scala.annotation.tailrec
+  private def closedRecordRow(row: Type): Boolean = Type.eraseAliases(row).baseType match {
+    case Type.Cst(TypeConstructor.RecordRowExtend(_), _) => closedRecordRow(Type.eraseAliases(row).typeArguments(1))
+    case Type.Cst(TypeConstructor.RecordRowEmpty, _) => true
+    case _ => false
   }
 
   private def recordFields(row: Type): List[(String, Type)] = row.baseType match {

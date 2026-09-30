@@ -11,7 +11,7 @@ import ca.uwaterloo.flix.api.{Flix, JavaBoundary}
 import ca.uwaterloo.flix.language.ast.shared.{Origin, Source, SourceName}
 import ca.uwaterloo.flix.util.{Options, Result}
 import ca.uwaterloo.flix.language.CompilationMessage
-import ca.uwaterloo.flix.language.ast.TypedAst
+import ca.uwaterloo.flix.language.ast.{Symbol, TypedAst}
 import org.scalatest.funsuite.AnyFunSuite
 
 import java.lang.constant.ClassDesc
@@ -80,6 +80,27 @@ class TestJavaBoundaryProducts extends AnyFunSuite with TestUtils {
       JavaBoundaryWrappers.checkContract(flix, contract, sctx).unsafeGet
       assert(flix.javaTypeProvider.lookupClass(ClassDesc.of("com.acme.Point")).isInstanceOf[Result.Err[?, ?]])
       expectSuccess(flix.check())
+    } finally flix.close()
+  }
+
+  test("the checked record gate rejects an open row even when declared labels match") {
+    val parsed = parse(text).unsafeGet
+    val product = parsed.products.head
+    val contract = parsed.copy(products = List(product.copy(components = List(product.components.head))))
+    val flix = compiler.addSource(Paths.get("Open.flix"),
+      "pub mod Open { pub def identity(x: { x = Int32 | r }): { x = Int32 | r } = x }", sctx)
+    try {
+      val checked = flix.check()
+      expectSuccess(checked)
+      val root = checked._1.get
+      val out = Symbol.mkDefnSym(s"${JavaBoundaryProducts.module(contract)}.out0")
+      val open = root.defs(Symbol.mkDefnSym("Open.identity"))
+      JavaBoundaryTypeGate.verify(contract, root.copy(defs = root.defs + (out -> open)))(flix) match {
+        case Result.Err(error) =>
+          assert(error.message.contains("closed"))
+          assert(error.loc == contract.products.head.loc)
+        case other => fail(s"Expected an open-record error, found $other")
+      }
     } finally flix.close()
   }
 
