@@ -6,6 +6,17 @@ Proposed. Scoped to how Flix code is *called from* the JVM -- Java, Kotlin, Scal
 values cross that boundary. Calling Java *from* Flix (`import`, `new`, method calls) is unchanged.
 Numbered 3 to follow ADRs 1 and 2 on `feat/stable-specialization-names-rewrite`.
 
+Revision 11 adds the experimental declared-product slice of Phase 2: syntax-only contracts
+declare named Java records for Flix record aliases and concrete tuples, including generic
+components. Real record classfiles are shared by synthetic metadata, bootstrap output and
+runtime output. Generated nominal adapter instances and ordinary checked helpers perform
+conversions; wrappers select the helpers by their checked concrete payload types. The existing
+instance-head rules remain unchanged. A staged Java caller validates runtime record semantics
+and component generic signatures with no compiler or stub classes on its runtime classpath.
+This slice is not the complete Phase 2: enums/sealed hierarchies, recursive and nested declared
+representations, per-instantiation nominal products, and Kotlin/Scala product callers remain.
+Phases 3–5 are requested but are not implemented by this slice. Status remains Proposed.
+
 Revision 10 records the Phase 2 metadata spike on `feat/java-boundary-phase2`. An in-memory
 classfile overlay lets ordinary Java interop resolve a synthetic record before it exists on
 the classpath, without loading it into the compiler JVM. Scoped metadata invalidates frontend
@@ -317,15 +328,31 @@ nominal adapter can instead implement `JavaResult` and `JavaArgument` targeting 
 record. The record bytecode in this spike is metadata-only: its constructor and accessor
 throw, and no runtime conversion or staged Java caller is claimed.
 
-The recommended next decision is one private, generated nominal adapter per declared
+The experimental product path now uses one private, generated nominal adapter per declared
 representation. Its payload is the original concrete Flix type; wrappers insert and remove
 the adapter through ordinary checked code. Generated instances then have legal, distinct
 nominal heads, while user functions retain their original signatures. Nested containers and
 recursive declared types need corresponding checked conversion helpers; the adapter proof
 does not yet establish either. This changes the proposed per-original-type instance scheme
-and is not adopted here without an explicit decision. The alternative is a broader redesign
+for the declared-product path after the request to proceed. The alternative is a broader redesign
 of instance-head legality, overlap detection and instance selection, outside the boundary
 metadata spike.
+
+The experimental product grammar inside an `export mod` contract is:
+
+```text
+record com.acme.Point(x: int, ys: java.util.List[java.lang.Integer]) = Acme.Point;
+tuple com.acme.Pair(left: long, right: double) = (Int64, Float64);
+```
+
+Component order is explicitly the constructor and record-component order. A record target is
+a closed Flix record type (an alias is allowed); a tuple target is a concrete tuple. Components
+are checked by ordinary constructor calls and accessor conversions, so a declared
+`List<Long>` for a Flix `List[Int32]` fails before code generation. Unsupported component
+instances fail closed; the current slice requires both conversion directions and `IO`-compatible
+conversion effects. It does not silently erase an unsupported component to `Object`. Exact and
+case-folded type/facade collisions are rejected, including dependency and generated class names.
+Metadata and owned generated sources are removed on success and failure.
 
 **A pre-type-check stub path is required in phase 1.** A Flix module that calls a Java class
 Java has not compiled yet cannot be type-checked, so a typed `--emit-java-api` cannot break the
