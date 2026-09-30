@@ -95,3 +95,9 @@ For an implementation milestone, first specify operation mappings and handler pr
 then test generated source, effect elimination, missing handlers and reentrancy. For views,
 measure allocation and full traversal for immutable List/Vector/Chain; test nested conversion,
 retention, concurrent reads and error timing before introducing the explicit view type.
+
+
+Both probes also pass in the independent full compiler-suite gate on `279ad487a`:
+18,063 tests passed in 125 suites, zero failed or aborted, with 8 ignored tests.
+The [Phase 3 validation record](JAVA-BOUNDARY-PHASE3.md#independent-full-compiler-suite-gate)
+records the exact command and the corrected JDI startup race from the first attempt.

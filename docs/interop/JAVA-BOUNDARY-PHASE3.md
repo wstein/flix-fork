@@ -134,7 +134,29 @@ jar. CLI and editor tests also pass. The subsequent milestone commit changes doc
 
 These results describe the original `feat/java-boundary-phase3` milestone before the inheritance
 review fixes. Phase 2's earlier full-suite run predates this implementation. Native-image
-execution remains outside this validation. The combined regression gate with all review fixes passes **183 tests in 13 suites, zero failures
-and zero aborted suites**, including all 17 interface tests and the unvalidated-plan emission
-regression. There are no ignored, canceled or pending tests. The full compiler-suite gate is
-still required before merging this fixed tip.
+execution remains outside this validation. The combined regression gate with all review fixes
+passes **183 tests in 13 suites, zero failures and zero aborted suites**, including all 17 interface tests and the unvalidated-plan emission
+regression. There are no ignored, canceled or pending tests. The independent full compiler-suite
+gate is recorded below.
+
+## Independent full compiler-suite gate
+
+The complete gate on `279ad487a` has **18,063 passing tests in 125 suites, zero failures or
+aborted suites**, with eight ignored tests and no canceled or pending tests. It completed in 1 hour, 6 minutes, 56 seconds using:
+
+```console
+./mill --no-server flix.test.testForked -oC
+```
+
+The first attempt on `79a22cf41` was stopped after the existing JDI continuation-local test
+failed with `VMDisconnectedException`; all boundary suites had completed without failures.
+Its startup code resumed the launched JVM directly and then resumed the queued startup event,
+which could release a later class-prepare suspension before breakpoints were installed.
+`279ad487a` removes that extra resume, following the
+[JDI event-set protocol](https://docs.oracle.com/en/java/javase/21/docs/api/jdk.jdi/com/sun/jdi/event/EventSet.html#resume()).
+The real JDI regression passed three focused runs before the complete successful rerun.
+
+This result validates all Phase 3 inheritance fixes and both Phase 4 probes independently of
+Phase 2's earlier gate. The following validation commit changes documentation only. The gate
+permits the local fast-forward into `dev0.77.0`; no push or native-image execution is claimed.
+The other session's `feat/java-boundary-phase3` worktree remains untouched.

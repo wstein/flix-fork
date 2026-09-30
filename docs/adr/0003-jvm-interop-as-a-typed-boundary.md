@@ -14,6 +14,11 @@ frontend; JVM shape plans cannot emit unchecked interface implementations. Java 
 requires an explicit sealed flag. Checked `throws` declarations are accepted without restricting
 Flix exceptions; fresh wrappers are allocated per call, and JPMS exports remain unchecked.
 The [Phase 3 guide](../interop/JAVA-BOUNDARY-PHASE3.md) records reproduced failures and validation.
+The independent `testForked -oC` gate on `279ad487a` passes 18,063 tests in 125 suites,
+zero failed or aborted, with 8 ignored tests. The first attempt exposed a JDI test-harness
+startup-resume race; it was corrected separately and passed three real debugger runs before
+the complete successful rerun. The final validation commit changes documentation only.
+
 
 Revision 14 implements the experimental Java-first Phase 3 slice and records the Phase 4
 investigation. `export instance <Java interface> = mod <Flix module> as "<implementation>"`
