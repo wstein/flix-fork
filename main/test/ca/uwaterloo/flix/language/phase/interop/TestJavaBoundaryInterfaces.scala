@@ -11,6 +11,7 @@ import ca.uwaterloo.flix.api.lsp.LspProject
 import ca.uwaterloo.flix.language.ast.shared.{Origin, Source, SourceName}
 import ca.uwaterloo.flix.util.{Options, Result}
 import org.scalatest.funsuite.AnyFunSuite
+import org.objectweb.asm.{ClassWriter, Opcodes}
 
 import java.nio.file.{Files, Path, Paths}
 import java.util.concurrent.TimeUnit
@@ -61,6 +62,38 @@ class TestJavaBoundaryInterfaces extends AnyFunSuite with TestUtils {
                            |  if (!(marker instanceof java.io.Serializable) || marker.getClass().getDeclaredMethods().length != 0) throw new AssertionError();
                            | }
                            |} """.stripMargin,
+        "Names" -> "package example; public interface Names extends java.util.function.Supplier<String> { String get(); }",
+        "A" -> "package example; public interface A<T> { T f(T x); }",
+        "B" -> "package example; public interface B { String f(String x); }",
+        "Combined" -> "package example; public interface Combined extends A<String>, B {}",
+        "CovariantB" -> "package example; public interface CovariantB { CharSequence f(String x); }",
+        "Multiple" -> "package example; public interface Multiple extends A<String>, CovariantB {}",
+        "MultipleCaller" -> """package example; public final class MultipleCaller {
+                             | public static void main(String[] args) throws Exception {
+                             |  Multiple m = (Multiple)Class.forName("example.FlixMultiple").getConstructor().newInstance();
+                             |  if (!((A<String>)m).f("a").equals("a!") || !((CovariantB)m).f("b").toString().equals("b!")) throw new AssertionError();
+                             |  long bridges = java.util.Arrays.stream(m.getClass().getDeclaredMethods()).filter(java.lang.reflect.Method::isBridge).count();
+                             |  if (bridges != 2) throw new AssertionError("Expected two bridges, found " + bridges);
+                             | }
+                             |} """.stripMargin,
+        "Left" -> "package example; public interface Left { String f(); }",
+        "Right" -> "package example; public interface Right { String f(); }",
+        "Diamond" -> "package example; public interface Diamond extends Left, Right {}",
+        "InheritanceCaller" -> """package example; public final class InheritanceCaller {
+                                | public static void main(String[] args) throws Exception {
+                                |  Object instance = Class.forName(args[0]).getConstructor().newInstance();
+                                |  if (instance instanceof Names) {
+                                |   Names names = (Names)instance;
+                                |   if (!names.get().equals("Flix") || !((java.util.function.Supplier<String>)names).get().equals("Flix")) throw new AssertionError();
+                                |  } else if (instance instanceof Combined) {
+                                |   Combined combined = (Combined)instance;
+                                |   if (!instance.getClass().getMethod("f", String.class).invoke(instance, "c").equals("c!") || !((A<String>)combined).f("a").equals("a!") || !((B)combined).f("b").equals("b!")) throw new AssertionError();
+                                |  } else {
+                                |   Diamond diamond = (Diamond)instance;
+                                |   if (!diamond.f().equals("Flix") || !((Left)diamond).f().equals("Flix") || !((Right)diamond).f().equals("Flix")) throw new AssertionError();
+                                |  }
+                                | }
+                                |} """.stripMargin,
         "Base" -> "package example; public interface Base<T> { T echo(T x); }",
         "Specific" -> "package example; public interface Specific extends Base<String> {}",
         "SpecificCaller" -> """package example; public final class SpecificCaller {
@@ -88,6 +121,17 @@ class TestJavaBoundaryInterfaces extends AnyFunSuite with TestUtils {
       }
       assert(ToolProvider.getSystemJavaCompiler.run(null, null, null,
         (List("-d", classes.toString) ++ inputs)* ) == 0)
+      // Model binary evolution: javac accepts the initial abstract parents. Existing Diamond
+      // then acquires conflicting defaults when the parent classfiles are replaced.
+      List("Left", "Right").foreach { name =>
+        val cw = new ClassWriter(ClassWriter.COMPUTE_MAXS)
+        cw.visit(Opcodes.V21, Opcodes.ACC_PUBLIC | Opcodes.ACC_INTERFACE | Opcodes.ACC_ABSTRACT,
+          "example/" + name, null, "java/lang/Object", null)
+        val mv = cw.visitMethod(Opcodes.ACC_PUBLIC, "f", "()Ljava/lang/String;", null, null)
+        mv.visitCode(); mv.visitLdcInsn(name); mv.visitInsn(Opcodes.ARETURN)
+        mv.visitMaxs(0, 0); mv.visitEnd(); cw.visitEnd()
+        Files.write(classes.resolve("example/" + name + ".class"), cw.toByteArray)
+      }
       val jar = dir.resolve("java.jar")
       val stream = new JarOutputStream(Files.newOutputStream(jar))
       val paths = Files.walk(classes)
@@ -111,6 +155,7 @@ class TestJavaBoundaryInterfaces extends AnyFunSuite with TestUtils {
                                           | pub def sum(xs: List[Int32]): Int32 = List.sum(xs)
                                           | pub def wide(x: Int64, y: Float64): Int64 = x + Float64.truncateToInt64(y)
                                           | pub def touch(): Unit = ()
+                                          | pub def name(): String = "Flix"
                                           | pub def echo(x: String): String = x + "!"
                                           | pub def valueInt(x: Int32): Int32 = x + 1
                                           | pub def valueLong(x: Int64): Int64 = x + 2i64
@@ -165,10 +210,11 @@ class TestJavaBoundaryInterfaces extends AnyFunSuite with TestUtils {
     assert(parse(text.replace("(long) -> long", "(int) -> long")).isInstanceOf[Result.Err[?, ?]])
   }
 
-  private def runCaller(dir: Path, jar: Path, runtime: Path, name: String): Unit = {
+  private def runCaller(dir: Path, jar: Path, runtime: Path, name: String, args: List[String] = Nil): Unit = {
     val log = dir.resolve(name + ".log")
-    val child = new ProcessBuilder(Paths.get(System.getProperty("java.home"), "bin", "java").toString,
-      "-cp", runtime.toString + java.io.File.pathSeparator + jar, name)
+    val command = List(Paths.get(System.getProperty("java.home"), "bin", "java").toString,
+      "-cp", runtime.toString + java.io.File.pathSeparator + jar, name) ++ args
+    val child = new ProcessBuilder(command.asJava)
       .redirectErrorStream(true).redirectOutput(log.toFile).start()
     try {
       assert(child.waitFor(30, TimeUnit.SECONDS))
@@ -275,6 +321,58 @@ class TestJavaBoundaryInterfaces extends AnyFunSuite with TestUtils {
             assert(error.loc == changed.loc)
           case other => fail(s"Expected an interface ABI mismatch, found $other")
         }
+      } finally flix.close()
+    }
+  }
+
+  private def compileInheritance(interfaceName: String, implementation: String, member: String): Unit =
+    withJava { (dir, jar) =>
+      val flix = compiler(jar)
+      try {
+        val contract = parse(s"""export instance example.$interfaceName = mod Impl as "example.$implementation" { $member }""").unsafeGet
+        val output = JavaBoundary.compile(flix, contract).unsafeGet
+        val runtime = dir.resolve("runtime")
+        assert(JavaBoundary.writeClasses(output.compilation.getClasses.values, runtime) == Result.Ok(()))
+        runCaller(dir, jar, runtime, "example.InheritanceCaller", List("example." + implementation))
+      } finally flix.close()
+    }
+
+  test("narrower return redeclarations dispatch through the generic parent interface") {
+    compileInheritance("Names", "FlixNames", "def get = name: () -> java.lang.String;")
+  }
+
+  test("one implementation fulfills both concrete and erased parent descriptors") {
+    compileInheritance("Combined", "FlixCombined", "def f = echo: (java.lang.String) -> java.lang.String;")
+  }
+
+  test("conflicting inherited defaults require an explicit implementation") {
+    withJava { (_, jar) =>
+      val flix = compiler(jar)
+      try {
+        val contract = parse("""export instance example.Diamond = mod Impl as "example.FlixDiamond" {}""").unsafeGet
+        JavaBoundary.check(flix, contract) match {
+          case Result.Err(ca.uwaterloo.flix.api.BootstrapError.CompilationErrors(errors, _)) =>
+            assert(errors.size == 1)
+            assert(errors.head.summary.contains("Conflicting inherited defaults"), errors.head.summary)
+            assert(errors.head.loc == contract.loc)
+          case other => fail(s"Expected a default-method conflict, found $other")
+        }
+      } finally flix.close()
+    }
+    compileInheritance("Diamond", "FlixDiamond", "def f = name: () -> java.lang.String;")
+  }
+
+  test("one covariant implementation emits every required erased bridge descriptor") {
+    withJava { (dir, jar) =>
+      val flix = compiler(jar)
+      try {
+        val contract = parse("""export instance example.Multiple = mod Impl as "example.FlixMultiple" {
+                             | def f = echo: (java.lang.String) -> java.lang.String;
+                             |} """.stripMargin).unsafeGet
+        val output = JavaBoundary.compile(flix, contract).unsafeGet
+        val runtime = dir.resolve("runtime")
+        assert(JavaBoundary.writeClasses(output.compilation.getClasses.values, runtime) == Result.Ok(()))
+        runCaller(dir, jar, runtime, "example.MultipleCaller")
       } finally flix.close()
     }
   }
