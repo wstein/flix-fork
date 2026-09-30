@@ -514,14 +514,34 @@ class TestInstances extends AnyFunSuite with TestUtils {
 
   test("only compiler-owned boundary sources bypass orphan checks") {
     val uri = URI.create("flix-boundary:/Orphan.flix")
-    val input = "mod N { pub trait C[a] } instance N.C[Int32]"
-    val flix = new Flix().setOptions(Options.TestWithLibNix)
+    val input = """mod Foreign { pub enum Value { case Value } }
+                  |instance Java.Boundary.JavaResult[Foreign.Value] {
+                  | type Out = Int32
+                  | type Aef = {}
+                  | pub def toJava(_x: Foreign.Value): Int32 = 1
+                  |}
+                  |instance Java.Boundary.JavaArgument[Foreign.Value] {
+                  | type In = Int32
+                  | type Aef = {}
+                  | pub def toFlix(_x: Int32): Foreign.Value = Foreign.Value.Value
+                  |}
+                  |""".stripMargin
+    val flix = new Flix().setOptions(Options.TestWithLibAll)
     try {
       flix.addSource(uri, input, sctx)
       expectError[InstanceError.OrphanInstance](flix.check())
       flix.addJavaBoundarySource(uri, input, sctx)
       expectSuccess(flix.check())
       flix.addSource(uri, input, sctx)
+      expectError[InstanceError.OrphanInstance](flix.check())
+    } finally flix.close()
+  }
+
+  test("compiler-owned sources still reject orphans for unrelated traits") {
+    val flix = new Flix().setOptions(Options.TestWithLibNix)
+    try {
+      flix.addJavaBoundarySource(URI.create("flix-boundary:/Orphan.flix"),
+        "mod N { pub trait C[a] } instance N.C[Int32]", sctx)
       expectError[InstanceError.OrphanInstance](flix.check())
     } finally flix.close()
   }

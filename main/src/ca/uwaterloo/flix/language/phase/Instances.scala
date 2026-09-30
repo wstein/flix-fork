@@ -56,10 +56,11 @@ object Instances {
     * * The trait's companion namespace.
     * * The same namespace as its type.
     * * The type's companion module (e.g. instance in `mod Fs.Size` for enum `Fs.Size`).
-    * Compiler-owned Java boundary sources may also declare instances in generated modules.
+    * Compiler-owned Java boundary sources may declare the two boundary traits in generated modules.
     */
   private def checkOrphan(inst: TypedAst.Instance)(implicit sctx: SharedContext, flix: Flix): Unit = inst match {
-    case _ if flix.isJavaBoundarySource(inst.loc.source) => ()
+    case _ if flix.isJavaBoundarySource(inst.loc.source) &&
+      Set(Symbol.mkTraitSym("Java.Boundary.JavaResult"), Symbol.mkTraitSym("Java.Boundary.JavaArgument")).contains(inst.trt.sym) => ()
     case TypedAst.Instance(_, _, _, trt, _, tpe, _, _, _, _, ns, _) =>
       val instNs = ns.idents.map(_.name)
       tpe.typeConstructor match {

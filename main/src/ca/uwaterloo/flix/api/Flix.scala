@@ -355,6 +355,8 @@ class Flix(pkgs: List[InstalledPackage] = Nil, jars: List[Path] = Nil, mounts: M
     addSource(uri, text, sctx)
     val name = SourceName.UriName(uri)
     boundarySources.put(name, sources(name))
+    // Ownership grants affect instance legality even with identical text. Conservatively invalidate
+    // every grant, including repeated grants; contract passes normally replace the text as well.
     changeSet = changeSet.markChanged(name, cachedTyperAst.dependencyGraph)
     this
   }
