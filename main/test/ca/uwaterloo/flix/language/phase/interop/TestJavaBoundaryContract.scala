@@ -49,6 +49,25 @@ class TestJavaBoundaryContract extends AnyFunSuite with TestUtils {
     }
   }
 
+  test("contract-level validation and facade collisions retain the declaration location") {
+    implicit val flix: Flix = compiler
+    val contract = parse(text).unsafeGet
+    assert(contract.declaration.loc == contract.loc)
+    val plan = JavaBoundaryWrappers.checkContract(flix, contract, sctx).unsafeGet
+    val collision = ca.uwaterloo.flix.language.phase.jvm.JvmClass(plan.name, Array.emptyByteArray)
+    ca.uwaterloo.flix.language.phase.jvm.JavaBoundaryApi.facade(plan, Map(plan.name -> collision)) match {
+      case Result.Err(error) => assert(error.loc == contract.loc)
+      case other => fail(s"Expected a located collision, found $other")
+    }
+    val invalid = contract.declaration.copy(className = "java.Reserved")
+    JavaBoundaryWrappers.compile(flix, invalid,
+      JavaBoundaryWrappers.Traits(ca.uwaterloo.flix.language.ast.Symbol.mkTraitSym("Java.Boundary.JavaResult"),
+        ca.uwaterloo.flix.language.ast.Symbol.mkTraitSym("Java.Boundary.JavaArgument")), sctx) match {
+      case Result.Err(error) => assert(error.loc == contract.loc)
+      case other => fail(s"Expected a located invalid name, found $other")
+    }
+  }
+
   test("ABI gate diffs classes, descriptors and generic signatures at the declaration") {
     val contract = parse(text).unsafeGet
     val plan = JavaBoundaryWrappers.checkContract(compiler, contract, sctx).unsafeGet

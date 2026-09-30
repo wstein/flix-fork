@@ -26,7 +26,7 @@ object JavaBoundaryContract {
   }
   case class Contract(className: String, members: List[Member], loc: SourceLocation) {
     def declaration: JavaBoundaryWrappers.Declaration = JavaBoundaryWrappers.Declaration(className,
-      members.map(member => JavaBoundaryWrappers.Member(member.name, member.target, member.loc)))
+      members.map(member => JavaBoundaryWrappers.Member(member.name, member.target, member.loc)), loc)
   }
   case class Error(message: String, loc: SourceLocation)
 

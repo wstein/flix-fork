@@ -29,29 +29,29 @@ import javax.lang.model.SourceVersion
   */
 object JavaBoundaryApi {
   case class Member(name: String, wrapper: Symbol.DefnSym, argumentNames: List[String] = Nil)
-  case class Declaration(className: String, members: List[Member])
+  case class Declaration(className: String, members: List[Member], loc: SourceLocation = SourceLocation.Unknown)
   case class Error(message: String, loc: SourceLocation)
   case class JavaType(desc: ClassDesc, signature: String)
   case class Method(member: Member, defn: TypedAst.Def, args: List[JavaType], result: JavaType, nullary: Boolean) {
     def descriptor: String = args.map(_.desc.descriptorString()).mkString("(", "", ")") + result.desc.descriptorString()
     def signature: String = args.map(_.signature).mkString("(", "", ")") + result.signature
   }
-  final class Plan private[jvm] (val name: ClassDesc, val methods: List[Method]) {
+  final class Plan private[jvm] (val name: ClassDesc, val methods: List[Method], val loc: SourceLocation) {
     def entryPoints: Set[Symbol.DefnSym] = methods.map(_.member.wrapper).toSet
   }
 
   /** Requires a successfully checked root, including instance validation. Records types before erasure. */
   def prepare(api: Declaration, root: TypedAst.Root)(implicit flix: Flix): Result[Plan, Error] = {
     if (!SourceVersion.isName(api.className) || api.className.startsWith("dev.flix.") || api.className.startsWith("java."))
-      return Err(Error("Invalid or reserved Java API class name.", SourceLocation.Unknown))
+      return Err(Error("Invalid or reserved Java API class name.", api.loc))
     if (api.members.isEmpty || api.members.map(_.name).distinct.size != api.members.size)
-      return Err(Error("An API needs members with distinct Java method names.", SourceLocation.Unknown))
+      return Err(Error("An API needs members with distinct Java method names.", api.loc))
     Result.traverse(api.members) { member =>
       root.defs.get(member.wrapper) match {
         case None => Err(Error("Unknown boundary wrapper.", member.wrapper.loc))
         case Some(defn) => prepareMethod(member, defn)
       }
-    }.map(methods => new Plan(ClassDesc.of(api.className), methods))
+    }.map(methods => new Plan(ClassDesc.of(api.className), methods, api.loc))
   }
 
   private def prepareMethod(member: Member, defn: TypedAst.Def)(implicit flix: Flix): Result[Method, Error] = {
@@ -120,7 +120,7 @@ object JavaBoundaryApi {
   def facade(plan: Plan, classes: Map[ClassDesc, JvmClass])(implicit flix: Flix): Result[JvmClass, Error] = {
     val folded = plan.name.descriptorString().toLowerCase(Locale.ROOT)
     if (classes.keys.exists(_.descriptorString().toLowerCase(Locale.ROOT) == folded))
-      Err(Error("The Java API class collides with a generated class (including case-only collisions).", SourceLocation.Unknown))
+      Err(Error("The Java API class collides with a generated class (including case-only collisions).", plan.loc))
     else Ok(generate(plan, false))
   }
 

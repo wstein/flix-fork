@@ -29,7 +29,7 @@ import scala.collection.mutable
 /** Opt-in two-pass wrapper orchestration. No surface associated-type rule is relaxed. */
 object JavaBoundaryWrappers {
   case class Member(name: String, target: Symbol.DefnSym, loc: SourceLocation)
-  case class Declaration(className: String, members: List[Member])
+  case class Declaration(className: String, members: List[Member], loc: SourceLocation = SourceLocation.Unknown)
   case class Traits(result: Symbol.TraitSym, argument: Symbol.TraitSym)
   case class Output(compilation: CompilationResult, plan: JavaBoundaryApi.Plan)
   sealed trait Error { def loc: SourceLocation }
@@ -79,10 +79,10 @@ object JavaBoundaryWrappers {
     val module = "BoundaryGenerated" + digest
     val uri = URI.create(s"flix-boundary:/$module.flix")
     if (root.modules.keys.exists(_.ns == List(module)) || root.sources.keys.exists(_.sourceName == SourceName.UriName(uri)))
-      return Err(Invalid("The generated boundary module or source name is already owned by the caller.", SourceLocation.Unknown))
+      return Err(Invalid("The generated boundary module or source name is already owned by the caller.", api.loc))
     if (!SourceVersion.isName(api.className) || api.className.startsWith("java.") || api.className.startsWith("dev.flix.") ||
         api.members.isEmpty || api.members.map(_.name).distinct.size != api.members.size)
-      return Err(Invalid("Expected a non-reserved Java class name and distinct API member names.", SourceLocation.Unknown))
+      return Err(Invalid("Expected a non-reserved Java class name and distinct API member names.", api.loc))
     Result.traverse(api.members.zipWithIndex) { case (member, index) =>
       generateWrapper(member, s"w$index", traits, root)
     }.flatMap { wrappers =>
@@ -123,7 +123,7 @@ object JavaBoundaryWrappers {
         if (augmented._2.nonEmpty) {
           val diagnostic = augmented._2.head
           val loc = if (diagnostic.source.sourceName != SourceName.UriName(uri)) diagnostic.loc
-          else memberLocations.getOrElse(diagnostic.loc.startLine, wrappers.head.member.loc)
+          else memberLocations.getOrElse(diagnostic.loc.startLine, api.loc)
           Err(WrapperErrors(augmented._2, loc))
         } else {
           val typed = augmented._1.get
@@ -132,7 +132,7 @@ object JavaBoundaryWrappers {
             val names = root.defs(wrapper.member.target).spec.fparams.toList.map(_.bnd.sym.text)
             JavaBoundaryApi.Member(wrapper.member.name, sym, names)
           }
-          val declaration = JavaBoundaryApi.Declaration(api.className, members)
+          val declaration = JavaBoundaryApi.Declaration(api.className, members, api.loc)
           for {
             plan <- JavaBoundaryApi.prepare(declaration, typed).mapErr(FacadeError.apply)
             _ <- verify(plan)
