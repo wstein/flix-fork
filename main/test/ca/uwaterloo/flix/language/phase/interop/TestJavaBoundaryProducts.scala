@@ -135,6 +135,8 @@ class TestJavaBoundaryProducts extends AnyFunSuite with TestUtils {
       val compiled = JavaBoundary.compile(flix, contract).unsafeGet
       JavaBoundary.writeClasses(compiled.compilation.getClasses.values, runtime).unsafeGet
       assert(JavaBoundaryProducts.classes(contract).forall { clazz =>
+        val stubFile = stubs.resolve(clazz.name.descriptorString().drop(1).dropRight(1) + ".class")
+        assert(Files.readAllBytes(stubFile).sameElements(clazz.bytecode), s"Bootstrap bytes differ for ${clazz.name}")
         clazz.bytecode.sameElements(compiled.compilation.getClasses(clazz.name).bytecode)
       })
       val log = dir.resolve("caller.log")
