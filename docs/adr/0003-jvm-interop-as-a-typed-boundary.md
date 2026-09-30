@@ -11,8 +11,7 @@ packaged deep boundary instances, source contracts and CLI/LSP diagnostics, synt
 bootstrap stubs with a pre-codegen ABI check, entry-point effect policy and default handlers,
 type-tagged opaque handles, transitive region rejection, and staged Java/Kotlin/Scala callers.
 The explicit contract and final generic-ready opaque handle incorporate the agreed design
-refinements. The rollout and upstream discussion draft are local; publication and submitting
-the proposal still require a separate go-ahead. The overall ADR remains Proposed.
+refinements. The overall ADR remains Proposed.
 
 Revision 7 records [automatic wrapper orchestration](../interop/AUTOMATIC-BOUNDARY-WRAPPERS.md):
 programmatic declarations select original definitions; checked instances derive Java argument
@@ -63,8 +62,7 @@ The export experiment came from `feat/jvm-language-interop` (merged into `dev0.7
 enums -- as Java enums and as sealed interfaces of records -- in both directions and nested.
 Its staged tests proved Java could link against the generated API. Before merging v0.77.0, this
 fork removed that implementation. Local archive tags `archive/export-v1` and
-`archive/dev0.77.0-pre-cleanup` retain the old trees; they must be published before a remote
-branch rewrite so pinned consumer commits remain fetchable.
+`archive/dev0.77.0-pre-cleanup` retain the old trees for existing consumers and comparison tests.
 
 What it cost is the reason for this ADR:
 
@@ -181,7 +179,7 @@ Phase 1 uses this declaration in a separate `.flix-api` sidecar. Its signatures 
 record the Java bootstrap ABI; they do not choose conversions. An optional `= target` before
 the colon aliases a Flix function. Ordinary `.flix` grammar is unchanged. Java generic
 arguments use `[...]`, fully qualified reference names, and boxed primitives. This is an
-experimental source format, not a promise of final upstream declaration syntax.
+experimental source format, not a promise of final declaration syntax.
 
 ### 3. Concrete elaboration precedes ordinary wrapper checking
 
@@ -256,7 +254,8 @@ refuses the export first.
 A type with no boundary instance is a missing-instance error; there is no silent fallback. To
 pass a Flix value through Java without converting it, the export says so with the type
 `Java.Boundary.Opaque[t]`. In a top-level boundary position the compiler synthesizes tagged
-source `pack`/`unpack` calls. Java holds `dev.flix.runtime.OpaqueHandle<Object>` and can return
+source bridge calls and casts; no public polymorphic `pack`/`unpack` helpers are exposed in Flix.
+Java holds `dev.flix.runtime.OpaqueHandle<Object>` and can return
 it, but the supported handle API cannot inspect the payload. The final handle carries a semantic
 `JvmTypeKey` and a display type; unwrapping checks the key before casting and fails with an
 `IllegalArgumentException` naming expected and actual types. `toString` shows the type only,
@@ -326,23 +325,23 @@ Java caller compiled against those recorded descriptors must keep linking.
 - **Phase 1 converts less than the archived fork did.** Tuples, records, and enums need phase 2's
   synthetic types or a user's own Java class. Existing export consumers stay on an archived build
   until their required shapes are implemented.
-- **Upstreamable in pieces.** Phase 1 is one declaration form, staged wrapper checking, a library module,
-  and a forwarding facade -- the shape a maintainer who just deleted `@Export` can review.
+- **Incremental implementation.** Phase 1 separates declaration handling, staged wrapper checking,
+  boundary instances, and forwarding facades.
 
 ## Alternatives considered
 
-Rated for value, effort, and fit with upstream (★ low to ★★★★★ high).
+Rated for value and effort (★ low to ★★★★★ high).
 
-| Alternative | Value | Effort | Upstream fit | Verdict |
-|---|---|---|---|---|
-| Keep the fork's bytecode conversions and polish them | ★★ | large, ongoing | ★ | Rejected: a second compiler for the boundary, the shape upstream removed |
-| Evolve `ToJava`/`ToFlix` to be deep and positional | ★★★ | medium | ★★ | Rejected: breaks their existing callers' types |
-| Per-def `@Export` with trait-based conversions | ★★★ | medium | ★★★ | Rejected: keeps derived Java names and scatters the API |
-| Implicit opaque fallback for any type without an instance | ★★★ | small | ★★ | Rejected: a forgotten instance silently changes the ABI |
-| Generate Java classes for tuples, records, and enums in phase 1 | ★★★★ | large | ★★★ | Deferred to phase 2: needs a synthetic-type provider |
-| Generated Java source facades compiled by `javac` | ★★★ | medium | ★★ | Deferred: better IDE and Javadoc story, but a Java toolchain inside the Flix build |
-| Reflective scripting API (JSR-223) | ★★ | small | ★★ | Out of scope: embedding, not a typed contract |
-| **Typed boundary: boundary traits, declared API, staged checked wrappers** | ★★★★★ | medium | ★★★★★ | **Proposed** |
+| Alternative | Value | Effort | Verdict |
+|---|---|---|---|
+| Keep the fork's bytecode conversions and polish them | ★★ | large, ongoing | Rejected: a second compiler for the boundary |
+| Evolve `ToJava`/`ToFlix` to be deep and positional | ★★★ | medium | Rejected: breaks their existing callers' types |
+| Per-def `@Export` with trait-based conversions | ★★★ | medium | Rejected: keeps derived Java names and scatters the API |
+| Implicit opaque fallback for any type without an instance | ★★★ | small | Rejected: a forgotten instance silently changes the ABI |
+| Generate Java classes for tuples, records, and enums in phase 1 | ★★★★ | large | Deferred to phase 2: needs a synthetic-type provider |
+| Generated Java source facades compiled by `javac` | ★★★ | medium | Deferred: better IDE and Javadoc story, but a Java toolchain inside the Flix build |
+| Reflective scripting API (JSR-223) | ★★ | small | Out of scope: embedding, not a typed contract |
+| **Typed boundary: boundary traits, declared API, staged checked wrappers** | ★★★★★ | medium | **Proposed** |
 
 ## Migration from the fork's `@Export`
 
@@ -356,11 +355,9 @@ Rated for value, effort, and fit with upstream (★ low to ★★★★★ high)
    `Chain` as `Collection`, records in label order, data-carrying enums as sealed interfaces of
    records, `Set` and `Map` refused as parameters. The fork's tests pin how each behaves.
 4. Migrate consumers to the new declaration only after the staged caller tests pass for the
-   shapes they use. Publish the archive tags before rewriting the remote branch, then keep the old
-   compiler and tests reachable while those migrations proceed.
-5. Propose phase 1 upstream on its own. `f4dac093c`, the facade-placement fix, is not needed by
-   this design -- the `as` name, not the namespace facade, is the Java-facing class -- and is
-   worth proposing only if upstream keeps Java-visible namespace classes for another reason.
+   shapes they use. Keep the old compiler and tests reachable while those migrations proceed.
+   `f4dac093c`, the facade-placement fix, is not needed by this design: the `as` name, not the
+   namespace facade, is the Java-facing class.
 
 ## Open questions
 
@@ -372,6 +369,6 @@ Rated for value, effort, and fit with upstream (★ low to ★★★★★ high)
 - **Typed opaque markers.** Phase 1 fixes the runtime handle name and type-tag checks. Phase 2
   may supply generated marker types to its reserved generic parameter.
 - **Production declaration syntax.** Phase 1's `.flix-api` sidecar does not disturb ordinary
-  `mod` parsing. Upstream may prefer another explicit-name source form.
+  `mod` parsing. A later revision may choose another explicit-name source form.
 - **Effects as Java interfaces (phase 4).** How a Java handler object maps to Flix's resumption
   semantics, and which effects it may implement at all.

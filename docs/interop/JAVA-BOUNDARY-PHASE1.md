@@ -74,7 +74,10 @@ handler order. Existing unchecked exceptions and errors reach the Java caller un
 
 Use `Java.Boundary.Opaque[t]` in the original Flix signature and construct
 `Java.Boundary.Opaque.Opaque(value)`. At a top-level boundary position the compiler synthesizes
-tagged `pack`/`unpack` calls and emits `dev.flix.runtime.OpaqueHandle<Object>`.
+tagged bridge calls and casts in its owned wrapper source and emits
+`dev.flix.runtime.OpaqueHandle<Object>`. There are no public polymorphic `pack`/`unpack`
+Flix helpers: ordinary safe Flix code cannot invent a tag or choose an unchecked unwrap type.
+Explicit unsafe casts and the internal Java bridge remain outside that guarantee.
 This is an explicit compiler capability, not an unconstrained blanket trait instance.
 Containers of opaque values require a user instance; they do not silently erase element types.
 
@@ -113,6 +116,32 @@ registered in native-image metadata, but native execution is not part of this va
 
 Start with a new consumer and a pinned experimental compiler build. Existing generated
 tuple/record/enum consumers remain on the archived export-enabled build until phase 2
-supports their shapes. Publication and remote migration are separate, explicit actions.
-The [upstream proposal draft](UPSTREAM-TYPED-BOUNDARY-PROPOSAL.md) is ready for discussion;
-no upstream issue/PR is opened automatically.
+supports their shapes.
+
+## Boundary policies
+
+Java reference arguments must be non-null. The facade checks them before invoking any
+conversion or target code. JDK collections, maps, and present optionals are checked recursively;
+errors are `IllegalArgumentException` messages naming the original parameter and element path
+(for example `x[1]` or `x[0].value`). Empty optionals remain valid. Objects are visited by
+identity, so a cyclic Java container does not loop in the check. Arbitrary user Java object
+fields are not inspected; user instances own their invariants. Java callers must not mutate
+arguments concurrently during checking or conversion.
+
+Packaged result collection instances return unmodifiable, detached copies, including nested
+collections. This preserves the archived export semantics without exposing Flix data to mutation.
+User-defined instances may explicitly choose other behavior.
+
+Associated-type elaboration limits reductions and instance-evidence checks, not structural
+type depth. Wide tuples or rows with no recursive projections do not consume the budget.
+Contract-level errors retain the API declaration location. Generated wrapper lines record
+their member source location instead of deriving it from an import-count offset.
+
+## Frontend measurement
+
+Set `FLIX_BOUNDARY_TIMINGS=1` when running `TestJavaBoundaryWrappers` to measure the
+input and augmented frontend checks separately, excluding code generation. Three fresh
+compiler samples on the small wrapper fixture measured 391/121, 362/118, and 1,254/246 ms
+(input/augmented). The second check uses the existing incremental compiler caches; these
+measurements do not support a two-times cost claim for this fixture, nor establish performance
+for production-sized projects. The probe has no timing threshold.
