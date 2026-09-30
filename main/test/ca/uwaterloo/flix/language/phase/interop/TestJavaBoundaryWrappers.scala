@@ -9,6 +9,7 @@ package ca.uwaterloo.flix.language.phase.interop
 
 import ca.uwaterloo.flix.TestUtils
 import ca.uwaterloo.flix.api.Flix
+import ca.uwaterloo.flix.language.CompilationMessage
 import ca.uwaterloo.flix.language.ast.{Symbol, Type, TypedAst}
 import ca.uwaterloo.flix.language.phase.interop.JavaBoundaryWrappers.*
 import ca.uwaterloo.flix.language.phase.jvm.JavaBoundaryApi
@@ -24,6 +25,26 @@ import javax.tools.ToolProvider
 import scala.jdk.CollectionConverters.*
 
 class TestJavaBoundaryWrappers extends AnyFunSuite with TestUtils {
+  test("frontend timing probe records the two checks separately") {
+    if (sys.env.contains("FLIX_BOUNDARY_TIMINGS")) {
+      val samples = (1 to 3).map { _ =>
+        val times = scala.collection.mutable.ArrayBuffer.empty[Long]
+        val measured = new Flix() {
+          override def check(): (Option[TypedAst.Root], List[CompilationMessage]) = {
+            val start = System.nanoTime()
+            try super.check() finally times += System.nanoTime() - start
+          }
+        }
+        measured.setOptions(Options.TestWithLibAll.copy(xchaosMonkey = false)).addSource(path, source, sctx)
+        try {
+          compile(measured, api(methods), traits, sctx).unsafeGet
+          assert(times.size == 2)
+          (times(0) / 1000000.0, times(1) / 1000000.0)
+        } finally measured.close()
+      }
+      info(s"Boundary frontend milliseconds (input, augmented): ${samples.mkString(", ")}")
+    }
+  }
   private val path = Paths.get("Wrappers.flix")
   private val source = """pub mod Wrappers {
                          |    import java.lang.Integer
