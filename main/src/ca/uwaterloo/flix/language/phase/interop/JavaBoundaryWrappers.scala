@@ -158,7 +158,7 @@ object JavaBoundaryWrappers {
       }
       lines += "}"
       val source = lines.mkString("\n")
-      flix.addSource(uri, source, sctx)
+      flix.addJavaBoundarySource(uri, source, sctx)
       try {
         val augmented = flix.check()
         if (augmented._2.nonEmpty) {
@@ -171,7 +171,8 @@ object JavaBoundaryWrappers {
           val members = wrappers.map { wrapper =>
             val sym = typed.defs.keys.find(sym => sym.namespace == List(module) && sym.text == wrapper.name).get
             val names = root.defs(wrapper.member.target).spec.fparams.toList.map(_.bnd.sym.text)
-            JavaBoundaryApi.Member(wrapper.member.name, sym, names)
+            val params = root.defs(wrapper.member.target).spec.fparams.toList.map(_.tpe)
+            JavaBoundaryApi.Member(wrapper.member.name, sym, names, params.map(JavaBoundaryApi.argumentShape))
           }
           val declaration = JavaBoundaryApi.Declaration(api.className, members, api.loc)
           for {

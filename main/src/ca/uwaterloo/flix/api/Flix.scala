@@ -116,6 +116,7 @@ class Flix(pkgs: List[InstalledPackage] = Nil, jars: List[Path] = Nil, mounts: M
     * [[librarySources]].
     */
   private val sources = mutable.Map.empty[SourceName, Source]
+  private val boundarySources = new java.util.concurrent.ConcurrentHashMap[SourceName, Source]()
 
   /**
     * The sources of the bundled library, by library level. Built once per level, on first use.
@@ -290,10 +291,10 @@ class Flix(pkgs: List[InstalledPackage] = Nil, jars: List[Path] = Nil, mounts: M
   def javaTypeProvider: JavaTypeProvider = currentJavaTypeProvider
 
   /** Generated boundary sources must never replace a source registered by the caller. */
-  private[flix] def hasSource(name: SourceName): Boolean = sources.contains(name)
+  private[flix] def hasSource(name: SourceName): Boolean = synchronized { sources.contains(name) }
 
   /** Scoped synthetic metadata for a boundary contract. No generated class is loaded into the compiler JVM. */
-  private[flix] def withJavaBoundaryTypes[A](classes: Map[java.lang.constant.ClassDesc, Array[Byte]])(body: => A): A = {
+  private[flix] def withJavaBoundaryTypes[A](classes: Map[java.lang.constant.ClassDesc, Array[Byte]])(body: => A): A = synchronized {
     if (closed)
       throw new IllegalStateException("The Flix instance has been closed.")
     if (currentJavaTypeProvider ne baseJavaTypeProvider)
@@ -348,6 +349,18 @@ class Flix(pkgs: List[InstalledPackage] = Nil, jars: List[Path] = Nil, mounts: M
     register(Source.fromString(SourceName.UriName(uri), Origin.User, sctx, text))
     this
   }
+
+  /** Capability for compiler-owned boundary code, never inferred from a caller-chosen URI. */
+  private[flix] def addJavaBoundarySource(uri: URI, text: String, sctx: SecurityContext): Flix = synchronized {
+    addSource(uri, text, sctx)
+    val name = SourceName.UriName(uri)
+    boundarySources.put(name, sources(name))
+    this
+  }
+
+  /** Worker phases read this without taking the compilation monitor. */
+  private[flix] def isJavaBoundarySource(source: Source): Boolean =
+    boundarySources.get(source.sourceName) eq source
 
   /**
     * Removes the source named by the path `p`, if any.
@@ -431,14 +444,16 @@ class Flix(pkgs: List[InstalledPackage] = Nil, jars: List[Path] = Nil, mounts: M
     * If a source is replaced, its name is marked as changed. Re-registering a source with the same
     * origin, security context, and text changes nothing and marks nothing.
     */
-  private def register(source: Source): Unit = sources.get(source.sourceName) match {
+  private def register(source: Source): Unit = synchronized {
+    boundarySources.remove(source.sourceName)
+    sources.get(source.sourceName) match {
     case None =>
       sources += source.sourceName -> source
     case Some(old) if old.origin == source.origin && old.sctx == source.sctx && java.util.Arrays.equals(old.data, source.data) => // nop
     case Some(_) =>
       changeSet = changeSet.markChanged(source.sourceName, cachedTyperAst.dependencyGraph)
       sources += source.sourceName -> source
-  }
+  }}
 
   /**
     * Unregisters the source with the given `name`, if any.
@@ -447,17 +462,19 @@ class Flix(pkgs: List[InstalledPackage] = Nil, jars: List[Path] = Nil, mounts: M
     * and the source is forgotten. The caches of the incremental phases drop it at the next
     * compilation, since they keep only entries that are still present.
     */
-  private def unregister(name: SourceName): Unit = sources.get(name) match {
+  private def unregister(name: SourceName): Unit = synchronized {
+    boundarySources.remove(name)
+    sources.get(name) match {
     case None => // nop
     case Some(_) =>
       changeSet = changeSet.markChanged(name, cachedTyperAst.dependencyGraph)
       sources -= name
-  }
+  }}
 
   /**
     * Sets the options used for this Flix instance.
     */
-  def setOptions(opts: Options): Flix = {
+  def setOptions(opts: Options): Flix = synchronized {
     if (opts == null)
       throw new IllegalArgumentException("'opts' must be non-null.")
     options = opts
@@ -502,7 +519,9 @@ class Flix(pkgs: List[InstalledPackage] = Nil, jars: List[Path] = Nil, mounts: M
     * Compiles the Flix program and returns a typed ast.
     * If the list of [[CompilationMessage]]s is empty, then the root is always `Some(root)`.
     */
-  def check(): (Option[TypedAst.Root], List[CompilationMessage]) = try {
+  def check(): (Option[TypedAst.Root], List[CompilationMessage]) = synchronized { checkInternal() }
+
+  private def checkInternal(): (Option[TypedAst.Root], List[CompilationMessage]) = try {
     if (closed)
       throw new IllegalStateException("The Flix instance has been closed.")
 
@@ -654,8 +673,8 @@ class Flix(pkgs: List[InstalledPackage] = Nil, jars: List[Path] = Nil, mounts: M
     * we explicitly set certain local variables to `null` once they are no longer needed.
     * This manual cleanup has been verified as effective in the profiler.
     */
-  def codeGen(typedAst: TypedAst.Root): CompilationResult = withJvmOrigins(typedAst) {
-    codeGenWithOrigins(typedAst)
+  def codeGen(typedAst: TypedAst.Root): CompilationResult = synchronized {
+    withJvmOrigins(typedAst) { codeGenWithOrigins(typedAst) }
   }
 
   /** Experimental ADR 3 API: expose checked concrete wrappers through an explicitly named facade. */
@@ -663,7 +682,7 @@ class Flix(pkgs: List[InstalledPackage] = Nil, jars: List[Path] = Nil, mounts: M
     codeGenWithJavaApi(typedAst, api, Nil)
 
   def codeGenWithJavaApi(typedAst: TypedAst.Root, api: JavaBoundaryApi.Declaration,
-                         boundaryClasses: List[ca.uwaterloo.flix.language.phase.jvm.JvmClass]): Result[CompilationResult, JavaBoundaryApi.Error] = {
+                         boundaryClasses: List[ca.uwaterloo.flix.language.phase.jvm.JvmClass]): Result[CompilationResult, JavaBoundaryApi.Error] = synchronized {
     implicit val flix: Flix = this
     JavaBoundaryApi.prepare(api, typedAst).flatMap { plan =>
       val retained = typedAst.copy(entryPoints = typedAst.entryPoints ++ plan.entryPoints)
@@ -792,7 +811,7 @@ class Flix(pkgs: List[InstalledPackage] = Nil, jars: List[Path] = Nil, mounts: M
   /**
     * Compiles the given typed ast to an executable ast.
     */
-  def compile(): Result[CompilationResult, List[CompilationMessage]] = {
+  def compile(): Result[CompilationResult, List[CompilationMessage]] = synchronized {
     val (result, errors) = check()
     if (errors.isEmpty) {
       Result.Ok(codeGen(result.get))
@@ -804,7 +823,7 @@ class Flix(pkgs: List[InstalledPackage] = Nil, jars: List[Path] = Nil, mounts: M
   /**
     * Clears all caches used for incremental compilation.
     */
-  def clearCaches(): Unit = {
+  def clearCaches(): Unit = synchronized {
     this.cachedLexerTokens = Map.empty
     this.cachedParserCst = SyntaxTree.empty
     this.cachedWeederAst = WeededAst.empty
@@ -823,7 +842,7 @@ class Flix(pkgs: List[InstalledPackage] = Nil, jars: List[Path] = Nil, mounts: M
     * Classes already loaded through [[jarLoader]] remain usable, but no further classes can be loaded
     * from the JARs. The instance must not be used for compilation after it has been closed.
     */
-  override def close(): Unit = {
+  override def close(): Unit = synchronized {
     closed = true
     javaTypeProvider.close()
     jarLoader.close()

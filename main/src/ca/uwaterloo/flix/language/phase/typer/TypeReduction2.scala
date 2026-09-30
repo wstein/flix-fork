@@ -214,6 +214,8 @@ object TypeReduction2 {
 
   /** Tries to find a static method of `owner` that takes arguments of type `ts`. */
   private def lookupStaticMethod(owner: ClassDesc, methodName: String, ts: List[Type], loc: SourceLocation)(implicit scope: RegionScope, renv: RigidityEnv, flix: Flix): JavaResolution[JavaMethod] = {
+    if (owner == ClassDesc.of("dev.flix.runtime.OpaqueHandleBridge") && methodName == "wrap" &&
+      !flix.isJavaBoundarySource(loc.source)) return JavaResolution.NotFound
     val typesAreKnown = ts.forall(isKnown)
     if (!typesAreKnown) return JavaResolution.UnresolvedTypes
 

@@ -15,6 +15,8 @@ import org.scalatest.funsuite.AnyFunSuite
 
 import java.lang.constant.ClassDesc
 import java.nio.file.Paths
+import java.util.concurrent.{CountDownLatch, TimeUnit}
+import java.util.concurrent.atomic.{AtomicBoolean, AtomicReference}
 
 class TestJavaBoundarySyntheticTypes extends AnyFunSuite with TestUtils {
   private val desc = ClassDesc.of("com.acme.SyntheticPoint")
@@ -108,6 +110,47 @@ class TestJavaBoundarySyntheticTypes extends AnyFunSuite with TestUtils {
     flix.close()
     assertThrows[IllegalStateException] {
       flix.withJavaBoundaryTypes(Map(desc -> point)) { fail("A closed compiler scope must not run") }
+    }
+  }
+
+  test("a concurrent ordinary check cannot observe another compilation's synthetic provider") {
+    val flix = new Flix().setOptions(Options.TestWithLibMin.copy(xchaosMonkey = false))
+      .addSource(Paths.get("Synthetic.flix"),
+        "pub mod Synthetic { import com.acme.SyntheticPoint pub def value(x: SyntheticPoint): Int32 \\ IO = x.x() }", sctx)
+    val entered = new CountDownLatch(1)
+    val release = new CountDownLatch(1)
+    val attempted = new CountDownLatch(1)
+    val completed = new CountDownLatch(1)
+    val error = new AtomicReference[Throwable]()
+    val rejectedMissingType = new AtomicBoolean(false)
+    val owner = new Thread(() => {
+      try flix.withJavaBoundaryTypes(Map(desc -> point)) {
+        entered.countDown()
+        assert(release.await(20, TimeUnit.SECONDS))
+      } catch { case t: Throwable => error.set(t) }
+    })
+    val ordinary = new Thread(() => {
+      attempted.countDown()
+      try rejectedMissingType.set(flix.check()._2.nonEmpty)
+      catch { case t: Throwable => error.set(t) }
+      finally completed.countDown()
+    })
+    try {
+      owner.start()
+      assert(entered.await(10, TimeUnit.SECONDS))
+      ordinary.start()
+      assert(attempted.await(10, TimeUnit.SECONDS))
+      assert(!completed.await(150, TimeUnit.MILLISECONDS), "Ordinary compilation escaped the provider scope lock")
+      release.countDown()
+      assert(completed.await(10, TimeUnit.SECONDS))
+      owner.join(10000)
+      assert(error.get() == null, Option(error.get()).map(_.toString).getOrElse(""))
+      assert(rejectedMissingType.get())
+    } finally {
+      release.countDown()
+      owner.join(10000)
+      ordinary.join(10000)
+      flix.close()
     }
   }
 

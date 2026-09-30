@@ -10,6 +10,20 @@ package dev.flix.runtime;
 public final class OpaqueHandleBridge {
     private OpaqueHandleBridge() { }
 
+
+    /** The compiler records converted positions; native Java values cross unchecked. */
+    public static void checkArgument(Object value, String path, String shape) {
+        if (shape.equals("U")) return;
+        if (value == null) throw new IllegalArgumentException("Null Java boundary argument: " + path);
+        if (shape.charAt(0) == 'L' && !shape.substring(1).equals("U")) {
+            int index = 0;
+            for (Object element : (java.util.Collection<?>) value) {
+                checkArgument(element, path + "[" + index++ + "]", shape.substring(1));
+            }
+        } else if (shape.charAt(0) == 'O' && !shape.substring(1).equals("U")) {
+            ((java.util.Optional<?>) value).ifPresent(element -> checkArgument(element, path + ".value", shape.substring(1)));
+        }
+    }
     /** Reject null before conversion, including nested JDK container elements. */
     public static void checkArgument(Object value, String parameter) {
         checkArgument(value, parameter, new java.util.IdentityHashMap<Object, Boolean>());

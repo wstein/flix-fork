@@ -21,6 +21,16 @@ import javax.tools.ToolProvider
 import scala.jdk.CollectionConverters.*
 
 class TestJavaBoundaryLibrary extends AnyFunSuite with TestUtils {
+  test("ordinary Flix code cannot import the compiler's opaque wrapping bridge") {
+    val input = """import dev.flix.runtime.OpaqueHandleBridge
+                  |def forge(): Unit \ IO = discard OpaqueHandleBridge.wrap("key", "Int32", null)
+                  |""".stripMargin
+    val flix = new Flix().setOptions(Options.TestWithLibAll.copy(xchaosMonkey = false))
+    try {
+      flix.addSource(java.net.URI.create("flix-boundary:/pretend-owned.flix"), input, sctx)
+      expectError[ca.uwaterloo.flix.language.errors.TypeError.StaticMethodNotFound](flix.check())
+    } finally flix.close()
+  }
   test("opaque conversions are not public polymorphic Flix helpers") {
     List("pack", "unpack").foreach { name =>
       val input = s"def forge(): Java.Boundary.Opaque[Int32] \\ IO = Java.Boundary.$name(\"key\", \"Int32\", null)"
@@ -39,6 +49,8 @@ class TestJavaBoundaryLibrary extends AnyFunSuite with TestUtils {
                          |    pub def echo(x: String): String = x
                          |    pub def nestedArgument(x: List[List[Int32]]): List[List[Int32]] = x
                          |    pub def nativeMap(x: JMap[String, String]): JMap[String, String] = x
+                         |    pub def setArgument(x: Set[Int32]): Set[Int32] = x
+                         |    pub def mapArgument(x: Map[Int32, Int32]): Map[Int32, Int32] = x
                          |    pub def set(): Set[Int32] = Set.singleton(3)
                          |    pub def map(): Map[Int32, List[Int32]] = Map.singleton(4, 5 :: Nil)
                          |    pub def bools(): List[Bool] = true :: false :: Nil
@@ -140,9 +152,11 @@ class TestJavaBoundaryLibrary extends AnyFunSuite with TestUtils {
                                   |    expectNull(() -> LibraryApi.nestedArgument(List.of(Arrays.asList(1, null))), "x[0][1]");
                                   |    Map<String, String> nullable = new LinkedHashMap<>();
                                   |    nullable.put("key", null);
-                                  |    expectNull(() -> LibraryApi.nativeMap(nullable), "x[0].value");
+                                  |    if (LibraryApi.nativeMap(nullable) != nullable) throw new AssertionError("native identity");
                                   |    nullable.clear(); nullable.put(null, "value");
-                                  |    expectNull(() -> LibraryApi.nativeMap(nullable), "x[0].key");
+                                  |    if (LibraryApi.nativeMap(nullable) != nullable || LibraryApi.nativeMap(null) != null) throw new AssertionError("native null");
+                                  |    Map rawCycle = new HashMap(); rawCycle.put("self", rawCycle);
+                                  |    LibraryApi.nativeMap(rawCycle);
                                   |    if (!new ArrayList<>(LibraryApi.chain(xs)).equals(xs)) throw new AssertionError("chain");
                                   |    if (!LibraryApi.set().equals(Set.of(3))) throw new AssertionError("set");
                                   |    if (!LibraryApi.map().equals(Map.of(4, List.of(5)))) throw new AssertionError("map");
@@ -208,6 +222,15 @@ class TestJavaBoundaryLibrary extends AnyFunSuite with TestUtils {
         assert(message.contains("default handler"))
         assert(loc.source.sourceName.toString.contains("LibraryApi.flix"))
       case other => fail(s"Expected an unhandled boundary effect, found $other")
+    }
+  }
+
+  test("default Set and Map argument conversions remain unsupported") {
+    List("setArgument", "mapArgument").foreach { name =>
+      compileMembers(List(name)) match {
+        case Result.Err(BoundaryError(_: BoundaryTypeElaborator.MissingInstance, _)) => ()
+        case other => fail(s"Expected missing argument evidence for $name, found $other")
+      }
     }
   }
 

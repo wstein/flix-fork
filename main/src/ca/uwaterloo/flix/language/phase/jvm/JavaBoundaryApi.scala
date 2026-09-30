@@ -28,7 +28,8 @@ import javax.lang.model.SourceVersion
   * default effect handlers, and pre-type-check cyclic-build stubs are separate integration gates.
   */
 object JavaBoundaryApi {
-  case class Member(name: String, wrapper: Symbol.DefnSym, argumentNames: List[String] = Nil)
+  case class Member(name: String, wrapper: Symbol.DefnSym, argumentNames: List[String] = Nil,
+                    argumentShapes: List[String] = Nil)
   case class Declaration(className: String, members: List[Member], loc: SourceLocation = SourceLocation.Unknown)
   case class Error(message: String, loc: SourceLocation)
   case class JavaType(desc: ClassDesc, signature: String)
@@ -75,6 +76,18 @@ object JavaBoundaryApi {
   /** Shared fail-closed representation check for generated wrapper signatures. */
   private[flix] def validateBoundaryType(tpe: Type): Result[Unit, Error] =
     if (tpe == Type.Unit) Ok(()) else javaType(tpe, false).map(_ => ())
+
+  private[flix] def boundaryType(tpe: Type): Result[JavaType, Error] = javaType(tpe, false)
+
+  /** Validation follows the original Flix type, not the runtime object's Java interfaces. */
+  private[flix] def argumentShape(tpe: Type): String = Type.eraseAliases(tpe).baseType match {
+    case Type.Cst(TypeConstructor.Native(_, _), _) => "U"
+    case Type.Cst(TypeConstructor.Vector, _) => "L" + argumentShape(Type.eraseAliases(tpe).typeArguments.head)
+    case Type.Cst(TypeConstructor.Enum(sym, _), _) if (sym.namespace.isEmpty || sym.namespace == List(sym.text)) &&
+      Set("List", "Vector", "Chain", "Option").contains(sym.text) =>
+      (if (sym.text == "Option") "O" else "L") + argumentShape(Type.eraseAliases(tpe).typeArguments.head)
+    case _ => "!"
+  }
 
   /** Java type arguments must already be boxed. Never silently erase unsupported types to Object. */
   private def javaType(tpe: Type, argument: Boolean): Result[JavaType, Error] = tpe match {
@@ -141,11 +154,13 @@ object JavaBoundaryApi {
       } else {
         var offset = 0
         method.args.zipWithIndex.foreach { case (arg, index) =>
-          if (!arg.desc.isPrimitive) {
+          val shape = method.member.argumentShapes.lift(index).getOrElse(argumentShape(method.defn.spec.fparams.toList(index).tpe))
+          if (!arg.desc.isPrimitive && shape != "U") {
             xLoad(arg.desc, offset)
             mv.visitLdcInsn(method.member.argumentNames.lift(index).getOrElse(s"p$index"))
+            mv.visitLdcInsn(shape)
             mv.visitMethodInsn(Opcodes.INVOKESTATIC, "dev/flix/runtime/OpaqueHandleBridge", "checkArgument",
-              "(Ljava/lang/Object;Ljava/lang/String;)V", false)
+              "(Ljava/lang/Object;Ljava/lang/String;Ljava/lang/String;)V", false)
           }
           offset += (if (arg.desc == CD_long || arg.desc == CD_double) 2 else 1)
         }
