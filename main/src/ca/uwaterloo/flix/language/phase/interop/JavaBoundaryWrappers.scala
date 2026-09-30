@@ -100,17 +100,30 @@ object JavaBoundaryWrappers {
         val effect = if (wrapper.effects.isEmpty) "" else wrapper.effects.map(_.toString).mkString(" \\ (", " + ", ")")
         s"    pub def ${wrapper.name}${params.mkString("(", ", ", ")")}: $result$effect = $body"
       }
-      val imports = renderer.imports
-      val source = (List(s"pub mod $module {") ++ imports ++ definitions ++ List("}")).mkString("\n")
+      val imports = renderer.imports ++ List("    import dev.flix.runtime.{OpaqueHandleBridge => BoundaryOpaqueBridge}",
+        "    import dev.flix.runtime.{OpaqueHandle => BoundaryOpaqueHandle}",
+        "    import java.lang.{Object => BoundaryObject}")
+      val lines = mutable.ArrayBuffer(s"pub mod $module {")
+      lines ++= imports
+      // Private to this owned, temporary module. A caller-owned module with this name was rejected above.
+      if (wrappers.exists(_.args.exists(_.call.exists(_.contains("boundaryUnpack")))))
+        lines += "    def boundaryUnpack(key: String, name: String, value: BoundaryOpaqueHandle[BoundaryObject]): Java.Boundary.Opaque[a] \\ IO = unchecked_cast(BoundaryOpaqueBridge.unwrap(key, name, value) as Java.Boundary.Opaque[a])"
+      val memberLocations = mutable.Map.empty[Int, SourceLocation]
+      definitions.zip(wrappers).foreach { case (definition, wrapper) =>
+        definition.linesIterator.foreach { line =>
+          lines += line
+          memberLocations(lines.size) = wrapper.member.loc
+        }
+      }
+      lines += "}"
+      val source = lines.mkString("\n")
       flix.addSource(uri, source, sctx)
       try {
         val augmented = flix.check()
         if (augmented._2.nonEmpty) {
           val diagnostic = augmented._2.head
-          val index = diagnostic.loc.startLine - imports.size - 2
           val loc = if (diagnostic.source.sourceName != SourceName.UriName(uri)) diagnostic.loc
-          else if (index >= 0 && index < wrappers.size) wrappers(index).member.loc
-          else wrappers.head.member.loc
+          else memberLocations.getOrElse(diagnostic.loc.startLine, wrappers.head.member.loc)
           Err(WrapperErrors(augmented._2, loc))
         } else {
           val typed = augmented._1.get
@@ -174,8 +187,12 @@ object JavaBoundaryWrappers {
       val name = FormatType.formatType(valueType).replace("\\", "\\\\").replace("\"", "\\\"")
       val handle = Type.mkApply(Type.mkNative(ClassDesc.of("dev.flix.runtime.OpaqueHandle"), 1, loc),
         List(Type.mkNative(ClassDesc.of("java.lang.Object"), 0, loc)), loc)
-      val operation = if (associated == "In") "unpack" else "pack"
-      Ok(Conversion(handle, Type.IO, Some(s"(value -> Java.Boundary.$operation(\"$key\", \"$name\", value))")))
+      // The unsafe cast is confined to compiler-generated code, not a public polymorphic Flix helper.
+      // Unwrapping checks the stable type tag before casting to the inferred target parameter type.
+      val call = if (associated == "In")
+        s"(value -> boundaryUnpack(\"$key\", \"$name\", value))"
+      else s"(value -> BoundaryOpaqueBridge.wrap(\"$key\", \"$name\", unchecked_cast(value as BoundaryObject)))"
+      Ok(Conversion(handle, Type.IO, Some(call)))
     case _ if isDirect(tpe) => JavaBoundaryApi.validateBoundaryType(tpe)
       .mapErr(cause => Invalid(cause.message, loc)).map(_ => Conversion(tpe, Type.Pure, None))
     case _ =>

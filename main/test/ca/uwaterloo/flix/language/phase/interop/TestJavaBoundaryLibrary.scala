@@ -21,6 +21,14 @@ import javax.tools.ToolProvider
 import scala.jdk.CollectionConverters.*
 
 class TestJavaBoundaryLibrary extends AnyFunSuite with TestUtils {
+  test("opaque conversions are not public polymorphic Flix helpers") {
+    List("pack", "unpack").foreach { name =>
+      val input = s"def forge(): Java.Boundary.Opaque[Int32] \\ IO = Java.Boundary.$name(\"key\", \"Int32\", null)"
+      val checked = new Flix().setOptions(Options.TestWithLibAll.copy(xchaosMonkey = false))
+        .addSource(Paths.get("Forge.flix"), input, sctx).check()
+      expectError[ca.uwaterloo.flix.language.errors.ResolutionError.UndefinedName](checked)
+    }
+  }
   private val source = """pub mod LibraryApi {
                          |    import java.util.{Map => JMap}
                          |    pub def values(): List[Int32] = 1 :: 2 :: Nil
