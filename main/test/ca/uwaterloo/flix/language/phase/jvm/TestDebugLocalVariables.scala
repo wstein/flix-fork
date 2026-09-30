@@ -206,7 +206,9 @@ class TestDebugLocalVariables extends AnyFunSuite {
       val prepare = vm.eventRequestManager().createClassPrepareRequest()
       prepare.addClassFilter("dev.flix.gen.Def$compute")
       prepare.enable()
-      vm.resume()
+      // VMStartEvent is already queued by launch(suspend = true). Resume it only through
+      // the event loop: an eager vm.resume() followed by the queued start's events.resume()
+      // can release a later class-prepare suspension before its breakpoints are installed.
       val observed = mutable.Set.empty[Int]
       val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(30)
       while (!observed.contains(6) && System.nanoTime() < deadline) {
