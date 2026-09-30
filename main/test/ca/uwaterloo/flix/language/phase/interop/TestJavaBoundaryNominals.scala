@@ -72,7 +72,7 @@ class TestJavaBoundaryNominals extends AnyFunSuite with TestUtils {
     } finally flix.close()
   }
 
-  /** Flix requires companion instances, so generated code must coexist with a caller's companion module. */
+  /** Generated boundary instances must coexist with a caller's companion module. */
   private def checkWithCompanions(color: String, tree: String): Unit = {
     val flix = compiler
       .addSource(Paths.get("Nominals/Color.flix"), s"pub mod Nominals.Color {\n$color\n}\n", sctx)

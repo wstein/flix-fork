@@ -162,9 +162,8 @@ object JavaBoundaryNominals {
       |    case Adapter$index.Adapter$index(value) => value
       |}
       |""".stripMargin
-    // A nominal type's companion module is a legal, distinct instance namespace.
-    // Do not reopen Java.Boundary: Flix intentionally rejects duplicate module declarations.
-    val owner = if (nominal.adapted) helperOwner(contract, index) else nominal.target
+    // Keep generated instances and helpers separate from caller-owned companion modules.
+    val owner = helperOwner(contract, index)
     val adapter = if (nominal.adapted) s"enum Adapter$index { case Adapter$index(${nominal.target}) }" else ""
     val payload = s"pub def boundaryPayload(x: ${nominal.target}): ${nominal.target} = x"
     s"\npub mod $owner {\n${imports.mkString("\n")}\n$adapter\n$definitions\n$helpers\n$payload\n}\n"

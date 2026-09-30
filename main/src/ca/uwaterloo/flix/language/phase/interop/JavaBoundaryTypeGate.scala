@@ -20,7 +20,7 @@ object JavaBoundaryTypeGate {
       p -> Type.eraseAliases(root.defs(Symbol.mkDefnSym(s"${JavaBoundaryProducts.module(contract)}.out$i")).spec.fparams.head.tpe)
     }
     val nominals = contract.nominals.zipWithIndex.map { case (n, i) =>
-      val owner = if (n.adapted) JavaBoundaryNominals.helperOwner(contract, i) else n.target
+      val owner = JavaBoundaryNominals.helperOwner(contract, i)
       n -> Type.eraseAliases(root.defs(Symbol.mkDefnSym(s"$owner.boundaryPayload")).spec.fparams.head.tpe)
     }
     val targets = products.map(_._2) ++ nominals.map(_._2)
@@ -72,7 +72,7 @@ object JavaBoundaryTypeGate {
       product.components.zip(types).map { case (c, t) => s"${product.className}.${c.name}" -> JavaBoundaryApi.argumentShape(t) }
     }
     val nominals = contract.nominals.zipWithIndex.flatMap { case (nominal, i) =>
-      val owner = if (nominal.adapted) JavaBoundaryNominals.helperOwner(contract, i) else nominal.target
+      val owner = JavaBoundaryNominals.helperOwner(contract, i)
       val tpe = Type.eraseAliases(root.defs(Symbol.mkDefnSym(s"$owner.boundaryPayload")).spec.fparams.head.tpe)
       val TypeConstructor.Enum(sym, _) = tpe.typeConstructor.get: @unchecked
       val decl = root.enums(sym)
