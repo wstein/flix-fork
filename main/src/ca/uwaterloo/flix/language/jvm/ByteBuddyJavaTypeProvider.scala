@@ -66,6 +66,17 @@ object ByteBuddyJavaTypeProvider {
       ClassFileLocator.ForClassLoader.ofPlatformLoader()
     ))
 
+  /** Synthetic class files take precedence without loading them or owning the delegate's resources. */
+  def overlay(classes: Map[ClassDesc, Array[Byte]], delegate: ByteBuddyJavaTypeProvider): ByteBuddyJavaTypeProvider = {
+    val bytes = classes.map { case (desc, content) => ClassDescs.binaryNameOf(desc) -> content.clone() }
+    val memory = new ClassFileLocator.Simple(bytes.asJava)
+    val fallback = new ClassFileLocator {
+      override def locate(name: String): ClassFileLocator.Resolution = delegate.locator.locate(name)
+      override def close(): Unit = ()
+    }
+    fromLocators(List(memory, fallback))
+  }
+
   /** Returns a provider backed by the given locators in lookup order. */
   private def fromLocators(locators: List[ClassFileLocator]): ByteBuddyJavaTypeProvider = {
     val locator = new ClassFileLocator.Compound(locators.asJava)

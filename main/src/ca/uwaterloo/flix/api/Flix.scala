@@ -285,7 +285,25 @@ class Flix(pkgs: List[InstalledPackage] = Nil, jars: List[Path] = Nil, mounts: M
   private val dependencyClassPath = new DependencyClassPath(jarPaths)
 
   /** The descriptor-based Java metadata provider owned by this compiler instance. */
-  val javaTypeProvider: JavaTypeProvider = ByteBuddyJavaTypeProvider.fromDependencyClassPath(dependencyClassPath, jarLoader)
+  private val baseJavaTypeProvider = ByteBuddyJavaTypeProvider.fromDependencyClassPath(dependencyClassPath, jarLoader)
+  @volatile private var currentJavaTypeProvider: JavaTypeProvider = baseJavaTypeProvider
+  def javaTypeProvider: JavaTypeProvider = currentJavaTypeProvider
+
+  /** Scoped synthetic metadata for a boundary contract. No generated class is loaded into the compiler JVM. */
+  private[flix] def withJavaBoundaryTypes[A](classes: Map[java.lang.constant.ClassDesc, Array[Byte]])(body: => A): A = {
+    if (closed)
+      throw new IllegalStateException("The Flix instance has been closed.")
+    if (currentJavaTypeProvider ne baseJavaTypeProvider)
+      throw new IllegalStateException("Nested Java boundary type scopes are not supported.")
+    val provider = ByteBuddyJavaTypeProvider.overlay(classes, baseJavaTypeProvider)
+    clearCaches()
+    currentJavaTypeProvider = provider
+    try body finally {
+      currentJavaTypeProvider = baseJavaTypeProvider
+      clearCaches()
+      provider.close()
+    }
+  }
 
   /**
     * Adds the source `text` under the path `p`, replacing any source already registered under it.
