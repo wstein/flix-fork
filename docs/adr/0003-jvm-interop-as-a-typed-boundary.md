@@ -6,6 +6,23 @@ Proposed. Scoped to how Flix code is *called from* the JVM -- Java, Kotlin, Scal
 values cross that boundary. Calling Java *from* Flix (`import`, `new`, method calls) is unchanged.
 Numbered 3 to follow ADRs 1 and 2 on `feat/stable-specialization-names-rewrite`.
 
+Revision 14 implements the experimental Java-first Phase 3 slice and records the Phase 4
+investigation. `export instance <Java interface> = mod <Flix module> as "<implementation>"`
+contracts reuse checked conversion wrappers, validate Java-owned classfile metadata and emit
+public instance implementations with erased bridges where required. Java clients compile
+against the interface first, without Flix API stubs. Concrete inherited methods, defaults,
+overloads, marker interfaces, CLI and editor validation are covered. The
+[Phase 3 guide](../interop/JAVA-BOUNDARY-PHASE3.md) records supported types and validation.
+
+Two [Phase 4 probes and design notes](../interop/JAVA-BOUNDARY-PHASE4.md) demonstrate synchronous
+Java operation objects inside lexical Flix handlers and read-only native views with deferred
+element conversion. Automatic handler bindings, escaping/asynchronous resumptions and production
+collection views remain future implementation work. Defaults continue to return detached
+collection copies. Overall status stays Proposed; Phase 2's full-suite evidence predates this
+implementation. The combined gate on `287b3d289` passes 176 tests in 13 suites, zero failed
+or aborted, including all 11 interface tests and both Phase 4 probes. No Phase 3 full-suite run,
+merge, push or native execution is claimed.
+
 Revision 13 records the Phase 2 review fixes and two implementation decisions: state-mutating
 runtime bridge members share one compiler-owned-source access policy, and each `Flix` instance
 retains its compilation monitor with orderly, blocking shutdown. Generated nominal code now
@@ -345,7 +362,7 @@ type-checking, so an instance can name them. That is phase 2.
 |---|---|---|---|
 | 1 | `Java.Boundary` traits; `export mod ... as`; staged elaboration and checked wrappers; forwarding facade with `Signature`; `Opaque[t]`; ABI gate; a new stub generator for joint compilation | the v0.77.0 compiler and its non-export fork features | nothing yet |
 | 2 | synthetic-type provider, so instances can target generated tuple, record, and enum classes; recover the archived conversion semantics as trait instances | stubs | nothing from the old export backend: it is already gone |
-| 3 | `export instance com.acme.Service = mod Acme.Impl`: Flix implements a Java interface Java compiles first | stubs for Flix-owned APIs only | stubs for Java-first projects |
+| 3 | `export instance com.acme.Service = mod Acme.Impl as "com.acme.FlixService"`: Flix implements a Java interface Java compiles first | stubs for Flix-owned APIs only | stubs for Java-first projects |
 | 4 | effects as Java handler interfaces; collection views (O(1) at the boundary) | -- | copies where they are too expensive |
 
 ### Phase 2 instance-head gate
@@ -535,5 +552,9 @@ Rated for value and effort (★ low to ★★★★★ high).
   may supply generated marker types to its reserved generic parameter.
 - **Production declaration syntax.** Phase 1's `.flix-api` sidecar does not disturb ordinary
   `mod` parsing. A later revision may choose another explicit-name source form.
-- **Effects as Java interfaces (phase 4).** How a Java handler object maps to Flix's resumption
-  semantics, and which effects it may implement at all.
+- **Effects as Java interfaces (phase 4).** The synchronous operation-object probe works with
+  compiler-owned resumption. Declarative operation mapping, handler precedence and an explicit
+  continuation lifetime/thread policy still precede automatic or asynchronous handler APIs.
+- **Collection views (phase 4).** Opt-in immutable backing and pure deferred conversion need
+  cursor-based iteration, retention/concurrency tests and allocation/traversal measurements
+  before replacing any explicit snapshot use. Default boundary instances keep copies.
