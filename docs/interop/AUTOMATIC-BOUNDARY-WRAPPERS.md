@@ -72,4 +72,4 @@ Phase 1 adds source contracts, packaged instances, effect handlers, type-tagged 
 transitive region checks, cyclic-build bootstrap stubs, and Kotlin/Scala callers. The separate
 `java-api-stubs` command reads the explicit contract without type-checking; the real compile
 checks its ABI against derived instances before code generation. See the Phase 1 guide for
-the 42-test boundary corpus and rollout limits. ADR 3 remains Proposed.
+the 43-test boundary corpus and rollout limits. ADR 3 remains Proposed.
