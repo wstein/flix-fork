@@ -8,7 +8,7 @@ package ca.uwaterloo.flix.language.phase.interop
 
 import ca.uwaterloo.flix.TestUtils
 import ca.uwaterloo.flix.api.{BootstrapError, Flix, JavaBoundary}
-import ca.uwaterloo.flix.api.lsp.{Diagnostic, LspProject}
+import ca.uwaterloo.flix.api.lsp.{ClientUri, Diagnostic, FlixLanguageClient, LspProject, LspServer}
 import ca.uwaterloo.flix.language.ast.shared.{Origin, SecurityContext, Source, SourceName}
 import ca.uwaterloo.flix.language.errors.JavaBoundaryError
 import ca.uwaterloo.flix.util.{Options, Result}
@@ -153,6 +153,37 @@ class TestJavaBoundaryContract extends AnyFunSuite with TestUtils {
     } finally {
       Files.delete(file); Files.delete(file.getParent); Files.delete(file.getParent.getParent); Files.delete(dir)
     }
+  }
+
+  test("plain LSP notifications route contract open, edits and close") {
+    val server = new LspServer.FlixLanguageServer(Options.TestWithLibAll.copy(xchaosMonkey = false))
+    val published = scala.collection.mutable.ArrayBuffer.empty[org.eclipse.lsp4j.PublishDiagnosticsParams]
+    val client = java.lang.reflect.Proxy.newProxyInstance(classOf[FlixLanguageClient].getClassLoader,
+      Array(classOf[FlixLanguageClient]), (_, method, args) => {
+        if (method.getName == "publishDiagnostics") published += args(0).asInstanceOf[org.eclipse.lsp4j.PublishDiagnosticsParams]
+        if (classOf[java.util.concurrent.CompletableFuture[?]].isAssignableFrom(method.getReturnType))
+          java.util.concurrent.CompletableFuture.completedFuture(null)
+        else null
+      }).asInstanceOf[FlixLanguageClient]
+    server.connect(client)
+    val uri = Paths.get("Cycle.flix-api").toAbsolutePath.toUri.toString
+    try {
+      val service = server.getTextDocumentService
+      service.didOpen(new org.eclipse.lsp4j.DidOpenTextDocumentParams(new org.eclipse.lsp4j.TextDocumentItem(
+        Paths.get("Cycle.flix").toAbsolutePath.toUri.toString, "flix", 1,
+        "pub mod Cycle { pub def values(): List[Int32] = 1 :: Nil pub def value(): Int32 = 42 }")))
+      service.didOpen(new org.eclipse.lsp4j.DidOpenTextDocumentParams(new org.eclipse.lsp4j.TextDocumentItem(
+        uri, "plaintext", 1, text.replace("java.lang.Integer", "java.lang.Long"))))
+      val diagnostic = published.reverseIterator.find(_.getUri == uri).get.getDiagnostics.get(0)
+      assert(diagnostic.getRange.getStart.getLine == 1)
+      assert(diagnostic.getMessage.getLeft.contains("values signature:"))
+      service.didChange(new org.eclipse.lsp4j.DidChangeTextDocumentParams(
+        new org.eclipse.lsp4j.VersionedTextDocumentIdentifier(uri, 2),
+        List(new org.eclipse.lsp4j.TextDocumentContentChangeEvent(text)).asJava))
+      assert(published.reverseIterator.find(_.getUri == uri).get.getDiagnostics.isEmpty)
+      service.didClose(new org.eclipse.lsp4j.DidCloseTextDocumentParams(new org.eclipse.lsp4j.TextDocumentIdentifier(uri)))
+      assert(!server.project.isOpen(ClientUri.toSourceName(java.net.URI.create(uri))))
+    } finally server.shutdown().get()
   }
 
   test("CLI stubs, checked output, and mismatch JSON use the source contract") {

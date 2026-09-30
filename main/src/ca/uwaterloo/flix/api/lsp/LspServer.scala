@@ -71,7 +71,7 @@ object LspServer {
     */
   private val DependencyWatcherId = "flix/dependencies"
 
-  private class FlixLanguageServer(o: Options) extends LanguageServer with LanguageClientAware {
+  private[flix] class FlixLanguageServer(o: Options) extends LanguageServer with LanguageClientAware {
     /**
       * The project served by this server.
       */
@@ -399,7 +399,7 @@ object LspServer {
     override def didOpen(didOpenTextDocumentParams: DidOpenTextDocumentParams): Unit = {
       System.err.println(s"didOpen: $didOpenTextDocumentParams")
       val textDocument = didOpenTextDocumentParams.getTextDocument
-      if (textDocument.getLanguageId == "flix") {
+      if (textDocument.getLanguageId == "flix" || textDocument.getUri.endsWith(".flix-api")) {
         val name = ClientUri.toSourceName(new URI(textDocument.getUri))
         flixLanguageServer.project.addSource(name, textDocument.getText)
         flixLanguageServer.processCheck()
@@ -423,6 +423,11 @@ object LspServer {
 
     override def didClose(didCloseTextDocumentParams: DidCloseTextDocumentParams): Unit = {
       System.err.println(s"didCloseTextDocumentParams: $didCloseTextDocumentParams")
+      val uri = didCloseTextDocumentParams.getTextDocument.getUri
+      if (uri.endsWith(".flix-api")) {
+        flixLanguageServer.project.remSource(ClientUri.toSourceName(new URI(uri)))
+        flixLanguageServer.processCheck()
+      }
     }
 
     override def didSave(didSaveTextDocumentParams: DidSaveTextDocumentParams): Unit = {
