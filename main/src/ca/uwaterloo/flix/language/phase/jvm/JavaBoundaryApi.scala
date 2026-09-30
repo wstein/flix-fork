@@ -17,7 +17,7 @@ import ca.uwaterloo.flix.util.Result.{Err, Ok}
 import ca.uwaterloo.flix.util.collection.CofiniteSet
 import org.objectweb.asm.{MethodVisitor, Opcodes}
 
-import java.lang.constant.ClassDesc
+import java.lang.constant.{ClassDesc, MethodTypeDesc}
 import java.lang.constant.ConstantDescs.*
 import java.util.Locale
 import javax.lang.model.SourceVersion
@@ -38,7 +38,8 @@ object JavaBoundaryApi {
     def descriptor: String = args.map(_.desc.descriptorString()).mkString("(", "", ")") + result.desc.descriptorString()
     def signature: String = args.map(_.signature).mkString("(", "", ")") + result.signature
   }
-  final class Plan private[jvm] (val name: ClassDesc, val methods: List[Method], val loc: SourceLocation, val interfaceName: Option[ClassDesc]) {
+  case class Bridge(method: Method, descriptor: MethodTypeDesc)
+  final class Plan private[jvm] (val name: ClassDesc, val methods: List[Method], val loc: SourceLocation, val interfaceName: Option[ClassDesc], val bridges: List[Bridge] = Nil) {
     def entryPoints: Set[Symbol.DefnSym] = methods.map(_.member.wrapper).toSet
   }
 
@@ -56,7 +57,8 @@ object JavaBoundaryApi {
       }
     }.flatMap { methods =>
       val plan = new Plan(ClassDesc.of(api.className), methods, api.loc, api.interfaceName.map(ClassDesc.of))
-      ca.uwaterloo.flix.language.phase.interop.JavaBoundaryInterfaces.verify(plan).map(_ => plan)
+      ca.uwaterloo.flix.language.phase.interop.JavaBoundaryInterfaces.verify(plan).map(bridges =>
+        new Plan(plan.name, methods, api.loc, plan.interfaceName, bridges))
     }
   }
 
@@ -184,6 +186,22 @@ object JavaBoundaryApi {
         }
         forward(method, if (plan.interfaceName.isDefined) 1 else 0)
       }
+      mv.visitMaxs(0, 0)
+      mv.visitEnd()
+    }
+    plan.bridges.foreach { bridge =>
+      implicit val mv: MethodVisitor = cw.visitMethod(Opcodes.ACC_PUBLIC | Opcodes.ACC_BRIDGE | Opcodes.ACC_SYNTHETIC,
+        bridge.method.member.name, bridge.descriptor.descriptorString(), null, null)
+      mv.visitCode()
+      mv.visitVarInsn(Opcodes.ALOAD, 0)
+      var offset = 1
+      bridge.descriptor.parameterArray().toList.zip(bridge.method.args).foreach { case (erased, concrete) =>
+        xLoad(erased, offset)
+        if (erased != concrete.desc) CHECKCAST(concrete.desc)
+        offset += (if (erased == CD_long || erased == CD_double) 2 else 1)
+      }
+      mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, owner, bridge.method.member.name, bridge.method.descriptor, false)
+      xReturn(bridge.descriptor.returnType())
       mv.visitMaxs(0, 0)
       mv.visitEnd()
     }

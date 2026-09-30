@@ -47,6 +47,14 @@ class TestJavaBoundaryInterfaces extends AnyFunSuite with TestUtils {
                        | static int seed() { return 9; }
                        |}
                        |""".stripMargin,
+        "Base" -> "package example; public interface Base<T> { T echo(T x); }",
+        "Specific" -> "package example; public interface Specific extends Base<String> {}",
+        "SpecificCaller" -> """package example; public final class SpecificCaller {
+                             | public static void main(String[] args) throws Exception {
+                             |  Specific s = (Specific)Class.forName("example.FlixSpecific").getConstructor().newInstance();
+                             |  if (!s.echo("a").equals("a!") || !((Base<String>)s).echo("b").equals("b!")) throw new AssertionError();
+                             | }
+                             |} """.stripMargin,
         "GenericMethod" -> "package example; public interface GenericMethod { <T> java.util.List<Integer> values(); }",
         "Locked" -> "package example; public sealed interface Locked permits Locked.Permit { final class Permit implements Locked {} }",
         "Caller" -> """package example;
@@ -89,6 +97,7 @@ class TestJavaBoundaryInterfaces extends AnyFunSuite with TestUtils {
                                           | pub def sum(xs: List[Int32]): Int32 = List.sum(xs)
                                           | pub def wide(x: Int64, y: Float64): Int64 = x + Float64.truncateToInt64(y)
                                           | pub def touch(): Unit = ()
+                                          | pub def echo(x: String): String = x + "!"
                                           | pub def valueInt(x: Int32): Int32 = x + 1
                                           | pub def valueLong(x: Int64): Int64 = x + 2i64
                                           |}
@@ -141,6 +150,32 @@ class TestJavaBoundaryInterfaces extends AnyFunSuite with TestUtils {
     assert(parse(text.replace("(long) -> long", "(int) -> long")).isInstanceOf[Result.Err[?, ?]])
   }
 
+  private def runCaller(dir: Path, jar: Path, runtime: Path, name: String): Unit = {
+    val log = dir.resolve(name + ".log")
+    val child = new ProcessBuilder(Paths.get(System.getProperty("java.home"), "bin", "java").toString,
+      "-cp", runtime.toString + java.io.File.pathSeparator + jar, name)
+      .redirectErrorStream(true).redirectOutput(log.toFile).start()
+    try {
+      assert(child.waitFor(30, TimeUnit.SECONDS))
+      assert(child.exitValue() == 0, Files.readString(log))
+    } finally if (child.isAlive) child.destroyForcibly().waitFor()
+  }
+
+  test("concrete inherited generic methods dispatch through erased parent descriptors") {
+    withJava { (dir, jar) =>
+      val flix = compiler(jar)
+      try {
+        val contract = parse("""export instance example.Specific = mod Impl as "example.FlixSpecific" {
+                             | def echo: (java.lang.String) -> java.lang.String;
+                             |} """.stripMargin).unsafeGet
+        val output = JavaBoundary.compile(flix, contract).unsafeGet
+        val runtime = dir.resolve("runtime")
+        assert(JavaBoundary.writeClasses(output.compilation.getClasses.values, runtime) == Result.Ok(()))
+        runCaller(dir, jar, runtime, "example.SpecificCaller")
+      } finally flix.close()
+    }
+  }
+
   test("Java compiles first against the interface and invokes Flix without stubs or compiler jar") {
     withJava { (dir, jar) =>
       val flix = compiler(jar)
@@ -150,14 +185,7 @@ class TestJavaBoundaryInterfaces extends AnyFunSuite with TestUtils {
         val runtime = dir.resolve("runtime")
         assert(JavaBoundary.writeClasses(compiled.compilation.getClasses.values, runtime) == Result.Ok(()))
         assert(!Files.exists(runtime.resolve("example/Service.class")))
-        val log = dir.resolve("caller.log")
-        val child = new ProcessBuilder(Paths.get(System.getProperty("java.home"), "bin", "java").toString,
-          "-cp", runtime.toString + java.io.File.pathSeparator + jar, "example.Caller")
-          .redirectErrorStream(true).redirectOutput(log.toFile).start()
-        try {
-          assert(child.waitFor(30, TimeUnit.SECONDS))
-          assert(child.exitValue() == 0, Files.readString(log))
-        } finally if (child.isAlive) child.destroyForcibly().waitFor()
+        runCaller(dir, jar, runtime, "example.Caller")
       } finally flix.close()
     }
   }
