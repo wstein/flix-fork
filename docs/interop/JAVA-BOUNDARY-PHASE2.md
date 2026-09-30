@@ -52,9 +52,15 @@ FLIX_FORK_ROOT=/path/to/compiler scripts/check-java-boundary-phase2
 The harness retains artifacts, compiles Java/Kotlin/Scala against API-only stubs, then executes
 against real product and nominal output with neither stubs nor the compiler jar at runtime.
 Compiler tests cover byte-identical declared stub/runtime classes, generic components, enum
-value methods, exhaustive Java switches, recursive trees, two Box instantiations, detached
+value methods, exhaustive Java switches, recursive trees, nested nominal arguments/results,
+two Box instantiations, detached
 unmodifiable results, located malformed-contract errors and provider concurrency isolation.
 Validation passed 27/27 focused product, nominal, provider and packaged-library tests.
 All three staged Java/Kotlin/Scala callers passed against fresh bootstrap/runtime output.
-The broad compiler suite is running; Phase 2 is not yet declared fully validated.
+The full compiler suite passed **18,022 tests in 123 suites, zero failures**, with eight ignored
+tests. It includes both sequential compiler corpora, the standard library, debugger/LSP,
+reachability, naming and package tooling. After that run, the nominal fixture was strengthened
+with List/Optional argument round trips and a null-element path assertion; all 27 focused tests
+and all three JVM callers passed again. No compiler implementation changed after the full run.
+Phase 2 is complete locally within the documented policy; no merge or push has been performed.
 Native-image execution is not covered.

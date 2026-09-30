@@ -114,12 +114,11 @@ ABI mismatch rejection, CLI JSON diagnostics, LSP edit/close behavior, opaque ty
 default handlers, generic collection signatures, and transitive region rejection.
 Temporary artifacts are retained for inspection; the script prints their directory.
 Review validation passed all 47 focused boundary tests and staged Java, Kotlin, and Scala
-callers against fresh artifacts. The broad `./mill --no-server flix.test` run is underway,
-including the default and sequential compiler configurations; it is not yet a green full-run
-claim. It found case-only `forEach`/`foreach` test-name collisions in `TestBPlusTree`, also
-present before the review fixes. Only the two syntax-test names were changed; the rerun passed
-all 14,245 standard-library tests. The live JDI continuation-local test was denied a debugger
-socket by the sandbox and passed when rerun with loopback access.
+callers against fresh artifacts. The combined Phase 1/2 branch subsequently passed the full
+`./mill --no-server flix.test`: 18,022 tests, 123 suites, zero failures, eight ignored tests,
+including both sequential configurations and the live JDI continuation-local test. Earlier
+review fixes renamed case-colliding `forEach`/`foreach` syntax tests in `TestBPlusTree`; the
+standard-library rerun passed all 14,245 tests. The JDI test requires local loopback access.
 The native-image build is not run; opaque class-file resources are registered in native-image
 metadata, but native execution is not part of this validation claim.
 

@@ -9,8 +9,10 @@ Numbered 3 to follow ADRs 1 and 2 on `feat/stable-specialization-names-rewrite`.
 Revision 12 completes the Phase 2 implementation scope: explicit records, tuples, enums and
 sealed record hierarchies; direct instances for monomorphic nominal enums; recursive nominal
 values and ordinary nested containers; adapter-backed concrete instantiations; and staged JVM
-language callers. Validation results and remaining execution gates are recorded in the rollout
-guide. Status remains Proposed, and phases 3–5 are not implemented by this milestone.
+language callers. The full compiler suite passed 18,022 tests; the subsequently strengthened
+nominal fixtures passed all 27 focused gates and Java/Kotlin/Scala callers again. The rollout
+guide records the exact validation sequence and limits. Status remains Proposed, and phases
+3–5 are not implemented by this milestone.
 
 Revision 11 adds the experimental declared-product slice of Phase 2: syntax-only contracts
 declare named Java records for Flix record aliases and concrete tuples, including generic
