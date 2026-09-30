@@ -257,9 +257,9 @@ object Instances {
   /**
     * Reassembles an instance
     */
-  private def checkInstance(inst: TypedAst.Instance, root: TypedAst.Root)(implicit sctx: SharedContext, flix: Flix): Unit = {
+  private def checkInstance(inst: TypedAst.Instance, root: TypedAst.Root, checkSignatures: Boolean)(implicit sctx: SharedContext, flix: Flix): Unit = {
     val eqEnv = ConstraintSolverInterface.expandEqualityEnv(root.eqEnv, inst.econstrs.flatMap(toShared))
-    checkSigMatch(inst, root, eqEnv)
+    if (checkSignatures) checkSigMatch(inst, root, eqEnv)
     checkOrphan(inst)
     checkSuperInstances(inst, root, eqEnv)
   }
@@ -274,12 +274,18 @@ object Instances {
     // This maps each instance head to its corresponding instance.
     var heads = Map.empty[TypeConstructor, TypedAst.Instance]
 
+    // A generated overlap makes associated-type selection ambiguous. Signature checks against
+    // that environment can accuse an otherwise valid caller instance of using the wrong type.
+    val generatedOverlapHeads = insts0.groupBy(_.tpe.typeConstructor).collect {
+      case (Some(head), insts) if insts.size > 1 && insts.exists(i => flix.isJavaBoundarySource(i.loc.source)) => head
+    }.toSet
+
     insts0.foreach {
       // check that the instance is on a valid type, suppressing other errors if not
       case inst =>
         if (checkSimple(inst)) {
           checkOverlap(inst, heads)
-          checkInstance(inst, root)
+          checkInstance(inst, root, checkSignatures = !generatedOverlapHeads.contains(unsafeGetHead(inst)))
           heads += (unsafeGetHead(inst) -> inst)
         }
     }

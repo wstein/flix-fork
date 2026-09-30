@@ -9,7 +9,7 @@ package ca.uwaterloo.flix.language.phase.interop
 import ca.uwaterloo.flix.TestUtils
 import ca.uwaterloo.flix.api.{BootstrapError, Flix, JavaBoundary}
 import ca.uwaterloo.flix.language.ast.shared.{Origin, Source, SourceName}
-import ca.uwaterloo.flix.util.{Options, Result}
+import ca.uwaterloo.flix.util.{Formatter, Options, Result}
 import org.scalatest.funsuite.AnyFunSuite
 
 import java.nio.file.{Files, Paths}
@@ -130,9 +130,42 @@ class TestJavaBoundaryNominals extends AnyFunSuite with TestUtils {
           assert(errors.size == 2, errors.map(_.summary).mkString("\n"))
           assert(errors.map(_.summary).toSet == Set(s"Duplicate module: '$owner'.", "Duplicate definition: 'boundaryPayload'."))
           assert(errors.forall(_.loc == contract.nominals.head.loc))
+          assert(errors.forall(_.locs.exists(_.source.sourceName == SourceName.PathName(Paths.get(owner.replace('.', '/') + ".flix")))))
+          assert(errors.forall(_.messageWithLoc(Formatter.NoFormatter)(None).contains(owner.replace('.', '/') + ".flix")))
         case other => fail(s"Expected located generated name clashes, found $other")
       }
     } finally flix.close()
+  }
+
+  test("hand-written boundary instances overlap once at the contract member") {
+    val contract = parse(contractText)
+    val path = Paths.get("Nominals/Color.flix")
+    List(
+      """instance Java.Boundary.JavaResult[Nominals.Color] {
+        | type Out = Int32
+        | type Aef = {}
+        | pub def toJava(_x: Nominals.Color): Int32 = 0
+        |} """.stripMargin,
+      """instance Java.Boundary.JavaArgument[Nominals.Color] {
+        | type In = Int32
+        | type Aef = {}
+        | pub def toFlix(_x: Int32): Nominals.Color = Nominals.Color.Red
+        |} """.stripMargin
+    ).foreach { instance =>
+      val flix = compiler.addSource(path, s"pub mod Nominals.Color { $instance }", sctx)
+      try {
+        expectSuccess(flix.check())
+        JavaBoundary.check(flix, contract) match {
+          case Result.Err(BootstrapError.CompilationErrors(errors, _)) =>
+            assert(errors.size == 1, errors.map(_.summary).mkString("\n"))
+            assert(errors.head.summary.contains("Overlapping instances"))
+            assert(errors.head.loc == contract.nominals.head.loc)
+            assert(errors.head.locs.exists(_.source.sourceName == SourceName.PathName(path)))
+            assert(errors.head.messageWithLoc(Formatter.NoFormatter)(None).contains(path.toString))
+          case other => fail(s"Expected a located overlap, found $other")
+        }
+      } finally flix.close()
+    }
   }
 
   test("caller diagnostics keep their own locations alongside generated clashes") {

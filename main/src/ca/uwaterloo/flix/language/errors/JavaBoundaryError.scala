@@ -11,10 +11,11 @@ import ca.uwaterloo.flix.language.ast.{SourceLocation, TypedAst}
 import ca.uwaterloo.flix.util.Formatter
 
 /** Shared text, CLI JSON, and LSP diagnostic for experimental API declarations. */
-case class JavaBoundaryError(detail: String, loc: SourceLocation) extends CompilationMessage {
+case class JavaBoundaryError(detail: String, loc: SourceLocation, override val locs: List[SourceLocation] = Nil) extends CompilationMessage {
   def kind: CompilationMessageKind = CompilationMessageKind.EntryPointError
   def code: ErrorCode = ErrorCode.E1400
   def summary: String = detail
   protected def message(formatter: Formatter)(implicit root: Option[TypedAst.Root]): String =
-    s">> $detail\n\n${Highlighter.highlight(loc, "Java API declaration", formatter)}"
+    s">> $detail\n\n${Highlighter.highlight(loc, "Java API declaration", formatter)}" +
+      locs.map(site => s"\n\nConflicting declaration at ${site.format}:\n${Highlighter.highlight(site, "conflicting declaration", formatter)}").mkString
 }

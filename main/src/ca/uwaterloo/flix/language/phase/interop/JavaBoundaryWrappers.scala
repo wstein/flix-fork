@@ -9,7 +9,7 @@ package ca.uwaterloo.flix.language.phase.interop
 
 import ca.uwaterloo.flix.api.Flix
 import ca.uwaterloo.flix.language.CompilationMessage
-import ca.uwaterloo.flix.language.errors.{JavaBoundaryError, NameError}
+import ca.uwaterloo.flix.language.errors.{InstanceError, JavaBoundaryError, NameError}
 import ca.uwaterloo.flix.language.ast.{SourceLocation, Symbol, Type, TypeConstructor, TypedAst}
 import ca.uwaterloo.flix.language.ast.shared.{SecurityContext, SourceName}
 import ca.uwaterloo.flix.language.phase.jvm.{JavaBoundaryApi, JvmClass}
@@ -109,10 +109,12 @@ object JavaBoundaryWrappers {
       val sites = error match {
         case NameError.DuplicateModule(_, first, second) => List(first, second)
         case NameError.DuplicateLowerName(_, first, second) => List(first, second)
+        case InstanceError.OverlappingInstances(_, _, first, second) => List(first, second)
         case _ => error.loc :: error.locs
       }
-      sites.find(_.source.sourceName == source) match {
-        case Some(loc) => JavaBoundaryError(error.summary, locations.getOrElse(loc.startLine, fallback))
+      sites.filter(_.source.sourceName == source).sortBy(_.startLine).headOption match {
+        case Some(loc) => JavaBoundaryError(error.summary, locations.getOrElse(loc.startLine, fallback),
+          sites.filterNot(_.source.sourceName == source).distinct.sorted)
         case None => error
       }
     }.distinct
