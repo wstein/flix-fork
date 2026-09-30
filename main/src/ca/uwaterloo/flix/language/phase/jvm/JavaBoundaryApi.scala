@@ -39,11 +39,20 @@ object JavaBoundaryApi {
     def signature: String = args.map(_.signature).mkString("(", "", ")") + result.signature
   }
   case class Bridge(method: Method, descriptor: MethodTypeDesc)
-  final class Plan private[jvm] (val name: ClassDesc, val methods: List[Method], val loc: SourceLocation, val interfaceName: Option[ClassDesc], val bridges: List[Bridge] = Nil) {
+  final class Plan private[jvm] (val name: ClassDesc, val methods: List[Method], val loc: SourceLocation,
+                                val interfaceName: Option[ClassDesc], val bridges: List[Bridge],
+                                private[JavaBoundaryApi] val interfaceVerified: Boolean) {
     def entryPoints: Set[Symbol.DefnSym] = methods.map(_.member.wrapper).toSet
+
+    /** Interface metadata is validated by the interop frontend before JVM emission. */
+    private[flix] def withInterfaceBridges(verifiedBridges: List[Bridge]): Plan =
+      new Plan(name, methods, loc, interfaceName, verifiedBridges, true)
   }
 
-  /** Requires a successfully checked root, including instance validation. Records types before erasure. */
+  /**
+    * Requires a successfully checked root, including instance validation. Records types before erasure.
+    * Interface metadata validation belongs to the interop frontend; this only prepares wrapper shapes.
+    */
   def prepare(api: Declaration, root: TypedAst.Root)(implicit flix: Flix): Result[Plan, Error] = {
     if (api.interfaceName.exists(name => !SourceVersion.isName(name)) ||
       !SourceVersion.isName(api.className) || api.className.startsWith("dev.flix.") || api.className.startsWith("java."))
@@ -55,10 +64,8 @@ object JavaBoundaryApi {
         case None => Err(Error("Unknown boundary wrapper.", member.wrapper.loc))
         case Some(defn) => prepareMethod(member, defn)
       }
-    }.flatMap { methods =>
-      val plan = new Plan(ClassDesc.of(api.className), methods, api.loc, api.interfaceName.map(ClassDesc.of))
-      ca.uwaterloo.flix.language.phase.interop.JavaBoundaryInterfaces.verify(plan).map(bridges =>
-        new Plan(plan.name, methods, api.loc, plan.interfaceName, bridges))
+    }.map { methods =>
+      new Plan(ClassDesc.of(api.className), methods, api.loc, api.interfaceName.map(ClassDesc.of), Nil, false)
     }
   }
 
@@ -142,7 +149,9 @@ object JavaBoundaryApi {
   /** Call only within the compilation's JVM-origin scope, after wrapper code generation. */
   def facade(plan: Plan, classes: Map[ClassDesc, JvmClass])(implicit flix: Flix): Result[JvmClass, Error] = {
     val folded = plan.name.descriptorString().toLowerCase(Locale.ROOT)
-    if (classes.keys.exists(_.descriptorString().toLowerCase(Locale.ROOT) == folded))
+    if (plan.interfaceName.nonEmpty && !plan.interfaceVerified)
+      Err(Error("Java interface metadata must be validated before implementation emission.", plan.loc))
+    else if (classes.keys.exists(_.descriptorString().toLowerCase(Locale.ROOT) == folded))
       Err(Error("The Java API class collides with a generated class (including case-only collisions).", plan.loc))
     else Ok(generate(plan, false))
   }

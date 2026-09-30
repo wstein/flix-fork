@@ -6,7 +6,7 @@
 package ca.uwaterloo.flix.language.phase.interop
 
 import ca.uwaterloo.flix.api.Flix
-import ca.uwaterloo.flix.language.ast.SourceLocation
+import ca.uwaterloo.flix.language.ast.{SourceLocation, TypedAst}
 import ca.uwaterloo.flix.language.ast.jvm.{JavaMethod, JavaType, JavaTypeVariable}
 import ca.uwaterloo.flix.language.jvm.{JavaLookupError, JavaMemberResolver}
 import ca.uwaterloo.flix.language.phase.jvm.JavaBoundaryApi
@@ -19,7 +19,11 @@ import scala.annotation.tailrec
 
 /** Validate implementations against Java-owned classfiles, without loading an interface. */
 object JavaBoundaryInterfaces {
-  def verify(plan: JavaBoundaryApi.Plan)(implicit flix: Flix): Result[List[JavaBoundaryApi.Bridge], JavaBoundaryApi.Error] = {
+  /** Prepare concrete wrapper shapes, then validate Java-owned metadata before code generation. */
+  def prepare(api: JavaBoundaryApi.Declaration, root: TypedAst.Root)(implicit flix: Flix): Result[JavaBoundaryApi.Plan, JavaBoundaryApi.Error] =
+    JavaBoundaryApi.prepare(api, root).flatMap(plan => verify(plan).map(plan.withInterfaceBridges))
+
+  private def verify(plan: JavaBoundaryApi.Plan)(implicit flix: Flix): Result[List[JavaBoundaryApi.Bridge], JavaBoundaryApi.Error] = {
     val owner = plan.interfaceName match {
       case None => return Ok(Nil)
       case Some(desc) => desc

@@ -691,7 +691,7 @@ class Flix(pkgs: List[InstalledPackage] = Nil, jars: List[Path] = Nil, mounts: M
   def codeGenWithJavaApi(typedAst: TypedAst.Root, api: JavaBoundaryApi.Declaration,
                          boundaryClasses: List[ca.uwaterloo.flix.language.phase.jvm.JvmClass]): Result[CompilationResult, JavaBoundaryApi.Error] = synchronized {
     implicit val flix: Flix = this
-    JavaBoundaryApi.prepare(api, typedAst).flatMap { plan =>
+    ca.uwaterloo.flix.language.phase.interop.JavaBoundaryInterfaces.prepare(api, typedAst).flatMap { plan =>
       val retained = typedAst.copy(entryPoints = typedAst.entryPoints ++ plan.entryPoints)
       withJvmOrigins(retained) {
         val compiled = codeGenWithOrigins(retained)

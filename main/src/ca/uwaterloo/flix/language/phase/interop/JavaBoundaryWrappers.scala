@@ -219,7 +219,7 @@ object JavaBoundaryWrappers {
           }
           val declaration = JavaBoundaryApi.Declaration(api.className, members, api.loc, api.interfaceName)
           for {
-            plan <- JavaBoundaryApi.prepare(declaration, typed).mapErr(FacadeError.apply)
+            plan <- JavaBoundaryInterfaces.prepare(declaration, typed).mapErr(FacadeError.apply)
             _ <- verify(plan)
           } yield Prepared(typed, declaration, plan)
         }

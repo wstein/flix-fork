@@ -91,6 +91,14 @@ class TestJavaBoundaryApi extends AnyFunSuite with TestUtils {
     Files.write(path, clazz.bytecode)
   }
 
+  test("unvalidated interface plans cannot emit implementations") {
+    implicit val flix: Flix = fixture._1
+    val api = declaration("com.acme.Unvalidated").copy(interfaceName = Some("java.lang.Runnable"))
+    val plan = JavaBoundaryApi.prepare(api, fixture._2).unsafeGet
+    assert(JavaBoundaryApi.facade(plan, Map.empty).isInstanceOf[Result.Err[?, ?]])
+    assert(JavaBoundaryInterfaces.prepare(api, fixture._2).isInstanceOf[Result.Err[?, ?]])
+  }
+
   test("recorded ABI preserves primitive widths and recursive Java generic signatures") {
     implicit val flix: Flix = fixture._1
     val api = declaration("com.acme.Boundary")
