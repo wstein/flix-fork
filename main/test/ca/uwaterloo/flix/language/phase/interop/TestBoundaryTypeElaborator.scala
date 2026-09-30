@@ -206,6 +206,13 @@ class TestBoundaryTypeElaborator extends AnyFunSuite with TestUtils {
     }
   }
 
+  test("wide associated results do not spend reductions on structural applications") {
+    implicit val flix: Flix = fixture._1
+    val wide = Type.mkTuple(List.fill(256)(Type.Int32), loc)
+    val eqenv = fixture._2.eqEnv.addAssocTypeDef(outSym, Type.Int32, wide)
+    assert(elaborate(outSym, Type.Int32, fixture._2.copy(eqEnv = eqenv)) == Result.Ok(wide))
+  }
+
   test("recursive instance evidence is rejected") {
     implicit val flix: Flix = fixture._1
     val root = fixture._2

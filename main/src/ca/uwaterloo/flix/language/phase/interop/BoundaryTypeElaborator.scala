@@ -40,30 +40,35 @@ object BoundaryTypeElaborator {
       case None => Err(UnresolvedAssociatedType(sym, arg))
       case Some(assoc) =>
         val query = Type.AssocType(AssocTypeSymUse(sym, arg.loc), arg, assoc.kind, arg.loc)
-        new Context(root).visitType(query, Set.empty, Set.empty, MaxDepth)
+        new Context(root).visitType(query, Set.empty, Set.empty)
     }
   }
 
   // A cycle may grow its argument on each step instead of repeating an identical query.
   // This prototype rejects that case deterministically rather than exhausting the JVM stack.
-  private val MaxDepth: Int = 128
+  private val MaxReductions: Int = 128
 
   private class Context(root: TypedAst.Root)(implicit flix: Flix) {
     private type AssocPath = Set[(Symbol.AssocTypeSym, Type)]
     private type InstancePath = Set[(Symbol.TraitSym, Type)]
+    private var remainingReductions = MaxReductions
+
+    private def consumeReduction(tpe: Type): Result[Unit, Error] = {
+      if (remainingReductions <= 0) Err(ReductionLimit(tpe))
+      else { remainingReductions -= 1; Ok(()) }
+    }
 
     /** Normalizes every projection, including those nested in Java type arguments and effects. */
-    def visitType(tpe: Type, assocs: AssocPath, instances: InstancePath, depth: Int): Result[Type, Error] = {
-      if (depth <= 0) return Err(ReductionLimit(tpe))
+    def visitType(tpe: Type, assocs: AssocPath, instances: InstancePath): Result[Type, Error] = {
       tpe match {
         case _: Type.Var => Err(NonConcreteType(tpe))
         case Type.Cst(TypeConstructor.Error(_, _), _) => Err(NonConcreteType(tpe))
         case _: Type.Cst => Ok(tpe)
-        case Type.Alias(_, _, expanded, _) => visitType(expanded, assocs, instances, depth - 1)
+        case Type.Alias(_, _, expanded, _) => visitType(expanded, assocs, instances)
         case Type.Apply(left, right, loc) =>
           for {
-            t1 <- visitType(left, assocs, instances, depth - 1)
-            t2 <- visitType(right, assocs, instances, depth - 1)
+            t1 <- visitType(left, assocs, instances)
+            t2 <- visitType(right, assocs, instances)
           } yield (t1, t2) match {
             case (Type.Apply(Type.Cst(TypeConstructor.Union, _), first, _), second) =>
               Type.mkUnion(first, second, loc)
@@ -71,8 +76,8 @@ object BoundaryTypeElaborator {
           }
         case Type.AssocType(symUse, input, kind, _) =>
           for {
-            arg <- visitType(input, assocs, instances, depth - 1)
-            result <- reduceAssoc(symUse.sym, arg, kind, assocs, instances, depth - 1)
+            arg <- visitType(input, assocs, instances)
+            result <- reduceAssoc(symUse.sym, arg, kind, assocs, instances)
           } yield result
         case _: Type.JvmToType | _: Type.JvmToEff | _: Type.UnresolvedJvmType =>
           Err(NonConcreteType(tpe))
@@ -80,18 +85,19 @@ object BoundaryTypeElaborator {
     }
 
     private def reduceAssoc(sym: Symbol.AssocTypeSym, arg: Type, kind: Kind,
-                            assocs: AssocPath, instances: InstancePath, depth: Int): Result[Type, Error] = {
+                            assocs: AssocPath, instances: InstancePath): Result[Type, Error] = {
       val key = (sym, arg)
       if (assocs.contains(key)) return Err(RecursiveAssociatedType(sym, arg))
       val next = assocs + key
       for {
-        _ <- requireInstance(sym.trt, arg, next, instances, depth)
+        _ <- consumeReduction(arg)
+        _ <- requireInstance(sym.trt, arg, next, instances)
         result <- root.eqEnv.getAssocDef(sym, arg) match {
           case None => Err(UnresolvedAssociatedType(sym, arg))
           case Some(defn) =>
             matchHead(arg, defn.arg) match {
               case None => Err(UnresolvedAssociatedType(sym, arg))
-              case Some(subst) => visitType(subst(defn.ret), next, instances, depth)
+              case Some(subst) => visitType(subst(defn.ret), next, instances)
             }
         }
         checked <- if (result.kind == kind) Ok(result) else Err(UnexpectedKind(result, kind))
@@ -100,10 +106,13 @@ object BoundaryTypeElaborator {
 
     /** Evidence is required even when an instance's associated type does not use its constraints. */
     private def requireInstance(sym: Symbol.TraitSym, arg: Type, assocs: AssocPath,
-                                instances: InstancePath, depth: Int): Result[Unit, Error] = {
-      if (depth <= 0) return Err(ReductionLimit(arg))
+                                instances: InstancePath): Result[Unit, Error] = {
       val key = (sym, arg)
       if (instances.contains(key)) return Err(RecursiveInstance(sym, arg))
+      consumeReduction(arg) match {
+        case Err(error) => return Err(error)
+        case Ok(_) => ()
+      }
       root.traitEnv.getInstance(sym, arg) match {
         case None => Err(MissingInstance(sym, arg))
         case Some(inst) => matchHead(arg, inst.tpe) match {
@@ -113,12 +122,12 @@ object BoundaryTypeElaborator {
             for {
               _ <- Result.sequence(inst.tconstrs.map { constr =>
                 for {
-                  input <- visitType(subst(constr.arg), assocs, next, depth - 1)
-                  _ <- requireInstance(constr.symUse.sym, input, assocs, next, depth - 1)
+                  input <- visitType(subst(constr.arg), assocs, next)
+                  _ <- requireInstance(constr.symUse.sym, input, assocs, next)
                 } yield ()
               })
               _ <- Result.sequence(inst.econstrs.map { constr =>
-                checkEquality(subst(constr), assocs, next, depth - 1)
+                checkEquality(subst(constr), assocs, next)
               })
             } yield ()
         }
@@ -126,7 +135,7 @@ object BoundaryTypeElaborator {
     }
 
     private def checkEquality(constr: EqualityConstraint, assocs: AssocPath,
-                              instances: InstancePath, depth: Int): Result[Unit, Error] = {
+                              instances: InstancePath): Result[Unit, Error] = {
       val sym = constr.symUse.sym
       val kind = root.traits.get(sym.trt).flatMap(_.assocs.find(_.sym == sym)).map(_.kind)
       kind match {
@@ -134,8 +143,8 @@ object BoundaryTypeElaborator {
         case Some(k) =>
           val projection = Type.AssocType(constr.symUse, constr.tpe1, k, constr.loc)
           for {
-            left <- visitType(projection, assocs, instances, depth)
-            right <- visitType(constr.tpe2, assocs, instances, depth)
+            left <- visitType(projection, assocs, instances)
+            right <- visitType(constr.tpe2, assocs, instances)
             _ <- if (ConstraintSolver2.isEquivalent(left, right)(EqualityEnv.empty, flix)) Ok(())
                  else Err(UnsatisfiedEquality(constr))
           } yield ()
