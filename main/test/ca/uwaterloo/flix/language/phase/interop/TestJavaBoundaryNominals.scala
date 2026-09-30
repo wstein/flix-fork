@@ -72,6 +72,32 @@ class TestJavaBoundaryNominals extends AnyFunSuite with TestUtils {
     } finally flix.close()
   }
 
+  /** Flix requires companion instances, so generated code must coexist with a caller's companion module. */
+  private def checkWithCompanions(color: String, tree: String): Unit = {
+    val flix = compiler
+      .addSource(Paths.get("Nominals/Color.flix"), s"pub mod Nominals.Color {\n$color\n}\n", sctx)
+      .addSource(Paths.get("Nominals/Tree.flix"), s"pub mod Nominals.Tree {\n$tree\n}\n", sctx)
+    try {
+      expectSuccess(flix.check())
+      JavaBoundaryWrappers.checkContract(flix, parse(contractText), sctx) match {
+        case Result.Ok(_) => expectSuccess(flix.check())
+        case Result.Err(e) => fail(s"contract rejected: $e")
+      }
+    } finally flix.close()
+  }
+
+  test("enum and sealed targets with existing companion modules keep their direct instances") {
+    checkWithCompanions(
+      "pub def all(): List[Nominals.Color] = Nominals.Color.Red :: Nominals.Color.Blue :: Nil",
+      "pub def leaf(x: Int32): Nominals.Tree = Nominals.Tree.Leaf(x)")
+  }
+
+  test("a caller-defined boundaryPayload in a companion module does not clash with generated code") {
+    checkWithCompanions(
+      "pub def boundaryPayload(x: Int32): Int32 = x",
+      "pub def boundaryPayload(): String = \"user\"")
+  }
+
   test("enum and sealed contracts reject missing cases, wrong payloads and folded variant collisions") {
     List(contractText.replace("case Blue;", ""), contractText.replace("radius: int", "radius: java.lang.String")).foreach { text =>
       val flix = compiler
