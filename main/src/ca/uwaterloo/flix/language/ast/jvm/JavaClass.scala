@@ -18,7 +18,8 @@ case class JavaClass(
   interfaces: List[JavaType],
   declaredConstructors: List[JavaMethod],
   declaredMethods: List[JavaMethod],
-  declaredFields: List[JavaField]
+  declaredFields: List[JavaField],
+  isSealed: Boolean = false
 ) extends JavaMember {
 
   /** Returns whether this class-file type is an interface. */

@@ -32,9 +32,9 @@ object JavaBoundaryContract {
     def adapted: Boolean = target.contains('[')
     def classNames: List[String] = className :: (if (sealedType) variants.map(v => s"$className$$${v.name}") else Nil)
   }
-  case class Contract(className: String, members: List[Member], loc: SourceLocation, products: List[Product], nominals: List[Nominal]) {
+  case class Contract(className: String, members: List[Member], loc: SourceLocation, products: List[Product], nominals: List[Nominal], interfaceName: Option[String] = None) {
     def declaration: JavaBoundaryWrappers.Declaration = JavaBoundaryWrappers.Declaration(className,
-      members.map(member => JavaBoundaryWrappers.Member(member.name, member.target, member.loc)), loc)
+      members.map(member => JavaBoundaryWrappers.Member(member.name, member.target, member.loc)), loc, interfaceName)
   }
   object Contract {
     def apply(className: String, members: List[Member], loc: SourceLocation): Contract =
@@ -51,17 +51,22 @@ object JavaBoundaryContract {
   def verify(contract: Contract, plan: JavaBoundaryApi.Plan): Result[Unit, Error] = {
     val actualClass = plan.name.descriptorString().drop(1).dropRight(1).replace('/', '.')
     val classDiff = if (contract.className == actualClass) Nil else List(s"class: expected ${contract.className}, actual $actualClass")
-    val actual = plan.methods.map(method => method.member.name -> method).toMap
-    val methodDiffs = contract.members.flatMap { member => actual.get(member.name) match {
-      case None => List(s"${member.name}: missing actual method")
+    val actual = plan.methods.map(method => (method.member.name, method.args.map(_.desc)) -> method).toMap
+    val methodDiffs = contract.members.flatMap { member => actual.get((member.name, member.args.map(_.desc))) match {
+      case None =>
+        plan.methods.find(_.member.name == member.name) match {
+          case Some(method) => List(s"${member.name} descriptor: expected ${member.descriptor}, actual ${method.descriptor}")
+          case None => List(s"${member.name}: missing actual method")
+        }
       case Some(method) =>
         List("descriptor" -> (member.descriptor, method.descriptor), "signature" -> (member.signature, method.signature))
           .collect { case (field, (expected, found)) if expected != found => s"${member.name} $field: expected $expected, actual $found" }
     }}
-    val extra = actual.keySet.diff(contract.members.map(_.name).toSet).toList.sorted.map(name => s"$name: unexpected actual method")
+    val extra = actual.keySet.diff(contract.members.map(m => (m.name, m.args.map(_.desc))).toSet).toList
+      .sortBy(_.toString).map { case (name, _) => s"$name: unexpected actual method" }
     val differences = classDiff ++ methodDiffs ++ extra
     if (differences.isEmpty) Ok(()) else {
-      val loc = contract.members.find(member => actual.get(member.name).forall(method =>
+      val loc = contract.members.find(member => actual.get((member.name, member.args.map(_.desc))).forall(method =>
         member.descriptor != method.descriptor || member.signature != method.signature)).map(_.loc).getOrElse(contract.loc)
       Err(Error("Java API contract mismatch:\n" + differences.mkString("\n"), loc))
     }
@@ -69,6 +74,7 @@ object JavaBoundaryContract {
 
   /** API-only bytecode from syntax, usable even when the Flix program's Java imports do not exist. */
   def stub(contract: Contract): JvmClass = {
+    require(contract.interfaceName.isEmpty, "Java-first interface implementations do not use bootstrap stubs.")
     val cw = new ClassWriter(ClassWriter.COMPUTE_MAXS)
     val name = ClassDesc.of(contract.className)
     cw.visit(Opcodes.V1_8, Opcodes.ACC_PUBLIC | Opcodes.ACC_FINAL | Opcodes.ACC_SUPER,
@@ -115,7 +121,13 @@ object JavaBoundaryContract {
     }
     def parse(): Result[Contract, Error] = try {
       val loc = location(current)
-      expect("export"); expect("mod")
+      expect("export")
+      val interfaceName = if (accept("instance")) {
+        val name = take().text
+        if (!SourceVersion.isName(name) || !name.contains('.')) abort("Expected a fully qualified Java interface name.")
+        expect("="); expect("mod")
+        Some(name)
+      } else { expect("mod"); None }
       val module = identifier()
       expect("as")
       val literal = take().text
@@ -220,7 +232,9 @@ object JavaBoundaryContract {
       }
       expect("}"); expect("<eof>")
       val result = members.result()
-      if (result.isEmpty || result.map(_.name).distinct.size != result.size) abort("Expected distinct, nonempty API members.")
+      val keys = if (interfaceName.isDefined) result.map(m => m.name + m.args.map(_.desc.descriptorString()).mkString("(", "", ")"))
+      else result.map(_.name)
+      if (result.isEmpty || keys.distinct.size != result.size) abort("Expected distinct, nonempty API members.")
       val types = products.result()
       val enums = nominals.result()
       val names = (className :: (types.map(_.className) ++ enums.flatMap(_.classNames))).map(_.toLowerCase(Locale.ROOT))
@@ -235,7 +249,7 @@ object JavaBoundaryContract {
       }
       val targets = types.map(_.target) ++ enums.map(_.target)
       if (targets.distinct.size != targets.size) abort("Each Flix type may have only one declared Java representation per contract.")
-      Ok(Contract(className, result, loc, types, enums))
+      Ok(Contract(className, result, loc, types, enums, interfaceName))
     } catch { case failure: ParseFailure => Err(failure.error) }
 
     /** A small, injection-free concrete Flix type grammar, not arbitrary generated source text. */

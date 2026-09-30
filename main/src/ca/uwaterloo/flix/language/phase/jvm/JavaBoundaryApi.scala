@@ -29,15 +29,16 @@ import javax.lang.model.SourceVersion
   */
 object JavaBoundaryApi {
   case class Member(name: String, wrapper: Symbol.DefnSym, argumentNames: List[String] = Nil,
-                    argumentShapes: List[String] = Nil)
-  case class Declaration(className: String, members: List[Member], loc: SourceLocation = SourceLocation.Unknown)
+                    argumentShapes: List[String] = Nil, loc: SourceLocation = SourceLocation.Unknown)
+  case class Declaration(className: String, members: List[Member], loc: SourceLocation = SourceLocation.Unknown,
+                         interfaceName: Option[String] = None)
   case class Error(message: String, loc: SourceLocation)
   case class JavaType(desc: ClassDesc, signature: String)
   case class Method(member: Member, defn: TypedAst.Def, args: List[JavaType], result: JavaType, nullary: Boolean) {
     def descriptor: String = args.map(_.desc.descriptorString()).mkString("(", "", ")") + result.desc.descriptorString()
     def signature: String = args.map(_.signature).mkString("(", "", ")") + result.signature
   }
-  final class Plan private[jvm] (val name: ClassDesc, val methods: List[Method], val loc: SourceLocation) {
+  final class Plan private[jvm] (val name: ClassDesc, val methods: List[Method], val loc: SourceLocation, val interfaceName: Option[ClassDesc]) {
     def entryPoints: Set[Symbol.DefnSym] = methods.map(_.member.wrapper).toSet
   }
 
@@ -45,14 +46,17 @@ object JavaBoundaryApi {
   def prepare(api: Declaration, root: TypedAst.Root)(implicit flix: Flix): Result[Plan, Error] = {
     if (!SourceVersion.isName(api.className) || api.className.startsWith("dev.flix.") || api.className.startsWith("java."))
       return Err(Error("Invalid or reserved Java API class name.", api.loc))
-    if (api.members.isEmpty || api.members.map(_.name).distinct.size != api.members.size)
+    if (api.members.isEmpty || (api.interfaceName.isEmpty && api.members.map(_.name).distinct.size != api.members.size))
       return Err(Error("An API needs members with distinct Java method names.", api.loc))
     Result.traverse(api.members) { member =>
       root.defs.get(member.wrapper) match {
         case None => Err(Error("Unknown boundary wrapper.", member.wrapper.loc))
         case Some(defn) => prepareMethod(member, defn)
       }
-    }.map(methods => new Plan(ClassDesc.of(api.className), methods, api.loc))
+    }.flatMap { methods =>
+      val plan = new Plan(ClassDesc.of(api.className), methods, api.loc, api.interfaceName.map(ClassDesc.of))
+      ca.uwaterloo.flix.language.phase.interop.JavaBoundaryInterfaces.verify(plan).map(_ => plan)
+    }
   }
 
   private def prepareMethod(member: Member, defn: TypedAst.Def)(implicit flix: Flix): Result[Method, Error] = {
@@ -141,9 +145,19 @@ object JavaBoundaryApi {
     val cw = ClassMaker.mkClassWriter()
     val owner = plan.name.descriptorString().drop(1).dropRight(1)
     cw.visit(CompilerConstants.JvmTargetVersion, Opcodes.ACC_PUBLIC | Opcodes.ACC_FINAL | Opcodes.ACC_SUPER,
-      owner, null, "java/lang/Object", null)
+      owner, null, "java/lang/Object", plan.interfaceName.map(i =>
+        Array(i.descriptorString().drop(1).dropRight(1))).orNull)
+    if (plan.interfaceName.isDefined) {
+      val constructor = cw.visitMethod(Opcodes.ACC_PUBLIC, "<init>", "()V", null, null)
+      constructor.visitCode()
+      constructor.visitVarInsn(Opcodes.ALOAD, 0)
+      constructor.visitMethodInsn(Opcodes.INVOKESPECIAL, "java/lang/Object", "<init>", "()V", false)
+      constructor.visitInsn(Opcodes.RETURN)
+      constructor.visitMaxs(0, 0)
+      constructor.visitEnd()
+    }
     plan.methods.foreach { method =>
-      implicit val mv: MethodVisitor = cw.visitMethod(Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC,
+      implicit val mv: MethodVisitor = cw.visitMethod(Opcodes.ACC_PUBLIC | (if (plan.interfaceName.isEmpty) Opcodes.ACC_STATIC else 0),
         method.member.name, method.descriptor, method.signature, null)
       mv.visitCode()
       if (stubOnly) {
@@ -152,7 +166,7 @@ object JavaBoundaryApi {
         mv.visitMethodInsn(Opcodes.INVOKESPECIAL, "java/lang/UnsupportedOperationException", "<init>", "()V", false)
         mv.visitInsn(Opcodes.ATHROW)
       } else {
-        var offset = 0
+        var offset = if (plan.interfaceName.isDefined) 1 else 0
         method.args.zipWithIndex.foreach { case (arg, index) =>
           val shape = method.member.argumentShapes.lift(index).getOrElse(argumentShape(method.defn.spec.fparams.toList(index).tpe))
           if (!arg.desc.isPrimitive && shape != "U") {
@@ -164,7 +178,7 @@ object JavaBoundaryApi {
           }
           offset += (if (arg.desc == CD_long || arg.desc == CD_double) 2 else 1)
         }
-        forward(method)
+        forward(method, if (plan.interfaceName.isDefined) 1 else 0)
       }
       mv.visitMaxs(0, 0)
       mv.visitEnd()
@@ -174,7 +188,7 @@ object JavaBoundaryApi {
   }
 
   /** Only calling convention glue: instantiate the compiled wrapper and unwind its normal result. */
-  private def forward(method: Method)(implicit mv: MethodVisitor, flix: Flix): Unit = {
+  private def forward(method: Method, firstArgument: Int)(implicit mv: MethodVisitor, flix: Flix): Unit = {
     val target = GenFunAndClosureClasses.defnDesc(method.member.wrapper)
     NEW(target)
     DUP()
@@ -184,7 +198,7 @@ object JavaBoundaryApi {
       GETSTATIC(GenUnit.SingletonField)
       PUTFIELD(InstanceField(target, "arg0", CD_Object))
     } else {
-      var offset = 0
+      var offset = firstArgument
       method.args.zipWithIndex.foreach { case (arg, index) =>
         DUP()
         xLoad(arg.desc, offset)

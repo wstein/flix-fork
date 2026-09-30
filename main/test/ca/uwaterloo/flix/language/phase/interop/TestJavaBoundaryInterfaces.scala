@@ -81,7 +81,7 @@ class TestJavaBoundaryInterfaces extends AnyFunSuite with TestUtils {
                                           | import example.Service
                                           | pub def values(): List[Int32] \ IO = Service.seed() :: 2 :: Nil
                                           | pub def sum(xs: List[Int32]): Int32 = List.sum(xs)
-                                          | pub def wide(x: Int64, y: Float64): Int64 = x + Float64.toInt64(y)
+                                          | pub def wide(x: Int64, y: Float64): Int64 = x + Float64.truncateToInt64(y)
                                           | pub def touch(): Unit = ()
                                           |}
                                           |""".stripMargin, sctx)

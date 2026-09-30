@@ -221,7 +221,8 @@ final case class ByteBuddyJavaTypeProvider(
       interfaces = tpe.getInterfaces.asScala.toList.map(toType),
       declaredConstructors = methods.filter(_.isConstructor).map(toMethod),
       declaredMethods = methods.filter(_.isMethod).map(toMethod),
-      declaredFields = tpe.getDeclaredFields.asScala.toList.map(toField)
+      declaredFields = tpe.getDeclaredFields.asScala.toList.map(toField),
+      isSealed = tpe.isSealed
     )
   }
 

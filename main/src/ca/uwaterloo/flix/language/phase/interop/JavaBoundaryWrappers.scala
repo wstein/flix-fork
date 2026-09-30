@@ -30,7 +30,8 @@ import scala.collection.mutable
 /** Opt-in two-pass wrapper orchestration. No surface associated-type rule is relaxed. */
 object JavaBoundaryWrappers {
   case class Member(name: String, target: Symbol.DefnSym, loc: SourceLocation)
-  case class Declaration(className: String, members: List[Member], loc: SourceLocation = SourceLocation.Unknown)
+  case class Declaration(className: String, members: List[Member], loc: SourceLocation = SourceLocation.Unknown,
+                         interfaceName: Option[String] = None)
   case class Traits(result: Symbol.TraitSym, argument: Symbol.TraitSym)
   case class Output(compilation: CompilationResult, plan: JavaBoundaryApi.Plan)
   sealed trait Error { def loc: SourceLocation }
@@ -163,7 +164,7 @@ object JavaBoundaryWrappers {
     if (root.modules.keys.exists(_.ns == List(module)) || root.sources.keys.exists(_.sourceName == SourceName.UriName(uri)))
       return Err(Invalid("The generated boundary module or source name is already owned by the caller.", api.loc))
     if (!SourceVersion.isName(api.className) || api.className.startsWith("java.") || api.className.startsWith("dev.flix.") ||
-        api.members.isEmpty || api.members.map(_.name).distinct.size != api.members.size)
+        api.members.isEmpty || (api.interfaceName.isEmpty && api.members.map(_.name).distinct.size != api.members.size))
       return Err(Invalid("Expected a non-reserved Java class name and distinct API member names.", api.loc))
     Result.traverse(api.members.zipWithIndex) { case (member, index) =>
       generateWrapper(member, s"w$index", traits, root, declared)
@@ -214,9 +215,9 @@ object JavaBoundaryWrappers {
             val sym = typed.defs.keys.find(sym => sym.namespace == List(module) && sym.text == wrapper.name).get
             val names = root.defs(wrapper.member.target).spec.fparams.toList.map(_.bnd.sym.text)
             val params = root.defs(wrapper.member.target).spec.fparams.toList.map(_.tpe)
-            JavaBoundaryApi.Member(wrapper.member.name, sym, names, params.map(JavaBoundaryApi.argumentShape))
+            JavaBoundaryApi.Member(wrapper.member.name, sym, names, params.map(JavaBoundaryApi.argumentShape), wrapper.member.loc)
           }
-          val declaration = JavaBoundaryApi.Declaration(api.className, members, api.loc)
+          val declaration = JavaBoundaryApi.Declaration(api.className, members, api.loc, api.interfaceName)
           for {
             plan <- JavaBoundaryApi.prepare(declaration, typed).mapErr(FacadeError.apply)
             _ <- verify(plan)

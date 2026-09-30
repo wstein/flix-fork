@@ -58,7 +58,9 @@ object JavaBoundary {
   }
 
   def writeStubs(contract: JavaBoundaryContract.Contract, directory: Path): Result[Unit, BootstrapError] =
-    writeClasses(JavaBoundaryContract.stub(contract) :: (JavaBoundaryProducts.classes(contract) ++ JavaBoundaryRuntime.classes), directory)
+    if (contract.interfaceName.isDefined) Err(BootstrapError.CompilationErrors(List(JavaBoundaryError(
+      "Java-first interface implementations do not use API stubs; compile Java against the interface first.", contract.loc)), None))
+    else writeClasses(JavaBoundaryContract.stub(contract) :: (JavaBoundaryProducts.classes(contract) ++ JavaBoundaryRuntime.classes), directory)
 
   /** Never delete outputs or overwrite a non-class file. The build tool owns stale-output cleanup. */
   def writeClasses(classes: Iterable[JvmClass], directory: Path): Result[Unit, BootstrapError] = try {
