@@ -25,8 +25,10 @@ class TestJavaBoundaryNominals extends AnyFunSuite with TestUtils {
                                | sealed com.acme.IntBox = Box[Int32] { case Box(value: int); };
                                | sealed com.acme.StringBox = Box[String] { case Box(value: java.lang.String); };
                                | def colors: () -> java.util.List[com.acme.Color];
+                               | def echoColors: (java.util.List[com.acme.Color]) -> java.util.List[com.acme.Color];
                                | def color: (com.acme.Color) -> com.acme.Color;
                                | def shape: () -> java.util.Optional[com.acme.Shape];
+                               | def echoOptionalShape: (java.util.Optional[com.acme.Shape]) -> java.util.Optional[com.acme.Shape];
                                | def echoShape: (com.acme.Shape) -> com.acme.Shape;
                                | def tree: () -> com.acme.Tree;
                                | def echoTree: (com.acme.Tree) -> com.acme.Tree;
@@ -41,8 +43,10 @@ class TestJavaBoundaryNominals extends AnyFunSuite with TestUtils {
                          | pub enum Tree { case Leaf(Int32), Node(Tree, Tree) }
                          | pub enum Box[a] { case Box(a) }
                          | pub def colors(): List[Color] = Color.Red :: Color.Blue :: Nil
+                         | pub def echoColors(x: List[Color]): List[Color] = x
                          | pub def color(x: Color): Color = x
                          | pub def shape(): Option[Shape] = Some(Shape.Circle(3))
+                         | pub def echoOptionalShape(x: Option[Shape]): Option[Shape] = x
                          | pub def echoShape(x: Shape): Shape = x
                          | pub def tree(): Tree = Tree.Node(Tree.Leaf(1), Tree.Node(Tree.Leaf(2), Tree.Leaf(3)))
                          | pub def echoTree(x: Tree): Tree = x
@@ -61,6 +65,7 @@ class TestJavaBoundaryNominals extends AnyFunSuite with TestUtils {
     try {
       val plan = JavaBoundaryWrappers.checkContract(flix, parse(contractText), sctx).unsafeGet
       assert(plan.methods.find(_.member.name == "colors").get.signature == "()Ljava/util/List<Lcom/acme/Color;>;")
+      assert(plan.methods.find(_.member.name == "echoColors").get.signature == "(Ljava/util/List<Lcom/acme/Color;>;)Ljava/util/List<Lcom/acme/Color;>;")
       assert(plan.methods.find(_.member.name == "shape").get.signature == "()Ljava/util/Optional<Lcom/acme/Shape;>;")
       assert(plan.methods.find(_.member.name == "echoTree").get.descriptor == "(Lcom/acme/Tree;)Lcom/acme/Tree;")
       expectSuccess(flix.check())
@@ -108,10 +113,15 @@ class TestJavaBoundaryNominals extends AnyFunSuite with TestUtils {
                                 | }
                                 | public static void main(String[] args) {
                                 |  if (!NominalApi.colors().equals(List.of(Color.Red, Color.Blue))) throw new AssertionError();
+                                |  if (!NominalApi.echoColors(NominalApi.colors()).equals(NominalApi.colors())) throw new AssertionError("nested enum argument");
+                                |  try { NominalApi.echoColors(Arrays.asList(Color.Red, null)); throw new AssertionError("null enum element"); }
+                                |  catch (IllegalArgumentException expected) { if (!expected.getMessage().contains("x[1]")) throw expected; }
                                 |  if (NominalApi.color(Color.valueOf("Blue")) != Color.Blue) throw new AssertionError();
                                 |  Color[] colors = Color.values(); colors[0] = Color.Blue;
                                 |  if (Color.values()[0] != Color.Red || Color.Blue.ordinal() != 1) throw new AssertionError();
                                 |  Shape shape = NominalApi.shape().orElseThrow();
+                                |  if (!NominalApi.echoOptionalShape(Optional.of(shape)).equals(Optional.of(shape)) ||
+                                |      !NominalApi.echoOptionalShape(Optional.empty()).isEmpty()) throw new AssertionError("nested sealed argument");
                                 |  if (!show(shape).equals("circle:3") || !NominalApi.echoShape(shape).equals(shape)) throw new AssertionError();
                                 |  Tree tree = NominalApi.tree();
                                 |  if (sum(tree) != 6 || !NominalApi.echoTree(tree).equals(tree)) throw new AssertionError();
