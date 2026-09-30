@@ -258,7 +258,7 @@ mod TestBPlusTree {
     /////////////////////////////////////////////////////////////////////////////
 
     @Test
-    def foreach01(): Unit \ Assert = region rc {
+    def foreachSyntax01(): Unit \ Assert = region rc {
         let tree = rangeQueryDefaultTree(rc);
         let list = MutList.empty(rc);
         let f = kv -> MutList.push(fst(kv), list);
@@ -268,7 +268,7 @@ mod TestBPlusTree {
     }
 
     @Test
-    def foreach02(): Unit \ Assert = region rc {
+    def foreachSyntax02(): Unit \ Assert = region rc {
         let tree = rangeQueryMultipleValues(rc);
         let list = MutList.empty(rc);
         let f = kv -> MutList.push(kv, list);
