@@ -76,6 +76,14 @@ class TestJavaBoundaryInterfaces extends AnyFunSuite with TestUtils {
                              |  if (bridges != 2) throw new AssertionError("Expected two bridges, found " + bridges);
                              | }
                              |} """.stripMargin,
+        "BroadValues" -> "package example; public interface BroadValues { java.util.Collection<Integer> values(); }",
+        "NarrowValues" -> "package example; public interface NarrowValues extends BroadValues { java.util.List<Integer> values(); }",
+        "ValuesCaller" -> """package example; public final class ValuesCaller {
+                           | public static void main(String[] args) throws Exception {
+                           |  NarrowValues values = (NarrowValues)Class.forName("example.FlixValues").getConstructor().newInstance();
+                           |  if (!values.values().equals(java.util.List.of(9, 2)) || !((BroadValues)values).values().equals(java.util.List.of(9, 2))) throw new AssertionError();
+                           | }
+                           |} """.stripMargin,
         "Grand" -> "package example; public interface Grand { default String f() { return \"Grand\"; } }",
         "SideOne" -> "package example; public interface SideOne extends Grand {}",
         "SideTwo" -> "package example; public interface SideTwo extends Grand {}",
@@ -385,6 +393,23 @@ class TestJavaBoundaryInterfaces extends AnyFunSuite with TestUtils {
         val runtime = dir.resolve("runtime")
         assert(JavaBoundary.writeClasses(output.compilation.getClasses.values, runtime) == Result.Ok(()))
         runCaller(dir, jar, runtime, "example.MultipleCaller")
+      } finally flix.close()
+    }
+  }
+
+  test("covariant parameterized returns retain their concrete generic arguments") {
+    withJava { (dir, jar) =>
+      val flix = compiler(jar)
+      try {
+        val input = """export instance example.NarrowValues = mod Impl as "example.FlixValues" {
+                      | def values: () -> java.util.List[java.lang.Integer];
+                      |} """.stripMargin
+        assert(JavaBoundary.check(flix, parse(input.replace("java.lang.Integer", "java.lang.Long")).unsafeGet)
+          .isInstanceOf[Result.Err[?, ?]])
+        val output = JavaBoundary.compile(flix, parse(input).unsafeGet).unsafeGet
+        val runtime = dir.resolve("runtime")
+        assert(JavaBoundary.writeClasses(output.compilation.getClasses.values, runtime) == Result.Ok(()))
+        runCaller(dir, jar, runtime, "example.ValuesCaller")
       } finally flix.close()
     }
   }

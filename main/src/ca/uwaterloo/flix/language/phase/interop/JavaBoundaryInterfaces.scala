@@ -9,12 +9,12 @@ import ca.uwaterloo.flix.api.Flix
 import ca.uwaterloo.flix.language.ast.SourceLocation
 import ca.uwaterloo.flix.language.ast.jvm.{JavaMethod, JavaType, JavaTypeVariable}
 import ca.uwaterloo.flix.language.jvm.{JavaLookupError, JavaMemberResolver}
-import java.lang.constant.ConstantDescs.CD_Object
 import ca.uwaterloo.flix.language.phase.jvm.JavaBoundaryApi
 import ca.uwaterloo.flix.util.Result
 import ca.uwaterloo.flix.util.Result.{Err, Ok}
 
 import java.lang.constant.ClassDesc
+import java.lang.constant.ConstantDescs.CD_Object
 import scala.annotation.tailrec
 
 /** Validate implementations against Java-owned classfiles, without loading an interface. */
@@ -57,8 +57,19 @@ object JavaBoundaryInterfaces {
               result <- signature(target.returnType).mapErr(error)
               _ <- if (args.mkString("(", "", ")") + result == method.signature) Ok(())
               else Err(error(s"Java interface signature mismatch for '${method.member.name}': expected ${args.mkString("(", "", ")") + result}, actual ${method.signature}."))
-            } yield if (target.ref.descriptor.descriptorString() == method.descriptor) None
-            else Some(JavaBoundaryApi.Bridge(method, target.ref.descriptor))
+              declarations = (target :: hierarchy.filter(m => !m.isBridge && !m.isSynthetic &&
+                methodKey(m) == methodKey(target))).distinctBy(_.ref)
+              required <- Result.traverse(declarations) { declaration =>
+                for {
+                  inheritedArgs <- Result.traverse(declaration.parameterTypes)(signature).mapErr(error)
+                  _ <- signature(declaration.returnType).mapErr(error)
+                  compatible <- covariantReturn(target.returnType, declaration.returnType).mapErr(error)
+                  _ <- if (declaration.typeParameters.isEmpty && inheritedArgs == args && compatible) Ok(())
+                  else Err(error(s"Incompatible inherited Java interface signature for '${method.member.name}'."))
+                } yield declaration.ref.descriptor
+              }
+            } yield required.distinct.filterNot(_.descriptorString() == method.descriptor)
+              .map(JavaBoundaryApi.Bridge(method, _))
           case _ => Err(error(s"No unique, non-generic Java interface method matches '${method.member.name}${method.descriptor}'."))
         }
       }
@@ -145,6 +156,29 @@ object JavaBoundaryInterfaces {
         else Err(JavaBoundaryApi.Error(s"Conflicting inherited defaults require an explicit implementation: ${key._1}.", plan.loc))
       }
     }.map(_ => ())
+  }
+
+  /** Reference returns may narrow, but generic arguments remain invariant. */
+  private def covariantReturn(actual: JavaType, expected: JavaType)
+                             (implicit flix: Flix): Result[Boolean, String] = {
+    def visit(current: JavaType, path: Set[ClassDesc]): Result[Boolean, String] = {
+      if (current == expected) Ok(true)
+      else if (current.erasure.isPrimitive || expected.erasure.isPrimitive) Ok(false)
+      else expected match {
+        case JavaType.NonGeneric(desc) => flix.javaTypeProvider.isSubtype(current.erasure, desc).mapErr(_.explanation)
+        case JavaType.Parameterized(desc, _) if current.erasure == desc || path(current.erasure) => Ok(false)
+        case JavaType.Parameterized(_, _) =>
+          flix.javaTypeProvider.lookupClass(current.erasure).mapErr(_.explanation).flatMap { clazz =>
+            val args = current match { case JavaType.Parameterized(_, values) => values; case _ => Nil }
+            val bindings = clazz.typeParameters.map(_.variable).zip(args).toMap
+            Result.traverse(clazz.superClass.toList ::: clazz.interfaces) { parent =>
+              visit(substitute(parent, bindings), path + current.erasure)
+            }.map(_.exists(identity))
+          }
+        case _ => Ok(false)
+      }
+    }
+    visit(actual, Set.empty)
   }
 
   /** Fail closed rather than erasing type variables, wildcards, or arrays. */
