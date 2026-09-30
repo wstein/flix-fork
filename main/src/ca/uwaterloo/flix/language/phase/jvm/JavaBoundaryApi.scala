@@ -44,7 +44,8 @@ object JavaBoundaryApi {
 
   /** Requires a successfully checked root, including instance validation. Records types before erasure. */
   def prepare(api: Declaration, root: TypedAst.Root)(implicit flix: Flix): Result[Plan, Error] = {
-    if (!SourceVersion.isName(api.className) || api.className.startsWith("dev.flix.") || api.className.startsWith("java."))
+    if (api.interfaceName.exists(name => !SourceVersion.isName(name)) ||
+      !SourceVersion.isName(api.className) || api.className.startsWith("dev.flix.") || api.className.startsWith("java."))
       return Err(Error("Invalid or reserved Java API class name.", api.loc))
     if (api.members.isEmpty || (api.interfaceName.isEmpty && api.members.map(_.name).distinct.size != api.members.size))
       return Err(Error("An API needs members with distinct Java method names.", api.loc))
@@ -131,7 +132,10 @@ object JavaBoundaryApi {
   }
 
   /** Uses exactly the recorded descriptor and signature, but has no dependency on Flix runtime classes. */
-  def stub(plan: Plan)(implicit flix: Flix): JvmClass = generate(plan, true)
+  def stub(plan: Plan)(implicit flix: Flix): JvmClass = {
+    require(plan.interfaceName.isEmpty, "Java-first interface implementations do not use bootstrap stubs.")
+    generate(plan, true)
+  }
 
   /** Call only within the compilation's JVM-origin scope, after wrapper code generation. */
   def facade(plan: Plan, classes: Map[ClassDesc, JvmClass])(implicit flix: Flix): Result[JvmClass, Error] = {

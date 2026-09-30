@@ -23,6 +23,8 @@ class TestJavaBoundaryInterfaces extends AnyFunSuite with TestUtils {
                        | def sum: (java.util.List[java.lang.Integer]) -> int;
                        | def wide: (long, double) -> long;
                        | def touch: () -> void;
+                       | def value = valueInt: (int) -> int;
+                       | def value = valueLong: (long) -> long;
                        |}
                        |""".stripMargin
   private def parse(value: String) = JavaBoundaryContract.parse(Source.fromString(
@@ -39,16 +41,20 @@ class TestJavaBoundaryInterfaces extends AnyFunSuite with TestUtils {
                        | java.util.List<Integer> values();
                        | int sum(java.util.List<Integer> xs);
                        | void touch();
+                       | int value(int x);
+                       | long value(long x);
                        | default int answer() { return 42; }
                        | static int seed() { return 9; }
                        |}
                        |""".stripMargin,
+        "GenericMethod" -> "package example; public interface GenericMethod { <T> java.util.List<Integer> values(); }",
+        "Locked" -> "package example; public sealed interface Locked permits Locked.Permit { final class Permit implements Locked {} }",
         "Caller" -> """package example;
                       |public final class Caller {
                       | public static void main(String[] args) throws Exception {
                       |  Service s = (Service) Class.forName("example.FlixService").getConstructor().newInstance();
                       |  if (!s.values().equals(java.util.List.of(9, 2)) || s.sum(java.util.List.of(3, 4)) != 7 ||
-                      |      s.wide(8L, 2.0) != 10L || s.answer() != 42) throw new AssertionError();
+                      |      s.wide(8L, 2.0) != 10L || s.answer() != 42 || s.value(6) != 7 || s.value(6L) != 8L) throw new AssertionError();
                       |  s.touch();
                       |  try { s.sum(java.util.Arrays.asList(1, null)); throw new AssertionError(); }
                       |  catch (IllegalArgumentException expected) { if (!expected.getMessage().contains("xs[1]")) throw expected; }
@@ -83,6 +89,8 @@ class TestJavaBoundaryInterfaces extends AnyFunSuite with TestUtils {
                                           | pub def sum(xs: List[Int32]): Int32 = List.sum(xs)
                                           | pub def wide(x: Int64, y: Float64): Int64 = x + Float64.truncateToInt64(y)
                                           | pub def touch(): Unit = ()
+                                          | pub def valueInt(x: Int32): Int32 = x + 1
+                                          | pub def valueLong(x: Int64): Int64 = x + 2i64
                                           |}
                                           |""".stripMargin, sctx)
 
@@ -91,6 +99,46 @@ class TestJavaBoundaryInterfaces extends AnyFunSuite with TestUtils {
     assert(contract.className == "example.FlixService")
     assert(contract.members(1).target.toString == "Impl.sum")
     assert(contract.members(1).loc.startLine == 3)
+  }
+
+  test("invalid interface declarations and missing methods produce located errors") {
+    withJava { (_, jar) =>
+      val flix = compiler(jar)
+      try {
+        List(
+          text.replace("example.Service =", "example.Missing =") -> "resolve Java interface",
+          text.replace("example.Service =", "java.lang.String =") -> "public, non-sealed",
+          text.replace("example.Service =", "java.lang.Deprecated =") -> "public, non-sealed",
+          text.replace("example.Service =", "example.Locked =") -> "public, non-sealed",
+          text.replace("example.Service =", "java.util.List =") -> "non-generic interface",
+          text.replace(" def touch: () -> void;", "") -> "Missing Java interface implementations",
+          text.replace("def values:", "def seed = values:") -> "No unique",
+          text.replace("java.lang.Integer", "java.lang.Long") -> "signature",
+          text.replace("example.Service =", "example.GenericMethod =") -> "non-generic Java interface method"
+        ).foreach { case (input, expected) =>
+          JavaBoundary.check(flix, parse(input).unsafeGet) match {
+            case Result.Err(ca.uwaterloo.flix.api.BootstrapError.CompilationErrors(errors, _)) =>
+              assert(errors.size == 1)
+              assert(errors.head.summary.contains(expected), errors.head.summary)
+              assert(errors.head.loc.source.sourceName == SourceName.PathName(Paths.get("Service.flix-api")))
+            case other => fail(s"Expected $expected, found $other")
+          }
+        }
+      } finally flix.close()
+    }
+  }
+
+  test("interface stubs are rejected without writing output") {
+    val dir = Files.createTempDirectory("flix-interface-no-stubs-")
+    try {
+      assert(JavaBoundary.writeStubs(parse(text).unsafeGet, dir).isInstanceOf[Result.Err[?, ?]])
+      val files = Files.list(dir)
+      try assert(files.count() == 0) finally files.close()
+    } finally Files.delete(dir)
+  }
+
+  test("duplicate erased overloads are rejected at the declaration") {
+    assert(parse(text.replace("(long) -> long", "(int) -> long")).isInstanceOf[Result.Err[?, ?]])
   }
 
   test("Java compiles first against the interface and invokes Flix without stubs or compiler jar") {
