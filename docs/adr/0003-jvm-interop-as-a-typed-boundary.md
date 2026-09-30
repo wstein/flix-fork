@@ -11,7 +11,9 @@ runtime bridge members share one compiler-owned-source access policy, and each `
 retains its compilation monitor with orderly, blocking shutdown. Generated nominal code now
 uses isolated modules, validates contracts and argument-check metadata, and bounds conversion
 depth using a measured 1,000-level budget. Overall ADR status remains Proposed for the later
-phases; the earlier full-suite evidence predates these review fixes.
+phases. An independent `testForked -oC` gate on `0e61f8146` validates all review fixes:
+18,043 tests passed in 123 suites, zero failed or aborted, with eight ignored tests. The final
+validation commit changes documentation only.
 
 Revision 12 completes the Phase 2 implementation scope: explicit records, tuples, enums and
 sealed record hierarchies; direct instances for monomorphic nominal enums; recursive nominal

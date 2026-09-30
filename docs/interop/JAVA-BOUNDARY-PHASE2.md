@@ -73,7 +73,12 @@ stubs and runtime types, including generic record components and permitted subcl
 stubs are deliberately not executable; never place them on the runtime classpath.
 
 The declaration, conversion-body and wrapper checks are serialized with the provider scope on
-one compiler instance. Incremental library nodes survive those checks. A measured fixture took
+one compiler instance. `close()` waits for an active check or metadata scope to finish before
+releasing resources; parallel compilation uses separate instances. Static calls to
+`OpaqueHandleBridge.wrap`, `enterConversion` and `exitConversion` share one compiler-only
+member list and require registered source ownership. A caller-chosen URI does not qualify.
+Both decisions and their consequences are recorded in ADR 3.
+Incremental library nodes survive those checks. A measured fixture took
 865/191/214 ms; an ordinary compile after scope exit was cold at 671 ms. These are observations,
 not performance guarantees. Per-provider caches remain a future improvement.
 
@@ -116,6 +121,12 @@ pass against runtime output only. The earlier full-suite evidence still predates
 The missing-shape and measured-limit follow-up adds two regressions that first failed without
 an internal error, and updates depth tests that first failed under the old 128-level budget.
 Validation passes **135 tests in nine suites, zero failures or aborted suites**, plus freshly
-recompiled Java/Kotlin/Scala callers. The full compiler suite remains pending.
-No merge or push has been performed.
+recompiled Java/Kotlin/Scala callers. The access-policy and blocking-shutdown follow-up passes **21 targeted tests**.
+The independent final gate on `0e61f8146` ran `./mill --no-server flix.test.testForked -oC`
+and passed **18,043 tests in 123 suites, zero failures, zero aborted suites**, with eight
+ignored tests and no canceled or pending tests. It completed in 45 minutes, 8 seconds and
+includes both sequential compiler corpora. This gate supersedes the earlier full-suite evidence
+for the review fixes. The subsequent validation commit changes documentation only.
+The validated branch is ready for local fast-forward integration into `feat/java-boundary-phase2`
+and then `dev0.77.0`. No push has been performed.
 Native-image execution is not covered.
