@@ -104,6 +104,15 @@ class TestJavaBoundaryProducts extends AnyFunSuite with TestUtils {
     } finally flix.close()
   }
 
+  test("generated product imports point to the corresponding declaration") {
+    val contract = parse(text).unsafeGet
+    val (source, locations) = JavaBoundaryProducts.sourceWithLocations(contract, validationOnly = true, Map.empty)
+    contract.products.zipWithIndex.foreach { case (product, index) =>
+      val line = source.linesIterator.zipWithIndex.find(_._1.contains(s"=> J$index}")).get._2 + 1
+      assert(locations(line) == product.loc)
+    }
+  }
+
   test("invalid product targets point to their contract declaration") {
     val contract = parse(text.replace("= Products.Point;", "= Products.MissingPoint;")).unsafeGet
     val flix = compiler

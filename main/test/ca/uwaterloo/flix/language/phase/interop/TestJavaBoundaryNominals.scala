@@ -168,6 +168,13 @@ class TestJavaBoundaryNominals extends AnyFunSuite with TestUtils {
     }
   }
 
+  test("the generated parent closing brace retains the contract location") {
+    val contract = parse(contractText)
+    val (source, locations) = JavaBoundaryProducts.sourceWithLocations(contract, validationOnly = true, Map.empty)
+    val brace = source.linesIterator.zipWithIndex.find(_._1 == "}").get._2 + 1
+    assert(locations(brace) == contract.loc)
+  }
+
   test("caller diagnostics keep their own locations alongside generated clashes") {
     val contract = parse(contractText)
     val owner = JavaBoundaryNominals.helperOwner(contract, 0)

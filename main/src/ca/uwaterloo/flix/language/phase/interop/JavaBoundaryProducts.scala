@@ -110,8 +110,8 @@ object JavaBoundaryProducts {
     val owner = module(contract)
     val imports = contract.products.zipWithIndex.map { case (product, index) =>
       val dot = product.className.lastIndexOf('.')
-      s"    import ${product.className.take(dot)}.{${product.className.drop(dot + 1)} => J$index}"
-    } :+ "    import dev.flix.runtime.{OpaqueHandleBridge => BoundaryChecks}"
+      s"    import ${product.className.take(dot)}.{${product.className.drop(dot + 1)} => J$index}\n" -> product.loc
+    } :+ ("    import dev.flix.runtime.{OpaqueHandleBridge => BoundaryChecks}\n" -> contract.loc)
     val definitions = contract.products.zipWithIndex.map { case (product, index) =>
       val parameters = product.components.indices.map(i => s"p$i").toList
       val from = if (product.tuple) s"let ${parameters.mkString("(", ", ", ")")} = x; " else ""
@@ -148,9 +148,9 @@ object JavaBoundaryProducts {
          |    }
          |""".stripMargin
     }
-    val parts = List((List(s"pub mod $owner {") ++ imports).mkString("\n") + "\n" -> contract.loc) ++
+    val parts = List(s"pub mod $owner {\n" -> contract.loc) ++ imports ++
       definitions.zip(contract.products).map { case (definition, product) => (definition + "\n") -> product.loc } ++
-      List("}" -> contract.loc) ++ JavaBoundaryNominals.sourceParts(contract, validationOnly, shapes)
+      List("}\n" -> contract.loc) ++ JavaBoundaryNominals.sourceParts(contract, validationOnly, shapes)
     val text = new StringBuilder
     val locations = scala.collection.mutable.Map.empty[Int, SourceLocation]
     var line = 1
