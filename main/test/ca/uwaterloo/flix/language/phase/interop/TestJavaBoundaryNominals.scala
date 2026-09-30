@@ -66,8 +66,14 @@ class TestJavaBoundaryNominals extends AnyFunSuite with TestUtils {
   test("nominal conversion budgets are isolated between caller threads") {
     val worker = java.util.concurrent.Executors.newSingleThreadExecutor()
     try {
-      for (_ <- 0 until 128) dev.flix.runtime.OpaqueHandleBridge.enterConversion("held")
+      dev.flix.runtime.OpaqueHandleBridge.exitConversion()
+      dev.flix.runtime.OpaqueHandleBridge.exitConversion()
+      var acquired = 0
       try {
+        for (_ <- 0 until 1000) {
+          dev.flix.runtime.OpaqueHandleBridge.enterConversion("held")
+          acquired += 1
+        }
         intercept[IllegalArgumentException] { dev.flix.runtime.OpaqueHandleBridge.enterConversion("held") }
         worker.submit(new java.util.concurrent.Callable[Unit] {
           def call(): Unit = {
@@ -75,7 +81,7 @@ class TestJavaBoundaryNominals extends AnyFunSuite with TestUtils {
             dev.flix.runtime.OpaqueHandleBridge.exitConversion()
           }
         }).get(10, TimeUnit.SECONDS)
-      } finally for (_ <- 0 until 128) dev.flix.runtime.OpaqueHandleBridge.exitConversion()
+      } finally for (_ <- 0 until acquired) dev.flix.runtime.OpaqueHandleBridge.exitConversion()
       dev.flix.runtime.OpaqueHandleBridge.enterConversion("reset")
       dev.flix.runtime.OpaqueHandleBridge.exitConversion()
     } finally worker.shutdownNow()
@@ -275,16 +281,19 @@ class TestJavaBoundaryNominals extends AnyFunSuite with TestUtils {
                                 |  for (int i = 0; i < 2; i++) {
                                 |   try { NominalApi.echoTree(deep); throw new AssertionError("deep argument accepted"); }
                                 |   catch (IllegalArgumentException expected) {
-                                |    if (!expected.getMessage().contains("128") || !expected.getMessage().contains("com.acme.Tree")) throw expected;
+                                |    if (!expected.getMessage().contains("1000") || !expected.getMessage().contains("com.acme.Tree")) throw expected;
                                 |   }
                                 |   if (!NominalApi.echoTree(tree).equals(tree)) throw new AssertionError("argument guard leaked");
                                 |   try { NominalApi.deepTree(2048); throw new AssertionError("deep result accepted"); }
                                 |   catch (IllegalArgumentException expected) {
-                                |    if (!expected.getMessage().contains("128") || !expected.getMessage().contains("com.acme.Tree")) throw expected;
+                                |    if (!expected.getMessage().contains("1000") || !expected.getMessage().contains("com.acme.Tree")) throw expected;
                                 |   }
-                                |   Tree limit = NominalApi.deepTree(127);
+                                |   Tree limit = NominalApi.deepTree(999);
                                 |   if (sum(NominalApi.echoTree(limit)) != 1) throw new AssertionError("guard leaked or rejected the limit");
-                                |   try { NominalApi.deepTree(128); throw new AssertionError("over-limit result accepted"); }
+                                |   try { NominalApi.deepTree(1000); throw new AssertionError("over-limit result accepted"); }
+                                |   catch (IllegalArgumentException expected) { }
+                                |   Tree over = new Tree.Node(limit, new Tree.Leaf(0));
+                                |   try { NominalApi.echoTree(over); throw new AssertionError("over-limit argument accepted"); }
                                 |   catch (IllegalArgumentException expected) { }
                                 |   try { NominalApi.echoTree(new Tree.Node(new Tree.Leaf(1), null)); throw new AssertionError("null child accepted"); }
                                 |   catch (IllegalArgumentException expected) { }

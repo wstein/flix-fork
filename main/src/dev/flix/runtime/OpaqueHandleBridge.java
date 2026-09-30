@@ -24,23 +24,24 @@ public final class OpaqueHandleBridge {
         }
     }
 
-    private static final int MAX_CONVERSION_DEPTH = 128;
-    private static final ThreadLocal<Integer> conversionDepth = ThreadLocal.withInitial(() -> 0);
+    private static final int MAX_CONVERSION_DEPTH = 1000;
+    private static final ThreadLocal<int[]> conversionDepth = ThreadLocal.withInitial(() -> new int[1]);
 
     /** Shared across generated nominal converters, but isolated between caller threads. */
     public static void enterConversion(String typeName) {
-        int depth = conversionDepth.get();
-        if (depth >= MAX_CONVERSION_DEPTH) {
+        int[] depth = conversionDepth.get();
+        if (depth[0] >= MAX_CONVERSION_DEPTH) {
             throw new IllegalArgumentException("Java boundary conversion exceeds " + MAX_CONVERSION_DEPTH
                     + " nominal levels: " + typeName);
         }
-        conversionDepth.set(depth + 1);
+        depth[0]++;
     }
 
     public static void exitConversion() {
-        int depth = conversionDepth.get() - 1;
-        if (depth == 0) conversionDepth.remove();
-        else conversionDepth.set(depth);
+        int[] depth = conversionDepth.get();
+        // Extra releases cannot make the depth negative and enlarge a later conversion's budget.
+        if (depth[0] <= 1) conversionDepth.remove();
+        else depth[0]--;
     }
 
     public static OpaqueHandle<Object> wrap(String typeKey, String typeName, Object payload) {
