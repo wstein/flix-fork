@@ -17,6 +17,7 @@ pub mod Java.Boundary {
     import java.math.BigInteger
     import java.math.BigDecimal
     import java.util.Optional
+    import java.util.Collections
     import java.util.LinkedHashSet
     import java.util.LinkedHashMap
     import java.util.{List => JList, Collection => JCollection, Set => JSet, Map => JMap}
@@ -140,7 +141,7 @@ pub mod Java.Boundary {
         type Out = JList[JavaResult.Out[a]]
         type Aef = IO + JavaResult.Aef[a]
         pub def toJava(xs: List[a]): JList[JavaResult.Out[a]] \ (IO + JavaResult.Aef[a]) =
-            Adaptor.toList(List.map(JavaResult.toJava, xs))
+            Collections.unmodifiableList(Adaptor.toList(List.map(JavaResult.toJava, xs)))
     }
     instance JavaArgument[List[a]] with JavaArgument[a] {
         type In = JList[JavaArgument.In[a]]
@@ -166,7 +167,7 @@ pub mod Java.Boundary {
         type Out = JList[JavaResult.Out[a]]
         type Aef = IO + JavaResult.Aef[a]
         pub def toJava(xs: Vector[a]): JList[JavaResult.Out[a]] \ (IO + JavaResult.Aef[a]) =
-            Adaptor.toList(List.map(JavaResult.toJava, Vector.toList(xs)))
+            Collections.unmodifiableList(Adaptor.toList(List.map(JavaResult.toJava, Vector.toList(xs))))
     }
     instance JavaArgument[Vector[a]] with JavaArgument[a] {
         type In = JList[JavaArgument.In[a]]
@@ -179,7 +180,7 @@ pub mod Java.Boundary {
         type Out = JCollection[JavaResult.Out[a]]
         type Aef = IO + JavaResult.Aef[a]
         pub def toJava(xs: Chain[a]): JCollection[JavaResult.Out[a]] \ (IO + JavaResult.Aef[a]) =
-            checked_cast(Adaptor.toList(List.map(JavaResult.toJava, Chain.toList(xs))))
+            checked_cast(Collections.unmodifiableList(Adaptor.toList(List.map(JavaResult.toJava, Chain.toList(xs)))))
     }
     instance JavaArgument[Chain[a]] with JavaArgument[a] {
         type In = JCollection[JavaArgument.In[a]]
@@ -211,7 +212,8 @@ pub mod Java.Boundary {
     def toHashSet(xs: List[a]): JSet[a] \ IO = {
         let result: LinkedHashSet[a] = new LinkedHashSet();
         List.forEach(x -> discard result.add(x), xs);
-        checked_cast(result)
+        let view: JSet[a] = checked_cast(result);
+        Collections.unmodifiableSet(view)
     }
 
     def toHashMap(xs: List[(k, v)]): JMap[k, v] \ IO = {
@@ -220,6 +222,7 @@ pub mod Java.Boundary {
             let (k, v) = kv;
             discard result.put(k, v)
         }, xs);
-        checked_cast(result)
+        let view: JMap[k, v] = checked_cast(result);
+        Collections.unmodifiableMap(view)
     }
 }

@@ -146,6 +146,12 @@ class TestJavaBoundaryLibrary extends AnyFunSuite with TestUtils {
                                   |    if (!new ArrayList<>(LibraryApi.chain(xs)).equals(xs)) throw new AssertionError("chain");
                                   |    if (!LibraryApi.set().equals(Set.of(3))) throw new AssertionError("set");
                                   |    if (!LibraryApi.map().equals(Map.of(4, List.of(5)))) throw new AssertionError("map");
+                                  |    expectImmutable(() -> xs.add(9));
+                                  |    expectImmutable(() -> LibraryApi.nested().get(0).add(9));
+                                  |    expectImmutable(() -> LibraryApi.vector(xs).clear());
+                                  |    expectImmutable(() -> LibraryApi.chain(xs).clear());
+                                  |    expectImmutable(() -> LibraryApi.set().add(9));
+                                  |    expectImmutable(() -> LibraryApi.map().put(9, List.of(9)));
                                   |    if (!LibraryApi.bools().equals(List.of(true, false))) throw new AssertionError("bool");
                                   |    if (!LibraryApi.chars().equals(List.of('a'))) throw new AssertionError("char");
                                   |    if (!LibraryApi.big(List.of(java.math.BigInteger.TEN)).equals(List.of(java.math.BigInteger.TEN))) throw new AssertionError("big integer");
@@ -173,6 +179,10 @@ class TestJavaBoundaryLibrary extends AnyFunSuite with TestUtils {
                                   |    catch (IllegalArgumentException expected) {
                                   |      if (!expected.getMessage().contains(path)) throw expected;
                                   |    }
+                                  |  }
+                                  |  static void expectImmutable(Runnable call) {
+                                  |    try { call.run(); throw new AssertionError("mutable result"); }
+                                  |    catch (UnsupportedOperationException expected) { }
                                   |  }
                                   |}
                                   |""".stripMargin)
