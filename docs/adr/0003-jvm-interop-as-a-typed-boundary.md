@@ -6,6 +6,12 @@ Proposed. Scoped to how Flix code is *called from* the JVM -- Java, Kotlin, Scal
 values cross that boundary. Calling Java *from* Flix (`import`, `new`, method calls) is unchanged.
 Numbered 3 to follow ADRs 1 and 2 on `feat/stable-specialization-names-rewrite`.
 
+Revision 9 records the Phase 1 review fixes: argument null validation, unmodifiable result
+collections, private generated opaque unwrapping, reduction-step budgeting, declaration-located
+errors and generated source maps, and separate frontend timing measurements. The rollout guide
+records validation progress and the remaining type-directed null and Java-bridge access refinements.
+The status remains Proposed; this is not approval to merge or start Phase 2.
+
 Revision 8 records the [experimental Phase 1 integration](../interop/JAVA-BOUNDARY-PHASE1.md):
 packaged deep boundary instances, source contracts and CLI/LSP diagnostics, syntax-only
 bootstrap stubs with a pre-codegen ABI check, entry-point effect policy and default handlers,

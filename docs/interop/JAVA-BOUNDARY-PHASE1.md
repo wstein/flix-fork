@@ -76,8 +76,8 @@ Use `Java.Boundary.Opaque[t]` in the original Flix signature and construct
 `Java.Boundary.Opaque.Opaque(value)`. At a top-level boundary position the compiler synthesizes
 tagged bridge calls and casts in its owned wrapper source and emits
 `dev.flix.runtime.OpaqueHandle<Object>`. There are no public polymorphic `pack`/`unpack`
-Flix helpers: ordinary safe Flix code cannot invent a tag or choose an unchecked unwrap type.
-Explicit unsafe casts and the internal Java bridge remain outside that guarantee.
+Flix helpers. The internal Java bridge remains public Java code and is not a security boundary;
+restricting its use from ordinary Flix sources remains a review follow-up.
 This is an explicit compiler capability, not an unconstrained blanket trait instance.
 Containers of opaque values require a user instance; they do not silently erase element types.
 
@@ -111,8 +111,15 @@ or the compiler jar. The compiler suites additionally test a genuine Java-first 
 ABI mismatch rejection, CLI JSON diagnostics, LSP edit/close behavior, opaque type checks,
 default handlers, generic collection signatures, and transitive region rejection.
 Temporary artifacts are retained for inspection; the script prints their directory.
-The full compiler suite and native-image build are not run; opaque class-file resources are
-registered in native-image metadata, but native execution is not part of this validation claim.
+Review validation passed all 47 focused boundary tests and staged Java, Kotlin, and Scala
+callers against fresh artifacts. The broad `./mill --no-server flix.test` run is underway,
+including the default and sequential compiler configurations; it is not yet a green full-run
+claim. It found case-only `forEach`/`foreach` test-name collisions in `TestBPlusTree`, also
+present before the review fixes. Only the two syntax-test names were changed; the rerun passed
+all 14,245 standard-library tests. The live JDI continuation-local test was denied a debugger
+socket by the sandbox and passed when rerun with loopback access.
+The native-image build is not run; opaque class-file resources are registered in native-image
+metadata, but native execution is not part of this validation claim.
 
 Start with a new consumer and a pinned experimental compiler build. Existing generated
 tuple/record/enum consumers remain on the archived export-enabled build until phase 2
@@ -136,6 +143,12 @@ Associated-type elaboration limits reductions and instance-evidence checks, not 
 type depth. Wide tuples or rows with no recursive projections do not consume the budget.
 Contract-level errors retain the API declaration location. Generated wrapper lines record
 their member source location instead of deriving it from an import-count offset.
+
+Round 2 leaves two implementation refinements open before merging: null validation should
+follow converted positions rather than recursively inspect unchanged Java-typed arguments,
+and the public internal bridge needs compiler-only access from Flix sources. The current null
+policy above describes the implementation, not the proposed unchecked Java-argument policy.
+Update that policy documentation together with the type-directed validation change.
 
 ## Frontend measurement
 
