@@ -10,6 +10,8 @@ import ca.uwaterloo.flix.TestUtils
 import ca.uwaterloo.flix.api.{Flix, JavaBoundary}
 import ca.uwaterloo.flix.language.ast.shared.{Origin, Source, SourceName}
 import ca.uwaterloo.flix.util.{Options, Result}
+import ca.uwaterloo.flix.language.CompilationMessage
+import ca.uwaterloo.flix.language.ast.TypedAst
 import org.scalatest.funsuite.AnyFunSuite
 
 import java.lang.constant.ClassDesc
@@ -19,6 +21,32 @@ import javax.tools.ToolProvider
 import scala.jdk.CollectionConverters.*
 
 class TestJavaBoundaryProducts extends AnyFunSuite with TestUtils {
+  test("frontend timings preserve incremental declaration and wrapper passes") {
+    if (sys.env.contains("FLIX_BOUNDARY_TIMINGS")) {
+      val times = scala.collection.mutable.ArrayBuffer.empty[Long]
+      val roots = scala.collection.mutable.ArrayBuffer.empty[TypedAst.Root]
+      val flix = new Flix() {
+        override def check(): (Option[TypedAst.Root], List[CompilationMessage]) = {
+          val start = System.nanoTime()
+          val result = super.check()
+          times += System.nanoTime() - start
+          result._1.foreach(roots += _)
+          result
+        }
+      }
+      flix.setOptions(Options.TestWithLibAll.copy(xchaosMonkey = false, incremental = true))
+        .addSource(Paths.get("Products.flix"), source, sctx)
+      try {
+        JavaBoundaryWrappers.checkContract(flix, parse(text).unsafeGet, sctx).unsafeGet
+        expectSuccess(flix.check())
+        assert(times.size == 4)
+        val libDef = roots.head.defs.keys.find(_.toString == "List.length").get
+        assert(roots(0).defs(libDef) eq roots(1).defs(libDef))
+        assert(roots(1).defs(libDef) eq roots(2).defs(libDef))
+        info(s"Phase 2 frontend milliseconds (declaration gate, bodies, wrappers, ordinary cold): ${times.map(_ / 1000000.0).mkString(", ")}")
+      } finally flix.close()
+    }
+  }
   private val text = """export mod Products as "com.acme.Api" {
                        |    record com.acme.Point(x: int, ys: java.util.List[java.lang.Integer]) = Products.Point;
                        |    tuple com.acme.Pair(left: long, right: double) = (Int64, Float64);
@@ -69,7 +97,7 @@ class TestJavaBoundaryProducts extends AnyFunSuite with TestUtils {
     val flix = compiler
     try {
       JavaBoundaryWrappers.checkContract(flix, wrong, sctx) match {
-        case Result.Err(error: JavaBoundaryWrappers.WrapperErrors) => assert(error.loc == wrong.loc)
+        case Result.Err(JavaBoundaryWrappers.ContractError(error)) => assert(error.loc == wrong.products.head.loc)
         case other => fail(s"Expected a checked, located component mismatch, found $other")
       }
       expectSuccess(flix.check())
@@ -85,7 +113,7 @@ class TestJavaBoundaryProducts extends AnyFunSuite with TestUtils {
       .addSource(Paths.get("Products.flix"), source.replace("pub def pair():", "pub type alias Pair = (Int64, Float64) pub def pair():"), sctx)
     try {
       JavaBoundaryWrappers.checkContract(flix, conflicting, sctx) match {
-        case Result.Err(JavaBoundaryWrappers.Invalid(message, loc)) =>
+        case Result.Err(JavaBoundaryWrappers.ContractError(JavaBoundaryContract.Error(message, loc))) =>
           assert(message.contains("same checked Flix payload type"))
           assert(loc == conflicting.loc)
         case other => fail(s"Expected a semantic target collision, found $other")
@@ -94,9 +122,25 @@ class TestJavaBoundaryProducts extends AnyFunSuite with TestUtils {
     } finally flix.close()
   }
 
+  test("nested structural products require an explicit nominal wrapper and report the API member") {
+    val contract = parse(text.replace("def point: () -> com.acme.Point;", "def nested: () -> java.util.List[com.acme.Point];")).unsafeGet
+    val flix = new Flix().setOptions(Options.TestWithLibAll.copy(xchaosMonkey = false))
+      .addSource(Paths.get("Products.flix"), source.replace("pub def point():", "pub def nested(): List[Point] = point() :: Nil pub def point():"), sctx)
+    try {
+      JavaBoundaryWrappers.checkContract(flix, contract, sctx) match {
+        case Result.Err(JavaBoundaryWrappers.Invalid(message, loc)) =>
+          assert(message.contains("nominal enum wrapper"))
+          assert(loc == contract.members.find(_.name == "nested").get.loc)
+        case other => fail(s"Expected a located structural-nesting diagnostic, found $other")
+      }
+    } finally flix.close()
+  }
+
   test("staged Java callers link against real declared records, not bootstrap stubs") {
     val contract = parse(text).unsafeGet
-    val dir = Files.createTempDirectory("flix-boundary-products-")
+    val kept = sys.env.get("FLIX_BOUNDARY_PHASE2_ARTIFACTS").map(path => Paths.get(path).resolve("products"))
+    val dir = kept.getOrElse(Files.createTempDirectory("flix-boundary-products-"))
+    Files.createDirectories(dir)
     val flix = compiler
     try {
       val stubs = dir.resolve("stubs")
@@ -149,9 +193,11 @@ class TestJavaBoundaryProducts extends AnyFunSuite with TestUtils {
       } finally if (child.isAlive) child.destroyForcibly().waitFor()
     } finally {
       flix.close()
-      val paths = Files.walk(dir)
-      try paths.iterator().asScala.toList.sortBy(_.getNameCount).reverse.foreach(Files.delete)
-      finally paths.close()
+      if (kept.isEmpty) {
+        val paths = Files.walk(dir)
+        try paths.iterator().asScala.toList.sortBy(_.getNameCount).reverse.foreach(Files.delete)
+        finally paths.close()
+      }
     }
   }
 }

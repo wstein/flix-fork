@@ -27,13 +27,20 @@ object JavaBoundaryContract {
   }
   case class Component(name: String, tpe: JavaBoundaryApi.JavaType)
   case class Product(className: String, components: List[Component], target: String, tuple: Boolean, loc: SourceLocation)
-  case class Contract(className: String, members: List[Member], loc: SourceLocation, products: List[Product]) {
+  case class Variant(name: String, components: List[Component])
+  case class Nominal(className: String, target: String, variants: List[Variant], sealedType: Boolean, loc: SourceLocation) {
+    def adapted: Boolean = target.contains('[')
+    def classNames: List[String] = className :: (if (sealedType) variants.map(v => s"$className$$${v.name}") else Nil)
+  }
+  case class Contract(className: String, members: List[Member], loc: SourceLocation, products: List[Product], nominals: List[Nominal]) {
     def declaration: JavaBoundaryWrappers.Declaration = JavaBoundaryWrappers.Declaration(className,
       members.map(member => JavaBoundaryWrappers.Member(member.name, member.target, member.loc)), loc)
   }
   object Contract {
     def apply(className: String, members: List[Member], loc: SourceLocation): Contract =
-      new Contract(className, members, loc, Nil)
+      new Contract(className, members, loc, Nil, Nil)
+    def apply(className: String, members: List[Member], loc: SourceLocation, products: List[Product]): Contract =
+      new Contract(className, members, loc, products, Nil)
   }
   case class Error(message: String, loc: SourceLocation)
 
@@ -119,6 +126,7 @@ object JavaBoundaryContract {
       expect("{")
       val members = List.newBuilder[Member]
       val products = List.newBuilder[Product]
+      val nominals = List.newBuilder[Nominal]
       while (current.text != "}" && current.text != "<eof>") {
         val memberLoc = location(current)
         if (current.text == "record" || current.text == "tuple") {
@@ -148,6 +156,47 @@ object JavaBoundaryContract {
           if (components.map(_.name).distinct.size != components.size) abort("Duplicate record component name.")
           if (tuple && components.size < 2) abort("A tuple declaration needs at least two components.")
           products += Product(name, components, target, tuple, memberLoc)
+        } else if (current.text == "enum" || current.text == "sealed") {
+          val sealedType = take().text == "sealed"
+          val name = take().text
+          if (!SourceVersion.isName(name) || !name.contains('.') || name.contains('$') || name.startsWith("java.") || name.startsWith("dev.flix."))
+            abort("Expected a non-reserved, fully qualified generated Java class name.")
+          expect("=")
+          val target = flixType(module, 0)
+          if (target.startsWith("(")) abort("An enum declaration requires a nominal Flix type.")
+          expect("{")
+          val variants = List.newBuilder[Variant]
+          while (current.text != "}" && current.text != "<eof>") {
+            expect("case")
+            val variant = identifier()
+            if (variant.contains('.') || !variant.head.isUpper || !SourceVersion.isIdentifier(variant) || SourceVersion.isKeyword(variant))
+              abort("Expected a simple, capitalized Java variant name.")
+            val fields = List.newBuilder[Component]
+            if (accept("(")) {
+              if (!sealedType) abort("A data-free Java enum cannot have payload components.")
+              if (!accept(")")) {
+                def field(): Unit = {
+                  val label = take().text
+                  if (!SourceVersion.isIdentifier(label) || SourceVersion.isKeyword(label) ||
+                      Set("clone", "finalize", "getClass", "hashCode", "notify", "notifyAll", "toString", "wait").contains(label))
+                    abort("Invalid Java record component name.")
+                  expect(":")
+                  fields += Component(label, javaType(false, false, 0))
+                }
+                field()
+                while (accept(",")) field()
+                expect(")")
+              }
+            }
+            expect(";")
+            val components = fields.result()
+            if (components.map(_.name).distinct.size != components.size) abort("Duplicate variant component name.")
+            variants += Variant(variant, components)
+          }
+          expect("}"); expect(";")
+          val cases = variants.result()
+          if (cases.isEmpty || cases.map(_.name).distinct.size != cases.size) abort("Expected distinct, nonempty enum cases.")
+          nominals += Nominal(name, target, cases, sealedType, memberLoc)
         } else {
         expect("def")
         val name = identifier()
@@ -171,10 +220,12 @@ object JavaBoundaryContract {
       val result = members.result()
       if (result.isEmpty || result.map(_.name).distinct.size != result.size) abort("Expected distinct, nonempty API members.")
       val types = products.result()
-      val names = (className :: types.map(_.className)).map(_.toLowerCase(Locale.ROOT))
+      val enums = nominals.result()
+      val names = (className :: (types.map(_.className) ++ enums.flatMap(_.classNames))).map(_.toLowerCase(Locale.ROOT))
       if (names.distinct.size != names.size) abort("Generated Java class names collide, including case-only collisions.")
-      if (types.map(_.target).distinct.size != types.size) abort("Each Flix type may have only one declared Java representation per contract.")
-      Ok(Contract(className, result, loc, types))
+      val targets = types.map(_.target) ++ enums.map(_.target)
+      if (targets.distinct.size != targets.size) abort("Each Flix type may have only one declared Java representation per contract.")
+      Ok(Contract(className, result, loc, types, enums))
     } catch { case failure: ParseFailure => Err(failure.error) }
 
     /** A small, injection-free concrete Flix type grammar, not arbitrary generated source text. */

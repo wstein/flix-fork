@@ -10,7 +10,6 @@ package dev.flix.runtime;
 public final class OpaqueHandleBridge {
     private OpaqueHandleBridge() { }
 
-
     /** The compiler records converted positions; native Java values cross unchecked. */
     public static void checkArgument(Object value, String path, String shape) {
         if (shape.equals("U")) return;
@@ -22,34 +21,6 @@ public final class OpaqueHandleBridge {
             }
         } else if (shape.charAt(0) == 'O' && !shape.substring(1).equals("U")) {
             ((java.util.Optional<?>) value).ifPresent(element -> checkArgument(element, path + ".value", shape.substring(1)));
-        }
-    }
-    /** Reject null before conversion, including nested JDK container elements. */
-    public static void checkArgument(Object value, String parameter) {
-        checkArgument(value, parameter, new java.util.IdentityHashMap<Object, Boolean>());
-    }
-
-    private static void checkArgument(Object value, String path,
-                                      java.util.IdentityHashMap<Object, Boolean> visited) {
-        if (value == null) {
-            throw new IllegalArgumentException("Null Java boundary argument: " + path);
-        }
-        // Java containers may be cyclic. Inspect each object once without invoking equals/hashCode.
-        if (visited.put(value, Boolean.TRUE) != null) return;
-        if (value instanceof java.util.Map<?, ?>) {
-            int index = 0;
-            for (java.util.Map.Entry<?, ?> entry : ((java.util.Map<?, ?>) value).entrySet()) {
-                checkArgument(entry.getKey(), path + "[" + index + "].key", visited);
-                checkArgument(entry.getValue(), path + "[" + index + "].value", visited);
-                index++;
-            }
-        } else if (value instanceof java.util.Collection<?>) {
-            int index = 0;
-            for (Object element : (java.util.Collection<?>) value) {
-                checkArgument(element, path + "[" + index++ + "]", visited);
-            }
-        } else if (value instanceof java.util.Optional<?>) {
-            ((java.util.Optional<?>) value).ifPresent(element -> checkArgument(element, path + ".value", visited));
         }
     }
 

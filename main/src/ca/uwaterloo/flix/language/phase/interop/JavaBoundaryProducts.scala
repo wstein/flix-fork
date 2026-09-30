@@ -21,14 +21,22 @@ object JavaBoundaryProducts {
     "BoundaryTypes" + hash
   }
 
-  def classes(contract: JavaBoundaryContract.Contract): List[JvmClass] = contract.products.map(record)
+  def classes(contract: JavaBoundaryContract.Contract): List[JvmClass] =
+    contract.products.map(record) ++ JavaBoundaryNominals.classes(contract)
 
-  private def record(product: JavaBoundaryContract.Product): JvmClass = {
+  private def record(product: JavaBoundaryContract.Product): JvmClass = record(product, None)
+
+  private[interop] def record(product: JavaBoundaryContract.Product, outer: Option[String]): JvmClass = {
     val desc = ClassDesc.of(product.className)
     val name = desc.descriptorString().drop(1).dropRight(1)
     val cw = new ClassWriter(ClassWriter.COMPUTE_MAXS)
     cw.visit(Opcodes.V21, Opcodes.ACC_PUBLIC | Opcodes.ACC_FINAL | Opcodes.ACC_SUPER | Opcodes.ACC_RECORD,
-      name, null, "java/lang/Record", null)
+      name, null, "java/lang/Record", outer.map(_.replace('.', '/')).toArray)
+    outer.foreach { owner =>
+      cw.visitNestHost(owner.replace('.', '/'))
+      cw.visitInnerClass(name, owner.replace('.', '/'), product.className.drop(owner.length + 1),
+        Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC | Opcodes.ACC_FINAL)
+    }
     product.components.foreach { field =>
       val descriptor = field.tpe.desc.descriptorString()
       val signature = if (descriptor == field.tpe.signature) null else field.tpe.signature
@@ -86,7 +94,13 @@ object JavaBoundaryProducts {
   }
 
   /** Private nominal heads avoid changing global instance legality, selection or overlap rules. */
-  def source(contract: JavaBoundaryContract.Contract): String = {
+  def source(contract: JavaBoundaryContract.Contract): String = source(contract, validationOnly = false)
+
+  def source(contract: JavaBoundaryContract.Contract, validationOnly: Boolean): String = {
+    source(contract, validationOnly, Map.empty)
+  }
+
+  def source(contract: JavaBoundaryContract.Contract, validationOnly: Boolean, shapes: Map[String, String]): String = {
     val owner = module(contract)
     val imports = contract.products.zipWithIndex.map { case (product, index) =>
       val dot = product.className.lastIndexOf('.')
@@ -106,20 +120,21 @@ object JavaBoundaryProducts {
       val rebuilt = if (product.tuple) in.mkString("(", ", ", ")")
       else product.components.zip(in).map { case (field, value) => s"${field.name} = $value" }.mkString("{ ", ", ", " }")
       val checks = product.components.filterNot(_.tpe.desc.isPrimitive).map { field =>
-        s"BoundaryChecks.checkArgument(x.${field.name}(), \"${product.className}.${field.name}\"); "
+        val path = s"${product.className}.${field.name}"
+        s"BoundaryChecks.checkArgument(x.${field.name}(), \"$path\", \"${shapes.getOrElse(path, "!")}\"); "
       }.mkString
+      val outBody = if (validationOnly) "checked_ecast(bug!(\"validation-only boundary declaration\"))" else s"match a { case A$index.A$index(x) => ${from}new J$index${out.mkString("(", ", ", ")")} }"
+      val inBody = if (validationOnly) "checked_ecast(bug!(\"validation-only boundary declaration\"))" else s"${checks}A$index.A$index($rebuilt)"
       s"""    enum A$index { case A$index(${product.target}) }
          |    instance Java.Boundary.JavaResult[A$index] {
          |        type Out = J$index
          |        type Aef = IO
-         |        pub def toJava(a: A$index): J$index \\ IO = match a {
-         |            case A$index.A$index(x) => ${from}new J$index${out.mkString("(", ", ", ")")}
-         |        }
+         |        pub def toJava(${if (validationOnly) "_a" else "a"}: A$index): J$index \\ IO = $outBody
          |    }
          |    instance Java.Boundary.JavaArgument[A$index] {
          |        type In = J$index
          |        type Aef = IO
-         |        pub def toFlix(x: J$index): A$index \\ IO = ${checks}A$index.A$index($rebuilt)
+         |        pub def toFlix(${if (validationOnly) "_x" else "x"}: J$index): A$index \\ IO = $inBody
          |    }
          |    pub def out$index(x: ${product.target}): J$index \\ IO = Java.Boundary.JavaResult.toJava(A$index.A$index(x))
          |    pub def in$index(x: J$index): ${product.target} \\ IO = match Java.Boundary.JavaArgument.toFlix(x) {
@@ -127,6 +142,6 @@ object JavaBoundaryProducts {
          |    }
          |""".stripMargin
     }
-    (List(s"pub mod $owner {") ++ imports ++ definitions ++ List("}")).mkString("\n")
+    (List(s"pub mod $owner {") ++ imports ++ definitions ++ List("}")).mkString("\n") + JavaBoundaryNominals.source(contract, validationOnly, shapes)
   }
 }

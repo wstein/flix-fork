@@ -60,8 +60,8 @@ object JavaBoundaryWrappers {
     withContractTypes(flix, contract, sctx) { prepareContract(flix, contract, sctx).map(_.plan) }
 
   private def withContractTypes[A](flix: Flix, contract: JavaBoundaryContract.Contract, sctx: SecurityContext)
-                                 (body: => Result[A, Error]): Result[A, Error] = {
-    if (contract.products.isEmpty) return body
+                                 (body: => Result[A, Error]): Result[A, Error] = flix.synchronized {
+    if (contract.products.isEmpty && contract.nominals.isEmpty) return body
     val classes = JavaBoundaryProducts.classes(contract)
     val available = flix.availableClasses.byClass.m.iterator.flatMap { case (name, packages) =>
       packages.map(pkg => (pkg :+ name).mkString(".").toLowerCase(java.util.Locale.ROOT))
@@ -73,11 +73,20 @@ object JavaBoundaryWrappers {
     if (flix.hasSource(SourceName.UriName(uri)))
       return Err(Invalid("The generated boundary type source is already owned by the caller.", contract.loc))
     flix.withJavaBoundaryTypes(classes.map(clazz => clazz.name -> clazz.bytecode).toMap) {
-      flix.addSource(uri, JavaBoundaryProducts.source(contract), sctx)
-      try body.mapErr {
+      flix.addJavaBoundarySource(uri, JavaBoundaryProducts.source(contract, validationOnly = true), sctx)
+      try {
+        val checked = flix.check()
+        val validated: Result[Unit, Error] = if (checked._2.nonEmpty) Err(InputErrors(checked._2, checked._2.head.loc))
+        else JavaBoundaryTypeGate.verify(contract, checked._1.get)(flix).mapErr(ContractError.apply)
+        validated.flatMap { _ =>
+          val shapes = JavaBoundaryTypeGate.argumentShapes(contract, checked._1.get)
+          flix.addJavaBoundarySource(uri, JavaBoundaryProducts.source(contract, validationOnly = false, shapes), sctx)
+          body
+        }.mapErr {
         case InputErrors(errors, _) if errors.exists(_.loc.source.sourceName == SourceName.UriName(uri)) =>
           WrapperErrors(errors, contract.loc)
         case other => other
+        }
       } finally flix.remSource(uri)
     }
   }
@@ -86,7 +95,10 @@ object JavaBoundaryWrappers {
     val traits = Traits(Symbol.mkTraitSym("Java.Boundary.JavaResult"), Symbol.mkTraitSym("Java.Boundary.JavaArgument"))
     prepareValidated(flix, contract.declaration, traits, sctx,
       plan => JavaBoundaryContract.verify(contract, plan).mapErr(ContractError.apply),
-      contract.products.indices.map(i => s"${JavaBoundaryProducts.module(contract)}.out$i" -> s"${JavaBoundaryProducts.module(contract)}.in$i").toList)
+      contract.products.indices.map(i => s"${JavaBoundaryProducts.module(contract)}.out$i" -> s"${JavaBoundaryProducts.module(contract)}.in$i").toList ++
+        contract.nominals.zipWithIndex.collect { case (nominal, i) if nominal.adapted =>
+          s"${JavaBoundaryNominals.helperOwner(contract, i)}.out" -> s"${JavaBoundaryNominals.helperOwner(contract, i)}.in"
+        })
   }
 
   private def emit(flix: Flix, prepared: Result[Prepared, Error]): Result[Output, Error] = emit(flix, prepared, Nil)
@@ -222,6 +234,8 @@ object JavaBoundaryWrappers {
     case _ if declared.contains(Type.eraseAliases(tpe)) =>
       val pair = declared(Type.eraseAliases(tpe))
       Ok(if (associated == "Out") pair._1 else pair._2)
+    case _ if containsDeclaredPayload(Type.eraseAliases(tpe), declared.keySet) =>
+      Err(Invalid("An adapter-backed declared type cannot cross inside a container or another type. Use a monomorphic nominal enum wrapper for nested representations.", loc))
     case Type.Alias(_, _, expanded, _) => conversion(expanded, trt, associated, method, root, loc, declared)
     case _ if (tpe.baseType match {
       case Type.Cst(TypeConstructor.Enum(sym, _), _) => sym.namespace == List("Java", "Boundary") && sym.text == "Opaque"
@@ -249,6 +263,9 @@ object JavaBoundaryWrappers {
         eff <- BoundaryTypeElaborator.elaborate(effect, tpe, root).mapErr(BoundaryError(_, loc))
       } yield Conversion(result, eff, Some((trt.namespace :+ trt.name :+ method).mkString(".")))
   }
+
+  private def containsDeclaredPayload(tpe: Type, declared: Set[Type]): Boolean =
+    tpe.typeArguments.exists(arg => declared.contains(arg) || containsDeclaredPayload(arg, declared))
 
   /** Conservatively inspect nominal payloads too: Opaque[Model] must not hide a regional array. */
   private def containsRegionBound(tpe: Type, root: TypedAst.Root, visited: Set[Symbol.EnumSym]): Boolean = {
