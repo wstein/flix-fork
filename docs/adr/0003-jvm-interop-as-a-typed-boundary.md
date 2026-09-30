@@ -303,6 +303,17 @@ concrete API contract: syntax-only stubs use its signatures, and checked instanc
 must match class names, descriptors, and generic signatures before runnable code is generated.
 Phase 3 removes the cycle itself for projects whose contract is a Java interface.
 
+### Scope of these phases
+
+These four phases cover one direction only: Java, Kotlin, and Scala calling Flix. They are not
+fully bidirectional interop. That also needs functions as values across the boundary (callbacks
+into Flix, closures out of it), generic exports, nullability annotations on the facade, Flix
+closures where Java expects a functional interface, `match` over Java enums, sealed hierarchies,
+and records, trusted nullability on imports, Kotlin and Scala idioms, an exception-mapping
+policy, build-tool integration, and a concurrency story. Those are tracked, rated, and ordered as
+phases 5 to 14 in issue #6 ("Beyond ADR 3"); functions in both directions (5 and 8) share one
+design and should get an ADR of their own.
+
 ## The ABI gate, in phase 1
 
 Whether existing callers still link depends on the class name, each method's descriptor, and its
