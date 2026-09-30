@@ -11,7 +11,7 @@ import ca.uwaterloo.flix.api.Flix
 import ca.uwaterloo.flix.language.CompilationMessage
 import ca.uwaterloo.flix.language.ast.{SourceLocation, Symbol, Type, TypeConstructor, TypedAst}
 import ca.uwaterloo.flix.language.ast.shared.{SecurityContext, SourceName}
-import ca.uwaterloo.flix.language.phase.jvm.JavaBoundaryApi
+import ca.uwaterloo.flix.language.phase.jvm.{JavaBoundaryApi, JvmClass}
 import ca.uwaterloo.flix.language.phase.jvm.JvmTypeKey
 import ca.uwaterloo.flix.language.fmt.FormatType
 import ca.uwaterloo.flix.runtime.CompilationResult
@@ -51,29 +51,67 @@ object JavaBoundaryWrappers {
 
   /** Rejects a bootstrap/recorded ABI mismatch before invoking code generation. */
   def compileContract(flix: Flix, contract: JavaBoundaryContract.Contract, sctx: SecurityContext): Result[Output, Error] =
-    emit(flix, prepareContract(flix, contract, sctx))
+    withContractTypes(flix, contract, sctx) {
+      emit(flix, prepareContract(flix, contract, sctx), JavaBoundaryProducts.classes(contract))
+    }
 
   /** Frontend-only entry point for editor diagnostics: no bytecode or disk output. */
   def checkContract(flix: Flix, contract: JavaBoundaryContract.Contract, sctx: SecurityContext): Result[JavaBoundaryApi.Plan, Error] =
-    prepareContract(flix, contract, sctx).map(_.plan)
+    withContractTypes(flix, contract, sctx) { prepareContract(flix, contract, sctx).map(_.plan) }
+
+  private def withContractTypes[A](flix: Flix, contract: JavaBoundaryContract.Contract, sctx: SecurityContext)
+                                 (body: => Result[A, Error]): Result[A, Error] = {
+    if (contract.products.isEmpty) return body
+    val classes = JavaBoundaryProducts.classes(contract)
+    val available = flix.availableClasses.byClass.m.iterator.flatMap { case (name, packages) =>
+      packages.map(pkg => (pkg :+ name).mkString(".").toLowerCase(java.util.Locale.ROOT))
+    }.toSet
+    val collision = classes.find(clazz => available.contains(clazz.name.descriptorString().drop(1).dropRight(1)
+      .replace('/', '.').toLowerCase(java.util.Locale.ROOT)) || flix.javaTypeProvider.lookupClass(clazz.name).isInstanceOf[Ok[?, ?]])
+    if (collision.nonEmpty) return Err(Invalid("A declared Java type already exists on the dependency classpath.", contract.loc))
+    val uri = URI.create(s"flix-boundary:/${JavaBoundaryProducts.module(contract)}.flix")
+    if (flix.hasSource(SourceName.UriName(uri)))
+      return Err(Invalid("The generated boundary type source is already owned by the caller.", contract.loc))
+    flix.withJavaBoundaryTypes(classes.map(clazz => clazz.name -> clazz.bytecode).toMap) {
+      flix.addSource(uri, JavaBoundaryProducts.source(contract), sctx)
+      try body.mapErr {
+        case InputErrors(errors, _) if errors.exists(_.loc.source.sourceName == SourceName.UriName(uri)) =>
+          WrapperErrors(errors, contract.loc)
+        case other => other
+      } finally flix.remSource(uri)
+    }
+  }
 
   private def prepareContract(flix: Flix, contract: JavaBoundaryContract.Contract, sctx: SecurityContext): Result[Prepared, Error] = {
     val traits = Traits(Symbol.mkTraitSym("Java.Boundary.JavaResult"), Symbol.mkTraitSym("Java.Boundary.JavaArgument"))
     prepareValidated(flix, contract.declaration, traits, sctx,
-      plan => JavaBoundaryContract.verify(contract, plan).mapErr(ContractError.apply))
+      plan => JavaBoundaryContract.verify(contract, plan).mapErr(ContractError.apply),
+      contract.products.indices.map(i => s"${JavaBoundaryProducts.module(contract)}.out$i" -> s"${JavaBoundaryProducts.module(contract)}.in$i").toList)
   }
 
-  private def emit(flix: Flix, prepared: Result[Prepared, Error]): Result[Output, Error] = prepared.flatMap { checked =>
-    flix.codeGenWithJavaApi(checked.root, checked.declaration).mapErr(FacadeError.apply)
+  private def emit(flix: Flix, prepared: Result[Prepared, Error]): Result[Output, Error] = emit(flix, prepared, Nil)
+
+  private def emit(flix: Flix, prepared: Result[Prepared, Error], classes: List[JvmClass]): Result[Output, Error] = prepared.flatMap { checked =>
+    flix.codeGenWithJavaApi(checked.root, checked.declaration, classes).mapErr(FacadeError.apply)
       .map(compiled => Output(compiled, checked.plan))
   }
 
   private def prepareValidated(flix: Flix, api: Declaration, traits: Traits, sctx: SecurityContext,
-                               verify: JavaBoundaryApi.Plan => Result[Unit, Error]): Result[Prepared, Error] = {
+                               verify: JavaBoundaryApi.Plan => Result[Unit, Error]): Result[Prepared, Error] =
+    prepareValidated(flix, api, traits, sctx, verify, Nil)
+
+  private def prepareValidated(flix: Flix, api: Declaration, traits: Traits, sctx: SecurityContext,
+                               verify: JavaBoundaryApi.Plan => Result[Unit, Error], products: List[(String, String)]): Result[Prepared, Error] = {
     implicit val compiler: Flix = flix
     val checked = flix.check()
     if (checked._2.nonEmpty) return Err(InputErrors(checked._2, checked._2.head.loc))
     val root = checked._1.get
+    val declared = products.map { case (out, in) =>
+      val result = root.defs(Symbol.mkDefnSym(out)).spec
+      val argument = root.defs(Symbol.mkDefnSym(in)).spec
+      Type.eraseAliases(result.fparams.head.tpe) -> (Conversion(result.retTpe, result.eff, Some(out)),
+        Conversion(argument.fparams.head.tpe, argument.eff, Some(in)))
+    }.toMap
     val digest = MessageDigest.getInstance("SHA-256").digest(api.className.getBytes(StandardCharsets.UTF_8))
       .map(byte => f"${byte & 0xff}%02x").mkString
     val module = "BoundaryGenerated" + digest
@@ -84,7 +122,7 @@ object JavaBoundaryWrappers {
         api.members.isEmpty || api.members.map(_.name).distinct.size != api.members.size)
       return Err(Invalid("Expected a non-reserved Java class name and distinct API member names.", api.loc))
     Result.traverse(api.members.zipWithIndex) { case (member, index) =>
-      generateWrapper(member, s"w$index", traits, root)
+      generateWrapper(member, s"w$index", traits, root, declared)
     }.flatMap { wrappers =>
       val renderer = new Renderer
       val definitions = wrappers.map { wrapper =>
@@ -143,7 +181,7 @@ object JavaBoundaryWrappers {
   }
 
   private def generateWrapper(member: Member, name: String, traits: Traits,
-                              root: TypedAst.Root)(implicit flix: Flix): Result[Wrapper, Error] = {
+                              root: TypedAst.Root, declared: Map[Type, (Conversion, Conversion)])(implicit flix: Flix): Result[Wrapper, Error] = {
     root.defs.get(member.target) match {
       case None => Err(Invalid("Unknown API target.", member.loc))
       case Some(defn) =>
@@ -154,8 +192,8 @@ object JavaBoundaryWrappers {
           return Err(Invalid("This prototype requires an ordinary function name and a valid Java member name.", member.loc))
         val params = spec.fparams.toList.map(_.tpe)
         for {
-          args <- Result.traverse(if (params == List(Type.Unit)) Nil else params)(conversion(_, traits.argument, "In", "toFlix", root, member.loc))
-          result <- conversion(spec.retTpe, traits.result, "Out", "toJava", root, member.loc)
+          args <- Result.traverse(if (params == List(Type.Unit)) Nil else params)(conversion(_, traits.argument, "In", "toFlix", root, member.loc, declared))
+          result <- conversion(spec.retTpe, traits.result, "Out", "toJava", root, member.loc, declared)
           eff = (args.map(_.eff) :+ result.eff).foldLeft(spec.eff)((left, right) => Type.mkUnion(left, right, member.loc))
           wrapper <- Type.eval(eff) match {
             case Ok(CofiniteSet.Set(effects)) =>
@@ -174,10 +212,13 @@ object JavaBoundaryWrappers {
   }
 
   private def conversion(tpe: Type, trt: Symbol.TraitSym, associated: String, method: String,
-                         root: TypedAst.Root, loc: SourceLocation)(implicit flix: Flix): Result[Conversion, Error] = tpe match {
-    case Type.Alias(_, _, expanded, _) => conversion(expanded, trt, associated, method, root, loc)
+                         root: TypedAst.Root, loc: SourceLocation, declared: Map[Type, (Conversion, Conversion)])(implicit flix: Flix): Result[Conversion, Error] = tpe match {
     case _ if containsRegionBound(tpe, root, Set.empty) =>
       Err(Invalid("Region-bound values cannot cross the boundary, including inside opaque or nominal types.", loc))
+    case _ if declared.contains(Type.eraseAliases(tpe)) =>
+      val pair = declared(Type.eraseAliases(tpe))
+      Ok(if (associated == "Out") pair._1 else pair._2)
+    case Type.Alias(_, _, expanded, _) => conversion(expanded, trt, associated, method, root, loc, declared)
     case _ if (tpe.baseType match {
       case Type.Cst(TypeConstructor.Enum(sym, _), _) => sym.namespace == List("Java", "Boundary") && sym.text == "Opaque"
       case _ => false

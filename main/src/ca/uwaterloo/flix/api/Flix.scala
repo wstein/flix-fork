@@ -289,6 +289,9 @@ class Flix(pkgs: List[InstalledPackage] = Nil, jars: List[Path] = Nil, mounts: M
   @volatile private var currentJavaTypeProvider: JavaTypeProvider = baseJavaTypeProvider
   def javaTypeProvider: JavaTypeProvider = currentJavaTypeProvider
 
+  /** Generated boundary sources must never replace a source registered by the caller. */
+  private[flix] def hasSource(name: SourceName): Boolean = sources.contains(name)
+
   /** Scoped synthetic metadata for a boundary contract. No generated class is loaded into the compiler JVM. */
   private[flix] def withJavaBoundaryTypes[A](classes: Map[java.lang.constant.ClassDesc, Array[Byte]])(body: => A): A = {
     if (closed)
@@ -656,17 +659,26 @@ class Flix(pkgs: List[InstalledPackage] = Nil, jars: List[Path] = Nil, mounts: M
   }
 
   /** Experimental ADR 3 API: expose checked concrete wrappers through an explicitly named facade. */
-  def codeGenWithJavaApi(typedAst: TypedAst.Root, api: JavaBoundaryApi.Declaration): Result[CompilationResult, JavaBoundaryApi.Error] = {
+  def codeGenWithJavaApi(typedAst: TypedAst.Root, api: JavaBoundaryApi.Declaration): Result[CompilationResult, JavaBoundaryApi.Error] =
+    codeGenWithJavaApi(typedAst, api, Nil)
+
+  def codeGenWithJavaApi(typedAst: TypedAst.Root, api: JavaBoundaryApi.Declaration,
+                         boundaryClasses: List[ca.uwaterloo.flix.language.phase.jvm.JvmClass]): Result[CompilationResult, JavaBoundaryApi.Error] = {
     implicit val flix: Flix = this
     JavaBoundaryApi.prepare(api, typedAst).flatMap { plan =>
       val retained = typedAst.copy(entryPoints = typedAst.entryPoints ++ plan.entryPoints)
       withJvmOrigins(retained) {
         val compiled = codeGenWithOrigins(retained)
         val support = ca.uwaterloo.flix.language.phase.interop.JavaBoundaryRuntime.classes
-        val classes = compiled.getClasses ++ support.map(clazz => clazz.name -> clazz)
+        val base = compiled.getClasses ++ support.map(clazz => clazz.name -> clazz)
+        val existing = base.keys.map(_.descriptorString().toLowerCase(java.util.Locale.ROOT)).toSet
+        val names = boundaryClasses.map(_.name.descriptorString().toLowerCase(java.util.Locale.ROOT))
+        if (names.distinct.size != names.size || names.exists(existing))
+          return Result.Err(JavaBoundaryApi.Error("A declared boundary class collides with a generated class (including case-only collisions).", api.loc))
+        val classes = base ++ boundaryClasses.map(clazz => clazz.name -> clazz)
         JavaBoundaryApi.facade(plan, classes).map { facade =>
           new CompilationResult(compiled.root.copy(classes = classes + (facade.name -> facade)),
-            compiled.totalTime, compiled.codeSize + facade.bytecode.length + support.map(_.bytecode.length).sum, this,
+            compiled.totalTime, compiled.codeSize + facade.bytecode.length + support.map(_.bytecode.length).sum + boundaryClasses.map(_.bytecode.length).sum, this,
             compiled.debugDefinitions, compiled.debugCalls, compiled.coverageSession)
         }
       }

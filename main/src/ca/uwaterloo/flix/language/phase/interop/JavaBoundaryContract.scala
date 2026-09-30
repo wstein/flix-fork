@@ -16,6 +16,7 @@ import org.objectweb.asm.{ClassWriter, Opcodes}
 
 import java.lang.constant.ClassDesc
 import javax.lang.model.SourceVersion
+import java.util.Locale
 
 /** Syntax-only, explicit bootstrap ABI. Checked instance reductions must agree before codegen. */
 object JavaBoundaryContract {
@@ -24,9 +25,15 @@ object JavaBoundaryContract {
     def descriptor: String = args.map(_.desc.descriptorString()).mkString("(", "", ")") + result.desc.descriptorString()
     def signature: String = args.map(_.signature).mkString("(", "", ")") + result.signature
   }
-  case class Contract(className: String, members: List[Member], loc: SourceLocation) {
+  case class Component(name: String, tpe: JavaBoundaryApi.JavaType)
+  case class Product(className: String, components: List[Component], target: String, tuple: Boolean, loc: SourceLocation)
+  case class Contract(className: String, members: List[Member], loc: SourceLocation, products: List[Product]) {
     def declaration: JavaBoundaryWrappers.Declaration = JavaBoundaryWrappers.Declaration(className,
       members.map(member => JavaBoundaryWrappers.Member(member.name, member.target, member.loc)), loc)
+  }
+  object Contract {
+    def apply(className: String, members: List[Member], loc: SourceLocation): Contract =
+      new Contract(className, members, loc, Nil)
   }
   case class Error(message: String, loc: SourceLocation)
 
@@ -111,8 +118,37 @@ object JavaBoundaryContract {
         abort("Invalid or reserved Java API class name.")
       expect("{")
       val members = List.newBuilder[Member]
+      val products = List.newBuilder[Product]
       while (current.text != "}" && current.text != "<eof>") {
         val memberLoc = location(current)
+        if (current.text == "record" || current.text == "tuple") {
+          val tuple = take().text == "tuple"
+          val name = take().text
+          if (!SourceVersion.isName(name) || !name.contains('.') || name.startsWith("java.") || name.startsWith("dev.flix."))
+            abort("Expected a non-reserved, fully qualified generated Java class name.")
+          expect("(")
+          val fields = List.newBuilder[Component]
+          def field(): Unit = {
+            val label = take().text
+            val reserved = Set("clone", "finalize", "getClass", "hashCode", "notify", "notifyAll", "toString", "wait")
+            if (!SourceVersion.isIdentifier(label) || SourceVersion.isKeyword(label) || reserved.contains(label))
+              abort("Invalid Java record component name.")
+            expect(":")
+            fields += Component(label, javaType(false, false, 0))
+          }
+          if (!accept(")")) {
+            field()
+            while (accept(",")) field()
+            expect(")")
+          }
+          expect("=")
+          val target = flixType(module, 0)
+          expect(";")
+          val components = fields.result()
+          if (components.map(_.name).distinct.size != components.size) abort("Duplicate record component name.")
+          if (tuple && components.size < 2) abort("A tuple declaration needs at least two components.")
+          products += Product(name, components, target, tuple, memberLoc)
+        } else {
         expect("def")
         val name = identifier()
         if (!SourceVersion.isIdentifier(name) || SourceVersion.isKeyword(name)) abort("Expected a Java method name.")
@@ -129,12 +165,44 @@ object JavaBoundaryContract {
         expect(";")
         val targetName = if (target.contains('.')) target else s"$module.$target"
         members += Member(name, Symbol.mkDefnSym(targetName), args.result(), result, memberLoc)
+        }
       }
       expect("}"); expect("<eof>")
       val result = members.result()
       if (result.isEmpty || result.map(_.name).distinct.size != result.size) abort("Expected distinct, nonempty API members.")
-      Ok(Contract(className, result, loc))
+      val types = products.result()
+      val names = (className :: types.map(_.className)).map(_.toLowerCase(Locale.ROOT))
+      if (names.distinct.size != names.size) abort("Generated Java class names collide, including case-only collisions.")
+      if (types.map(_.target).distinct.size != types.size) abort("Each Flix type may have only one declared Java representation per contract.")
+      Ok(Contract(className, result, loc, types))
     } catch { case failure: ParseFailure => Err(failure.error) }
+
+    /** A small, injection-free concrete Flix type grammar, not arbitrary generated source text. */
+    private def flixType(module: String, depth: Int): String = {
+      if (depth >= 128) abort("Flix boundary type nesting exceeds 128 levels.")
+      if (accept("(")) {
+        val args = List.newBuilder[String]
+        args += flixType(module, depth + 1)
+        while (accept(",")) args += flixType(module, depth + 1)
+        expect(")")
+        val values = args.result()
+        if (values.size < 2) abort("Expected a concrete tuple type.")
+        values.mkString("(", ", ", ")")
+      } else {
+        val name = identifier()
+        if (!name.split('.').last.head.isUpper) abort("Expected a concrete Flix type, not a type variable.")
+        val builtins = Set("Unit", "Bool", "Char", "Int8", "Int16", "Int32", "Int64", "Float32", "Float64",
+          "String", "BigInt", "BigDecimal", "List", "Option", "Vector", "Chain", "Set", "Map")
+        val qualified = if (name.contains('.') || builtins.contains(name)) name else s"$module.$name"
+        if (!accept("[")) qualified else {
+          val args = List.newBuilder[String]
+          args += flixType(module, depth + 1)
+          while (accept(",")) args += flixType(module, depth + 1)
+          expect("]")
+          args.result().mkString(s"$qualified[", ", ", "]")
+        }
+      }
+    }
 
     private def javaType(result: Boolean, generic: Boolean, depth: Int): JavaBoundaryApi.JavaType = {
       if (depth >= 128) abort("Java API type nesting exceeds 128 levels.")

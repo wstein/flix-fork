@@ -10,7 +10,7 @@ import ca.uwaterloo.flix.language.CompilationMessage
 import ca.uwaterloo.flix.language.ast.shared.{Origin, SecurityContext, Source, SourceName}
 import ca.uwaterloo.flix.language.errors.JavaBoundaryError
 import ca.uwaterloo.flix.language.fmt.FormatType
-import ca.uwaterloo.flix.language.phase.interop.{BoundaryTypeElaborator, JavaBoundaryContract, JavaBoundaryRuntime, JavaBoundaryWrappers}
+import ca.uwaterloo.flix.language.phase.interop.{BoundaryTypeElaborator, JavaBoundaryContract, JavaBoundaryProducts, JavaBoundaryRuntime, JavaBoundaryWrappers}
 import ca.uwaterloo.flix.language.phase.jvm.JvmClass
 import ca.uwaterloo.flix.language.phase.jvm.JavaBoundaryApi
 import ca.uwaterloo.flix.util.Result
@@ -58,7 +58,7 @@ object JavaBoundary {
   }
 
   def writeStubs(contract: JavaBoundaryContract.Contract, directory: Path): Result[Unit, BootstrapError] =
-    writeClasses(JavaBoundaryContract.stub(contract) :: JavaBoundaryRuntime.classes, directory)
+    writeClasses(JavaBoundaryContract.stub(contract) :: (JavaBoundaryProducts.classes(contract) ++ JavaBoundaryRuntime.classes), directory)
 
   /** Never delete outputs or overwrite a non-class file. The build tool owns stale-output cleanup. */
   def writeClasses(classes: Iterable[JvmClass], directory: Path): Result[Unit, BootstrapError] = try {
