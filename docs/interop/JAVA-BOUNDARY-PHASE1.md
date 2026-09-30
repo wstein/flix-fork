@@ -3,6 +3,7 @@
 The replacement is opt-in. It does not restore `@Export`, change ordinary Java imports,
 or alter the existing `ToJava`/`ToFlix` traits. ADR 3 remains Proposed; this implements its
 first experimental milestone, not generated tuple/record/enum classes or Java effect handlers.
+Generated types are covered by the separate [Phase 2 milestone](JAVA-BOUNDARY-PHASE2.md).
 
 ## Declare the bootstrap and recorded API
 
@@ -76,8 +77,9 @@ Use `Java.Boundary.Opaque[t]` in the original Flix signature and construct
 `Java.Boundary.Opaque.Opaque(value)`. At a top-level boundary position the compiler synthesizes
 tagged bridge calls and casts in its owned wrapper source and emits
 `dev.flix.runtime.OpaqueHandle<Object>`. There are no public polymorphic `pack`/`unpack`
-Flix helpers. The internal Java bridge remains public Java code and is not a security boundary;
-restricting its use from ordinary Flix sources remains a review follow-up.
+Flix helpers. The internal Java bridge remains public Java code and is not a security boundary.
+Ordinary Flix sources cannot resolve its wrapping method. Only compiler-registered source
+objects have that capability; choosing a generated-looking URI does not grant it.
 This is an explicit compiler capability, not an unconstrained blanket trait instance.
 Containers of opaque values require a user instance; they do not silently erase element types.
 
@@ -127,13 +129,15 @@ supports their shapes.
 
 ## Boundary policies
 
-Java reference arguments must be non-null. The facade checks them before invoking any
-conversion or target code. JDK collections, maps, and present optionals are checked recursively;
-errors are `IllegalArgumentException` messages naming the original parameter and element path
-(for example `x[1]` or `x[0].value`). Empty optionals remain valid. Objects are visited by
-identity, so a cyclic Java container does not loop in the check. Arbitrary user Java object
-fields are not inspected; user instances own their invariants. Java callers must not mutate
-arguments concurrently during checking or conversion.
+Converted reference positions reject null with `IllegalArgumentException` naming the original
+parameter and element path (for example `x[1]`). The checked original Flix type determines
+which List/Vector/Chain/Option positions are inspected, not the Java object's interfaces.
+Native Java types cross unchecked, including a null object, nullable contents and cyclic
+containers; no container walk is performed for such a position. Empty optionals remain valid.
+Declared product and nominal conversion helpers similarly validate converted component types.
+User instances own arbitrary Java object invariants. Converted containers currently have a
+validation walk before conversion; fusing those walks is a future optimization. Java callers
+must not mutate arguments concurrently during checking or conversion.
 
 Packaged result collection instances return unmodifiable, detached copies, including nested
 collections. This preserves the archived export semantics without exposing Flix data to mutation.

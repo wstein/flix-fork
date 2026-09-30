@@ -6,6 +6,12 @@ Proposed. Scoped to how Flix code is *called from* the JVM -- Java, Kotlin, Scal
 values cross that boundary. Calling Java *from* Flix (`import`, `new`, method calls) is unchanged.
 Numbered 3 to follow ADRs 1 and 2 on `feat/stable-specialization-names-rewrite`.
 
+Revision 12 completes the Phase 2 implementation scope: explicit records, tuples, enums and
+sealed record hierarchies; direct instances for monomorphic nominal enums; recursive nominal
+values and ordinary nested containers; adapter-backed concrete instantiations; and staged JVM
+language callers. Validation results and remaining execution gates are recorded in the rollout
+guide. Status remains Proposed, and phases 3–5 are not implemented by this milestone.
+
 Revision 11 adds the experimental declared-product slice of Phase 2: syntax-only contracts
 declare named Java records for Flix record aliases and concrete tuples, including generic
 components. Real record classfiles are shared by synthetic metadata, bootstrap output and
@@ -328,15 +334,47 @@ nominal adapter can instead implement `JavaResult` and `JavaArgument` targeting 
 record. The record bytecode in this spike is metadata-only: its constructor and accessor
 throw, and no runtime conversion or staged Java caller is claimed.
 
-The experimental product path now uses one private, generated nominal adapter per declared
-representation. Its payload is the original concrete Flix type; wrappers insert and remove
-the adapter through ordinary checked code. Generated instances then have legal, distinct
-nominal heads, while user functions retain their original signatures. Nested containers and
-recursive declared types need corresponding checked conversion helpers; the adapter proof
-does not yet establish either. This changes the proposed per-original-type instance scheme
-for the declared-product path after the request to proceed. The alternative is a broader redesign
-of instance-head legality, overlap detection and instance selection, outside the boundary
-metadata spike.
+Structural records, tuples and concrete generic instantiations use private generated nominal
+adapters. Their payload is the original checked concrete Flix type; wrappers insert and remove
+the adapter through ordinary checked helpers. They cross at top-level signature positions only.
+Nested adapter-backed payloads produce a declaration-located error recommending a monomorphic
+nominal enum wrapper, rather than an ambiguous or implicit container conversion.
+
+Monomorphic enums instead receive direct `JavaResult`/`JavaArgument` instances in their enum
+companion module. Their associated Java type is constant and they have no instance constraints.
+Thus ordinary `List[Color]` and `Option[Shape]` instances work, and recursive `Tree` payloads do
+not require recursive instance evidence: only conversion bodies recurse. Existing instance-head
+and overlap rules remain unchanged. Multiple concrete `Box[Int32]`/`Box[String]` declarations
+use distinct adapters and top-level helpers rather than overlapping instances.
+
+The contract additionally declares nominal types explicitly:
+
+```text
+enum com.acme.Color = Color { case Red; case Blue; };
+sealed com.acme.Shape = Shape { case Circle(radius: int); case Label(text: java.lang.String); };
+sealed com.acme.Tree = Tree { case Leaf(value: int); case Node(left: com.acme.Tree, right: com.acme.Tree); };
+sealed com.acme.IntBox = Box[Int32] { case Box(value: int); };
+```
+
+All cases must be present exactly once. Component names and order are explicit Java API;
+checked Flix payload types determine their conversion and must match the declared ABI in both
+directions. Java enums implement standard `values`/`valueOf`; sealed interfaces list their
+permitted nested records. Record value methods use JDK `ObjectMethods.bootstrap`. One classfile
+generator supplies synthetic metadata, bootstrap output and runtime output; tests compare
+bytes for every declared class, including enum parents and sealed nested records.
+
+Declared-type APIs use three frontend checks: validation-only instance declarations first,
+then a checked case/component ABI gate, then real conversion bodies, then the wrapper check
+(the body and wrapper checks follow the original two-pass orchestration). Malformed contracts
+are rejected before invalid generated bodies enter type inference. Declaration-only bodies
+never reach code generation. Semantic duplicate targets include aliases and their expansions.
+
+Compilation and source mutations on one `Flix` instance are serialized with its metadata scope;
+worker phases read the active provider without acquiring the compilation monitor. An ordinary
+concurrent check cannot observe another API's synthetic types. Incremental AST identity is
+preserved between the declaration, body and wrapper checks. Scope exit still clears caches,
+so a subsequent ordinary compile is cold; this remains an optimization opportunity, not a
+claim that the provider is per-compilation or that all frontend cache costs have disappeared.
 
 The experimental product grammar inside an `export mod` contract is:
 
@@ -438,11 +476,11 @@ Rated for value and effort (★ low to ★★★★★ high).
 
 ## Open questions
 
-- **Production frontend performance.** The experimental two-pass frontend preserves checked
+- **Production frontend performance.** The experimental staged frontend preserves checked
   instances and ABI invalidation; how should production integration avoid redundant work?
   Bootstrap stubs now come from the explicit contract and are checked before real code generation.
-- **The synthetic-type provider.** Where it runs, how it declares classes to the Java resolver,
-  and how it names them without the layout leaks of the current design.
+- **The synthetic-type provider.** Can provider-scoped caches replace the current serialized
+  overlay and cold ordinary compile without leaking generated metadata across compilations?
 - **Typed opaque markers.** Phase 1 fixes the runtime handle name and type-tag checks. Phase 2
   may supply generated marker types to its reserved generic parameter.
 - **Production declaration syntax.** Phase 1's `.flix-api` sidecar does not disturb ordinary
